@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — Watcher "Semantic Search Disabled" badge was reading a vestigial global flag (2026-04-22)
+
+Watcher dashboard's System Performance card always showed "Semantic Search Disabled" even when every agent had per-agent semantic search turned on. The `/api/stats/memory` endpoint was reading `Config.enable_semantic_search`, a legacy global singleton that defaults to `False` and is not referenced anywhere else in the backend (no runtime path actually gates on it). Meanwhile, the real behavior is driven per-agent by `Agent.enable_semantic_search`, which defaults to `True`.
+
+**Fix:**
+- `backend/api/routes.py` (`get_memory_stats`) — `semantic_search_enabled` is now derived by aggregating the per-agent flag over the in-scope agents (all agents for global admins, tenant-scoped otherwise). The response also now includes `agents_with_semantic_search` and `total_agents`. The vector-store embedding aggregation loop now skips agents that have semantic search disabled rather than indiscriminately counting every agent's ChromaDB collection.
+- `frontend/lib/client.ts`, `frontend/components/watcher/DashboardTab.tsx`, `frontend/components/watcher/dashboard/SystemPerformanceSection.tsx` — `MemoryStats` extended with the new fields. The badge now has four states with correct styling: "Semantic Search Active (M/M agents)" (green) when all in-scope agents have it on, "Semantic Search Partial (N/M agents)" (warning) when only some do, "Semantic Search Disabled (0/M agents)" (muted) when none do, and "Semantic Search — no agents" (muted) when the tenant has no agents yet.
+
+**Verified end-to-end:** backend `/api/stats/memory` now returns `semantic_search_enabled: true, agents_with_semantic_search: 10, total_agents: 10` for the test tenant (previously `false`). Frontend UI renders the green "Semantic Search Active (10/10 agents)" badge with `bg-tsushin-success/10 border border-tsushin-success/30` styling. The legacy `Config.enable_semantic_search` column remains in the schema but is now orphaned — a later commit can drop it.
+
 ### QA - VM fresh-install UI-first regression campaign (2026-04-22)
 
 Completed fresh-install regression run `20260422-081634` against a disposable Ubuntu 24.04 aarch64 Parallels VM from a clean `origin/develop` clone. The stock `python3 install.py --defaults` pass completed but revalidated the already-open IP-literal self-signed TLS failure (`BUG-688`). The interactive installer pass using `10.211.55.5.sslip.io` completed with self-signed HTTPS, `/setup` was completed in Playwright, and final `/api/health` plus `/api/readiness` remained 200 before cleanup.

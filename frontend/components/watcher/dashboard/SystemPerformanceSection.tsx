@@ -12,6 +12,8 @@ import { CHART_COLORS } from '@/components/charts/chartTheme'
 
 interface MemoryStats {
   semantic_search_enabled: boolean
+  agents_with_semantic_search: number
+  total_agents: number
   ring_buffer_size: number
   senders_in_memory: number
   total_messages_cached: number
@@ -147,22 +149,54 @@ export default function SystemPerformanceSection({
           System Performance
         </h2>
 
-        {/* Semantic Search Status Badge */}
-        {memoryStats.semantic_search_enabled ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-success/10 border border-tsushin-success/30">
-            <div className="w-2 h-2 rounded-full bg-tsushin-success animate-pulse" />
-            <span className="text-xs font-medium text-tsushin-success">
-              Semantic Search Active
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
-            <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
-            <span className="text-xs font-medium text-tsushin-muted">
-              Semantic Search Disabled
-            </span>
-          </div>
-        )}
+        {/* Semantic Search Status Badge — aggregated from per-agent flags */}
+        {(() => {
+          const enabled = memoryStats.agents_with_semantic_search ?? 0
+          const total = memoryStats.total_agents ?? 0
+          const countLabel = `${enabled}/${total} agent${total === 1 ? '' : 's'}`
+
+          if (total === 0) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
+                <span className="text-xs font-medium text-tsushin-muted">
+                  Semantic Search — no agents
+                </span>
+              </div>
+            )
+          }
+
+          if (enabled === 0) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
+                <span className="text-xs font-medium text-tsushin-muted">
+                  Semantic Search Disabled ({countLabel})
+                </span>
+              </div>
+            )
+          }
+
+          if (enabled < total) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-warning/10 border border-tsushin-warning/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-warning animate-pulse" />
+                <span className="text-xs font-medium text-tsushin-warning">
+                  Semantic Search Partial ({countLabel})
+                </span>
+              </div>
+            )
+          }
+
+          return (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-success/10 border border-tsushin-success/30">
+              <div className="w-2 h-2 rounded-full bg-tsushin-success animate-pulse" />
+              <span className="text-xs font-medium text-tsushin-success">
+                Semantic Search Active ({countLabel})
+              </span>
+            </div>
+          )
+        })()}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

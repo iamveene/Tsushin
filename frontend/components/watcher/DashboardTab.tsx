@@ -23,6 +23,8 @@ import SystemPerformanceSection from './dashboard/SystemPerformanceSection'
 
 interface MemoryStats {
   semantic_search_enabled: boolean
+  agents_with_semantic_search: number
+  total_agents: number
   ring_buffer_size: number
   senders_in_memory: number
   total_messages_cached: number

@@ -784,7 +784,6 @@ async def get_memory_stats(
 
     # Base stats
     stats = {
-        "semantic_search_enabled": config.enable_semantic_search if hasattr(config, 'enable_semantic_search') else False,
         "ring_buffer_size": config.memory_size,
     }
 
@@ -807,7 +806,16 @@ async def get_memory_stats(
         ).count()
         agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
 
-    # If semantic search is enabled, get vector store stats for visible agents
+    # Semantic search state is per-agent; the global Config.enable_semantic_search
+    # flag is vestigial and unused at runtime. Aggregate the per-agent flags so
+    # the Watcher badge reflects what's actually configured on agents in scope.
+    total_agents = len(agents)
+    agents_with_semantic_search = sum(1 for a in agents if a.enable_semantic_search)
+    stats["total_agents"] = total_agents
+    stats["agents_with_semantic_search"] = agents_with_semantic_search
+    stats["semantic_search_enabled"] = agents_with_semantic_search > 0
+
+    # If any in-scope agent has semantic search enabled, aggregate embedding counts
     if stats["semantic_search_enabled"]:
         try:
             from pathlib import Path
@@ -816,8 +824,10 @@ async def get_memory_stats(
             total_embeddings = 0
             agent_embeddings = {}
 
-            # Aggregate embeddings from each agent's ChromaDB using VectorStore manager
+            # Aggregate embeddings only from agents that actually have semantic search on
             for agent in agents:
+                if not agent.enable_semantic_search:
+                    continue
                 agent_chroma_path = f"./data/chroma/agent_{agent.id}"
                 if Path(agent_chroma_path).exists():
                     try:

@@ -3131,7 +3131,7 @@ Watcher is the frontend observability surface. Tabs per `README.md:178-188`:
 
 | Tab | Purpose |
 |---|---|
-| **Dashboard** | KPIs, activity timeline, system performance, distribution charts. |
+| **Dashboard** | KPIs, activity timeline, system performance, distribution charts. System Performance includes a **Semantic Search** badge driven by `GET /api/stats/memory`'s `agents_with_semantic_search / total_agents` aggregation (Active when all agents enabled, Partial when some, Disabled when none). |
 | **Conversations** | Live conversation feed with filtering. |
 | **Flows** | Flow execution tracking & status. |
 | **Billing** | Token usage and cost analytics per agent/model. |
