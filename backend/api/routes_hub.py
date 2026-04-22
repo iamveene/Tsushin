@@ -154,7 +154,7 @@ def get_asana_oauth_handler(
             detail="ASANA_ENCRYPTION_KEY not configured in database or environment. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
 
-    redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:3030/hub/asana/callback")
+    redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
     # Load client credentials from database (if already registered)
     from models import Config
@@ -188,7 +188,7 @@ def _create_asana_service(integration_id: int, db: Session) -> AsanaService:
     if not encryption_key:
         raise HTTPException(status_code=500, detail="ASANA_ENCRYPTION_KEY not configured in database or environment")
 
-    redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:3030/hub/asana/callback")
+    redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
     # Load client credentials from database
     config = db.query(Config).first()

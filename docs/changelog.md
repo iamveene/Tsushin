@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — OAuth/email/frontend HTTP/HTTPS landmines + SSL-overlay auto-load (2026-04-21)
+
+A user-reported Google Calendar OAuth regression (`redirect_uri=https://localhost/api/hub/google/oauth/callback` rejected) surfaced a broader set of HTTP/HTTPS inconsistencies. Root cause had two layers:
+
+1. Several code paths hard-coded `http://localhost:…` defaults and ignored `TSN_FRONTEND_URL` / `TSN_BACKEND_URL`. Any integration whose dedicated env var wasn't explicitly set (Asana is the obvious one — `ASANA_REDIRECT_URI` is not in `.env`) silently fell back to HTTP even when the operator had set the public URLs to HTTPS.
+2. `docker-compose` commands that omitted `docker-compose.ssl.yml` recreated the Caddy `proxy` against the base (HTTP-only) Caddyfile, so `https://localhost` and port 443 publishing silently disappeared after any rebuild. This was the "UI got downgraded from HTTPS to HTTP during a test" regression the user has hit repeatedly.
+
+**Code fixes (derive from `settings.FRONTEND_URL` / `settings.BACKEND_URL`):**
+- `backend/api/routes_hub.py`, `backend/api/v1/routes_hub.py` — Asana OAuth redirect URI now derives from `settings.FRONTEND_URL` when `ASANA_REDIRECT_URI` is unset.
+- `backend/agent/skills/scheduler/asana_provider.py` — Asana scheduler provider token-refresh redirect_uri now matches the OAuth auth flow (`{FRONTEND_URL}/hub/asana/callback`); previously it used a completely different backend path (`/api/hub/asana/oauth/callback`), which Asana rejects with `invalid_grant` on refresh.
+- `backend/services/email_service.py` — `base_url` now reads `settings.FRONTEND_URL` (handles both `TSN_FRONTEND_URL` and the legacy `FRONTEND_URL` names) instead of `os.getenv("FRONTEND_URL")`, which only saw the legacy name and fell back to HTTP. Fixes invitation and password-reset email links on HTTPS deployments.
+- `backend/services/public_ingress_resolver.py` — last-resort invitation base-URL fallback now uses `settings.FRONTEND_URL` instead of a bare `os.getenv("FRONTEND_URL")`.
+- `backend/agent/skills/scheduler_skill.py` — bot reply text linking to `/flows` now uses `settings.FRONTEND_URL` instead of a hard-coded `http://localhost:3030/flows`.
+
+**Compose + env:**
+- `docker-compose.yml` — `TSN_GOOGLE_OAUTH_REDIRECT_URI` and `ASANA_REDIRECT_URI` defaults now inherit from `${TSN_BACKEND_URL}` / `${TSN_FRONTEND_URL}` via nested `${VAR:-${VAR:-…}}` substitution. Setting the two public URLs in `.env` is now sufficient to flip the whole stack to HTTPS.
+- `.env` — pinned `COMPOSE_FILE=docker-compose.yml:docker-compose.ssl.yml` so every `docker-compose` call automatically applies the SSL overlay. Without this, any recreate of the `proxy` service drops the TLS mount + port publishing and silently takes `https://localhost` offline.
+
+**Doc + playbook guardrails:**
+- `CLAUDE.md` — added an "SSL Overlay (CRITICAL — do NOT downgrade the proxy)" section under the Safe Container Rebuild rules, and replaced the old `docker-compose up -d --build --no-cache` incantation (which isn't a valid flag combination on current compose) with `docker-compose build --no-cache` + `docker-compose up -d`.
+- `.claude/agents/qa-tester.md`, `methodology/commands/fire_full_regression.md`, `methodology/commands/fire_regression.md`, `methodology/commands/fire_remediation.md` — prepended a "Do NOT flip the instance's HTTP/HTTPS mode" block that tells the runner to source `.env`, export `UI_URL` / `API_URL`, and substitute those everywhere the doc says `http://localhost:3030` / `http://localhost:8081`. The goal is to stop agents from "fixing" hard-coded URLs in the test scripts by editing the operator's `.env`.
+
+Verified post-fix on the live instance: `https://localhost/api/health`, login, `/api/v1/oauth/token`, `/api/v1/agents/1/chat` (agent returned `REGRESSION_OK`), and the frontend root redirect to `/auth/login` all return 200 over HTTPS; `ASANA_REDIRECT_URI` inside the container resolves to `https://localhost/hub/asana/callback`; `email_service.base_url` resolves to `https://localhost`; WhatsApp agent container reconnected cleanly; no new backend errors beyond the pre-existing Qdrant fallback warning.
+
 ### QA - UI-first partial regression campaign (2026-04-22)
 
 Partial run of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` (run ID `20260421b`) against the existing local Mac stack (E2 path). Campaign was interrupted by a user-reported login issue (root cause: Chrome HSTS redirect for `localhost` → `https://localhost` which is not published — de-duped against BUG-685). Login confirmed working at `http://127.0.0.1:3030`. Completed phases: Preflight (all healthy), Playground API/WS (PASS), Playground + Mini browser (PASS with 2 bugs), Flows API/schema (PASS), Sentinel programmatic tests (62/62 PASS, LLM gate PASS), Audit 5 local instance (PASS). Phases C2, B2, D1–D4 not reached. All QA fixtures (2 agents, 2 contacts, 1 vector store, 2 sentinel profiles, 2 threads) were deleted and the stack was fully reverted to pre-run state.
