@@ -2,7 +2,7 @@ import logging
 import time
 import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from .ai_client import AIClient
 # Phase 4.8: Ring buffer memory (SenderMemory) deprecated
@@ -439,6 +439,84 @@ class AgentService:
             return tool_result
 
         return ai_response
+
+    async def _reason_over_tool_result(
+        self,
+        tool_name: str,
+        parameters: Dict[str, Any],
+        tool_execution_result: str,
+        message_text: str,
+        system_prompt: str,
+        agent_run_id: Optional[int],
+        sender_key: Optional[str],
+    ) -> Optional[str]:
+        """
+        Option X: second LLM call after tool execution so the model composes a
+        reasoned answer over the tool result instead of dumping the formatted
+        listing verbatim.
+
+        Only invoked for text-returning data-fetch skills (skip_ai=False).
+        Media tools, confirmations, A2A delegate, and shell commands bypass this
+        path. On any failure the caller falls back to the raw tool output, so the
+        reply pipeline is never blocked.
+        """
+        TOOL_OUTPUT_MAX_CHARS = 4000
+
+        truncated = tool_execution_result
+        if len(tool_execution_result) > TOOL_OUTPUT_MAX_CHARS:
+            truncated = (
+                tool_execution_result[:TOOL_OUTPUT_MAX_CHARS]
+                + "\n[... output truncated for brevity ...]"
+            )
+
+        params_repr = str(parameters) if parameters else "{}"
+        reasoning_message = (
+            f"The user asked: {message_text}\n\n"
+            f"To answer this, the tool '{tool_name}' was called with arguments {params_repr}.\n"
+            f"The tool returned:\n\n"
+            f"{truncated}\n\n"
+            f"Using the tool result above, write a natural, helpful response to the user. "
+            f"Do not output tool call blocks. Do not say 'the tool returned' or 'I called'. "
+            f"Answer naturally and reference the specific data where helpful."
+        )
+
+        try:
+            self.logger.info(
+                f"[OPTION-X] Firing reasoning call for tool='{tool_name}', "
+                f"output_len={len(tool_execution_result)}"
+            )
+            reasoning_result = await self.ai_client.generate(
+                system_prompt,
+                reasoning_message,
+                operation_type="tool_reasoning",
+                agent_id=self.agent_id,
+                agent_run_id=agent_run_id,
+                skill_type=tool_name,
+                sender_key=sender_key,
+            )
+            if reasoning_result.get("error") or not reasoning_result.get("answer"):
+                self.logger.warning(
+                    f"[OPTION-X] Reasoning call failed or empty "
+                    f"(tool={tool_name}, error={reasoning_result.get('error')}); "
+                    f"falling back to raw tool output"
+                )
+                return None
+
+            reasoned = self._strip_reasoning_tags(reasoning_result["answer"])
+            if reasoned:
+                reasoned = self._strip_internal_context(reasoned)
+                reasoned = self._filter_sensitive_content(reasoned)
+            if reasoned and reasoned.strip():
+                self.logger.info(f"[OPTION-X] Reasoning call succeeded for tool='{tool_name}'")
+                return reasoned
+            return None
+
+        except Exception as exc:
+            self.logger.warning(
+                f"[OPTION-X] Reasoning call exception for tool='{tool_name}': {exc}; "
+                f"falling back to raw tool output"
+            )
+            return None
 
     async def process_message(
         self,
@@ -1010,6 +1088,13 @@ IMPORTANT: When the user asks for system information, server status, file listin
                             metadata=skill_message_metadata or None,
                         )
 
+                        # Option X: gate for the second-LLM-call after tool execution.
+                        # Default False — only flipped for text-returning data-fetch skills
+                        # where metadata.skip_ai is False (or absent). Shell, media-producing
+                        # tools, confirmations, and A2A delegate keep the current behavior
+                        # (raw tool output becomes the reply).
+                        _should_reason = False
+
                         if is_shell_tool:
                             # Shell tool needs special parameter handling
                             script = parameters.get('script', '')
@@ -1029,11 +1114,12 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 self.logger.warning("Shell tool call missing 'script' parameter")
                                 tool_execution_result = None
                         else:
-                            # Check if this tool produces media (like generate_image)
+                            # Option X: always request the full SkillResult so we can read
+                            # metadata.skip_ai and decide whether to fire the reasoning pass.
+                            # Media-producing tools (generate_image) need media_paths anyway.
                             media_producing_tools = {'generate_image'}
-                            needs_full_result = tool_name in media_producing_tools
+                            needs_media_output = tool_name in media_producing_tools
 
-                            # All other skill tools (web_search, manage_flows, etc.)
                             skill_result = await skill_manager.execute_tool_call(
                                 db=self.db,
                                 agent_id=self.agent_id,
@@ -1041,23 +1127,35 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 arguments=parameters,
                                 message=skill_message,
                                 sender_key=sender_key,
-                                return_full_result=needs_full_result
+                                return_full_result=True
                             )
 
-                            # Handle media-producing tools
-                            if needs_full_result and skill_result:
-                                from agent.skills.base import SkillResult
-                                if isinstance(skill_result, SkillResult):
-                                    tool_execution_result = skill_result.output if skill_result.success else f"Error: {skill_result.output}"
-                                    # Store media paths for later sending
-                                    if skill_result.media_paths:
-                                        if not hasattr(self, '_pending_media_paths'):
-                                            self._pending_media_paths = []
-                                        self._pending_media_paths.extend(skill_result.media_paths)
-                                        self.logger.info(f"Queued {len(skill_result.media_paths)} media files for sending")
-                                else:
-                                    tool_execution_result = skill_result
+                            from agent.skills.base import SkillResult
+                            if isinstance(skill_result, SkillResult):
+                                tool_execution_result = skill_result.output if skill_result.success else f"Error: {skill_result.output}"
+                                # Store media paths for later sending
+                                if skill_result.media_paths:
+                                    if not hasattr(self, '_pending_media_paths'):
+                                        self._pending_media_paths = []
+                                    self._pending_media_paths.extend(skill_result.media_paths)
+                                    self.logger.info(f"Queued {len(skill_result.media_paths)} media files for sending")
+                                # Option X gate: skip_ai=True means "raw output IS the final
+                                # answer, do not paraphrase" (write confirmations, A2A delegate,
+                                # media tools). skip_ai=False/absent means "LLM should reason
+                                # over this data" (list/search/read on gmail, flows, flights,
+                                # web_search, agent_communication.ask, etc.).
+                                skill_skip_ai = (
+                                    skill_result.metadata.get('skip_ai', False)
+                                    if skill_result.metadata else False
+                                )
+                                _should_reason = (
+                                    skill_result.success
+                                    and not needs_media_output
+                                    and not skill_skip_ai
+                                )
                             else:
+                                # Legacy: skill_manager returned a raw string (e.g.
+                                # NotImplementedError fallback). No metadata to gate on.
                                 tool_execution_result = skill_result
 
                         if tool_execution_result:
@@ -1072,6 +1170,23 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
                             tool_used = f"skill:{tool_name}"
                             tool_result = tool_execution_result
+
+                            # Option X: second LLM call so the model reasons over the raw
+                            # tool output and composes a natural answer instead of dumping
+                            # the formatted listing. Falls back to the raw output on any
+                            # failure so tool execution never blocks the reply.
+                            if _should_reason:
+                                reasoned = await self._reason_over_tool_result(
+                                    tool_name=tool_name,
+                                    parameters=parameters,
+                                    tool_execution_result=tool_execution_result,
+                                    message_text=message_text,
+                                    system_prompt=system_prompt_with_date,
+                                    agent_run_id=agent_run_id,
+                                    sender_key=sender_key,
+                                )
+                                if reasoned:
+                                    ai_response = reasoned
 
                     elif self.sandboxed_tools:
                         # Execute custom tool (non-shell)

@@ -22,6 +22,20 @@ const AddIntegrationWizard = dynamic(
   () => import('@/components/integrations/AddIntegrationWizard'),
   { ssr: false },
 )
+// Guided wizards that replace the Hub's fixed-card / scattered-CTA pattern
+// with a single "+ Add ..." launcher per tab. Both are thin dispatchers —
+// once the user picks a service/channel, they hand off to the existing
+// per-service sub-wizard (SlackSetupWizard, GmailSetupWizard, etc.). See
+// frontend/components/integrations/ProductivityWizard.tsx + ChannelsWizard.tsx.
+const ProductivityWizard = dynamic(
+  () => import('@/components/integrations/ProductivityWizard'),
+  { ssr: false },
+)
+const ChannelsWizard = dynamic(
+  () => import('@/components/integrations/ChannelsWizard'),
+  { ssr: false },
+)
+import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
@@ -398,6 +412,15 @@ export default function HubPage() {
   // v0.6.0: Webhook-as-a-Channel
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
+
+  // v0.7.0: Guided wizards for the Productivity + Communication tabs. These
+  // dispatchers replace the "+ Configure" / per-placeholder-card CTAs with a
+  // single "+ Add ..." launcher per tab. See the wizard components for the
+  // picker UX; they delegate to the existing per-service/per-channel setup
+  // modals (SlackSetupWizard, GmailSetupWizard, Asana OAuth handler, etc.)
+  // once the user has picked a target on step 1.
+  const [showProductivityWizard, setShowProductivityWizard] = useState(false)
+  const [showChannelsWizard, setShowChannelsWizard] = useState(false)
   const [webhookRotateModal, setWebhookRotateModal] = useState<
     { open: boolean; secret: string; inboundUrl: string } | null
   >(null)
@@ -2527,6 +2550,48 @@ export default function HubPage() {
     }
   }
 
+  // v0.7.0 — wizard dispatchers. Both wizards close themselves before
+  // invoking these callbacks, so we only need to flip the right sub-wizard's
+  // visibility (or call the existing connect handler for browser-redirect
+  // flows like Asana).
+  const handleProductivityDispatch = (serviceId: string) => {
+    if (serviceId === 'gmail') {
+      handleGmailConnect()
+    } else if (serviceId === 'google_calendar') {
+      handleGoogleCalendarConnect()
+    } else if (serviceId === 'asana') {
+      handleAsanaConnect()
+    } else {
+      toast.error('Not yet supported', `No connect handler for '${serviceId}' yet`)
+    }
+  }
+
+  const handleChannelsDispatch = (channelId: ChannelId) => {
+    switch (channelId) {
+      case 'whatsapp':
+        setShowCreateModeSelector(true)
+        break
+      case 'telegram':
+        setShowTelegramModal(true)
+        break
+      case 'slack':
+        setShowSlackSetupModal(true)
+        break
+      case 'discord':
+        setShowDiscordSetupModal(true)
+        break
+      case 'webhook':
+        setShowWebhookSetupModal(true)
+        break
+      case 'gmail':
+        // Inbound email channel uses the same Google OAuth as Productivity Gmail.
+        handleGmailConnect()
+        break
+      default:
+        toast.error('Not yet supported', `No connect handler for '${channelId}' yet`)
+    }
+  }
+
   // Re-authorize an expired/revoked integration
   const handleReauthorize = async (integrationId: number) => {
     try {
@@ -3706,27 +3771,78 @@ export default function HubPage() {
             )}
 
             {/* ==================== COMMUNICATION TAB ==================== */}
-            {activeTab === 'communication' && (
+            {/* v0.7.0 rework — single "+ Add Channel" launcher opens
+                ChannelsWizard, which dispatches to the existing per-channel
+                setup modal (WhatsApp / Telegram / Slack / Discord / Webhook /
+                Gmail-inbound). Per-channel sections are hidden when they
+                contain zero instances so empty shells don't dominate the tab.
+                The per-section "+ Create X" button inside each section (shown
+                only when at least one instance already exists) lets users add
+                another instance without going back through the wizard. */}
+            {activeTab === 'communication' && (() => {
+              const communicationConfiguredCount =
+                mcpInstances.length +
+                telegramInstances.length +
+                slackIntegrations.length +
+                discordIntegrations.length +
+                webhookIntegrations.length +
+                hubIntegrations.filter(i => i.type === 'gmail').length
+              return (
               <div className="space-y-6 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">Communication Channels</h2>
                     <p className="text-sm text-tsushin-slate">Connect messaging platforms for agent interactions</p>
                   </div>
-                  <button
-                    onClick={() => setShowCreateModeSelector(true)}
-                    className="btn-primary"
-                  >
-                    + Create WhatsApp Instance
-                  </button>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => setShowChannelsWizard(true)}
+                      className="btn-primary"
+                    >
+                      + Add Channel
+                    </button>
+                  )}
                 </div>
 
-                {/* WhatsApp Instances */}
+                {communicationConfiguredCount === 0 && (
+                  <div className="card p-8 text-center border-dashed border-tsushin-border/60">
+                    <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-tsushin-accent/10 flex items-center justify-center">
+                      <MessageIconSvg size={24} className="text-tsushin-accent" />
+                    </div>
+                    <h3 className="text-white font-semibold mb-1">No channels configured yet</h3>
+                    <p className="text-xs text-tsushin-slate mb-4 max-w-md mx-auto">
+                      Connect WhatsApp, Telegram, Slack, Discord, Webhooks, or a Gmail inbox so users can reach your agents on the platforms they already use.
+                    </p>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowChannelsWizard(true)}
+                        className="btn-primary px-4 py-2 text-sm"
+                      >
+                        + Add Channel
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* WhatsApp Instances — v0.7.0: hidden when zero instances
+                    exist. Settings like the Conversation Response Delay are
+                    only relevant once at least one WhatsApp instance is
+                    provisioned; the "+ Add Channel" launcher at the top of
+                    the tab covers first-time provisioning. */}
+                {mcpInstances.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <MessageIconSvg size={18} /> WhatsApp Instances
                     </h3>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowCreateModeSelector(true)}
+                        className="px-4 py-2 bg-green-600/20 text-green-400 border border-green-600/50 rounded hover:bg-green-600/30 text-sm"
+                      >
+                        + Create Instance
+                      </button>
+                    )}
                   </div>
 
                   {agentMcpInstances.length === 0 && testerMcpInstances.length > 0 && (
@@ -3986,8 +4102,13 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {/* Phase 10.1.1: Telegram Bot Instances */}
+                {/* Phase 10.1.1: Telegram Bot Instances — v0.7.0: section
+                    rendered only when the tenant already has at least one
+                    bot. The "+ Add Channel" launcher covers the 0-instance
+                    case; per-section "+ Create Bot" stays for adding a 2nd. */}
+                {telegramInstances.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -4070,8 +4191,10 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {/* v0.6.0: Slack Integration */}
+                {/* v0.6.0: Slack Integration — v0.7.0: hidden when empty. */}
+                {slackIntegrations.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -4155,8 +4278,10 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {/* v0.6.0: Discord Integration */}
+                {/* v0.6.0: Discord Integration — v0.7.0: hidden when empty. */}
+                {discordIntegrations.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -4240,11 +4365,15 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* v0.6.0 V060-CHN-002: Public Base URL setting (used by Slack HTTP + Discord + Webhooks) */}
-                <PublicBaseUrlCard canEdit={canEditSettings} />
+                {(slackIntegrations.length > 0 || discordIntegrations.length > 0 || webhookIntegrations.length > 0) && (
+                  <PublicBaseUrlCard canEdit={canEditSettings} />
+                )}
 
-                {/* v0.6.0: Webhook-as-a-Channel Integrations */}
+                {/* v0.6.0: Webhook-as-a-Channel Integrations — v0.7.0: hidden when empty. */}
+                {webhookIntegrations.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -4384,14 +4513,30 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+                )}
 
-                {/* Gmail Integration */}
+                {/* Gmail Integration — v0.7.0: hidden when empty; dashed
+                    "Add Another Gmail" placeholder removed. Users add Gmail
+                    via the "+ Add Channel" wizard (Gmail inbound channel) or
+                    via Productivity Wizard → Email; this section keeps per-
+                    instance management cards. */}
+                {hubIntegrations.filter(i => i.type === 'gmail').length > 0 && (
                 <div className="space-y-4">
-                  <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                    <EnvelopeIcon size={18} /> Email Integration
-                  </h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                      <EnvelopeIcon size={18} /> Email Integration
+                    </h3>
+                    {canWriteHub && (
+                      <button
+                        onClick={handleGmailConnect}
+                        disabled={!googleCredentials}
+                        className={`px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/50 rounded hover:bg-red-600/30 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        + Add Gmail Account
+                      </button>
+                    )}
+                  </div>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Existing Gmail Integrations */}
                     {hubIntegrations.filter(i => i.type === 'gmail').map(integration => (
                       <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-red-700/30'}`}>
                         <div className="flex items-center justify-between mb-3">
@@ -4442,100 +4587,94 @@ export default function HubPage() {
                         </div>
                       </div>
                     ))}
-
-                    {/* Add Another Account Card */}
-                    <div className={`card p-5 hover-glow border-dashed border-red-700/30 ${!googleCredentials ? 'opacity-70' : ''}`}>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
-                            <PlusIconSvg size={20} className="text-red-400" />
-                          </div>
-                          <h3 className="font-semibold text-white">
-                            {hubIntegrations.filter(i => i.type === 'gmail').length > 0 ? 'Add Another Gmail' : 'Gmail'}
-                          </h3>
-                        </div>
-                        {hubIntegrations.filter(i => i.type === 'gmail').length === 0 && (
-                          <span className="badge badge-neutral">Not Connected</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">
-                        {hubIntegrations.filter(i => i.type === 'gmail').length > 0
-                          ? 'Connect an additional Gmail account'
-                          : 'Read and send emails via Gmail'}
-                      </p>
-                      {!googleCredentials && (
-                        <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                          <p className="text-xs text-amber-400">
-                            <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" /> Requires Google OAuth. <a href="/settings/integrations" className="underline hover:no-underline">Configure in Settings</a>
-                          </p>
-                        </div>
-                      )}
-                      <button
-                        onClick={handleGmailConnect}
-                        disabled={!googleCredentials}
-                        className={`w-full btn-secondary py-2 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        {hubIntegrations.filter(i => i.type === 'gmail').length > 0 ? '+ Add Gmail Account' : 'Connect to Gmail'}
-                      </button>
-                    </div>
                   </div>
                 </div>
+                )}
 
                 {/* More Channels and Push Notifications sections removed — all channels now have full integrations */}
               </div>
-            )}
+              )
+            })()}
 
             {/* ==================== PRODUCTIVITY TAB ==================== */}
-            {activeTab === 'productivity' && (
+            {/* v0.7.0 rework — single "+ Add Productivity Integration" launcher
+                opens ProductivityWizard (Category -> Service). Configured
+                integration cards render only when present; unconfigured
+                services live inside the wizard picker, so the tab no longer
+                shows "Asana — Not Connected" / "Google Calendar — Not
+                Connected" placeholder cards. Google OAuth credentials are
+                still configured in Settings → Integrations and surfaced as a
+                small badge so the user knows whether Google-backed connects
+                will proceed without a pre-setup step. */}
+            {activeTab === 'productivity' && (() => {
+              // Gmail intentionally excluded here — Gmail cards render under
+              // the Communication tab (email-as-channel). The productivity
+              // wizard still offers Gmail as a choice; the resulting card
+              // appears in Communication, not Productivity.
+              const asanaIntegrations = hubIntegrations.filter(i => i.type === 'asana')
+              const calendarIntegrations = hubIntegrations.filter(i => i.type === 'calendar')
+              const anyConfigured = asanaIntegrations.length + calendarIntegrations.length > 0
+              return (
               <div className="space-y-6 animate-fade-in">
-                <div>
-                  <h2 className="text-lg font-display font-semibold text-white">Productivity & Scheduling</h2>
-                  <p className="text-sm text-tsushin-slate">Connect task management and calendar apps</p>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-lg font-display font-semibold text-white">Productivity & Scheduling</h2>
+                    <p className="text-sm text-tsushin-slate">Connect calendar, email, and task-management services to agents.</p>
+                  </div>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => setShowProductivityWizard(true)}
+                      className="btn-primary"
+                    >
+                      + Add Productivity Integration
+                    </button>
+                  )}
                 </div>
 
-                {/* Google OAuth Credentials Status - Link to centralized settings */}
-                <div className="card p-5 border-purple-700/30">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-                        <LockIcon size={20} className="text-purple-400" />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-white">Google Integration</h3>
-                        <p className="text-xs text-tsushin-slate">Gmail, Calendar & SSO</p>
-                      </div>
-                    </div>
-                    {googleCredentials ? (
-                      <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
-                        Configured
-                      </span>
-                    ) : (
-                      <span className="px-2 py-1 text-xs font-medium rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                        Not Configured
-                      </span>
-                    )}
-                  </div>
+                {/* Google OAuth badge — compact, not a full card, so it stops
+                    dominating the tab when the user hasn't added anything yet.
+                    The wizard handles the "missing credentials" case inline. */}
+                <div className="flex items-center gap-3 text-xs text-tsushin-slate px-4 py-2 rounded-lg border border-tsushin-border/60 bg-tsushin-slate/5">
+                  <LockIcon size={14} className="text-purple-400" />
+                  <span>Google OAuth:</span>
                   {googleCredentials ? (
-                    <p className="text-xs text-tsushin-slate mb-3">
-                      Google OAuth is configured. Connect Gmail or Calendar below.
-                    </p>
+                    <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
+                      Configured
+                    </span>
                   ) : (
-                    <p className="text-xs text-tsushin-slate mb-3">
-                      Configure Google OAuth in Settings to enable Gmail, Calendar, and SSO.
-                    </p>
+                    <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+                      Not configured
+                    </span>
                   )}
-                  <a
-                    href="/settings/integrations"
-                    className="w-full btn-secondary py-2 text-sm inline-block text-center"
-                  >
-                    {googleCredentials ? 'Manage in Settings' : 'Configure in Settings'}
+                  {!googleCredentials && (
+                    <span className="text-amber-400/80">— required for Gmail/Calendar</span>
+                  )}
+                  <a href="/settings/integrations" className="ml-auto underline hover:no-underline">
+                    {googleCredentials ? 'Manage' : 'Configure'}
                   </a>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {/* Asana Integration (Special - OAuth) */}
-                  {hubIntegrations.filter(i => i.type === 'asana').length > 0 ? (
-                    hubIntegrations.filter(i => i.type === 'asana').map(integration => (
+                {!anyConfigured ? (
+                  <div className="card p-8 text-center border-dashed border-tsushin-border/60">
+                    <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-orange-500/10 flex items-center justify-center">
+                      <LightbulbIcon size={24} className="text-orange-300" />
+                    </div>
+                    <h3 className="text-white font-semibold mb-1">No productivity integrations yet</h3>
+                    <p className="text-xs text-tsushin-slate mb-4 max-w-md mx-auto">
+                      Connect Google Calendar, Gmail, or Asana so agents can schedule meetings, read mail, or create tasks on your behalf.
+                    </p>
+                    {canWriteHub && (
+                      <button
+                        onClick={() => setShowProductivityWizard(true)}
+                        className="btn-primary px-4 py-2 text-sm"
+                      >
+                        + Add Productivity Integration
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {asanaIntegrations.map(integration => (
                       <div key={integration.id} className="card p-5 hover-glow border-orange-700/30">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-3">
@@ -4571,130 +4710,64 @@ export default function HubPage() {
                           </button>
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <div className="card p-5 hover-glow border-dashed border-orange-700/30">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center">
-                            <CheckCircleIcon size={20} className="text-orange-400" />
-                          </div>
-                          <h3 className="font-semibold text-white">Asana</h3>
-                        </div>
-                        <span className="badge badge-neutral">Not Connected</span>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-4">Task & project management</p>
-                      <button
-                        onClick={handleAsanaConnect}
-                        className="w-full btn-secondary py-2 text-sm"
-                      >
-                        Connect to Asana
-                      </button>
-                    </div>
-                  )}
+                    ))}
 
-                  {/* Google Calendar Integration */}
-                  {/* Existing Calendar Integrations */}
-                  {hubIntegrations.filter(i => i.type === 'calendar').map(integration => (
-                    <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-blue-700/30'}`}>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                            <CalendarIcon size={20} className="text-blue-400" />
+                    {calendarIntegrations.map(integration => (
+                      <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-blue-700/30'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                              <CalendarIcon size={20} className="text-blue-400" />
+                            </div>
+                            <h3 className="font-semibold text-white">Google Calendar</h3>
                           </div>
-                          <h3 className="font-semibold text-white">Google Calendar</h3>
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                            integration.health_status === 'healthy'
+                              ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                              : integration.health_status === 'unavailable'
+                              ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                              : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                            }`}>
+                            {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
+                          </span>
                         </div>
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                          integration.health_status === 'healthy'
-                            ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                            : integration.health_status === 'unavailable'
-                            ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                            : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                          }`}>
-                          {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
-                        </span>
-                      </div>
-                      <p className="text-xs text-tsushin-slate mb-3">Calendar & scheduling</p>
-                      <div className="text-sm text-tsushin-slate mb-3">
-                        <p className="text-xs">Account: {integration.name?.replace('Google Calendar - ', '') || 'Unknown'}</p>
-                      </div>
-                      {integration.health_status === 'unavailable' && (
-                        <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                          <p className="text-xs text-red-400">
-                            <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
-                            Authorization expired. Re-authorize to restore access.
-                          </p>
+                        <p className="text-xs text-tsushin-slate mb-3">Calendar & scheduling</p>
+                        <div className="text-sm text-tsushin-slate mb-3">
+                          <p className="text-xs">Account: {integration.name?.replace('Google Calendar - ', '') || 'Unknown'}</p>
                         </div>
-                      )}
-                      <div className="flex gap-2">
-                        {integration.health_status === 'unavailable' ? (
-                          <button
-                            onClick={() => handleReauthorize(integration.id)}
-                            className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
-                          >
-                            Re-authorize
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleGoogleCalendarDisconnect(integration.id)}
-                            className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                          >
-                            Disconnect
-                          </button>
+                        {integration.health_status === 'unavailable' && (
+                          <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                            <p className="text-xs text-red-400">
+                              <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
+                              Authorization expired. Re-authorize to restore access.
+                            </p>
+                          </div>
                         )}
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Add Another Account Card */}
-                  <div className={`card p-5 hover-glow border-dashed border-blue-700/30 ${!googleCredentials ? 'opacity-70' : ''}`}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                          {hubIntegrations.filter(i => i.type === 'calendar').length > 0 ? <PlusIconSvg size={20} className="text-blue-400" /> : <CalendarIcon size={20} className="text-blue-400" />}
+                        <div className="flex gap-2">
+                          {integration.health_status === 'unavailable' ? (
+                            <button
+                              onClick={() => handleReauthorize(integration.id)}
+                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
+                            >
+                              Re-authorize
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleGoogleCalendarDisconnect(integration.id)}
+                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                            >
+                              Disconnect
+                            </button>
+                          )}
                         </div>
-                        <h3 className="font-semibold text-white">
-                          {hubIntegrations.filter(i => i.type === 'calendar').length > 0 ? 'Add Another Calendar' : 'Google Calendar'}
-                        </h3>
                       </div>
-                      {hubIntegrations.filter(i => i.type === 'calendar').length === 0 && (
-                        <span className="badge badge-neutral">Not Connected</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-tsushin-slate mb-3">
-                      {hubIntegrations.filter(i => i.type === 'calendar').length > 0
-                        ? 'Connect an additional Google Calendar'
-                        : 'Calendar & scheduling'}
-                    </p>
-                    {!googleCredentials && (
-                      <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                        <p className="text-xs text-amber-400">
-                          <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" /> Requires Google OAuth. <a href="/settings/integrations" className="underline hover:no-underline">Configure in Settings</a>
-                        </p>
-                      </div>
-                    )}
-                    <button
-                      onClick={handleGoogleCalendarConnect}
-                      disabled={!googleCredentials}
-                      className={`w-full btn-secondary py-2 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      {hubIntegrations.filter(i => i.type === 'calendar').length > 0 ? '+ Add Calendar Account' : 'Connect to Google Calendar'}
-                    </button>
+                    ))}
+
                   </div>
-
-                </div>
-
-                {/* Info Box */}
-                <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-orange-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-orange-300" /> Productivity Integrations
-                  </h3>
-                  <p className="text-xs text-tsushin-slate">
-                    Connect your favorite productivity tools to let agents manage tasks, schedule meetings, and sync with your knowledge bases.
-                  </p>
-                </div>
+                )}
               </div>
-            )}
+              )
+            })()}
 
             {/* ==================== DEVELOPER TOOLS TAB ==================== */}
             {activeTab === 'developer' && (
@@ -6252,6 +6325,20 @@ export default function HubPage() {
         onClose={() => { setShowSearchWizard(false); setAddIntegrationInitialProvider(undefined) }}
         onComplete={() => { refreshSearxngInstances(); loadHubIntegrations() }}
         initialProviderId={addIntegrationInitialProvider as any}
+      />
+
+      {/* v0.7.0: guided wizards for Productivity + Communication tabs. Both
+          are thin dispatchers — they pick a service/channel and hand off to
+          the existing per-service sub-wizard / OAuth handler. */}
+      <ProductivityWizard
+        isOpen={showProductivityWizard}
+        onClose={() => setShowProductivityWizard(false)}
+        onServiceSelected={handleProductivityDispatch}
+      />
+      <ChannelsWizard
+        isOpen={showChannelsWizard}
+        onClose={() => setShowChannelsWizard(false)}
+        onChannelSelected={handleChannelsDispatch}
       />
     </div>
   )

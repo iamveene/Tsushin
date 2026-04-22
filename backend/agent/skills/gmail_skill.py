@@ -425,7 +425,7 @@ class GmailSkill(BaseSkill):
             success=True,
             output="\n".join(lines),
             processed_content="\n".join(lines),
-            metadata={'skip_ai': True, 'count': len(email_summaries), 'emails': email_summaries}
+            metadata={'skip_ai': False, 'count': len(email_summaries), 'emails': email_summaries}
         )
 
     async def _handle_search_emails(
@@ -508,7 +508,7 @@ class GmailSkill(BaseSkill):
             success=True,
             output="\n".join(lines),
             processed_content="\n".join(lines),
-            metadata={'skip_ai': True, 'count': len(email_summaries), 'query': query, 'emails': email_summaries}
+            metadata={'skip_ai': False, 'count': len(email_summaries), 'query': query, 'emails': email_summaries}
         )
 
     def _extract_subject_filter(self, text: str) -> Optional[str]:
@@ -1108,7 +1108,7 @@ class GmailSkill(BaseSkill):
     def get_default_config(cls) -> Dict[str, Any]:
         """Get default configuration."""
         return {
-            "execution_mode": "hybrid",
+            "execution_mode": "tool",
             "enabled": True,
             "keywords": [],
             "use_ai_fallback": True,
@@ -1144,7 +1144,7 @@ class GmailSkill(BaseSkill):
             "enum": ["tool", "legacy", "hybrid"],
             "title": "Execution Mode",
             "description": "Execution mode: tool (LLM decides), legacy (keywords), hybrid (both)",
-            "default": "hybrid"
+            "default": "tool"
         }
 
         base_schema["properties"]["integration_id"] = {

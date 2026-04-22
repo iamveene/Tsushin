@@ -197,7 +197,7 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
     for (let i = 0; i < selectedAgents.length; i += 1) {
       const agent = selectedAgents[i]
       try {
-        await api.updateAgentSkill(agent.id, 'gmail', { is_enabled: true })
+        await api.updateAgentSkill(agent.id, 'gmail', { is_enabled: true, config: {} })
         await api.updateSkillIntegration(agent.id, 'gmail', {
           integration_id: selectedIntegrationId,
           config: {},

@@ -131,7 +131,12 @@ class EmailService:
                 self.provider = ConsoleEmailProvider()
                 logger.info("Email service using console provider (development mode)")
 
-        self.base_url = os.getenv("FRONTEND_URL", "http://localhost:3030")
+        # Use settings.FRONTEND_URL so TSN_FRONTEND_URL (the canonical env var
+        # used in docker-compose) is honored. A plain os.getenv("FRONTEND_URL")
+        # only sees the legacy name and falls back to http://localhost:3030,
+        # which breaks invitation/reset links in HTTPS deployments.
+        import settings
+        self.base_url = settings.FRONTEND_URL
         self.app_name = os.getenv("APP_NAME", "Tsushin")
 
     def send_invitation_email(

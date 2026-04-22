@@ -7,6 +7,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Feat — Option X: second LLM reasoning call for skill-tool results (2026-04-22)
+
+**User symptom resolved:** on agent `movl` after listing emails, follow-up questions like "qual desses é o mais importante?" now return a reasoned analysis (e.g., "The most important is Maria Júlia's request from the accounting team — formal PDF statement request; Marcos's reply (item 1) is related as it forwards those statements; items 4 and 5 are automated delivery notifications") instead of re-dumping the same raw email list. Before this change, the LLM would correctly decide to call the Gmail tool (tool-mode was active after the earlier BUG-699 cleanup), but the tool's rendered output would **replace** the LLM's response via a single-shot text substitution at `backend/agent/agent_service.py:1071`, so the LLM never got a chance to compose a reasoned answer over the tool result. The raw `📧 N emails: ...` listing became the final reply, regardless of what the user actually asked.
+
+**Root cause:** Tsushin's tool-calling pipeline was never a true Anthropic-style `tool_use → tool_result → final_response` loop. It was a one-shot: (1) LLM emits a tool_call text block; (2) `agent_service` parses and executes the tool; (3) the tool's rendered `output` string replaces the entire `ai_response`. There was no second LLM call to let the model reason over the tool result. `SkillResult.metadata.skip_ai` (which already encoded the right intent: `skip_ai=False` means "LLM should reason", `skip_ai=True` means "raw output is the final answer") was read only in the router's legacy keyword-dispatch path, not in the agent_service tool-mode path.
+
+**Fix (Option X):** add a second LLM call in `backend/agent/agent_service.py` after text-returning skill tools execute, passing the original user message + the raw tool output + the agent's existing system prompt, so the model composes a natural-language final reply. The second call is gated on `SkillResult.metadata.skip_ai == False`, which encodes the correct intent per skill:
+
+- **Bucket A (reasoning fires):** `gmail` list/search, `flows` list, `flight_search`, `web_search`, `agent_communication.ask`, `agent_communication.list_agents`, `okg_term_memory.recall`, `browser_automation` when `skip_ai=False` per action. Data-fetch operations where the LLM should synthesize an answer.
+- **Bucket B/C-special (reasoning bypassed):** `generate_image` (media artifact is the reply), `agent_communication.delegate` (`skip_ai=True` — target's answer passes through verbatim by design), shell commands (`is_shell_tool` branch, structurally separate), sandboxed tools (`run_shell_command`, `/tool nmap`, `/tool dig`, etc. — raw technical output is expected).
+- **Bucket C (write confirmations):** `flows.create/update/delete`, `agent_switcher.set`, `automation.run/status` — all keep `skip_ai=True`, raw confirmation string is fine.
+
+**Changes:**
+
+- `backend/agent/agent_service.py`:
+  - Range 1013-1074 (the skill-tool execution block) now always passes `return_full_result=True` so we have access to `SkillResult.metadata` for every skill (previously only `generate_image` did this). Media paths handling is unchanged.
+  - New `_should_reason` local bool, set True only when `skill_result.success and not needs_media_output and not metadata.get('skip_ai', False)`. Defaults False (shell branch + legacy string-return fallbacks never reason).
+  - Range 1161-1186: after `ai_response = tool_execution_result`, invoke the new `_reason_over_tool_result` helper when `_should_reason` is True. Its return replaces `ai_response`; on any failure (exception, empty answer, AI error flag) the raw tool output is retained so the reply pipeline is never blocked.
+  - New private method `_reason_over_tool_result` (between `_prefer_tool_result_when_response_empty` and `process_message`). Truncates tool output to 4000 chars, builds a reasoning user-message with explicit "do not output tool call blocks" guard, calls `self.ai_client.generate()` with `operation_type="tool_reasoning"` (tracked separately in token analytics), strips reasoning tags / internal context / sensitive content from the returned answer (same sanitizers applied to the first-call output), returns `None` on any failure.
+  - Added `Any` to `typing` imports.
+
+- `backend/agent/skills/gmail_skill.py` (lines 428, 511): flipped `skip_ai: True` → `skip_ai: False` on the success paths of `_handle_list_emails` and `_handle_search_emails`. Empty-result and error paths keep `skip_ai: True` (those strings are self-explanatory). This aligns skills-as-tools semantics: list/search is "data for the LLM to reason over", not "final answer dump".
+
+- `backend/agent/skills/flows_skill.py` (line 1990): flipped `skip_ai: True` → `skip_ai: False` on the `_execute_tool_list` non-empty success path. Create/update/delete confirmations keep `skip_ai: True`.
+
+- `backend/agent/skills/flight_search_skill.py`: no change required — success path already had no `skip_ai` key, so `metadata.get('skip_ai', False)` defaults correctly to `False`.
+
+**Token/latency cost:** +1 LLM call per tool-invoking turn for bucket-A skills. Typical Gmail list (5 emails, ~1.5 KB tool output) adds ~1500 input + ~200 output tokens at ~$0.0001 per turn on Gemini Flash. Latency +1-3s per turn. No per-agent feature flag — the per-skill `skip_ai` flag already provides the right granularity; agents that want raw dumps can flip `skip_ai` on specific handlers.
+
+**Verified E2E:**
+- API v1 `POST /api/v1/agents/41/chat` (agent `movl`): Turn 1 `{"message": "quais meus ultimos emails?"}` → reasoned summary naming each sender + content hint, not raw markdown list. Turn 2 `{"message": "qual desses emails eh o mais importante?", "thread_id": 282}` → LLM identifies "Maria Júlia (item 3) – EXTRATOS BANCARIOS" as most important, explains the accounting context, groups the related emails (items 1, 2), dismisses the automated delivery updates (items 4, 5). `operation=tool_reasoning` visible in `AIClient.generate()` logs.
+- WhatsApp channel via tester MCP (+5527999616279 → +5527988290533, `/invoke movl`): same two-turn flow produced the same reasoned behavior end-to-end on the user's actual channel. Turn 2 response: "Vini, o e-mail mais importante parece ser o da **Maria Júlia**, do setor contábil. Ela está solicitando os extratos bancários em PDF, o que geralmente é uma tarefa prioritária..."
+- A2A regression: `ask movl qual eh seu ultimo email recebido` to agent `Tsushin` → Tsushin delegates via `agent_communication.ask`, movl replies, Tsushin composes a reasoned final answer for the user. Deep reasoning chain works.
+- Bucket-E regression: `/tool dig lookup domain=example.com` on agent `Tsushin` → raw dig output with execution time box preserved, `tool_used: custom:dig`, no `tool_reasoning` call (sandboxed branch structurally separate).
+- Bucket-A skills with legitimate `skip_ai=True` (e.g. write confirmations) still bypass reasoning.
+
+**Out of scope — reserved for v0.7.0:**
+
+Even with Option X, a follow-up question that still triggers a new tool call (e.g., the LLM re-calling `gmail_operation` in turn 2 because `conversation_history` only persists the rendered text, not the structured `emails[]` metadata) incurs the fetch again. The full fix — per-skill `auto_inject_results` toggle on `AgentSkillConfig` that persists `tool_result` structured data in `conversation_history` and re-injects it into the LLM prompt on subsequent turns, plus a referential-pronoun guard to suppress redundant tool dispatches — is scheduled for v0.7.0 under "Skill Tool-Result Reasoning & Cross-Turn Context Injection" in `.private/ROADMAP.md`. Option X closes the single-turn UX gap; v0.7.0 closes the cross-turn one.
+
+### Fix — Gmail/Flight/Image/Web-Search skills silently ran in legacy keyword mode despite being declared tool-only (2026-04-22)
+
+Commit `b1b1bb9` (2026-03-29) deprecated legacy keyword triggering by flipping the class-level `execution_mode` attribute from `"hybrid"` to `"tool"` on 10 skills. The intent was that the LLM would be the only one deciding when to call these skills, via the MCP tool schema. However, for four of those skills (`gmail`, `flight_search`, `image`, `web_search`) the commit left the stale value `"hybrid"` inside `get_default_config()` (and inside the UI schema default in `get_config_schema()`). At runtime, `config.get('execution_mode', self.execution_mode)` returns the persisted value first — so every new agent whose skill row was seeded from that default ended up with `config.execution_mode == "hybrid"` stored in the DB, silently re-activating the keyword-routing path the commit was supposed to delete.
+
+**User-visible symptom (reproduced on agent `movl`):** mentioning "email" to the Gmail-enabled agent caused the skill to fire in legacy mode, which short-circuits the LLM via `skip_ai=True` and dumps a hardcoded 10-email list. Follow-up reasoning ("qual desses é mais importante?") never reached the LLM because the keyword "email" re-triggered the skill. The volume-10 looked hardcoded because `_handle_list_emails` reads `config.default_max_results` (hardcoded default: 10) and `_build_email_query` extracts no count from the message — every legacy-mode invocation ends up returning the same 10.
+
+**Fix:**
+- `backend/agent/skills/gmail_skill.py`, `backend/agent/skills/flight_search_skill.py`, `backend/agent/skills/image_skill.py`, `backend/agent/skills/search_skill.py` — flipped `execution_mode` from `"hybrid"` to `"tool"` in both `get_default_config()` and the UI schema `default`. Class-level `execution_mode = "tool"` was already correct from `b1b1bb9`; these changes make the default config and the UI form default consistent with it.
+- `frontend/components/integrations/GmailSetupWizard.tsx` (line 200) — the "Link Gmail to agents" wizard now sends `{ is_enabled: true, config: {} }` explicitly instead of relying on backend Pydantic to populate `config`. Cosmetic / defense-in-depth — Pydantic `default_factory=dict` already compensates, but now the frontend→backend contract is explicit and won't regress silently if the default is ever tightened.
+- `backend/alembic/versions/0044_fix_skill_execution_mode_hybrid_leftover.py` — new migration flips `config.execution_mode` from `"hybrid"` to `"tool"` on existing rows for the four affected skill types (`gmail`, `flight_search`, `image`, `web_search`). Rows where `config` is `NULL` or `{}` self-heal via the runtime fallback once the code fix is deployed; this migration handles the rows that already have `"hybrid"` explicitly persisted. Idempotent (filtered on current value), Postgres+SQLite safe.
+
+**Verified end-to-end:** after the rebuild+migration, agent `movl` (id 41) responded to `POST /api/v1/agents/41/chat` with `{"message": "quais meus ultimos emails?"}` using `tool_used: "skill:gmail_operation"` (tool mode, previously `skip_ai` bypass) and returned 5 emails (LLM chose via max_results, previously hardcoded 10). DB verification: all four skill types now have `execution_mode="tool"` (or NULL/empty which resolve to `"tool"` via the class-attr fallback) across all 13 affected rows in the test tenant.
+
+**Out of scope — tracked for v0.7.0:** even with tool mode active, asking a follow-up question ("qual desses é mais importante?") still causes the LLM to re-invoke the Gmail tool instead of reasoning over the emails from the prior turn. Root cause: Tsushin's tool path is single-shot text substitution (`agent_service.py:1071` swaps the tool result into the response string) — there is no native `tool_use → tool_result → final_response` agentic loop, and `conversation_history` only persists the rendered string, not the structured `emails[]` metadata. The fix is the proposed framework-level `auto_inject_results` toggle on `AgentSkillConfig` planned for v0.7.0 (see plan `pq-isso-acontece-ele-zesty-puffin.md`). This changelog entry covers only the leftover-architecture cleanup.
+
+### Fix — Watcher "Semantic Search Disabled" badge was reading a vestigial global flag (2026-04-22)
+
+Watcher dashboard's System Performance card always showed "Semantic Search Disabled" even when every agent had per-agent semantic search turned on. The `/api/stats/memory` endpoint was reading `Config.enable_semantic_search`, a legacy global singleton that defaults to `False` and is not referenced anywhere else in the backend (no runtime path actually gates on it). Meanwhile, the real behavior is driven per-agent by `Agent.enable_semantic_search`, which defaults to `True`.
+
+**Fix:**
+- `backend/api/routes.py` (`get_memory_stats`) — `semantic_search_enabled` is now derived by aggregating the per-agent flag over the in-scope agents (all agents for global admins, tenant-scoped otherwise). The response also now includes `agents_with_semantic_search` and `total_agents`. The vector-store embedding aggregation loop now skips agents that have semantic search disabled rather than indiscriminately counting every agent's ChromaDB collection.
+- `frontend/lib/client.ts`, `frontend/components/watcher/DashboardTab.tsx`, `frontend/components/watcher/dashboard/SystemPerformanceSection.tsx` — `MemoryStats` extended with the new fields. The badge now has four states with correct styling: "Semantic Search Active (M/M agents)" (green) when all in-scope agents have it on, "Semantic Search Partial (N/M agents)" (warning) when only some do, "Semantic Search Disabled (0/M agents)" (muted) when none do, and "Semantic Search — no agents" (muted) when the tenant has no agents yet.
+
+**Verified end-to-end:** backend `/api/stats/memory` now returns `semantic_search_enabled: true, agents_with_semantic_search: 10, total_agents: 10` for the test tenant (previously `false`). Frontend UI renders the green "Semantic Search Active (10/10 agents)" badge with `bg-tsushin-success/10 border border-tsushin-success/30` styling. The legacy `Config.enable_semantic_search` column remains in the schema but is now orphaned — a later commit can drop it.
+
+### QA - VM fresh-install UI-first regression campaign (2026-04-22)
+
+Completed fresh-install regression run `20260422-081634` against a disposable Ubuntu 24.04 aarch64 Parallels VM from a clean `origin/develop` clone. The stock `python3 install.py --defaults` pass completed but revalidated the already-open IP-literal self-signed TLS failure (`BUG-688`). The interactive installer pass using `10.211.55.5.sslip.io` completed with self-signed HTTPS, `/setup` was completed in Playwright, and final `/api/health` plus `/api/readiness` remained 200 before cleanup.
+
+Coverage included hosted providers (OpenAI, Anthropic, Gemini, Vertex AI), tool APIs (Brave, Tavily, SerpAPI/Google Flights), auto-provisioned Qdrant vector store, Ollama provisioning path, memory/facts/KB, Sentinel/MemGuard detect and block probes, Playground UI/API chat, slash commands, A2A permission/session APIs, custom instruction/script skills, MCP server linkage, sandboxed tools, Shell Command Center, webhook channel delivery, graph activity/glow instrumentation, programmatic/agentic flows, API client OAuth token exchange, live OpenAPI download, generated Python client smoke, and a 21-page Playwright UI sweep across Watcher, Hub, Studio, Playground, Flows, Agent Studio, and settings.
+
+Pass/fail summary: sslip self-signed install path PASS; setup/browser login PASS; API health/readiness PASS; provider matrix PASS after replacing the stale Anthropic model with a current Claude 4.x model; API follow-ups PASS; generated client smoke PASS; graph showed Playground/Webhook/KB activity and no WhatsApp graph node when WhatsApp was unconfigured; Playground UI sent a real browser message and received `UI_OK`. New bugs opened: 5 total — High 2 (`BUG-694`, `BUG-695`), Medium 1 (`BUG-697`), Low 2 (`BUG-696`, `BUG-698`). Duplicates/revalidations not counted as new: `BUG-688`, the `BUG-308` stale-model family, and the `BUG-542` Gemini multi-part extraction log symptom.
+
+### Fix — A2A `context` leak between agents (BUG-693, partial — 2026-04-22)
+
+User investigating Google Calendar isolation found that when Tsushin asks movl for events via `agent_communication.ask`, then asks archsec the same question in the same thread, archsec "answered" with movl's events — even though archsec is bound to a different Calendar integration. Root cause is NOT a calendar/tenant leak (DB bindings and `SchedulerProviderFactory` are correctly scoped — verified by direct `GoogleCalendarProvider.list_events` calls). The leak lives in the A2A request path: the calling LLM populates a free-form `context` string that the target agent is shown as `"Additional Context: {context}"` with no untrust marker. Tsushin's LLM hoisted movl's tool output into that field; archsec's LLM paraphrased it verbatim, especially because the default `allow_target_skills=False` disables the target's own tools.
+
+**Defense-in-depth shipped in this commit:**
+- `backend/agent/skills/agent_communication_skill.py` — the MCP schema for `context` now explicitly tells the calling LLM not to paste tool output, emails, calendar events, or account-scoped data into the field.
+- `backend/services/agent_communication_service.py` (`_invoke_target_agent` prompt assembly) — source-supplied `context` is now framed as an UNTRUSTED hint with explicit instructions to the target agent: prefer own memory/tools, do not repeat specifics (names, dates, numbers, quoted content) unless independently verified, and when skills are disabled, say so instead of paraphrasing the hint as if verified.
+
+**Verified end-to-end — two rounds:**
+1. **Adversarial injection:** re-ran the same scenario with a deliberately hand-crafted tainted context. Tsushin's request to archsec carried `"Known events include Apr 22 Dr Eliud at 09:30; Apr 23 Dr Grossi at 09:40; Apr 24 LATAM LA 3243; Apr 27 LATAM LA 3644"` in `context_transferred`. Archsec ignored the untrusted hint, called its own `manage_reminders` tool, and returned only the two real `mv@archsec.io` events (`xASM`, `Sync Kees Mv`) — none of the tainted context appeared in the response.
+2. **Natural round-trip (both calendars in one Tsushin thread):** user asked Tsushin for events from movl then from archsec back-to-back. Movl returned its 7 real `movl2007@gmail.com` events; archsec returned only its 2 real `mv@archsec.io` events. Tsushin's LLM this time followed the new schema description and sent only a benign `"User wants a summary of their weekly events."` as archsec's `context` — no event specifics hoisted from movl's prior turn. Both defenses (caller-side schema nudge and callee-side untrust marker) worked. Evidence in `agent_communication_message.id IN (85,86,87,88)`.
+
+**Structural follow-up (not in this commit):** ideally drop the free-form `context` parameter entirely and let target agents fetch their own data via their own tools; or restrict `context` to a typed schema that cannot be misread as authoritative data. A regression test (two calendar-bound agents + verify no cross-event leak) should be added to `backend/tests/`. Tracked in BUG-693.
+
+### Fix — `scheduler` skill registry miss broke Google Calendar + flow-template execution (2026-04-21)
+
+User-reported toast after connecting Google Calendar: `Skill type 'scheduler' is not registered. Available: ['…', 'flows', '…']`. Root cause: v0.6.0 replaced `SchedulerSkill` with `FlowsSkill` and registered it under `skill_type='flows'`, but `'scheduler'` remained the canonical abstraction name used everywhere else — integration wizards (`GoogleCalendarSetupWizard`, `GmailSetupWizard`), seeded flow templates (Weekly Calendar Summary), the Flows page dropdown, and any DB rows created via those paths. At flow-execution time, `flow_engine.py` looked up `'scheduler'` in the skill registry, missed, and raised.
+
+Scheduler is the skill abstraction; Flows, Google Calendar, and Asana are all providers of it — Google Calendar has nothing to do with "flows" beyond sharing the same provider-aware skill class. The registry should expose the abstraction name, not one of its provider names.
+
+**Fix:**
+- `backend/agent/skills/skill_manager.py` — `FlowsSkill` is now registered under both `"flows"` (legacy alias, preserved for DB rows that already use it) and `"scheduler"` (canonical abstraction, used by the wizards and templates). Both keys resolve to the same provider-aware implementation.
+- `backend/api/routes_skill_integrations.py` — updated the "unknown skill type" error message to advertise the full set (`scheduler, flows, email, gmail, flight_search, web_search`).
+- `backend/dev_tests/test_week5_skills.py` — fixed stale assertions that expected the removed `scheduler_query` key.
+
+Not changed (intentional): `flow_template_seeding.py:260` still uses `skill_type="scheduler"` — that value is semantically correct (the Weekly Calendar Summary template targets the Scheduler abstraction, not the Flows provider). The registry alias is what makes it executable again.
+
+**Verified:** registry now exposes both keys resolving to `FlowsSkill`; movl agent received a calendar query in the Playground without the registry error (the subsequent `manage_reminders` tool-enablement issue is an unrelated MCP tool gate, not a scheduler registry problem); backend logs show zero `Skill type 'scheduler' is not registered` entries after the fix.
+
+**Wizard fix + DB migration (follow-up commit):** `GoogleCalendarSetupWizard` was writing `skill_type='scheduler'` while `AgentSkillsManager` writes `'flows'`. The registry alias made execution tolerate either, but downstream lookups (`skill_manager._get_skill_record`, `SchedulerProviderFactory.get_provider_for_agent`, ~40 other sites) query by the canonical value `'flows'` and missed the wizard-created rows, so tool calls to `manage_reminders` returned "Tool is not enabled for this agent" even though the skill was technically registered and enabled. Fix: wizard now writes `'flows'`, and existing `AgentSkill` / `AgentSkillIntegration` rows with `skill_type='scheduler'` were migrated to `'flows'`. Verified end-to-end on agent "movl": `List my calendar events for the next 7 days` returned 7 real Google Calendar events via the `google_calendar` provider.
+
+### Fix — OAuth/email/frontend HTTP/HTTPS landmines + SSL-overlay auto-load (2026-04-21)
+
+A user-reported Google Calendar OAuth regression (`redirect_uri=https://localhost/api/hub/google/oauth/callback` rejected) surfaced a broader set of HTTP/HTTPS inconsistencies. Root cause had two layers:
+
+1. Several code paths hard-coded `http://localhost:…` defaults and ignored `TSN_FRONTEND_URL` / `TSN_BACKEND_URL`. Any integration whose dedicated env var wasn't explicitly set (Asana is the obvious one — `ASANA_REDIRECT_URI` is not in `.env`) silently fell back to HTTP even when the operator had set the public URLs to HTTPS.
+2. `docker-compose` commands that omitted `docker-compose.ssl.yml` recreated the Caddy `proxy` against the base (HTTP-only) Caddyfile, so `https://localhost` and port 443 publishing silently disappeared after any rebuild. This was the "UI got downgraded from HTTPS to HTTP during a test" regression the user has hit repeatedly.
+
+**Code fixes (derive from `settings.FRONTEND_URL` / `settings.BACKEND_URL`):**
+- `backend/api/routes_hub.py`, `backend/api/v1/routes_hub.py` — Asana OAuth redirect URI now derives from `settings.FRONTEND_URL` when `ASANA_REDIRECT_URI` is unset.
+- `backend/agent/skills/scheduler/asana_provider.py` — Asana scheduler provider token-refresh redirect_uri now matches the OAuth auth flow (`{FRONTEND_URL}/hub/asana/callback`); previously it used a completely different backend path (`/api/hub/asana/oauth/callback`), which Asana rejects with `invalid_grant` on refresh.
+- `backend/services/email_service.py` — `base_url` now reads `settings.FRONTEND_URL` (handles both `TSN_FRONTEND_URL` and the legacy `FRONTEND_URL` names) instead of `os.getenv("FRONTEND_URL")`, which only saw the legacy name and fell back to HTTP. Fixes invitation and password-reset email links on HTTPS deployments.
+- `backend/services/public_ingress_resolver.py` — last-resort invitation base-URL fallback now uses `settings.FRONTEND_URL` instead of a bare `os.getenv("FRONTEND_URL")`.
+- `backend/agent/skills/scheduler_skill.py` — bot reply text linking to `/flows` now uses `settings.FRONTEND_URL` instead of a hard-coded `http://localhost:3030/flows`.
+
+**Compose + env:**
+- `docker-compose.yml` — `TSN_GOOGLE_OAUTH_REDIRECT_URI` and `ASANA_REDIRECT_URI` defaults now inherit from `${TSN_BACKEND_URL}` / `${TSN_FRONTEND_URL}` via nested `${VAR:-${VAR:-…}}` substitution. Setting the two public URLs in `.env` is now sufficient to flip the whole stack to HTTPS.
+- `.env` — pinned `COMPOSE_FILE=docker-compose.yml:docker-compose.ssl.yml` so every `docker-compose` call automatically applies the SSL overlay. Without this, any recreate of the `proxy` service drops the TLS mount + port publishing and silently takes `https://localhost` offline.
+
+**Doc + playbook guardrails:**
+- `CLAUDE.md` — added an "SSL Overlay (CRITICAL — do NOT downgrade the proxy)" section under the Safe Container Rebuild rules, and replaced the old `docker-compose up -d --build --no-cache` incantation (which isn't a valid flag combination on current compose) with `docker-compose build --no-cache` + `docker-compose up -d`.
+- `.claude/agents/qa-tester.md`, `methodology/commands/fire_full_regression.md`, `methodology/commands/fire_regression.md`, `methodology/commands/fire_remediation.md` — prepended a "Do NOT flip the instance's HTTP/HTTPS mode" block that tells the runner to source `.env`, export `UI_URL` / `API_URL`, and substitute those everywhere the doc says `http://localhost:3030` / `http://localhost:8081`. The goal is to stop agents from "fixing" hard-coded URLs in the test scripts by editing the operator's `.env`.
+
+Verified post-fix on the live instance: `https://localhost/api/health`, login, `/api/v1/oauth/token`, `/api/v1/agents/1/chat` (agent returned `REGRESSION_OK`), and the frontend root redirect to `/auth/login` all return 200 over HTTPS; `ASANA_REDIRECT_URI` inside the container resolves to `https://localhost/hub/asana/callback`; `email_service.base_url` resolves to `https://localhost`; WhatsApp agent container reconnected cleanly; no new backend errors beyond the pre-existing Qdrant fallback warning.
+
+### QA - UI-first partial regression campaign (2026-04-22)
+
+Partial run of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` (run ID `20260421b`) against the existing local Mac stack (E2 path). Campaign was interrupted by a user-reported login issue (root cause: Chrome HSTS redirect for `localhost` → `https://localhost` which is not published — de-duped against BUG-685). Login confirmed working at `http://127.0.0.1:3030`. Completed phases: Preflight (all healthy), Playground API/WS (PASS), Playground + Mini browser (PASS with 2 bugs), Flows API/schema (PASS), Sentinel programmatic tests (62/62 PASS, LLM gate PASS), Audit 5 local instance (PASS). Phases C2, B2, D1–D4 not reached. All QA fixtures (2 agents, 2 contacts, 1 vector store, 2 sentinel profiles, 2 threads) were deleted and the stack was fully reverted to pre-run state.
+
+Bug count from this campaign: 3 new open bugs — Medium 3 (BUG-690: onboarding modal buttons unresponsive, BUG-691: Playground wrong thread after refresh, BUG-692: Mini expand wrong thread handoff).
+
+### QA - UI-first regression rerun aborted on backend health timeout (2026-04-21)
+
+Started an autonomous subagent-first rerun of `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` with run id `20260421-204933`. The run selected the existing-local-instance Audit 5 track and initially passed direct backend HTTP health/readiness, compose health, disk, setup-status, and MCP log checks. E2 local-instance non-browser validation passed and de-duped the local HTTPS refusal to existing `BUG-685`.
+
+The campaign was then aborted per the playbook hard-stop rule after parallel A1/B1/C1 activity caused or exposed backend unresponsiveness: direct `/api/health` and `/api/readiness` timed out with HTTP `000`, and `docker compose ps` showed backend and proxy unhealthy. C1's preserved Sentinel benchmark log shows repeated Gemini/Sentinel unified-analysis timeouts before the abort. New tracker entry: `BUG-689` (Critical), covering backend health/readiness timeout during the Sentinel benchmark run. No product code was changed and no restart/rebuild was used to mask the failure.
+
+### QA - UI-first full regression campaign completed (2026-04-21)
+
+Ran the full UI-first regression campaign from `.private/TEST_PLAYBOOK_UI_FIRST_REGRESSION.md` after the required health recovery gate, including local A/B/C/D audit tracks, isolated VM fresh-install validation, cleanup, and final health checks.
+
+- Playground API/WebSocket, Playground UI, Mini, and Graph tracks passed.
+- Flows API/schema checks passed; Flows UI builder coverage opened one Medium bug because browser create attempts reached configuration screens but did not complete flow creation.
+- Sentinel preflight, fixture setup, Gemini Flash LLM gate, and API matrix passed; Sentinel UI opened one Medium bug for the Test Analysis result being hidden until the User Guide state was dismissed.
+- Tenant admin, global admin, and SSO UI surfaces loaded cleanly; destructive multi-tenant stress/provisioning writes were skipped where the playbook required safety.
+- VM fresh-install HTTP pass succeeded; self-signed IP HTTPS pass opened one High installer/TLS bug.
+- Local HTTPS proxy coverage opened one Medium bug because `https://localhost` was unavailable while the proxy container was healthy.
+- Final cleanup verification found no leftover run-owned containers, VM workdirs, or active local QA resources; final local health and readiness were green.
+
+Bug count from this campaign: 4 new open bugs - High 1, Medium 3.
+
+### Hub Productivity + Communication rework — guided wizards replace fixed cards (2026-04-21)
+
+User follow-up to the v0.7 Hub rework: apply the same judgement used for AI Providers and Tool APIs (single guided "+ Add …" launcher, no placeholder cards for unused services) to the Productivity and Communication tabs. Both tabs previously leaned on fixed/placeholder cards that took screen space for services the tenant had not chosen to use; they now collapse to configured-instance cards only, with a single wizard launcher per tab.
+
+**Productivity tab (`frontend/app/hub/page.tsx`)**
+
+- Removed the fixed **Google Integration** status card, the **Asana — Not Connected** placeholder card, and the **Google Calendar — Not Connected** placeholder card.
+- Added a single top-right **"+ Add Productivity Integration"** launcher that opens the new `ProductivityWizard`. The wizard runs Category (calendar / email / tasks / knowledge base) → Service (Google Calendar / Gmail / Asana / …), then hands off to the existing per-service setup flow (`GmailSetupWizard`, `GoogleCalendarSetupWizard`, Asana OAuth redirect) — dispatcher pattern, no rewrite of deep OAuth flows.
+- Google OAuth configuration state is now a compact inline badge instead of a full card. Empty tab state shows one centred "No productivity integrations yet" CTA; with at least one configured service, only the matching instance cards render.
+- Gmail cards are intentionally surfaced only under **Communication** (email-as-channel) to avoid the duplicate placement the v0.6 layout had.
+
+**Communication tab (`frontend/app/hub/page.tsx`)**
+
+- Consolidated six scattered CTAs (top-level `+ Create WhatsApp Instance`; per-section `+ Create Bot` / `+ Connect Workspace` / `+ Connect Bot` / `+ New Webhook` / `+ Add Gmail Account`; plus duplicate empty-state body buttons) into one top-level **"+ Add Channel"** launcher that opens the new `ChannelsWizard`.
+- Per-channel sections (WhatsApp, Telegram, Slack, Discord, Webhooks, Gmail Email Integration) are hidden when the tenant has zero instances of that channel — so an unused Telegram / Slack / Discord section no longer occupies a full empty-state card. Section-level `+ Create …` buttons are retained when at least one instance exists, so a second instance can be added without round-tripping through the wizard.
+- The dashed **"Add Another Gmail"** placeholder is gone — adding a Gmail account now flows through `+ Add Channel` → Gmail, or `+ Add Productivity Integration` → Email → Gmail.
+- The Public-Base-URL advanced card renders only when a Slack / Discord / Webhook integration actually exists (the setting is irrelevant otherwise).
+- Unified empty-state card shown only when zero channels are configured anywhere on the tab.
+
+**New wizards**
+
+- `frontend/components/integrations/ProductivityWizard.tsx` — two-step picker (Category → Service), fetches `/api/hub/productivity-services`, falls back to a static array on offline/degraded boot. Dispatches to existing sub-wizards via a caller-provided `onServiceSelected` callback so modals don't stack.
+- `frontend/components/integrations/ChannelsWizard.tsx` — one-step picker (Channel), fetches `/api/channels`, merges per-tenant `tenant_has_configured` badges into the fallback. Dispatches to `WhatsAppSetupWizard` / `TelegramBotModal` / `SlackSetupWizard` / `DiscordSetupWizard` / `WebhookSetupModal` / `GmailSetupWizard`. Includes an inbound-email `gmail` entry the backend catalog doesn't currently expose; Guard 9 (below) allowlists that extra.
+
+**Backend catalog**
+
+- New `backend/hub/productivity_catalog.py` — `ProductivityServiceInfo` dataclass + `PRODUCTIVITY_CATALOG` array (google_calendar, gmail, asana). Pattern mirrors `backend/channels/catalog.py`.
+- New `GET /api/hub/productivity-services` endpoint in `backend/api/routes_hub_providers.py` — returns the catalog annotated with `tenant_has_configured` (per integration type) and `tenant_has_oauth_credentials` (per OAuth provider; surfaced to the wizard so successive Google-backed picks don't re-ask for the same secret).
+- `frontend/lib/client.ts` — `ProductivityServiceInfo` interface + `api.getProductivityServices()` method.
+
+**Drift prevention (item 5)**
+
+- `backend/tests/test_wizard_drift.py` extended with **Guard 8** (backend `PRODUCTIVITY_CATALOG` ⇄ `ProductivityWizard` `FALLBACK_SERVICES`) and **Guard 9** (backend `CHANNEL_CATALOG` actionable entries ⇄ `ChannelsWizard` `FALLBACK_CHANNELS`, with a narrow `{gmail}` allowlist for wizard-only extras). Adding a new productivity service or channel to the backend without updating the wizard fallback now fails CI.
+- New `frontend/lib/wizard-registry.ts` — a pure-metadata registry that enumerates every wizard + the backend catalog each one depends on. Not imported by the wizards themselves (keeps offline mode robust), but documents the coupling in one place so future wizard additions pick up the drift guard.
+
+**Before/after cosmetic baseline (captured 2026-04-21 via Playwright)**
+
+- Productivity before: 0 configured cards, 3 fixed/placeholder cards (Google Integration, Asana, Google Calendar).
+- Productivity after: 0 configured cards → single centred empty-state CTA; ≥1 configured → only configured cards + inline OAuth badge.
+- Communication before: 5 configured cards, 1 dashed "Add Another Gmail" placeholder, 3 empty-state shells (Telegram/Slack/Discord), 6 scattered CTAs.
+- Communication after: configured-only sections, zero placeholders, 1 top-level "+ Add Channel" (plus per-section "+" only when ≥1 instance exists).
+
+Evidence under `output/playwright/hub-wizard-v0.7/pre-impl/` (pre-impl screenshots).
+
 ### Fourth Sweep — Zero open bugs (2026-04-21)
 
 User wanted no open bugs. Closed the final 2 architectural items with fixes + live verification.
