@@ -176,8 +176,12 @@ def resolve_invitation_base_url(
     if req_origin:
         return req_origin
 
-    import os
-    env_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+    # Last-resort fallback. Read from settings.FRONTEND_URL so the TSN_FRONTEND_URL
+    # env name (canonical in docker-compose) is honored — a bare os.getenv here
+    # would only see the legacy FRONTEND_URL name and yield the wrong protocol
+    # on HTTPS deployments.
+    import settings
+    env_url = (settings.FRONTEND_URL or "").rstrip("/")
     if env_url:
         return env_url
     return "http://localhost:3030"

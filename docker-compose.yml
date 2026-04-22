@@ -167,9 +167,13 @@ services:
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 
       # URL Configuration (for OAuth callbacks, redirects)
+      # Google/Asana redirect defaults INHERIT from TSN_BACKEND_URL/TSN_FRONTEND_URL
+      # so `.env` only needs to set the two public URLs to flip the whole stack
+      # between http://localhost:PORT and https://<domain>. Python settings also
+      # re-derives on its own as a safety net for the unset case.
       - TSN_BACKEND_URL=${TSN_BACKEND_URL:-http://localhost:8081}
       - TSN_FRONTEND_URL=${TSN_FRONTEND_URL:-http://localhost:3030}
-      - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
+      - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-${TSN_BACKEND_URL:-http://localhost:8081}/api/hub/google/oauth/callback}
 
       # v0.6.1 Public Ingress Resolver — dev escape hatch for local setups without
       # a Cloudflare tunnel. Leave empty in production.
@@ -199,7 +203,7 @@ services:
 
       # Integrations
       - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}
-      - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
+      - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-${TSN_FRONTEND_URL:-http://localhost:3030}/hub/asana/callback}
 
       # External services (use host.docker.internal for host access)
       - GROQ_API_KEY=${GROQ_API_KEY:-}
