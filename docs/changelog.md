@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — `scheduler` skill registry miss broke Google Calendar + flow-template execution (2026-04-21)
+
+User-reported toast after connecting Google Calendar: `Skill type 'scheduler' is not registered. Available: ['…', 'flows', '…']`. Root cause: v0.6.0 replaced `SchedulerSkill` with `FlowsSkill` and registered it under `skill_type='flows'`, but `'scheduler'` remained the canonical abstraction name used everywhere else — integration wizards (`GoogleCalendarSetupWizard`, `GmailSetupWizard`), seeded flow templates (Weekly Calendar Summary), the Flows page dropdown, and any DB rows created via those paths. At flow-execution time, `flow_engine.py` looked up `'scheduler'` in the skill registry, missed, and raised.
+
+Scheduler is the skill abstraction; Flows, Google Calendar, and Asana are all providers of it — Google Calendar has nothing to do with "flows" beyond sharing the same provider-aware skill class. The registry should expose the abstraction name, not one of its provider names.
+
+**Fix:**
+- `backend/agent/skills/skill_manager.py` — `FlowsSkill` is now registered under both `"flows"` (legacy alias, preserved for DB rows that already use it) and `"scheduler"` (canonical abstraction, used by the wizards and templates). Both keys resolve to the same provider-aware implementation.
+- `backend/api/routes_skill_integrations.py` — updated the "unknown skill type" error message to advertise the full set (`scheduler, flows, email, gmail, flight_search, web_search`).
+- `backend/dev_tests/test_week5_skills.py` — fixed stale assertions that expected the removed `scheduler_query` key.
+
+Not changed (intentional): `flow_template_seeding.py:260` still uses `skill_type="scheduler"` — that value is semantically correct (the Weekly Calendar Summary template targets the Scheduler abstraction, not the Flows provider). The registry alias is what makes it executable again.
+
+**Verified:** registry now exposes both keys resolving to `FlowsSkill`; movl agent received a calendar query in the Playground without the registry error (the subsequent `manage_reminders` tool-enablement issue is an unrelated MCP tool gate, not a scheduler registry problem); backend logs show zero `Skill type 'scheduler' is not registered` entries after the fix.
+
+**Wizard audit finding (documented for future work):** `GoogleCalendarSetupWizard` writes `skill_type='scheduler'` while `AgentSkillsManager` writes `skill_type='flows'` via its `PROVIDER_SKILLS` map — same logical skill, different DB keys. The registry alias makes both work at execution time, but unifying the writes on `'scheduler'` (plus a one-shot DB migration from `'flows'` → `'scheduler'`) is a follow-up cleanup.
+
 ### Fix — OAuth/email/frontend HTTP/HTTPS landmines + SSL-overlay auto-load (2026-04-21)
 
 A user-reported Google Calendar OAuth regression (`redirect_uri=https://localhost/api/hub/google/oauth/callback` rejected) surfaced a broader set of HTTP/HTTPS inconsistencies. Root cause had two layers:
