@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### QA - VM fresh-install UI-first regression campaign (2026-04-22)
+
+Completed fresh-install regression run `20260422-081634` against a disposable Ubuntu 24.04 aarch64 Parallels VM from a clean `origin/develop` clone. The stock `python3 install.py --defaults` pass completed but revalidated the already-open IP-literal self-signed TLS failure (`BUG-688`). The interactive installer pass using `10.211.55.5.sslip.io` completed with self-signed HTTPS, `/setup` was completed in Playwright, and final `/api/health` plus `/api/readiness` remained 200 before cleanup.
+
+Coverage included hosted providers (OpenAI, Anthropic, Gemini, Vertex AI), tool APIs (Brave, Tavily, SerpAPI/Google Flights), auto-provisioned Qdrant vector store, Ollama provisioning path, memory/facts/KB, Sentinel/MemGuard detect and block probes, Playground UI/API chat, slash commands, A2A permission/session APIs, custom instruction/script skills, MCP server linkage, sandboxed tools, Shell Command Center, webhook channel delivery, graph activity/glow instrumentation, programmatic/agentic flows, API client OAuth token exchange, live OpenAPI download, generated Python client smoke, and a 21-page Playwright UI sweep across Watcher, Hub, Studio, Playground, Flows, Agent Studio, and settings.
+
+Pass/fail summary: sslip self-signed install path PASS; setup/browser login PASS; API health/readiness PASS; provider matrix PASS after replacing the stale Anthropic model with a current Claude 4.x model; API follow-ups PASS; generated client smoke PASS; graph showed Playground/Webhook/KB activity and no WhatsApp graph node when WhatsApp was unconfigured; Playground UI sent a real browser message and received `UI_OK`. New bugs opened: 5 total — High 2 (`BUG-694`, `BUG-695`), Medium 1 (`BUG-697`), Low 2 (`BUG-696`, `BUG-698`). Duplicates/revalidations not counted as new: `BUG-688`, the `BUG-308` stale-model family, and the `BUG-542` Gemini multi-part extraction log symptom.
+
 ### Fix — A2A `context` leak between agents (BUG-693, partial — 2026-04-22)
 
 User investigating Google Calendar isolation found that when Tsushin asks movl for events via `agent_communication.ask`, then asks archsec the same question in the same thread, archsec "answered" with movl's events — even though archsec is bound to a different Calendar integration. Root cause is NOT a calendar/tenant leak (DB bindings and `SchedulerProviderFactory` are correctly scoped — verified by direct `GoogleCalendarProvider.list_events` calls). The leak lives in the A2A request path: the calling LLM populates a free-form `context` string that the target agent is shown as `"Additional Context: {context}"` with no untrust marker. Tsushin's LLM hoisted movl's tool output into that field; archsec's LLM paraphrased it verbatim, especially because the default `allow_target_skills=False` disables the target's own tools.
