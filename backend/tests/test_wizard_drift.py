@@ -653,5 +653,59 @@ def test_channels_wizard_fallback_matches_backend():
     )
 
 
+# ---------------------------------------------------------------------------
+# Guard 10 — Gemini TTS model catalog drift
+# ---------------------------------------------------------------------------
+
+def test_gemini_tts_models_frontend_fallback_matches_backend():
+    """
+    GeminiTTSProvider.SUPPORTED_MODELS is the authoritative catalog of Gemini
+    TTS preview models. The frontend's offline fallback in
+    `frontend/components/audio-wizard/defaults.ts` (`GEMINI_TTS_MODELS`) must
+    list the same model_ids — otherwise a degraded /api/tts-providers/gemini/models
+    response will surface a different set than what the backend can actually
+    invoke, causing silent fallback to the default model on save.
+    """
+    from hub.providers.gemini_tts_provider import GeminiTTSProvider
+
+    backend_models = set(GeminiTTSProvider.SUPPORTED_MODELS.keys())
+    assert backend_models, "GeminiTTSProvider.SUPPORTED_MODELS is empty"
+    assert GeminiTTSProvider.DEFAULT_MODEL in backend_models, (
+        f"DEFAULT_MODEL='{GeminiTTSProvider.DEFAULT_MODEL}' is not in SUPPORTED_MODELS"
+    )
+
+    defaults_path = FRONTEND / "components" / "audio-wizard" / "defaults.ts"
+    assert defaults_path.exists(), f"defaults.ts not found at {defaults_path}"
+    text = _read(defaults_path)
+
+    block = re.search(
+        r"GEMINI_TTS_MODELS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert block, (
+        "GEMINI_TTS_MODELS array not found in defaults.ts. If you renamed it, "
+        "update this regex too."
+    )
+    frontend_models = set(re.findall(r"id:\s*'([^']+)'", block.group(1)))
+
+    assert backend_models == frontend_models, (
+        f"GEMINI_TTS_MODELS drift: backend SUPPORTED_MODELS={sorted(backend_models)}, "
+        f"frontend GEMINI_TTS_MODELS={sorted(frontend_models)}. "
+        f"Add/remove the matching entry in defaults.ts."
+    )
+
+    # Default-model constant in defaults.ts must match the backend default.
+    default_match = re.search(
+        r"GEMINI_TTS_DEFAULT_MODEL\s*=\s*'([^']+)'",
+        text,
+    )
+    assert default_match, "GEMINI_TTS_DEFAULT_MODEL constant missing in defaults.ts"
+    assert default_match.group(1) == GeminiTTSProvider.DEFAULT_MODEL, (
+        f"Default model drift: backend='{GeminiTTSProvider.DEFAULT_MODEL}', "
+        f"frontend='{default_match.group(1)}'."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

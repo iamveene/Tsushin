@@ -34,11 +34,12 @@ class AudioTTSSkill(BaseSkill):
 
     Configuration:
     {
-        "provider": "kokoro",          # "openai", "kokoro", or "elevenlabs"
+        "provider": "kokoro",          # "openai", "kokoro", "elevenlabs", or "gemini"
         "voice": "pf_dora",            # Provider-specific voice
         "response_format": "opus",     # Audio format: mp3, opus, aac, flac, wav
         "speed": 1.0,                  # OpenAI: 0.25-4.0, Kokoro: 0.5-2.0
-        "language": "pt"               # Kokoro only: pt, en, es, ja, etc.
+        "language": "pt",              # Kokoro only: pt, en, es, ja, etc.
+        "model": "gemini-3.1-flash-tts-preview"  # Gemini only: model id (optional)
     }
     """
 
@@ -145,6 +146,7 @@ class AudioTTSSkill(BaseSkill):
                 language=config.get("language", "pt"),
                 speed=config.get("speed", 1.0),
                 response_format=config.get("response_format", "opus"),
+                model=config.get("model"),
                 agent_id=agent_id,
                 sender_key=sender_key,
                 message_id=message_id
@@ -376,6 +378,15 @@ class AudioTTSSkill(BaseSkill):
                     "default": 1.0,
                     "minimum": 0.25,
                     "maximum": 4.0
+                },
+                "model": {
+                    "type": "string",
+                    "title": "TTS Model",
+                    "description": (
+                        "Provider-specific model id. Currently only Gemini honors this; "
+                        "ignored by Kokoro/OpenAI/ElevenLabs. Discover values via "
+                        "GET /api/tts-providers/{provider}/models."
+                    )
                 }
             },
             "required": []
