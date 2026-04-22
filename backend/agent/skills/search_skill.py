@@ -613,7 +613,7 @@ Search query:"""
                     "type": "string",
                     "enum": ["tool", "legacy", "hybrid"],
                     "description": "Execution mode: tool (AI decides), legacy (keywords only), hybrid (both)",
-                    "default": "hybrid"
+                    "default": "tool"
                 }
             }
         }

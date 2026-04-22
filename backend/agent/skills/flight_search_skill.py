@@ -700,7 +700,7 @@ Return JSON only:"""
             Default config dict
         """
         return {
-            "execution_mode": "hybrid",
+            "execution_mode": "tool",
             "keywords": [],
             "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
@@ -727,7 +727,7 @@ Return JSON only:"""
                     "type": "string",
                     "enum": ["tool", "legacy", "hybrid"],
                     "description": "Execution mode: tool (LLM decides), legacy (keywords), hybrid (both)",
-                    "default": "hybrid"
+                    "default": "tool"
                 },
                 "keywords": {
                     "type": "array",
