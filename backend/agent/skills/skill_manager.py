@@ -77,9 +77,17 @@ class SkillManager:
             from agent.skills.audio_tts_skill import AudioTTSSkill
             self.register_skill(AudioTTSSkill)
 
-            # Phase 6.4 Week 5: Import Flows skill (replaces scheduler + scheduler_query)
+            # Scheduler skill abstraction. FlowsSkill is the provider-aware
+            # implementation that dispatches to Flows (built-in), Google
+            # Calendar, or Asana based on AgentSkillIntegration.scheduler_provider.
+            # Registered under BOTH "scheduler" (canonical abstraction name used
+            # by integration wizards, flow templates, and the Flows page
+            # dropdown) and "flows" (alias used by some DB rows created via
+            # AgentSkillsManager). Do not remove either alias without migrating
+            # the corresponding AgentSkill / AgentSkillIntegration rows.
             from agent.skills.flows_skill import FlowsSkill
             self.register_skill(FlowsSkill)
+            self.registry["scheduler"] = FlowsSkill
 
             # Automation Skill: Multi-step workflow automation
             from agent.skills.automation_skill import AutomationSkill

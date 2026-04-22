@@ -1256,6 +1256,26 @@ export interface TravelProviderInfo {
   tenant_has_configured: boolean
 }
 
+// Productivity services catalog row. Powers the Hub > Productivity guided
+// wizard (category -> service -> delegated credential step). Categories are
+// "calendar" | "email" | "tasks" | "knowledge_base". The wizard only renders
+// cards whose `tenant_has_configured` is false so the picker never repeats a
+// service that's already in place.
+export interface ProductivityServiceInfo {
+  id: string
+  name: string
+  description?: string | null
+  category: string
+  vendor: string
+  requires_oauth: boolean
+  oauth_provider: string
+  integration_type: string
+  icon_hint: string
+  status: string
+  tenant_has_configured: boolean
+  tenant_has_oauth_credentials: boolean
+}
+
 export interface AgentTTSConfig {
   provider?: string
   voice?: string
@@ -3143,6 +3163,8 @@ export const api = {
 
   async getMemoryStats(): Promise<{
     semantic_search_enabled: boolean
+    agents_with_semantic_search: number
+    total_agents: number
     ring_buffer_size: number
     senders_in_memory: number
     total_messages_cached: number
@@ -3787,6 +3809,12 @@ export const api = {
   async getSearchProviders(): Promise<SearchProviderInfo[]> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/search-providers`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch search providers')
+    return res.json()
+  },
+
+  async getProductivityServices(): Promise<ProductivityServiceInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/productivity-services`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch productivity services')
     return res.json()
   },
 

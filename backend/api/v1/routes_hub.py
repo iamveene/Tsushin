@@ -142,6 +142,7 @@ def _create_service_for_integration(integration: HubIntegration, db: Session):
 def _create_asana_service(integration_id: int, db: Session):
     """Create AsanaService instance (extracted from routes_hub)."""
     import os
+    import settings
     from models import Config
     from hub.asana.asana_service import AsanaService
     from services.encryption_key_service import get_asana_encryption_key
@@ -150,7 +151,7 @@ def _create_asana_service(integration_id: int, db: Session):
     if not encryption_key:
         raise HTTPException(status_code=500, detail="ASANA_ENCRYPTION_KEY not configured")
 
-    redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:3030/hub/asana/callback")
+    redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
     config = db.query(Config).first()
     client_id = config.asana_mcp_client_id if config and config.asana_mcp_registered else None

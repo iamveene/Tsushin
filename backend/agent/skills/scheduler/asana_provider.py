@@ -122,9 +122,12 @@ class AsanaProvider(SchedulerProviderBase):
                 raise ValueError(f"Asana integration {self.integration_id} not found")
 
             # Get OAuth config
+            import settings
             from services.encryption_key_service import get_asana_encryption_key
             encryption_key = get_asana_encryption_key(db)
-            redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:8081/api/hub/asana/oauth/callback")
+            # Must match the URI used at authorization (frontend callback page),
+            # otherwise Asana rejects token refresh with invalid_grant.
+            redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
             self._service = AsanaService(
                 db=self.db,

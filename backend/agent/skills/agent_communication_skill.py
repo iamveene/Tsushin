@@ -120,7 +120,16 @@ class AgentCommunicationSkill(BaseSkill):
                     },
                     "context": {
                         "type": "string",
-                        "description": "Optional context to pass to the target agent (e.g., conversation summary)",
+                        "description": (
+                            "Optional short topical hint about the user's intent "
+                            "(e.g. 'user is planning a trip', 'follow-up on incident #42'). "
+                            "IMPORTANT: do NOT paste tool output, another agent's response, "
+                            "emails, calendar events, or any private/account-scoped data here. "
+                            "The target agent owns its own data and will fetch it via its own "
+                            "tools — providing such content here is treated as untrusted hearsay "
+                            "and may cause the target to respond incorrectly or refuse the task. "
+                            "Keep this field short (one or two sentences) or omit it."
+                        ),
                     },
                 },
                 "required": ["action"],

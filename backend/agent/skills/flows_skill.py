@@ -1987,7 +1987,7 @@ Return ONLY a valid JSON object, no other text."""
             success=True,
             output="\n".join(lines),
             metadata={
-                "skip_ai": True,
+                "skip_ai": False,
                 "event_count": len(events),
                 "provider_type": provider_type,
                 "action": "list"
