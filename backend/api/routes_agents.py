@@ -6,7 +6,7 @@ Provides CRUD operations for agents and tone presets.
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
@@ -1018,8 +1018,75 @@ def delete_agent(
         if next_agent:
             next_agent.is_default = True
 
-    db.delete(agent)
-    db.commit()
+    # BUG-701 FIX: Cascade-clean child rows before deleting the agent.
+    #
+    # Eight tables have FK(agent.id) with delete_rule=NO ACTION (agent_skill_integration,
+    # agent_project_access, message_queue, sentinel_agent_config, sentinel_exception,
+    # shell_command, user_agent_session, user_project_session) — any row in any of them
+    # raises ForeignKeyViolation → 500. Seventeen more tables reference agent_id WITHOUT
+    # any FK constraint at all (agent_skill, agent_knowledge, agent_run, memory, etc.),
+    # so they would become silent orphans if we only deleted the agent row. Five CASCADE
+    # FKs (agent_communication_*, agent_custom_skill, sentinel_profile_assignment) are
+    # handled by Postgres automatically and are not in this block.
+    #
+    # Strategy:
+    #   - DELETE rows in tables that are owned-by-agent (config, state, queues, sessions)
+    #   - UPDATE ... SET agent_id = NULL in audit / historical tables so the record of
+    #     past activity is preserved even after the agent is gone
+    #   - The whole thing runs inside the same transaction as db.delete(agent) below,
+    #     so a failure anywhere rolls everything back.
+    try:
+        # Owned-by-agent: delete
+        _owned_tables_agent_id = [
+            "agent_skill",                 # per-agent skill config (no FK — silent orphan risk)
+            "agent_skill_integration",     # FK NO ACTION — blocks delete today
+            "agent_knowledge",             # per-agent KB docs
+            "agent_run",                   # per-agent execution runs
+            "agent_sandboxed_tool",        # per-agent tool whitelist
+            "agent_project_access",        # FK NO ACTION
+            "contact_agent_mapping",       # contact↔agent binding
+            "conversation_thread",         # threads owned by the agent
+            "conversation_logs",           # per-turn log
+            "conversation_search_fts",     # FTS index rows
+            "custom_skill_execution",      # per-agent custom-skill exec records
+            "memory",                      # agent memory store
+            "playground_document",         # playground state per agent
+            "semantic_knowledge",          # embeddings for this agent
+            "user_agent_session",          # FK NO ACTION
+            "user_project_session",        # FK NO ACTION (per-agent project state)
+            "message_queue",               # FK NO ACTION (pending messages targeting agent)
+            "sentinel_agent_config",       # FK NO ACTION (per-agent security profile)
+            "okg_memory_audit_log",        # NOT NULL column — cannot SET NULL
+        ]
+        for tbl in _owned_tables_agent_id:
+            db.execute(text(f"DELETE FROM {tbl} WHERE agent_id = :aid"), {"aid": agent_id})
+
+        # Audit / historical: SET NULL to preserve record (columns are nullable)
+        db.execute(text("UPDATE sentinel_exception SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE sentinel_analysis_log SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE token_usage SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE shell_command SET executed_by_agent_id = NULL WHERE executed_by_agent_id = :aid"), {"aid": agent_id})
+
+        # Unbind from projects and flows without destroying them (the project/flow
+        # structure survives the agent's deletion; the binding is re-assigned later).
+        db.execute(text("UPDATE project SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE flow_node SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+
+        db.delete(agent)
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).exception(
+            f"Agent delete failed despite cascade cleanup (agent_id={agent_id})"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent cannot be deleted because another record still references it. "
+                "The cascade cleanup missed a table — please report this with the agent ID."
+            )
+        )
 
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_DELETE, "agent", str(agent_id), {"name": agent_name}, request)
 

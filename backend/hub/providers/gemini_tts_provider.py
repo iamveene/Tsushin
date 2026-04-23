@@ -1,10 +1,15 @@
 """
 Gemini TTS Provider
-Implements TTS using Google's Gemini 3.1 Flash TTS Preview model.
+Implements TTS using Google's Gemini TTS Preview models.
 
-Reference: https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview
+Reference: https://ai.google.dev/gemini-api/docs/models
 
-Key characteristics of the preview model:
+Supported models (all preview, gated by `SUPPORTED_MODELS`):
+- gemini-3.1-flash-tts-preview — Balanced (default)
+- gemini-2.5-flash-tts-preview — Fast
+- gemini-2.5-pro-tts-preview   — Quality
+
+Key characteristics shared across the preview models:
 - Standard generateContent endpoint with response_modalities=["AUDIO"]
 - 30 prebuilt voices (Zephyr, Puck, Charon, Kore, ...)
 - Output: raw 24 kHz / 16-bit / mono PCM (we wrap in WAV client-side using stdlib `wave`)
@@ -72,7 +77,6 @@ _GEMINI_VOICE_PRESETS: List[Dict[str, str]] = [
     {"voice_id": "Sulafat", "description": "Warm"},
 ]
 
-_GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 _GEMINI_PCM_SAMPLE_RATE = 24000
 _GEMINI_PCM_SAMPLE_WIDTH = 2  # 16-bit
 _GEMINI_PCM_CHANNELS = 1      # mono
@@ -83,9 +87,16 @@ class GeminiTTSProvider(TTSProvider):
     """
     Google Gemini TTS provider (preview).
 
-    Uses gemini-3.1-flash-tts-preview on the standard generateContent endpoint.
-    Outputs 24 kHz / 16-bit / mono PCM that we wrap in a WAV container.
+    Honors per-request `model` selection across the 3 preview Gemini TTS models
+    (see `SUPPORTED_MODELS`). Outputs 24 kHz / 16-bit / mono PCM wrapped in WAV.
     """
+
+    SUPPORTED_MODELS: Dict[str, str] = {
+        "gemini-3.1-flash-tts-preview": "Gemini 3.1 Flash TTS — Balanced (default)",
+        "gemini-2.5-flash-tts-preview": "Gemini 2.5 Flash TTS — Fast",
+        "gemini-2.5-pro-tts-preview":   "Gemini 2.5 Pro TTS — Quality",
+    }
+    DEFAULT_MODEL = "gemini-3.1-flash-tts-preview"
 
     VOICES: Dict[str, VoiceInfo] = {
         entry["voice_id"]: VoiceInfo(
@@ -139,12 +150,27 @@ class GeminiTTSProvider(TTSProvider):
 
     def get_pricing_info(self) -> Dict[str, Any]:
         return {
-            "model": _GEMINI_TTS_MODEL,
+            "models": list(self.SUPPORTED_MODELS.keys()),
+            "default_model": self.DEFAULT_MODEL,
             "cost_per_1k_chars": 0.0,
             "currency": "USD",
             "is_free": False,
-            "notes": "Preview — Google has not published pricing yet (as of 2026-04).",
+            # TODO: Pro tier is typically 5–10x Flash; revisit when Google
+            # publishes pricing for the TTS preview models.
+            "notes": "Preview — Google has not published pricing for any TTS model yet (as of 2026-04).",
         }
+
+    def _resolve_model(self, requested: Optional[str]) -> str:
+        """Return a valid TTS model id, falling back to the default with a warning."""
+        if requested and requested in self.SUPPORTED_MODELS:
+            return requested
+        if requested:
+            self.logger.warning(
+                "Unknown Gemini TTS model '%s' — falling back to default '%s'",
+                requested,
+                self.DEFAULT_MODEL,
+            )
+        return self.DEFAULT_MODEL
 
     @staticmethod
     def _wrap_pcm_as_wav(pcm_bytes: bytes) -> bytes:
@@ -177,7 +203,7 @@ class GeminiTTSProvider(TTSProvider):
             pass
         return None
 
-    async def _invoke_gemini(self, api_key: str, text: str, voice: str) -> Any:
+    async def _invoke_gemini(self, api_key: str, text: str, voice: str, model: str) -> Any:
         """Issue a single generateContent call. Runs the blocking SDK in a thread."""
         from google import genai
         from google.genai import types
@@ -196,7 +222,7 @@ class GeminiTTSProvider(TTSProvider):
 
         return await asyncio.to_thread(
             client.models.generate_content,
-            model=_GEMINI_TTS_MODEL,
+            model=model,
             contents=text,
             config=generate_config,
         )
@@ -212,6 +238,7 @@ class GeminiTTSProvider(TTSProvider):
                 )
 
             voice = request.voice if request.voice in self.VOICES else self.get_default_voice()
+            model = self._resolve_model(getattr(request, "model", None))
             text = request.text
 
             # Keep preview caps modest — the model's input budget is 8K tokens.
@@ -228,7 +255,7 @@ class GeminiTTSProvider(TTSProvider):
                 "Generating Gemini TTS: %d chars, voice=%s, model=%s",
                 len(text),
                 voice,
-                _GEMINI_TTS_MODEL,
+                model,
             )
 
             # Google documents that the TTS preview model occasionally returns text
@@ -237,7 +264,7 @@ class GeminiTTSProvider(TTSProvider):
             last_error: Optional[str] = None
             for attempt in range(_MAX_TEXT_TOKEN_RETRIES + 1):
                 try:
-                    response = await self._invoke_gemini(api_key, text, voice)
+                    response = await self._invoke_gemini(api_key, text, voice, model)
                     pcm_bytes = self._extract_audio_bytes(response)
                     if pcm_bytes:
                         break
@@ -283,14 +310,15 @@ class GeminiTTSProvider(TTSProvider):
 
             self._track_usage(
                 char_count=char_count,
-                model_name=_GEMINI_TTS_MODEL,
+                model_name=model,
                 agent_id=request.agent_id,
                 sender_key=request.sender_key,
                 message_id=request.message_id,
             )
 
             self.logger.info(
-                "Gemini TTS generated: %s (%d bytes)", audio_path, audio_size
+                "Gemini TTS generated: %s (%d bytes, model=%s)",
+                audio_path, audio_size, model,
             )
 
             return TTSResponse(
@@ -300,12 +328,12 @@ class GeminiTTSProvider(TTSProvider):
                 audio_size_bytes=audio_size,
                 format="wav",
                 characters_processed=char_count,
-                estimated_cost=0.0,  # Pricing TBD
+                estimated_cost=0.0,  # Pricing TBD across all 3 preview models
                 voice_used=voice,
                 language_used=request.language or "auto",
                 speed_used=1.0,
                 metadata={
-                    "model": _GEMINI_TTS_MODEL,
+                    "model": model,
                     "is_audio_response": True,
                     "sample_rate": _GEMINI_PCM_SAMPLE_RATE,
                     "sample_width_bytes": _GEMINI_PCM_SAMPLE_WIDTH,
@@ -351,7 +379,8 @@ class GeminiTTSProvider(TTSProvider):
                 message="Gemini TTS is available (preview)",
                 available=True,
                 details={
-                    "model": _GEMINI_TTS_MODEL,
+                    "models": list(self.SUPPORTED_MODELS.keys()),
+                    "default_model": self.DEFAULT_MODEL,
                     "voices": len(self.VOICES),
                     "api_key_configured": True,
                     "release_stage": "preview",

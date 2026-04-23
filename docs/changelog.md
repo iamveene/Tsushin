@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — ProviderWizard Review step showed misleading "Models — Missing" deadlock for TTS (2026-04-22)
+
+After the previous fix made OpenAI/Gemini TTS visible in the Add Provider wizard, the user reported the Review step (Step 6) still showed "**Models — Missing — go back and add at least one.**" in red for cloud TTS providers. Even though the Create button was technically enabled (no `disabled` attribute), the strong visual signal made the UX appear deadlocked — the user couldn't tell whether finalizing would work. Same pattern as the StepTestAndModels gate fix: a row that's load-bearing for LLM providers (`available_models`) was rendered uncritically for TTS, where the concept doesn't apply.
+
+**Fix:**
+- `frontend/components/provider-wizard/steps/StepReview.tsx`: when `modality === 'tts'`, the row now renders as **"Voices & models — Picked per-agent in the Audio Agents Wizard"** (gray, informational) instead of the LLM-shaped "Models — Missing" red error. Discovery URL is `/api/tts-providers/{provider}/voices` and `/models`, both surfaced in the Audio Agents Wizard.
+- `frontend/components/provider-wizard/steps/StepReview.tsx`: hides the **"Default instance"** row entirely for cloud-TTS-via-api_keys (ElevenLabs/OpenAI/Gemini). Those vendors save through `POST /api/api-keys` which is keyed `(service, tenant_id)` — there's at most one row per service per tenant, so "default" doesn't apply. Kokoro (TTS local) and LLM/Image still show the row because they create real `TTSInstance` / `ProviderInstance` rows that support multi-instance default routing.
+- `frontend/components/provider-wizard/steps/StepTestAndModels.tsx`: same logic — hides the **"Set as default for {vendor}"** checkbox at the bottom of Step 5 for the same cloud-TTS-via-api_keys cases, so the toggle never shows up only to be ignored at save time.
+
+**Verified end-to-end (Playwright):** Walked the wizard Modality=TTS → Cloud → Gemini → Step 4 (throwaway `AIza`-prefixed key) → Step 5 (no Set-as-default checkbox, info card visible) → Step 6 (Voices & models row in gray, no Models/Missing row, no Default instance row, Create button enabled). Discarded without clicking Create — verified the production Gemini key (`AIza...Dlug`, id 1) was not overwritten. 0 console errors.
+
+### Fix — ProviderWizard (Hub → Add Provider) was missing OpenAI TTS and Gemini TTS vendor cards (2026-04-22)
+
+User-visible symptom: opening Hub → AI Providers → "+ New Instance" → Modality=TTS → Hosting=Cloud showed only **ElevenLabs** with the message "Only one provider fits your choices — click to continue". Tenants couldn't use this wizard to register Google Gemini TTS or OpenAI TTS as a provider, despite the backend `TTSProviderRegistry` already supporting them and the Audio Agents Wizard surfacing them correctly.
+
+**Root cause — drift between three frontend surfaces vs. one backend registry.** `frontend/components/provider-wizard/steps/StepVendorSelect.tsx:44` had a hardcoded `TTS_CLOUD: VendorOption[]` array containing only ElevenLabs, while `frontend/components/audio-wizard/AudioProviderFields.tsx:44-49` (FALLBACK_PROVIDER_CARDS), `frontend/components/audio-wizard/defaults.ts:9` (AudioProvider type union), and `backend/hub/providers/tts_registry.py` all listed 4 providers. The existing wizard-drift guard (Guard 2 in `backend/tests/test_wizard_drift.py`) only checked the `AudioProvider` type union — it never noticed the ProviderWizard's parallel hardcoded list.
+
+**Fix:**
+- `frontend/components/provider-wizard/steps/StepVendorSelect.tsx`: added OpenAI TTS and Gemini TTS to `TTS_CLOUD` with copy that explicitly notes the API key is reused from the LLM/Image cards (no need to re-enter). Now tenants see all 3 cloud TTS vendors in step 3 of the wizard.
+- `frontend/components/provider-wizard/steps/StepProgress.tsx`: extended the cloud-TTS save branch (previously only matched `vendor === 'elevenlabs'`) to also handle `openai` and `gemini` via the same `POST /api/api-keys` upsert path. The endpoint is idempotent (`create_or_update_api_key`) so re-saving an existing key from the LLM flow is non-destructive — refreshes the encrypted blob and bumps `updated_at`.
+- `frontend/components/provider-wizard/steps/StepTestAndModels.tsx`: previously gated Next on `draft.available_models.length > 0`, which broke the TTS path entirely (TTS providers don't expose `available_models` the same way LLMs do). Now bypasses the gate when `modality === 'tts'` and renders a per-vendor info card explaining that voices and TTS models are picked per-agent in the Audio Agents Wizard (`/api/tts-providers/{provider}/models` and `/voices` are the runtime source of truth, not this credential step).
+
+**Drift prevention — Guard 2 expanded to cover ALL TTS-provider surfaces.** The wizard-drift test in `backend/tests/test_wizard_drift.py` now asserts that every backend-registered TTS provider appears in **5 frontend surfaces**, not just 1:
+1. `AudioProvider` type union in `defaults.ts` (existing)
+2. `FALLBACK_PROVIDER_CARDS` in `AudioProviderFields.tsx` (new)
+3. `PROVIDER_COPY` marketing dict in `AudioProviderFields.tsx` (new)
+4. `VOICE_AGENT_DEFAULTS` per-provider templates in `defaults.ts` (new)
+5. `TTS_CLOUD` + `TTS_LOCAL` in `provider-wizard/StepVendorSelect.tsx` (new — the surface that drifted in this bug)
+6. The cloud-TTS save branch condition in `StepProgress.tsx` (new — registered providers minus Kokoro must all appear in the OR-chain, otherwise save silently falls through to the LLM path and 400s)
+
+If any of these 6 surfaces miss a backend-registered provider in the future, the test fails with a precise pointer to which surface and which provider id is missing.
+
+**Studio audit — no additional drift found.** The Studio's quick-create modal (`frontend/components/watcher/studio/StudioAgentSelector.tsx`) for Voice/Hybrid agents already delegates to `openAudioWizard()` (the AudioAgentsWizard with the new model picker), and its LLM picker is fully API-driven via `api.getProviderInstances()`. The "Open full create flow" link routes to the regular Agent Wizard's `StepAudio` (also fixed). No hardcoded TTS provider lists in the Studio surfaces.
+
+**Verified end-to-end (Playwright, 9/9 checks):** Hub → Add Provider → TTS + Cloud now shows all 3 vendors with correct copy; selecting Gemini → Step 4 credentials renders normally; Step 5 unblocks for TTS modality and shows a "Voices & TTS models" info card pointing to the Audio Agents Wizard; Self-hosted shows only Kokoro (TTS_LOCAL unchanged). 0 console errors.
+
+### Feat — Gemini TTS multi-model support + image-generation catalog consolidation (2026-04-22)
+
+**TTS:** Tsushin's Gemini TTS provider previously hardcoded a single model id (`gemini-3.1-flash-tts-preview`). Tenants can now pick between three Gemini TTS preview models per agent — Fast (`gemini-2.5-flash-tts-preview`), Balanced (`gemini-3.1-flash-tts-preview`, default — preserves prior behavior), and Quality (`gemini-2.5-pro-tts-preview`). The selection is exposed in both the Audio Agents Wizard and the regular Agent Wizard's audio step, persists into `AgentSkill.config.model`, and is delivered into the SDK call without changing the existing voice / language / format surface.
+
+**Image generation:** the existing `ImageSkill` already supports `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview` (from earlier in v0.6.0). No code change — this changelog entry consolidates the catalog in docs so tenants can see the full set explicitly.
+
+**Backend:**
+- `backend/hub/providers/gemini_tts_provider.py`: replaced module-level `_GEMINI_TTS_MODEL` constant with class-level `SUPPORTED_MODELS = {…}` dict + `DEFAULT_MODEL`. New `_resolve_model()` falls back to default with a warning on unknown ids (rather than silently using a wrong model). `_invoke_gemini()` accepts `model` and threads it into `client.models.generate_content(model=…)`. `synthesize()` reads `request.model`, propagates into the SDK call, `_track_usage(model_name=…)`, and the response `metadata["model"]`. `get_pricing_info()` and `health_check().details` now return the full model list.
+- `backend/hub/providers/tts_provider.py`: `TTSRequest` gained `model: Optional[str] = None`. Backward-compatible — Kokoro/OpenAI/ElevenLabs ignore it; only Gemini honors it today.
+- `backend/agent/skills/audio_tts_skill.py`: forwards `config.get("model")` into `TTSRequest`. New `"model"` property in `get_config_schema()`. No DB migration — `AgentSkill.config` is JSON.
+- `backend/api/routes_tts_providers.py`: new generic endpoint `GET /api/tts-providers/{provider}/models` — returns `[]` for providers without `SUPPORTED_MODELS` (frontend hides the picker uniformly), populated from the provider's `SUPPORTED_MODELS` dict for Gemini. `AgentTTSProviderResponse` and `AgentTTSProviderUpdate` Pydantic models gained `model: Optional[str]`; persisted into `tts_config["model"]` when set.
+
+**Frontend:**
+- `frontend/lib/client.ts`: new `TTSModelInfo` type, `AgentTTSConfig.model?` field, `getTTSProviderModels(provider)` API method.
+- `frontend/components/audio-wizard/defaults.ts`: new `GEMINI_TTS_MODELS` array and `GEMINI_TTS_DEFAULT_MODEL` constant — used as offline fallback when the live `/models` endpoint is unreachable. Drift-checked by `backend/tests/test_wizard_drift.py` (Guard 10).
+- `frontend/components/audio-wizard/AudioProviderFields.tsx`: `AudioVoiceFieldsValue.model?` field. Fetches `getTTSProviderModels(provider)` and reconciles state on provider change. Renders the Model dropdown only when the provider exposes a non-empty model list (uniformly hides for Kokoro / OpenAI / ElevenLabs today; will surface automatically when those providers expose `SUPPORTED_MODELS` in the future).
+- `frontend/components/audio-wizard/AudioAgentsWizard.tsx`: `WizardState.model`, defaults to `GEMINI_TTS_DEFAULT_MODEL` when provider preset is Gemini, included in the `audio_tts` skill config payload, displayed in Step 5 review.
+- `frontend/lib/agent-wizard/reducer.ts`: `AudioConfig.model?` field.
+- `frontend/components/agent-wizard/steps/StepAudio.tsx`: passes `audio.model` to `AudioVoiceFields`.
+- `frontend/components/agent-wizard/hooks/useCreateAgentChain.ts`: includes `model` in the `audio_tts` skill config when set.
+- `frontend/components/agent-wizard/steps/StepReview.tsx`: shows model id when present.
+
+**Wizards intentionally NOT touched:** the Provider Wizard (`frontend/components/provider-wizard/`) is the credential-and-LLM-discovery surface — TTS model selection happens at the per-agent level, not at the credential level. The single Gemini API key (`ApiKey.service="gemini"`) is shared across LLM + TTS + Image, so adding TTS models doesn't require a new credential surface.
+
+**Tests:**
+- `backend/tests/test_gemini_tts_provider.py` (new): unit tests for `_resolve_model` (default fallback, valid passthrough, invalid + warning), `_invoke_gemini` SDK plumb-through (parametrized over all 3 models), `synthesize()` end-to-end (model in metadata + tracker `model_name`), and unknown-model fallback path.
+- `backend/tests/test_wizard_drift.py` (Guard 10): asserts `GeminiTTSProvider.SUPPORTED_MODELS` matches frontend `GEMINI_TTS_MODELS` and that `DEFAULT_MODEL` matches `GEMINI_TTS_DEFAULT_MODEL`.
+
+**Known follow-ups (NOT in this commit):**
+- Pricing for the 3 Gemini TTS preview models is `$0.00` until Google publishes it. Pro tier is typically 5–10× Flash, so analytics will under-report Pro spend in the meantime — there's a TODO in `get_pricing_info()`.
+- The 30 voice presets are documented for the 3.1 model only. Smoke-testing the 2.5 Flash/Pro models against Google's docs may reveal a per-model voice catalog; if so, `SUPPORTED_MODELS` should be extended to carry per-model voice lists and the frontend voice dropdown should refilter on model change.
+
+### Fix — DELETE /api/agents/{id} returned 500 on any agent with linked integrations (BUG-701 — 2026-04-22)
+
+Reported on the `wizard-test-gmail-20260422` agent (id 217) created during the BUG-700 investigation — clicking Delete in the UI returned `Internal Server Error`. Reproducing via API confirmed `HTTP 500 {"detail":"Internal server error"}`. Root cause in [routes_agents.py:1021](backend/api/routes_agents.py:1021): `db.delete(agent); db.commit()` runs without cleaning up child rows. Eight tables have `FK(agent.id)` with `delete_rule = NO ACTION` (the default — `agent_skill_integration`, `agent_project_access`, `message_queue`, `sentinel_agent_config`, `sentinel_exception`, `shell_command`, `user_agent_session`, `user_project_session`) — any row in any of them raises `ForeignKeyViolation` → FastAPI converts to 500. In agent 217's case, the blocker was the single `agent_skill_integration` row the Gmail wizard inserted after assigning the Gmail integration to the test agent. Additionally, **seventeen more tables** reference `agent_id` without any FK constraint at all (`agent_skill`, `agent_knowledge`, `agent_run`, `memory`, `conversation_thread`, `conversation_logs`, `semantic_knowledge`, `token_usage`, `playground_document`, etc.), so those rows would become silent orphans if we only deleted the agent.
+
+**Fix:** `delete_agent` now cascade-cleans all child rows inside the same transaction before deleting the agent. Owned-by-agent tables (operational state, sessions, queues, per-agent config — 19 tables) are `DELETE`d; audit/historical tables with nullable `agent_id` (`sentinel_exception`, `sentinel_analysis_log`, `shell_command.executed_by_agent_id`, `token_usage`) are `UPDATE ... SET agent_id = NULL` to preserve past activity records; `project.agent_id` and `flow_node.agent_id` are set to NULL so projects/flows aren't destroyed when the agent is unbound. Five tables with `CASCADE` FKs (`agent_communication_message`, `agent_communication_permission`, `agent_communication_session`, `agent_custom_skill`, `sentinel_profile_assignment`) continue to be handled by Postgres automatically. If anything still raises `IntegrityError` (meaning a future schema change added a new referencing table), the transaction rolls back and the user gets `HTTP 409` with a specific error message pointing to the agent ID instead of a generic 500.
+
+Verified E2E: `DELETE /api/agents/217` now returns `HTTP 204`. Pre-fix, agent 217 had 3 `agent_skill` rows + 1 `agent_skill_integration` row; post-fix, both counts are zero and the agent is gone. Sanity check across the instance: `agent` count moved 10 → 9; `agent_skill` count moved exactly 173 → 170 (matching the 3 skills that belonged to 217); `agent_skill_integration` moved 11 → 10 (matching the 1 Gmail row). No collateral damage.
+
+**Related follow-up (NOT in this commit):** the FK constraints themselves should be migrated to `CASCADE` (owned-by-agent) or `SET NULL` (audit) as a schema-level fix so application-layer cleanup becomes belt-and-suspenders instead of the sole defense. Also, the 17 `agent_id` columns that have no FK at all are a silent data-integrity gap — they should gain proper FK constraints. Both items are tracked as v0.7.0 architectural hygiene in `.private/ROADMAP.md`.
+
 ### Feat — Option X: second LLM reasoning call for skill-tool results (2026-04-22)
 
 **User symptom resolved:** on agent `movl` after listing emails, follow-up questions like "qual desses é o mais importante?" now return a reasoned analysis (e.g., "The most important is Maria Júlia's request from the accounting team — formal PDF statement request; Marcos's reply (item 1) is related as it forwards those statements; items 4 and 5 are automated delivery notifications") instead of re-dumping the same raw email list. Before this change, the LLM would correctly decide to call the Gmail tool (tool-mode was active after the earlier BUG-699 cleanup), but the tool's rendered output would **replace** the LLM's response via a single-shot text substitution at `backend/agent/agent_service.py:1071`, so the LLM never got a chance to compose a reasoned answer over the tool result. The raw `📧 N emails: ...` listing became the final reply, regardless of what the user actually asked.

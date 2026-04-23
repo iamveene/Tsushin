@@ -1282,6 +1282,14 @@ export interface AgentTTSConfig {
   language?: string
   response_format?: string
   speed?: number
+  /** Provider-specific model id (currently honored by Gemini only). */
+  model?: string
+}
+
+export interface TTSModelInfo {
+  model_id: string
+  label: string
+  is_default: boolean
 }
 
 export interface SkillDefinition {
@@ -3827,6 +3835,15 @@ export const api = {
   async getTTSProviderVoices(providerName: string): Promise<TTSVoice[]> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/voices`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider voices')
+    return res.json()
+  },
+
+  // Per-provider model picker. Providers without `SUPPORTED_MODELS` (Kokoro,
+  // OpenAI, ElevenLabs today) return [] so the frontend can hide the model
+  // dropdown uniformly. Gemini returns its 3 preview TTS models.
+  async getTTSProviderModels(providerName: string): Promise<TTSModelInfo[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/models`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider models')
     return res.json()
   },
 

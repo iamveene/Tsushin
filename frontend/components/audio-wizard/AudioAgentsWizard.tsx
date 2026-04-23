@@ -8,6 +8,7 @@ import type { AudioWizardOpenOptions, AudioAgentType } from '@/contexts/AudioWiz
 import {
   VOICE_AGENT_DEFAULTS,
   TRANSCRIPT_AGENT_DEFAULTS,
+  GEMINI_TTS_DEFAULT_MODEL,
   type AudioProvider,
 } from './defaults'
 import { AudioProviderPicker, AudioVoiceFields } from './AudioProviderFields'
@@ -30,6 +31,8 @@ interface WizardState {
   language: string
   speed: number
   format: string
+  /** Provider-specific model id (Gemini today). */
+  model?: string
   // Kokoro-only
   memLimit: string
   autoProvision: boolean
@@ -51,6 +54,7 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
     language: 'pt',
     speed: 1.0,
     format: 'opus',
+    model: provider === 'gemini' ? GEMINI_TTS_DEFAULT_MODEL : undefined,
     memLimit: '1.5g',
     autoProvision: true,
     providerInstanceId: null,
@@ -164,15 +168,17 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
         })
       } else {
         // OpenAI / ElevenLabs / Gemini: set skill config directly (no TTSInstance)
+        const cfg: Record<string, any> = {
+          provider: state.provider,
+          voice: state.voice,
+          language: state.language,
+          speed: state.speed,
+          response_format: state.format,
+        }
+        if (state.model) cfg.model = state.model
         await api.updateAgentSkill(agentId, 'audio_tts', {
           is_enabled: true,
-          config: {
-            provider: state.provider,
-            voice: state.voice,
-            language: state.language,
-            speed: state.speed,
-            response_format: state.format,
-          },
+          config: cfg,
         })
       }
     }
@@ -441,6 +447,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
               format: state.format,
               memLimit: state.memLimit,
               setAsDefaultTTS: state.setAsDefaultTTS,
+              model: state.model,
             }}
             onChange={(patch) => setState(s => ({ ...s, ...patch }))}
             wantsTTS={wantsTTS}
@@ -579,6 +586,12 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
               <div className="text-xs text-gray-500">Language</div>
               <div className="text-white">{state.language}</div>
             </div>
+            {state.model && (
+              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                <div className="text-xs text-gray-500">Model</div>
+                <div className="text-white font-mono text-xs">{state.model}</div>
+              </div>
+            )}
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
               <div className="text-xs text-gray-500">Target agent</div>
               <div className="text-white">

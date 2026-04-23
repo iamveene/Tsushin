@@ -15,22 +15,30 @@ import { LightningIcon, CheckCircleIcon, AlertTriangleIcon, SearchIcon } from '@
 export default function StepTestAndModels() {
   const { state, patchDraft, markStepComplete } = useProviderWizard()
   const { draft } = state
-  const { vendor, hosting } = draft
+  const { vendor, hosting, modality } = draft
 
   const [testing, setTesting] = useState(false)
   const [discovering, setDiscovering] = useState(false)
   const [modelInput, setModelInput] = useState('')
   const [predefined, setPredefined] = useState<string[]>([])
 
+  // TTS providers don't expose `available_models` the same way LLMs do — they
+  // ship a fixed voice/model catalog discoverable via /api/tts-providers/.
+  // The TTS save path (StepProgress branch 1+2) doesn't read `available_models`
+  // either, so this step has nothing meaningful to ask. Auto-complete and
+  // hide the LLM-shaped UI when modality === 'tts'.
+  const isTTS = modality === 'tts'
+
   // The backend `ProviderInstanceCreate` schema requires
   // `available_models.length >= 1` — POSTing with an empty list returns 400.
   // Previously this step always marked complete and the empty state copy
   // hinted "Auto-detect after saving", which is false: save fails without
   // models. Gate Next on having at least one model (entered manually,
-  // added from suggestions, or populated via Auto-detect).
+  // added from suggestions, or populated via Auto-detect). TTS modality
+  // bypasses this gate (see comment above).
   useEffect(() => {
-    markStepComplete('testAndModels', draft.available_models.length > 0)
-  }, [markStepComplete, draft.available_models.length])
+    markStepComplete('testAndModels', isTTS || draft.available_models.length > 0)
+  }, [markStepComplete, isTTS, draft.available_models.length])
 
   // Load curated model suggestions once.
   useEffect(() => {
@@ -132,7 +140,25 @@ export default function StepTestAndModels() {
         </div>
       )}
 
-      {/* Models */}
+      {/* TTS modality: voices/models live in /api/tts-providers/{provider}/voices
+          and /models — selected per-agent in the Audio Wizard, not at credential
+          creation time. We surface a short hint instead of the LLM-shaped
+          model picker. */}
+      {isTTS && (
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-ink/40 p-3">
+          <div className="text-sm text-white font-medium mb-1">Voices & TTS models</div>
+          <div className="text-xs text-tsushin-slate">
+            {vendor === 'gemini'
+              ? 'Picked per-agent in the Audio Agents Wizard. Three preview models (Fast / Balanced / Quality) and 30 prebuilt voices are available — no setup required here.'
+              : vendor === 'openai'
+              ? '6 voices (alloy, nova, echo, fable, onyx, shimmer) — picked per-agent in the Audio Agents Wizard.'
+              : 'Voices are picked per-agent in the Audio Agents Wizard.'}
+          </div>
+        </div>
+      )}
+
+      {/* Models (LLM only) */}
+      {!isTTS && (
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm font-medium text-tsushin-fog">Models</label>
@@ -188,8 +214,14 @@ export default function StepTestAndModels() {
           </p>
         )}
       </div>
+      )}
 
-      {/* Default instance */}
+      {/* Default instance — only meaningful for paths that create a real
+          instance row (ProviderInstance for LLM/Image, TTSInstance for Kokoro).
+          Cloud TTS via api_keys (ElevenLabs / OpenAI / Gemini) has at most one
+          api_key per service per tenant, so the concept of "default" doesn't
+          apply — hide the toggle. */}
+      {!(isTTS && (vendor === 'elevenlabs' || vendor === 'openai' || vendor === 'gemini')) && (
       <label className="flex items-center gap-3 cursor-pointer p-3 bg-tsushin-ink rounded-lg border border-tsushin-border">
         <input
           type="checkbox"
@@ -202,6 +234,7 @@ export default function StepTestAndModels() {
           <div className="text-xs text-tsushin-slate">Agents that reference this vendor without a specific instance will use this one.</div>
         </div>
       </label>
+      )}
     </div>
   )
 }

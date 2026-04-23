@@ -45,6 +45,12 @@ class TTSRequest:
     speed: float = 1.0             # Speech speed multiplier
     response_format: str = "opus"  # Audio format: mp3, opus, aac, flac, wav, pcm
 
+    # Optional provider-specific model id (e.g., "gemini-2.5-pro-tts-preview").
+    # Providers that don't expose model selection (Kokoro, OpenAI, ElevenLabs today)
+    # ignore this field. Providers that do (e.g. Gemini) self-validate against
+    # their own SUPPORTED_MODELS dict and fall back to a default on miss.
+    model: Optional[str] = None
+
     # Optional tracking metadata
     agent_id: Optional[int] = None
     sender_key: Optional[str] = None

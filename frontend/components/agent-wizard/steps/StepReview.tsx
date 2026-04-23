@@ -95,6 +95,9 @@ export default function StepReview() {
                 <>
                   <div className="capitalize">{state.draft.audio.capability} · {state.draft.audio.provider}</div>
                   <div className="text-xs text-gray-400">{state.draft.audio.language} · {state.draft.audio.voice}</div>
+                  {state.draft.audio.model && (
+                    <div className="text-xs text-gray-400 font-mono">model: {state.draft.audio.model}</div>
+                  )}
                 </>
               )}
               {s.key === 'skills' && (
