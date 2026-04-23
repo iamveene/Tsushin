@@ -216,7 +216,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }, [agentId])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [loadData])
 
