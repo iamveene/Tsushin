@@ -7,10 +7,10 @@ POST /api/webhooks/{webhook_id}/inbound
   protection (X-Tsushin-Timestamp). Optional per-webhook IP allowlist and
   per-webhook rate limit.
 
-On success: enqueues a message into message_queue with channel='webhook'
-and returns 202 with the queue_id and poll URL. The QueueWorker's
-_process_webhook_message dispatcher routes the message through AgentRouter
-→ LLM → (optional) callback POST via WebhookChannelAdapter.
+On success: enqueues a trigger_event row into message_queue with
+channel='webhook' and returns 202 with the queue_id and poll URL. The
+QueueWorker's webhook dispatcher routes the event through AgentRouter
+→ LLM → (optional) callback POST via WebhookTrigger.notify_external_system().
 """
 
 from __future__ import annotations
@@ -208,19 +208,30 @@ async def receive_webhook(
     sender_name = str(body.get("sender_name") or body.get("user_name") or "Webhook")
     source_id = str(body.get("source_id") or f"whk_{webhook_id}_{int(time.time()*1000)}")
 
-    # --- Layer 7: resolve bound agent ---
+    # --- Layer 7: resolve configured agent ---
+    from services.default_agent_service import get_default_agent
+
+    default_agent_id = get_default_agent(
+        db=db,
+        tenant_id=integration.tenant_id,
+        channel_type="webhook",
+        instance_id=webhook_id,
+        user_identifier=sender_id,
+    )
     agent = (
         db.query(Agent)
         .filter(
-            Agent.webhook_integration_id == webhook_id,
+            Agent.id == default_agent_id,
             Agent.tenant_id == integration.tenant_id,
             Agent.is_active == True,  # noqa: E712
         )
         .first()
+        if default_agent_id
+        else None
     )
     if agent is None:
-        logger.warning(f"Webhook {webhook_id}: no bound agent for tenant {integration.tenant_id}")
-        raise HTTPException(status_code=404, detail="No agent bound to this webhook")
+        logger.warning(f"Webhook {webhook_id}: no configured agent for tenant {integration.tenant_id}")
+        raise HTTPException(status_code=404, detail="No agent configured for this webhook")
 
     # --- Layer 8: enqueue ---
     payload = {
@@ -240,6 +251,7 @@ async def receive_webhook(
         sender_key=f"webhook_{webhook_id}_{sender_id}"[:255],
         payload=payload,
         priority=0,
+        message_type="trigger_event",
     )
 
     return {

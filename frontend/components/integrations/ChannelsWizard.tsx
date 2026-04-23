@@ -5,11 +5,11 @@
  *
  * Replaces the six scattered per-channel CTAs ("+ Create WhatsApp Instance"
  * at tab level, "+ Create Bot" / "+ Connect Workspace" / "+ Connect Bot" /
- * "+ New Webhook" / "Add Another Gmail" per-section, plus duplicate empty-
+ * "Add Another Gmail" per-section, plus duplicate empty-
  * state body buttons) with a single "+ Add Channel" launcher. The wizard
  * shows the channel catalog as a picker, then hands off to the existing
  * per-channel setup modal (WhatsAppSetupWizard, Telegram modal,
- * SlackSetupWizard, DiscordSetupWizard, Webhook setup, GmailSetupWizard).
+ * SlackSetupWizard, DiscordSetupWizard, GmailSetupWizard).
  *
  * Catalog source: /api/channels (see backend/api/routes_channels.py and
  * backend/channels/catalog.py). The frontend keeps a static fallback so
@@ -28,7 +28,6 @@ export type ChannelId =
   | 'telegram'
   | 'slack'
   | 'discord'
-  | 'webhook'
   | 'gmail'
 
 interface Props {
@@ -83,16 +82,6 @@ const FALLBACK_CHANNELS: Array<ChannelCatalogEntry & { channel_id: ChannelId }> 
     requires_setup: true,
     setup_hint: 'Provide the bot token and application id.',
     icon_hint: 'discord',
-    tenant_has_configured: false,
-  },
-  {
-    channel_id: 'webhook',
-    id: 'webhook',
-    display_name: 'Webhook',
-    description: 'Expose a signed HTTPS endpoint for custom clients.',
-    requires_setup: true,
-    setup_hint: 'We generate the secret; you copy it into your client.',
-    icon_hint: 'webhook',
     tenant_has_configured: false,
   },
   {

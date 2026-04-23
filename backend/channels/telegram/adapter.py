@@ -9,11 +9,11 @@ No behavioral changes — delegates to the same transport object.
 import logging
 from typing import ClassVar, Optional
 
-from channels.base import ChannelAdapter
+from channels.base import Channel
 from channels.types import SendResult, HealthResult
 
 
-class TelegramChannelAdapter(ChannelAdapter):
+class TelegramChannelAdapter(Channel):
     """Telegram channel via Bot API."""
 
     channel_type: ClassVar[str] = "telegram"

@@ -1,5 +1,5 @@
 """
-v0.6.0: Webhook Integration Management API.
+v0.7.0: Webhook Trigger Management API.
 
 Tenant-scoped CRUD for WebhookIntegration. Secret is generated server-side,
 returned **once in plaintext** on create/rotate, and thereafter only the
@@ -30,8 +30,8 @@ from utils.ssrf_validator import SSRFValidationError, validate_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
-    prefix="/api/webhook-integrations",
-    tags=["Webhook Integrations"],
+    prefix="/api/triggers/webhook",
+    tags=["Webhook Triggers"],
     redirect_slashes=False,
 )
 

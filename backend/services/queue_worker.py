@@ -579,9 +579,9 @@ class QueueWorker:
         v0.6.0: Process an inbound webhook message from the queue.
 
         Routes the normalized payload through AgentRouter with webhook_instance_id
-        set so the WebhookChannelAdapter is registered. If the webhook integration
+        set so the WebhookTrigger is registered. If the webhook integration
         has callback_enabled=True, the agent's response will be POSTed back to
-        the customer's callback URL.
+        the customer's callback URL via Trigger.notify_external_system().
 
         The LLM answer is returned for queue-result retrieval via
         GET /api/v1/queue/{id} (matches API channel poll semantics).

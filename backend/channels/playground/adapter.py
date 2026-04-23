@@ -10,11 +10,11 @@ exists for protocol uniformity, health_check, and capability flags.
 import logging
 from typing import ClassVar, Optional
 
-from channels.base import ChannelAdapter
+from channels.base import Channel
 from channels.types import SendResult, HealthResult
 
 
-class PlaygroundChannelAdapter(ChannelAdapter):
+class PlaygroundChannelAdapter(Channel):
     """Web Playground channel (request/response via API + WebSocket streaming)."""
 
     channel_type: ClassVar[str] = "playground"
