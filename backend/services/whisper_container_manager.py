@@ -226,9 +226,17 @@ class WhisperContainerManager:
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
         self.runtime.start_container(instance.container_name)
-        instance.container_status = "running"
+        healthy = self._ensure_authenticated_ready(instance, db)
+        instance.container_status = "running" if healthy else "error"
+        instance.health_status = "healthy" if healthy else "unavailable"
+        instance.health_status_reason = (
+            "Container started and passed authenticated warm-up"
+            if healthy
+            else "Container started but authenticated warm-up failed"
+        )
+        instance.last_health_check = datetime.utcnow()
         db.commit()
-        return "running"
+        return "running" if healthy else "error"
 
     def stop_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
         instance = self._get_instance(instance_id, tenant_id, db)
@@ -244,9 +252,17 @@ class WhisperContainerManager:
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
         self.runtime.restart_container(instance.container_name)
-        instance.container_status = "running"
+        healthy = self._ensure_authenticated_ready(instance, db)
+        instance.container_status = "running" if healthy else "error"
+        instance.health_status = "healthy" if healthy else "unavailable"
+        instance.health_status_reason = (
+            "Container restarted and passed authenticated warm-up"
+            if healthy
+            else "Container restarted but authenticated warm-up failed"
+        )
+        instance.last_health_check = datetime.utcnow()
         db.commit()
-        return "running"
+        return "running" if healthy else "error"
 
     def deprovision(
         self,
@@ -308,10 +324,18 @@ class WhisperContainerManager:
     def _wait_for_health(self, instance, *, token: str, username: str) -> bool:
         start = time.time()
         while time.time() - start < HEALTH_CHECK_TIMEOUT:
-            if self._check_health(instance) and self._warm_up(instance, token=token, username=username):
+            if self._warm_up(instance, token=token, username=username):
                 return True
             time.sleep(HEALTH_CHECK_INTERVAL)
         return False
+
+    def _ensure_authenticated_ready(self, instance, db: Session) -> bool:
+        token = WhisperInstanceService.resolve_api_token(instance, db)
+        if not token:
+            logger.warning("ASR instance %s missing API token during readiness check", instance.id)
+            return False
+        username = (instance.auth_username or "tsushin").strip() or "tsushin"
+        return self._wait_for_health(instance, token=token, username=username)
 
     def _check_health(self, instance) -> bool:
         try:
@@ -370,6 +394,7 @@ def startup_reconcile(db: Session) -> None:
     except Exception as e:
         logger.warning("Whisper startup_reconcile: runtime unavailable: %s", e)
         return
+    manager = WhisperContainerManager()
 
     rows = db.query(ASRInstance).filter(
         ASRInstance.container_status.in_(["creating", "provisioning"]),
@@ -390,17 +415,24 @@ def startup_reconcile(db: Session) -> None:
             runtime.get_container(container_name)
             status = runtime.get_container_status(container_name)
             if status == "running":
-                instance.container_status = "running"
-                instance.health_status = "healthy"
-                instance.health_status_reason = "Reconciled at startup — container running"
+                ready = manager._ensure_authenticated_ready(instance, db)
+                instance.container_status = "running" if ready else "error"
+                instance.health_status = "healthy" if ready else "unavailable"
+                instance.health_status_reason = (
+                    "Reconciled at startup — authenticated warm-up passed"
+                    if ready
+                    else "Reconciled at startup — authenticated warm-up failed"
+                )
             else:
                 instance.container_status = "error"
                 instance.health_status = "unavailable"
                 instance.health_status_reason = f"Reconciled at startup — container status={status}"
+            instance.last_health_check = datetime.utcnow()
         except (ContainerNotFoundError, ContainerRuntimeError, Exception):
             instance.container_status = "error"
             instance.health_status = "unavailable"
             instance.health_status_reason = "Reconciled at startup — container missing or failed"
+            instance.last_health_check = datetime.utcnow()
     try:
         db.commit()
     except Exception as e:
