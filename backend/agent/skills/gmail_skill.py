@@ -1,22 +1,25 @@
 """
-Gmail Skill - Email Reading for Agents
+Gmail Skill - Email Access for Agents
 
-Allows agents to read and search emails from connected Gmail accounts.
-Supports per-agent integration selection (multiple Gmail accounts per tenant).
+Allows agents to read, search, send, reply to, and draft emails from
+connected Gmail accounts. Supports per-agent integration selection
+(multiple Gmail accounts per tenant).
 
 Features:
 - List recent emails
 - Search emails with Gmail query syntax
 - Get specific email content
-- Thread viewing
-
-Note: Read-only access. Sending emails is not supported.
+- Send outbound emails
+- Reply in existing threads
+- Create drafts
 
 Sub-capabilities:
 - list_emails: View recent messages in inbox
 - search_emails: Search with Gmail query syntax
 - read_email: Get full email content
-- list_threads: View email threads
+- send_email: Send new outbound emails
+- reply_email: Reply to an existing Gmail thread
+- draft_email: Create a draft without sending
 """
 
 from .base import BaseSkill, InboundMessage, SkillResult
@@ -29,15 +32,15 @@ logger = logging.getLogger(__name__)
 
 class GmailSkill(BaseSkill):
     """
-    Gmail reading skill for agents.
+    Gmail access skill for agents.
 
-    Allows agents to access emails from connected Gmail accounts.
+    Allows agents to read and compose emails from connected Gmail accounts.
     Each agent can be configured to use a specific Gmail integration.
 
     Skills-as-Tools (Phase 3):
     - Tool name: gmail_operation
     - Execution mode: hybrid (supports both tool and legacy keyword modes)
-    - Actions: list, search, read
+    - Actions: list, search, read, send, reply, draft
 
     Example:
         Agent "Support Bot" uses support@company.com
@@ -46,7 +49,7 @@ class GmailSkill(BaseSkill):
 
     skill_type = "gmail"
     skill_name = "Gmail"
-    skill_description = "Read and search emails from connected Gmail accounts"
+    skill_description = "Read, search, send, reply to, and draft emails from connected Gmail accounts"
     execution_mode = "tool"
     # Hidden from the agent creation wizard: requires Google OAuth flow (Hub → Integrations → Gmail).
     wizard_visible = False
@@ -814,28 +817,77 @@ class GmailSkill(BaseSkill):
             "name": "gmail_operation",
             "title": "Gmail Operations",
             "description": (
-                "Interact with Gmail inbox - list, search, or read emails. "
-                "Use when user asks about their emails, inbox, or wants to check messages."
+                "Interact with Gmail - list, search, read, send, reply to, or "
+                "draft emails. Use when user asks about their inbox or wants "
+                "help composing outbound email."
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "search", "read"],
-                        "description": "Action to perform: 'list' (recent emails), 'search' (find specific emails), 'read' (get email content)"
+                        "enum": ["list", "search", "read", "send", "reply", "draft"],
+                        "description": (
+                            "Action to perform: 'list' (recent emails), "
+                            "'search' (find specific emails), 'read' (get email "
+                            "content), 'send' (send a new email), 'reply' "
+                            "(reply in-thread), or 'draft' (save draft only)"
+                        )
                     },
                     "query": {
                         "type": "string",
-                        "description": "Search query for 'search' action. Supports Gmail query syntax (e.g., 'from:john@example.com', 'subject:meeting')"
+                        "description": (
+                            "Search query for 'search', 'read', or 'reply' when "
+                            "message_id is not provided. Supports Gmail query "
+                            "syntax (e.g., 'from:john@example.com', "
+                            "'subject:meeting')."
+                        )
                     },
                     "sender": {
                         "type": "string",
-                        "description": "Filter by sender email or name (for search/list actions)"
+                        "description": "Filter by sender email or name (for search/list/read actions)"
                     },
                     "subject": {
                         "type": "string",
-                        "description": "Filter by subject text (for search/list actions)"
+                        "description": "Filter by subject text (for search/list/read/send/draft actions)"
+                    },
+                    "message_id": {
+                        "type": "string",
+                        "description": "Exact Gmail message ID to read or reply to"
+                    },
+                    "to": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Recipient email or list of emails for send/draft"
+                    },
+                    "cc": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional CC recipients for send/reply/draft"
+                    },
+                    "bcc": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}}
+                        ],
+                        "description": "Optional BCC recipients for send/reply/draft"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Plain-text body for send/reply/draft"
+                    },
+                    "body_html": {
+                        "type": "string",
+                        "description": "Optional HTML body for send/reply/draft"
+                    },
+                    "reply_all": {
+                        "type": "boolean",
+                        "description": "When replying, include the original To/Cc recipients",
+                        "default": False
                     },
                     "max_results": {
                         "type": "integer",
@@ -849,7 +901,7 @@ class GmailSkill(BaseSkill):
             },
             "annotations": {
                 "destructive": False,
-                "idempotent": True,
+                "idempotent": False,
                 "audience": ["user"]
             }
         }
@@ -882,19 +934,26 @@ class GmailSkill(BaseSkill):
         query = arguments.get("query", "")
         sender = arguments.get("sender")
         subject_filter = arguments.get("subject")
+        message_id = arguments.get("message_id")
+        recipients = arguments.get("to")
+        cc = arguments.get("cc")
+        bcc = arguments.get("bcc")
+        body = arguments.get("body", "")
+        body_html = arguments.get("body_html")
+        reply_all = bool(arguments.get("reply_all", False))
         max_results = arguments.get("max_results", config.get("default_max_results", 10))
 
         if not action:
             return SkillResult(
                 success=False,
-                output="Action is required. Use 'list', 'search', or 'read'.",
+                output="Action is required. Use 'list', 'search', 'read', 'send', 'reply', or 'draft'.",
                 metadata={"error": "missing_action"}
             )
 
-        if action not in ["list", "search", "read"]:
+        if action not in ["list", "search", "read", "send", "reply", "draft"]:
             return SkillResult(
                 success=False,
-                output=f"Invalid action '{action}'. Use 'list', 'search', or 'read'.",
+                output=f"Invalid action '{action}'. Use 'list', 'search', 'read', 'send', 'reply', or 'draft'.",
                 metadata={"error": "invalid_action"}
             )
 
@@ -903,6 +962,30 @@ class GmailSkill(BaseSkill):
 
             # Get Gmail service (validates integration)
             gmail_service = self._get_gmail_service(config)
+
+            capability_errors = {
+                "list": "Listing emails is disabled for this agent.",
+                "search": "Searching emails is disabled for this agent.",
+                "read": "Reading emails is disabled for this agent.",
+                "send": "Sending emails is disabled for this agent.",
+                "reply": "Replying to emails is disabled for this agent.",
+                "draft": "Draft creation is disabled for this agent.",
+            }
+            capability_map = {
+                "list": "list_emails",
+                "search": "search_emails",
+                "read": "read_email",
+                "send": "send_email",
+                "reply": "reply_email",
+                "draft": "draft_email",
+            }
+
+            if not self._is_capability_enabled(config, capability_map[action]):
+                return SkillResult(
+                    success=False,
+                    output=capability_errors[action],
+                    metadata={"error": "capability_disabled", "action": action}
+                )
 
             # Build query from filters
             query_parts = []
@@ -926,7 +1009,38 @@ class GmailSkill(BaseSkill):
                     )
                 return await self._execute_search(gmail_service, full_query, max_results)
             elif action == "read":
-                return await self._execute_read(gmail_service, full_query)
+                return await self._execute_read(gmail_service, full_query, message_id=message_id)
+            elif action == "send":
+                return await self._execute_send(
+                    gmail_service,
+                    to=recipients,
+                    subject=subject_filter,
+                    body=body,
+                    cc=cc,
+                    bcc=bcc,
+                    body_html=body_html,
+                )
+            elif action == "reply":
+                return await self._execute_reply(
+                    gmail_service,
+                    body=body,
+                    body_html=body_html,
+                    message_id=message_id,
+                    query=full_query,
+                    reply_all=reply_all,
+                    cc=cc,
+                    bcc=bcc,
+                )
+            elif action == "draft":
+                return await self._execute_draft(
+                    gmail_service,
+                    to=recipients,
+                    subject=subject_filter,
+                    body=body,
+                    cc=cc,
+                    bcc=bcc,
+                    body_html=body_html,
+                )
 
         except ValueError as e:
             logger.error(f"GmailSkill.execute_tool: Configuration error: {e}")
@@ -934,6 +1048,13 @@ class GmailSkill(BaseSkill):
                 success=False,
                 output=f"Gmail not configured: {str(e)}",
                 metadata={"error": "not_configured"}
+            )
+        except PermissionError as e:
+            logger.error(f"GmailSkill.execute_tool: Permission error: {e}")
+            return SkillResult(
+                success=False,
+                output=str(e),
+                metadata={"error": "missing_scope", "action": action}
             )
         except Exception as e:
             logger.error(f"GmailSkill.execute_tool error: {e}", exc_info=True)
@@ -1028,21 +1149,28 @@ class GmailSkill(BaseSkill):
             metadata={"count": len(email_summaries), "query": query, "emails": email_summaries}
         )
 
-    async def _execute_read(self, gmail_service, query: Optional[str]) -> SkillResult:
+    async def _execute_read(self, gmail_service, query: Optional[str], message_id: Optional[str] = None) -> SkillResult:
         """Execute read email operation for tool mode."""
-        if query:
+        if message_id:
+            content = await gmail_service.get_message_content(message_id)
+        elif query:
             messages = await gmail_service.search_messages(query, max_results=1)
+            if not messages:
+                return SkillResult(
+                    success=True,
+                    output="No email found to read.",
+                    metadata={}
+                )
+            content = await gmail_service.get_message_content(messages[0]['id'])
         else:
             messages = await gmail_service.list_messages(max_results=1)
-
-        if not messages:
-            return SkillResult(
-                success=True,
-                output="No email found to read.",
-                metadata={}
-            )
-
-        content = await gmail_service.get_message_content(messages[0]['id'])
+            if not messages:
+                return SkillResult(
+                    success=True,
+                    output="No email found to read.",
+                    metadata={}
+                )
+            content = await gmail_service.get_message_content(messages[0]['id'])
 
         # Format email content
         from_addr = content['from']
@@ -1070,6 +1198,168 @@ class GmailSkill(BaseSkill):
             metadata={"email": content}
         )
 
+    @staticmethod
+    def _normalize_recipients(value: Any) -> list[str]:
+        """Normalize tool-call recipient input into a clean list."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return [str(value).strip()]
+
+    def _is_capability_enabled(self, config: Dict[str, Any], capability_name: str) -> bool:
+        """Check whether a capability is enabled, defaulting to True."""
+        default_capabilities = self.get_default_config().get("capabilities", {})
+        config_capabilities = config.get("capabilities", {}) or {}
+        merged = {
+            cap_name: {**cap_default, **config_capabilities.get(cap_name, {})}
+            for cap_name, cap_default in default_capabilities.items()
+        }
+        capability = merged.get(capability_name, {})
+        return capability.get("enabled", True)
+
+    async def _execute_send(
+        self,
+        gmail_service,
+        *,
+        to: Any,
+        subject: Optional[str],
+        body: str,
+        cc: Any = None,
+        bcc: Any = None,
+        body_html: Optional[str] = None,
+    ) -> SkillResult:
+        """Execute send email operation for tool mode."""
+        recipients = self._normalize_recipients(to)
+        if not recipients:
+            return SkillResult(
+                success=False,
+                output="Send requires at least one recipient in 'to'.",
+                metadata={"error": "missing_recipients"}
+            )
+
+        response = await gmail_service.send_message(
+            to=recipients,
+            subject=subject or "(No Subject)",
+            body_text=body,
+            cc=self._normalize_recipients(cc),
+            bcc=self._normalize_recipients(bcc),
+            body_html=body_html,
+        )
+
+        thread_id = response.get("threadId")
+        message_id = response.get("id")
+        output = (
+            f"Email sent to {', '.join(recipients)}"
+            f"{' with subject ' + repr(subject) if subject else ''}."
+        )
+
+        return SkillResult(
+            success=True,
+            output=output,
+            metadata={
+                "action": "send",
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "recipients": recipients,
+            }
+        )
+
+    async def _execute_draft(
+        self,
+        gmail_service,
+        *,
+        to: Any,
+        subject: Optional[str],
+        body: str,
+        cc: Any = None,
+        bcc: Any = None,
+        body_html: Optional[str] = None,
+    ) -> SkillResult:
+        """Execute create draft operation for tool mode."""
+        recipients = self._normalize_recipients(to)
+        if not recipients:
+            return SkillResult(
+                success=False,
+                output="Draft creation requires at least one recipient in 'to'.",
+                metadata={"error": "missing_recipients"}
+            )
+
+        response = await gmail_service.create_draft(
+            to=recipients,
+            subject=subject or "(No Subject)",
+            body_text=body,
+            cc=self._normalize_recipients(cc),
+            bcc=self._normalize_recipients(bcc),
+            body_html=body_html,
+        )
+
+        draft_id = response.get("id")
+        message_id = (response.get("message") or {}).get("id")
+        output = (
+            f"Draft created for {', '.join(recipients)}"
+            f"{' with subject ' + repr(subject) if subject else ''}."
+        )
+
+        return SkillResult(
+            success=True,
+            output=output,
+            metadata={
+                "action": "draft",
+                "draft_id": draft_id,
+                "message_id": message_id,
+                "recipients": recipients,
+            }
+        )
+
+    async def _execute_reply(
+        self,
+        gmail_service,
+        *,
+        body: str,
+        body_html: Optional[str],
+        message_id: Optional[str],
+        query: Optional[str],
+        reply_all: bool,
+        cc: Any = None,
+        bcc: Any = None,
+    ) -> SkillResult:
+        """Execute reply operation for tool mode."""
+        target_message_id = message_id
+        if not target_message_id and query:
+            messages = await gmail_service.search_messages(query, max_results=1)
+            if messages:
+                target_message_id = messages[0]["id"]
+
+        if not target_message_id:
+            return SkillResult(
+                success=False,
+                output="Reply requires a message_id or a query that matches an email.",
+                metadata={"error": "missing_reply_target"}
+            )
+
+        response = await gmail_service.reply_to_message(
+            target_message_id,
+            body_text=body,
+            body_html=body_html,
+            reply_all=reply_all,
+            cc=self._normalize_recipients(cc),
+            bcc=self._normalize_recipients(bcc),
+        )
+
+        return SkillResult(
+            success=True,
+            output=f"Reply sent for Gmail message {target_message_id}.",
+            metadata={
+                "action": "reply",
+                "message_id": response.get("id"),
+                "thread_id": response.get("threadId"),
+                "replied_to_message_id": target_message_id,
+            }
+        )
+
     @classmethod
     def get_sentinel_context(cls) -> Dict[str, Any]:
         """
@@ -1087,19 +1377,29 @@ class GmailSkill(BaseSkill):
                 "Read emails from inbox",
                 "Search for specific emails",
                 "List recent messages",
-                "Check email from specific sender"
+                "Check email from specific sender",
+                "Send a new email",
+                "Reply to an email thread",
+                "Create a draft email",
             ],
             "expected_patterns": [
                 "email", "inbox", "mail", "messages",
                 "list", "search", "read", "check",
+                "send", "reply", "draft",
                 "from:", "subject:", "gmail"
             ],
-            "risk_notes": "Read-only access. Monitor for mass data exfiltration patterns.",
-            "risk_level": "low",
+            "risk_notes": (
+                "Monitor for mass inbox exfiltration and suspicious outbound mail "
+                "requests that look like phishing or impersonation."
+            ),
+            "risk_level": "medium",
             "deviation_signatures": {
                 "data_exfiltration": {
                     "volume_threshold": {"calls_per_hour": 50, "unique_queries": 20},
                     "description": "Unusual volume of email queries may indicate data harvesting"
+                },
+                "outbound_impersonation": {
+                    "description": "Unexpected requests to send or draft deceptive email content"
                 }
             }
         }
@@ -1130,6 +1430,21 @@ class GmailSkill(BaseSkill):
                     "enabled": True,
                     "label": "Read Email",
                     "description": "Get full email content"
+                },
+                "send_email": {
+                    "enabled": True,
+                    "label": "Send Email",
+                    "description": "Send a new outbound email"
+                },
+                "reply_email": {
+                    "enabled": True,
+                    "label": "Reply to Email",
+                    "description": "Reply within an existing email thread"
+                },
+                "draft_email": {
+                    "enabled": True,
+                    "label": "Create Draft",
+                    "description": "Save an email draft without sending it"
                 }
             }
         }
@@ -1180,6 +1495,24 @@ class GmailSkill(BaseSkill):
                     }
                 },
                 "read_email": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {"type": "boolean", "default": True}
+                    }
+                },
+                "send_email": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {"type": "boolean", "default": True}
+                    }
+                },
+                "reply_email": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {"type": "boolean", "default": True}
+                    }
+                },
+                "draft_email": {
                     "type": "object",
                     "properties": {
                         "enabled": {"type": "boolean", "default": True}

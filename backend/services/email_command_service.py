@@ -169,11 +169,11 @@ class EmailCommandService:
 - Read emails
 - Search emails
 - List labels
-- Send emails (read-only)
+- Send, reply to, and draft emails when gmail.send is authorized
 
 **Permissions:**
 - Read access
-- Write access
+- Outbound send/draft access when gmail.send is present
 
 Use `/email list` to see recent emails"""
 
