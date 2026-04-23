@@ -109,7 +109,7 @@ class PlaygroundService:
         agent_id: int,
         message_text: str,
         thread,
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, str]]:
         """Build a bounded DATA block from recent structured tool results."""
         if not thread:
             return None
@@ -120,6 +120,19 @@ class PlaygroundService:
 
             thread_service = PlaygroundThreadService(self.db)
             history = thread_service._get_thread_messages_from_memory(thread)
+            scratchpad_history: List[Dict[str, Any]] = []
+            for entry in getattr(thread, "agentic_scratchpad", None) or []:
+                if not isinstance(entry, dict):
+                    continue
+                tool_result = entry.get("tool_result")
+                if isinstance(tool_result, dict):
+                    scratchpad_history.append({
+                        "role": "assistant",
+                        "tool_result": tool_result,
+                    })
+            if scratchpad_history:
+                history = list(history or []) + scratchpad_history
+
             skill_type = is_followup_to_prior_skill(message_text, history)
             if not skill_type:
                 return None
@@ -157,11 +170,14 @@ class PlaygroundService:
                 return None
 
             data_block = build_data_block(list(reversed(results)), max_bytes)
-            return (
-                f"{data_block}\n\n"
-                "Use the DATA block above to answer this follow-up. "
-                "Do not call the same data-fetch tool again unless the user asked for fresh data."
-            )
+            return {
+                "context": (
+                    f"{data_block}\n\n"
+                    "Use the DATA block above to answer this follow-up. "
+                    "Do not call the same data-fetch tool again unless the user asked for fresh data."
+                ),
+                "skill_type": skill_type,
+            }
         except Exception as exc:
             self.logger.warning(f"Structured tool DATA injection failed: {exc}")
             return None
@@ -638,13 +654,17 @@ class PlaygroundService:
                 full_message = f"{tool_context}\n\n{full_message}"
                 self.logger.info(f"Injected Layer 5 tool context ({len(tool_context)} chars)")
 
-            structured_tool_context = self._build_structured_tool_data_context(
+            structured_tool_data = self._build_structured_tool_data_context(
                 agent_id=agent_id,
                 message_text=message_text,
                 thread=thread,
             )
-            if structured_tool_context:
+            suppress_direct_skill_processing = False
+            if structured_tool_data:
+                structured_tool_context = structured_tool_data["context"]
                 full_message = f"{structured_tool_context}\n\n{full_message}"
+                config_dict["suppress_followup_tool_skill_type"] = structured_tool_data["skill_type"]
+                suppress_direct_skill_processing = True
                 self.logger.info(
                     f"Injected structured tool DATA context ({len(structured_tool_context)} chars)"
                 )
@@ -691,11 +711,18 @@ class PlaygroundService:
             from agent.skills.skill_manager import get_skill_manager
             skill_manager = get_skill_manager()
             try:
-                skill_result = await skill_manager.process_message_with_skills(
-                    self.db,
-                    agent_id,
-                    inbound_msg
-                )
+                if suppress_direct_skill_processing:
+                    self.logger.info(
+                        "Skipping direct skill processing for follow-up DATA reuse; "
+                        "delegating to AgentService"
+                    )
+                    skill_result = None
+                else:
+                    skill_result = await skill_manager.process_message_with_skills(
+                        self.db,
+                        agent_id,
+                        inbound_msg
+                    )
 
                 if skill_result and skill_result.success:
                     self.logger.info(f"Message processed by skill, output: {skill_result.output[:100]}...")
@@ -985,8 +1012,18 @@ class PlaygroundService:
                 )
 
                 if thread and result.get("agentic_scratchpad") is not None:
-                    thread.agentic_scratchpad = result.get("agentic_scratchpad")
-                    self.db.commit()
+                    next_scratchpad = result.get("agentic_scratchpad")
+                    if (
+                        suppress_direct_skill_processing
+                        and not next_scratchpad
+                        and thread.agentic_scratchpad
+                    ):
+                        self.logger.info(
+                            "Preserving structured tool DATA scratchpad after follow-up reuse"
+                        )
+                    else:
+                        thread.agentic_scratchpad = next_scratchpad
+                        self.db.commit()
 
                 # Phase 14.5: Index agent response in FTS5 for conversation search
                 try:

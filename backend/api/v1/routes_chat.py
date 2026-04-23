@@ -427,13 +427,17 @@ async def poll_queue_status(
 
     if queue_item.status == "completed":
         result = payload.get("result") if isinstance(payload, dict) else None
+        response_result = result
+        if isinstance(result, dict):
+            response_result = dict(result)
+            response_result.pop("agentic_scratchpad", None)
         response_data: dict[str, Any] = {
             "status": "completed",
             "queue_id": queue_id,
-            "result": result,
+            "result": response_result,
         }
         if include_scratchpad:
-            scratchpad = _resolve_queue_scratchpad(db, result)
+            scratchpad = _resolve_queue_scratchpad(db, result, caller)
             if scratchpad is not None:
                 response_data["agentic_scratchpad"] = scratchpad
         return QueueStatusResponse(
@@ -462,7 +466,7 @@ async def poll_queue_status(
     )
 
 
-def _resolve_queue_scratchpad(db: Session, result: Optional[dict]) -> Optional[List[dict]]:
+def _resolve_queue_scratchpad(db: Session, result: Optional[dict], caller: ApiCaller) -> Optional[List[dict]]:
     """Resolve a completed queue result's scratchpad without widening queue access."""
     if not isinstance(result, dict):
         return None
@@ -475,7 +479,16 @@ def _resolve_queue_scratchpad(db: Session, result: Optional[dict]) -> Optional[L
     if not isinstance(thread_id, int):
         return None
 
-    thread = db.query(ConversationThread).filter(ConversationThread.id == thread_id).first()
+    thread_query = db.query(ConversationThread).filter(
+        ConversationThread.id == thread_id,
+        ConversationThread.tenant_id == caller.tenant_id,
+    )
+    if caller.is_api_client and caller.client_id:
+        thread_query = thread_query.filter(ConversationThread.api_client_id == caller.client_id)
+    elif caller.user_id:
+        thread_query = thread_query.filter(ConversationThread.user_id == caller.user_id)
+
+    thread = thread_query.first()
     if isinstance(getattr(thread, "agentic_scratchpad", None), list):
         return thread.agentic_scratchpad
     return None

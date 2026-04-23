@@ -65,6 +65,7 @@ export default function ChannelRoutingRulesPanel({
   const [saving, setSaving] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
   const [form, setForm] = useState<RuleFormState | null>(null)
 
   const agentNames = useMemo(() => {
@@ -78,13 +79,17 @@ export default function ChannelRoutingRulesPanel({
   const loadRules = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setAgentsError(null)
     try {
-      const [rulePage, agentRows] = await Promise.all([
-        api.listChannelRoutingRules(channelType, instanceId, { limit: 100 }),
-        api.getAgents(true),
-      ])
+      const rulePage = await api.listChannelRoutingRules(channelType, instanceId, { limit: 100 })
       setRules(rulePage.items)
-      setAgents(agentRows)
+      try {
+        const agentRows = await api.getAgents(true)
+        setAgents(agentRows)
+      } catch (agentErr: unknown) {
+        setAgents([])
+        setAgentsError(getErrorMessage(agentErr, 'Agent lookup unavailable'))
+      }
       setLoaded(true)
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to load routing rules'))
@@ -239,7 +244,7 @@ export default function ChannelRoutingRulesPanel({
                         {JSON.stringify(rule.criteria || {})}
                       </code>
                     </div>
-                    {canWrite && (
+                    {canWrite && agents.length > 0 && (
                       <div className="flex shrink-0 gap-1">
                         <button
                           type="button"
@@ -266,7 +271,13 @@ export default function ChannelRoutingRulesPanel({
             </div>
           )}
 
-          {canWrite && !form && (
+          {agentsError && (
+            <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              Agent lookup is unavailable; routing rules are read-only in this view.
+            </div>
+          )}
+
+          {canWrite && agents.length > 0 && !form && (
             <button
               type="button"
               onClick={startCreate}

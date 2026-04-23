@@ -398,7 +398,7 @@ class Agent(Base):
     memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
 
     # v0.7.0 Track F: bounded outer agentic loop configuration
-    max_agentic_rounds = Column(Integer, nullable=True, default=3)
+    max_agentic_rounds = Column(Integer, nullable=True, default=1)
     max_agentic_loop_bytes = Column(Integer, nullable=True, default=8192)
 
     # Phase 10: Channel Configuration

@@ -58,26 +58,35 @@ def _migrate_legacy_config_keys() -> None:
     if "config" not in existing:
         return
 
-    for column_name in TOOL_RESULT_COLUMNS:
+    bool_columns = ("auto_inject_results", "skip_ai_on_data_fetch")
+    int_columns = ("max_result_bytes", "max_results_retained", "max_turns_lookback")
+
+    for column_name in bool_columns:
         if column_name not in existing:
             continue
         bind.execute(sa.text(f"""
             UPDATE agent_skill
             SET {column_name} = (config ->> :key)::boolean
             WHERE config::jsonb ? :key
-              AND (config ->> :key) IN ('true', 'false')
-              AND :key IN ('auto_inject_results', 'skip_ai_on_data_fetch')
+              AND lower(config ->> :key) IN ('true', 'false')
         """), {"key": column_name})
+
+    for column_name in int_columns:
+        if column_name not in existing:
+            continue
         bind.execute(sa.text(f"""
             UPDATE agent_skill
             SET {column_name} = (config ->> :key)::integer
             WHERE config::jsonb ? :key
               AND (config ->> :key) ~ '^[0-9]+$'
-              AND :key IN ('max_result_bytes', 'max_results_retained', 'max_turns_lookback')
         """), {"key": column_name})
+
+    for column_name in (*bool_columns, *int_columns):
+        if column_name not in existing:
+            continue
         bind.execute(sa.text("""
             UPDATE agent_skill
-            SET config = config::jsonb - :key
+            SET config = (config::jsonb - :key)::json
             WHERE config::jsonb ? :key
         """), {"key": column_name})
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Wave 3A — Track C UI readiness + Track F agentic-loop core (2026-04-23)
+
+**Added:**
+- Alembic `0049_add_agent_skill_tool_result_columns.py`, `0057_add_platform_agentic_bounds.py`, and `0058_add_agent_max_agentic_rounds.py` for the Track F schema slice. `0049` adds `conversation_thread.agentic_scratchpad` plus `agent_skill.auto_inject_results`, `skip_ai_on_data_fetch`, `max_result_bytes`, `max_results_retained`, and `max_turns_lookback`; `0057` adds platform min/max agentic bounds on `Config`; `0058` adds per-agent `max_agentic_rounds` and `max_agentic_loop_bytes`. The chain now lands on single Alembic head `0058`.
+- `backend/agent/followup_detector.py` and focused Track F tests covering English/Portuguese follow-up references, fresh-fetch override phrases, agentic loop caps, bounded DATA injection, queue scratchpad redaction, tenant/API-client queue ownership, and Option X single-shot preservation.
+- Read-only Track C UI surfaces for `/continuous-agents`, `/continuous-agents/{id}`, `/hub/wake-events`, `/hub/triggers/email/{id}`, and `/hub/triggers/webhook/{id}` against the existing A2 read contracts.
+- Frontend client methods/types for continuous agents, continuous runs, wake events, email-trigger delete, trigger detail reads, and conversational channel routing rules.
+- Channel routing-rule UI in Hub Communication for WhatsApp, Telegram, Slack, and Discord only, plus Watcher handling for `type=continuous_run`.
+- Onboarding step 16, "Triggers & Continuous Agents", pointing users toward the Hub Communication trigger and continuous-agent surfaces.
+
+**Changed:**
+- API v1 agent creation now defaults omitted `max_agentic_rounds` to `1`, preserving prior single-shot behavior unless a caller opts into more rounds.
+- API v1 async queue polling exposes a top-level `agentic_scratchpad` only when `include_scratchpad=true`; nested `result.agentic_scratchpad` remains redacted.
+- Playground/API-v1 Gmail follow-ups can now reuse structured tool DATA from `conversation_thread.agentic_scratchpad` without re-calling the Gmail tool when the follow-up detector identifies a same-skill reference.
+- Agentic DATA reuse now preserves the prior scratchpad when the follow-up answer produces no new tool result.
+
+**Validated:**
+- `docker-compose build --no-cache backend` and `docker-compose up -d backend` from the root stack succeeded; backend/frontend/postgres/proxy were healthy.
+- Direct backend and HTTPS proxy `/api/health` returned healthy; Alembic `current` and `heads` both reported `0058 (head)`.
+- M-3 audit query found `0` legacy `agent_skill.config` rows using the new Track F toggle keys.
+- Container tests: `20 passed, 4 deselected, 17 warnings` for Track F/provider parser coverage; `15 passed, 2 warnings` for A2 continuous control plane, email triggers, and default agents.
+- Live API smoke returned `200` for `/api/continuous-agents`, `/api/continuous-runs`, and `/api/wake-events`.
+- Live `movl` API-v1 two-turn scenario: turn 1 used `skill:gmail_operation`; turn 2 returned with `tool_used=null`; `conversation_thread.agentic_scratchpad` remained length `1`; the recent `agent_run` rows showed the second run without a tool.
+- Browser smoke covered Hub Communication, `/continuous-agents`, `/hub/wake-events`, webhook trigger detail, `/settings/default-agents`, `/settings/asr`, and Watcher with 0 console errors.
+- Targeted ESLint passed for the Track C/Watcher/onboarding files. Full `npm --prefix frontend run typecheck` is still blocked by existing repo-wide TypeScript debt outside this slice.
+
 ### Track A2 — Continuous-Agent Control Plane backend contracts (2026-04-23)
 
 **Added:**
