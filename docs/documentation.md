@@ -174,6 +174,19 @@ Track A Phase 1 now has the routing-control surfaces needed before continuous-ag
 * **Agent Studio cleanup** — `/agents` no longer edits the tenant default inline. It shows the current default agent as a read-only indicator and links to `/settings/default-agents`.
 * **Drift protection** — `backend/tests/test_wizard_drift.py` now cross-checks the Trigger wizard fallback against `TRIGGER_CATALOG`, in addition to the existing channel/productivity/provider guards.
 
+### 2.8 v0.7.0 Track A2 Continuous-Agent Control Plane
+
+Track A2 is a backend-first contract checkpoint. It adds the schema and read surfaces that later Email/Jira/GitHub/Schedule trigger tracks and Track C UI consume.
+
+* **Migrations** — Alembic `0047_add_continuous_agent_models.py` intentionally revises current release head `0059`, and `0050_add_channel_event_rule.py` revises `0047`, keeping one linear chain while preserving Track A2's allocated revision IDs.
+* **Models** — `delivery_policy`, `budget_policy`, `continuous_agent`, `continuous_subscription`, `wake_event`, `continuous_run`, and `channel_event_rule` are tenant-scoped. `continuous_run.wake_event_ids` and `continuous_run.agentic_scratchpad` are JSONB in `0047`; Track F later adds scratchpad only to `conversation_thread`.
+* **Read-only APIs** — this checkpoint exposes `GET /api/continuous-agents`, `GET /api/continuous-agents/{id}`, `GET /api/continuous-runs`, `GET /api/continuous-runs/{id}`, `GET /api/wake-events`, and `GET /api/wake-events/{id}`. Write endpoints for continuous agents/runs/wake events are intentionally deferred. Pagination shape is `items`, `total`, `limit`, `offset`.
+* **Auth and permissions** — continuous-agent list/detail uses session cookie, UI Bearer JWT, OAuth2 API-client Bearer JWT, or `X-API-Key` via the shared auth stack. `/api/continuous-agents*` requires `agents.read`; `/api/continuous-runs*` and `/api/wake-events*` require `watcher.read`. Missing tenant context fails closed with `403`; cross-tenant detail access returns `403`.
+* **Payload contract** — `wake_event` stores no inline payload in A2. Trigger adapters must redact/store payloads separately and set `payload_ref` to an opaque local path under `backend/data/wake_events/` or a future blob key. There is no payload fetch endpoint in A2.
+* **Status enums** — `continuous_agent.status`: `active`, `paused`, `disabled`, `error`; `continuous_subscription.status`: `active`, `paused`, `disabled`, `error`; `wake_event.status`: `pending`, `claimed`, `processed`, `filtered`, `failed`; `continuous_run.status`: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `skipped`; `delivery_policy.importance_threshold`: `low`, `normal`, `high`; `budget_policy.on_exhaustion`: `pause`, `degrade_to_hybrid`, `notify_only`; `continuous_agent.execution_mode`: `autonomous`, `hybrid`, `notify_only`.
+* **Routing rules** — channel routing rules use the generic route shape `/api/channels/{channel_type}/{instance_id}/routing-rules` with list/create/get/update/delete for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). The plan's Slack example maps directly to `POST /api/channels/slack/{id}/routing-rules`. The API validates both channel instance ownership and target-agent ownership before writes. Trigger details remain per-type APIs such as `/api/triggers/email` and `/api/triggers/webhook` in A2.
+* **Budget/Sentinel/Watcher hooks** — `ContinuousBudgetLimiter` extends the shared sliding-window limiter with a `budget_kind` dimension and returns `pause`, `degrade_to_hybrid`, or `notify_only` decisions. Gmail send/reply/draft checks Sentinel's `continuous_agent_action_approval` detection only when an explicit continuous-agent context is present. `WatcherActivityService` now emits `type=continuous_run`, `run_type=continuous` events for later UI badging.
+
 ---
 
 ## 3. Quick Start
