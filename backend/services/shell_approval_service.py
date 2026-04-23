@@ -311,17 +311,21 @@ class ShellApprovalService:
 
         return results
 
-    def expire_old_approvals(self) -> int:
+    def expire_old_approvals(self, tenant_id: str) -> int:
         """
-        Expire approval requests that have passed their deadline.
+        Expire approval requests that have passed their deadline for one tenant.
 
         Returns:
             Number of expired requests
         """
+        if not tenant_id:
+            raise ValueError("tenant_id is required when expiring shell approvals")
+
         now = datetime.utcnow()
         cutoff = now - timedelta(minutes=self.DEFAULT_EXPIRATION_MINUTES)
 
         expired = self.db.query(ShellCommand).filter(
+            ShellCommand.tenant_id == tenant_id,
             ShellCommand.status == "pending_approval",
             ShellCommand.queued_at < cutoff
         ).all()
@@ -443,10 +447,11 @@ class ShellApprovalService:
     def _get_user_id(self, user_identifier: str) -> Optional[int]:
         """Get user ID from identifier string (email or user:X format)."""
         if user_identifier.startswith("user:"):
+            raw_value = user_identifier.split(":", 1)[1]
             try:
-                return int(user_identifier.split(":")[1])
+                return int(raw_value)
             except (IndexError, ValueError):
-                pass
+                user_identifier = raw_value
 
         # Try to find user by email
         from models_rbac import User
@@ -480,29 +485,44 @@ class ShellApprovalService:
             ShellIntegration.id == command.shell_id
         ).first()
 
-        # Import audit log function if available
         try:
-            from services.audit_service import log_audit_event
+            from services.audit_service import TenantAuditActions, log_tenant_event
 
-            log_audit_event(
-                tenant_id=command.tenant_id,
-                category="shell",
-                action=f"shell.{action}",
+            action_map = {
+                "approval_requested": TenantAuditActions.SHELL_APPROVAL_REQUESTED,
+                "approved": TenantAuditActions.SHELL_APPROVED,
+                "rejected": TenantAuditActions.SHELL_REJECTED,
+                "expired": TenantAuditActions.SHELL_EXPIRED,
+            }
+            audit_action = action_map.get(action, f"shell.{action}")
+            user_id = None
+            if action == "approved":
+                user_id = self._get_user_id(details.get("approved_by", "") or "")
+            elif action == "rejected":
+                user_id = self._get_user_id(details.get("rejected_by", "") or "")
+            elif action == "approval_requested":
+                user_id = self._get_user_id(command.initiated_by or "")
+
+            log_tenant_event(
+                self.db,
+                command.tenant_id,
+                user_id,
+                audit_action,
                 resource_type="shell_command",
                 resource_id=command_id,
                 details={
                     **details,
                     "shell_id": command.shell_id,
                     "shell_hostname": shell.hostname if shell else None,
-                    "commands": command.commands
+                    "commands": command.commands,
                 },
+                channel="system",
                 severity="warning" if action in ["rejected", "expired"] else "info"
             )
-        except ImportError:
-            # Audit service not available, log to standard logger
+        except Exception as exc:
             logger.info(
                 f"AUDIT: shell.{action} | command={command_id} | "
-                f"shell={command.shell_id} | details={details}"
+                f"shell={command.shell_id} | details={details} | audit_error={exc}"
             )
 
 

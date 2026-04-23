@@ -2752,10 +2752,12 @@ Each key field has a show/hide eye toggle and placeholder `"Enter Fernet encrypt
 
 | Filter | Options |
 |---|---|
-| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, API Clients, Custom Skills, MCP Servers, Team |
+| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, Shell, API Clients, Custom Skills, MCP Servers, Team |
 | Severity | All Severities, Info, Warning, Critical |
 | Channel | All Channels, Web, API, WhatsApp, Telegram, System |
 | From / To | Date range |
+
+Date-only filters now expand to full-day bounds on the backend, so selecting `To = 2026-04-23` includes events through `2026-04-23 23:59:59.999999` instead of stopping at midnight.
 
 **Syslog Forwarding Panel** (`audit-logs/page.tsx:416-521`):
 
@@ -3153,7 +3155,7 @@ To restore it later, just click Start — the encrypted token and hostname are p
 
 The audit-logs UI exposes the same three (plus "All Severities") — see §21.7.
 
-**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, api_client, skill, mcp, team.
+**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, shell, api_client, skill, mcp, team.
 
 **Channels**: web, api, whatsapp, telegram, system.
 
@@ -3556,6 +3558,8 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 /shell myserver:df -h            — Execute on specific host "myserver"
 /shell @all:uptime               — Execute on all registered beacons
 ```
+
+Shell command requests are rate-limited per beacon/integration (60 commands/minute by default in the shared shell security service), and the HTTP beacon endpoints apply additional throttles. Registration and version checks are capped at 12 requests/minute per beacon, beacon-package downloads are capped at 6 requests/minute per beacon or signed-in user, check-ins get 3x burst headroom over the configured poll cadence (clamped to 30-360 RPM), and command-result posts get 8x headroom (clamped to 60-480 RPM).
 
 #### Thread commands
 ```
