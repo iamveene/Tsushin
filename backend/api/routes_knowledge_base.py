@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from models import AgentKnowledge, KnowledgeChunk, Agent
 from models_rbac import User
-from agent.knowledge.knowledge_service import KnowledgeService
+from agent.knowledge.knowledge_service import KnowledgeMetadataError, KnowledgeService
 from auth_dependencies import get_current_user_required, get_tenant_context, TenantContext, require_permission
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,14 @@ def _verify_agent_access(agent_id: int, current_user: User, db: Session) -> Agen
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
+
+
+def _knowledge_response(service: KnowledgeService, knowledge: AgentKnowledge) -> KnowledgeResponse:
+    try:
+        tags = service.get_document_tags(knowledge)
+    except KnowledgeMetadataError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return KnowledgeResponse.from_record(knowledge, tags=tags)
 
 
 # Pydantic Models
@@ -288,7 +296,7 @@ async def upload_knowledge(
         except Exception as e:
             logger.warning(f"Error deleting temp file: {e}")
 
-        return KnowledgeResponse.from_record(knowledge, tags=service.get_document_tags(knowledge))
+        return _knowledge_response(service, knowledge)
 
     except HTTPException:
         raise
@@ -310,7 +318,7 @@ def list_knowledge(
     service = KnowledgeService(db)
     knowledge_list = service.get_agent_knowledge(agent_id)
 
-    return [KnowledgeResponse.from_record(k, tags=service.get_document_tags(k)) for k in knowledge_list]
+    return [_knowledge_response(service, knowledge) for knowledge in knowledge_list]
 
 
 @router.get("/agents/{agent_id}/knowledge-base/stats")
@@ -347,7 +355,7 @@ def get_knowledge_detail(
     if knowledge.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    return KnowledgeResponse.from_record(knowledge, tags=service.get_document_tags(knowledge))
+    return _knowledge_response(service, knowledge)
 
 
 @router.patch("/agents/{agent_id}/knowledge-base/{knowledge_id}", response_model=KnowledgeResponse)
@@ -376,11 +384,13 @@ def update_knowledge_detail(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except KnowledgeMetadataError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     if not updated:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    return KnowledgeResponse.from_record(updated, tags=service.get_document_tags(updated))
+    return _knowledge_response(service, updated)
 
 
 @router.get("/agents/{agent_id}/knowledge-base/{knowledge_id}/chunks", response_model=List[KnowledgeChunkResponse])
