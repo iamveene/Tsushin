@@ -42,7 +42,9 @@ const LLM_LOCAL: VendorOption[] = [
 ]
 
 const TTS_CLOUD: VendorOption[] = [
-  { id: 'elevenlabs', label: 'ElevenLabs', description: 'Hosted high-fidelity voice generation. Requires an API key.', Icon: MicrophoneIcon },
+  { id: 'openai',     label: 'OpenAI TTS',         description: 'tts-1 / tts-1-hd voices (alloy, nova, echo, fable, onyx, shimmer). Reuses your OpenAI API key — same key as the OpenAI LLM card.', Icon: MicrophoneIcon },
+  { id: 'gemini',     label: 'Google Gemini TTS',  description: 'Preview models — Fast (2.5 Flash), Balanced (3.1 Flash, default), Quality (2.5 Pro). 30 prebuilt voices, WAV output. Reuses your Gemini API key — same key as the Gemini LLM / Image cards.', Icon: GeminiIcon, tag: 'Preview' },
+  { id: 'elevenlabs', label: 'ElevenLabs',         description: 'Hosted high-fidelity voice generation. Requires an API key.',                                                                                                                                  Icon: MicrophoneIcon },
 ]
 
 const TTS_LOCAL: VendorOption[] = [
