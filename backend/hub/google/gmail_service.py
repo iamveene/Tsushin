@@ -2,26 +2,28 @@
 Gmail Service
 
 Provides Gmail API integration through HubIntegrationBase.
-Supports read-only email access for agents.
+Supports inbound and outbound email access for agents.
 
 Features:
 - List emails with filtering
 - Get specific email content
 - Search emails with Gmail query syntax
 - List labels
-
-Note: This implementation is read-only. Write operations (send, draft)
-are not supported in this version for security.
+- Send emails
+- Create drafts
+- Reply to existing threads
 
 Required Gmail API Scopes:
 - https://www.googleapis.com/auth/gmail.readonly
+- https://www.googleapis.com/auth/gmail.send
 """
 
 import base64
-import os
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from email.utils import format_datetime, getaddresses
+from typing import Any, Dict, List, Optional, Sequence
 import httpx
 from sqlalchemy.orm import Session
 
@@ -36,12 +38,14 @@ from models import GmailIntegration, OAuthToken, HubIntegration
 
 logger = logging.getLogger(__name__)
 
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+
 
 class GmailService(HubIntegrationBase):
     """
     Gmail API service.
 
-    Provides read-only email access for agents.
+    Provides inbound and outbound Gmail access for agents.
     Each GmailService instance is tied to a specific GmailIntegration.
 
     Example:
@@ -228,6 +232,123 @@ class GmailService(HubIntegrationBase):
             duration = time.time() - start_time
             self._metrics["requests_duration_seconds"] += duration
 
+    def _get_latest_token(self) -> Optional[OAuthToken]:
+        """Return the newest OAuth token row for this integration."""
+        return self.db.query(OAuthToken).filter(
+            OAuthToken.integration_id == self.integration_id
+        ).order_by(OAuthToken.created_at.desc()).first()
+
+    def has_send_scope(self) -> bool:
+        """
+        Whether the stored OAuth token explicitly includes gmail.send.
+
+        Returns False when the token row is missing or its scope string does not
+        mention gmail.send. A missing scope string is treated as unknown and also
+        returns False so callers can surface an actionable re-auth hint.
+        """
+        token = self._get_latest_token()
+        if not token or not token.scope:
+            return False
+        return GMAIL_SEND_SCOPE in {scope for scope in token.scope.split() if scope}
+
+    def _ensure_send_scope(self) -> None:
+        """
+        Require gmail.send before performing outbound actions.
+
+        Older Gmail integrations may have been authorized before outbound mail
+        was introduced. Those integrations must be re-authorized to add the
+        gmail.send scope.
+        """
+        token = self._get_latest_token()
+        if not token or not token.scope or not self.has_send_scope():
+            raise PermissionError(
+                "Gmail integration is missing gmail.send. Re-authorize the "
+                "integration to enable send, reply, and draft operations."
+            )
+
+    @staticmethod
+    def _normalize_recipients(recipients: Optional[Sequence[str] | str]) -> List[str]:
+        """Normalize a string or sequence of recipients into a clean list."""
+        if recipients is None:
+            return []
+        if isinstance(recipients, str):
+            return [item.strip() for item in recipients.split(",") if item.strip()]
+        return [str(item).strip() for item in recipients if str(item).strip()]
+
+    @staticmethod
+    def _dedupe_recipients(*groups: Sequence[str]) -> List[str]:
+        """Merge recipient lists while preserving order and uniqueness."""
+        seen = set()
+        ordered: List[str] = []
+        for group in groups:
+            for recipient in group:
+                lowered = recipient.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                ordered.append(recipient)
+        return ordered
+
+    def _build_raw_message(
+        self,
+        *,
+        to: Sequence[str],
+        subject: str,
+        body_text: str,
+        cc: Optional[Sequence[str]] = None,
+        bcc: Optional[Sequence[str]] = None,
+        body_html: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build a base64url-encoded MIME message payload for Gmail."""
+        integration = self._get_integration()
+        recipients = self._normalize_recipients(to)
+        if not recipients:
+            raise ValueError("At least one recipient is required")
+
+        cc_list = self._normalize_recipients(cc)
+        bcc_list = self._normalize_recipients(bcc)
+
+        message = EmailMessage()
+        message["From"] = integration.email_address
+        message["To"] = ", ".join(recipients)
+        message["Subject"] = subject.strip() or "(No Subject)"
+        message["Date"] = format_datetime(datetime.now(timezone.utc))
+
+        if cc_list:
+            message["Cc"] = ", ".join(cc_list)
+        if bcc_list:
+            message["Bcc"] = ", ".join(bcc_list)
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+        if references:
+            message["References"] = references
+
+        if body_html:
+            message.set_content(body_text or "")
+            message.add_alternative(body_html, subtype="html")
+        else:
+            message.set_content(body_text or "")
+
+        payload: Dict[str, Any] = {
+            "raw": base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        }
+        if thread_id:
+            payload["threadId"] = thread_id
+        return payload
+
+    @staticmethod
+    def _extract_headers(message: Dict[str, Any]) -> Dict[str, str]:
+        """Flatten Gmail payload headers into a lowercase lookup map."""
+        headers: Dict[str, str] = {}
+        for header in message.get("payload", {}).get("headers", []):
+            name = header.get("name", "").lower()
+            if name:
+                headers[name] = header.get("value", "")
+        return headers
+
     # ========================================
     # Gmail Messages API
     # ========================================
@@ -360,11 +481,12 @@ class GmailService(HubIntegrationBase):
         message = await self.get_message(message_id, format="full")
 
         # Extract headers
-        headers = {}
-        for header in message.get("payload", {}).get("headers", []):
-            name = header.get("name", "").lower()
-            if name in ["subject", "from", "to", "date", "cc", "bcc"]:
-                headers[name] = header.get("value", "")
+        all_headers = self._extract_headers(message)
+        headers = {
+            name: value
+            for name, value in all_headers.items()
+            if name in ["subject", "from", "to", "date", "cc", "bcc"]
+        }
 
         # Extract body
         body_text = ""
@@ -459,6 +581,156 @@ class GmailService(HubIntegrationBase):
             params={"format": "full"}
         )
 
+    async def send_message(
+        self,
+        *,
+        to: Sequence[str] | str,
+        subject: str,
+        body_text: str,
+        cc: Optional[Sequence[str] | str] = None,
+        bcc: Optional[Sequence[str] | str] = None,
+        body_html: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send a Gmail message immediately.
+
+        Raises:
+            PermissionError: If the integration lacks gmail.send.
+        """
+        self._ensure_send_scope()
+        payload = self._build_raw_message(
+            to=self._normalize_recipients(to),
+            subject=subject,
+            body_text=body_text,
+            cc=self._normalize_recipients(cc),
+            bcc=self._normalize_recipients(bcc),
+            body_html=body_html,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+            references=references,
+        )
+
+        self._log_info("Sending Gmail message")
+        return await self._make_request(
+            "POST",
+            "/users/me/messages/send",
+            json_data=payload,
+        )
+
+    async def create_draft(
+        self,
+        *,
+        to: Sequence[str] | str,
+        subject: str,
+        body_text: str,
+        cc: Optional[Sequence[str] | str] = None,
+        bcc: Optional[Sequence[str] | str] = None,
+        body_html: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a Gmail draft without sending it.
+
+        Raises:
+            PermissionError: If the integration lacks gmail.send.
+        """
+        self._ensure_send_scope()
+        message_payload = self._build_raw_message(
+            to=self._normalize_recipients(to),
+            subject=subject,
+            body_text=body_text,
+            cc=self._normalize_recipients(cc),
+            bcc=self._normalize_recipients(bcc),
+            body_html=body_html,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+            references=references,
+        )
+
+        self._log_info("Creating Gmail draft")
+        return await self._make_request(
+            "POST",
+            "/users/me/drafts",
+            json_data={"message": message_payload},
+        )
+
+    async def reply_to_message(
+        self,
+        message_id: str,
+        *,
+        body_text: str,
+        body_html: Optional[str] = None,
+        reply_all: bool = False,
+        cc: Optional[Sequence[str] | str] = None,
+        bcc: Optional[Sequence[str] | str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Reply to an existing Gmail message in-thread.
+
+        Args:
+            message_id: Gmail message ID to reply to.
+            reply_all: When true, include original To/Cc recipients except the
+                connected mailbox itself.
+
+        Raises:
+            PermissionError: If the integration lacks gmail.send.
+            ValueError: If the original message is missing reply metadata.
+        """
+        self._ensure_send_scope()
+        original = await self.get_message(message_id, format="full")
+        headers = self._extract_headers(original)
+        integration_email = self._get_integration().email_address.lower()
+
+        to_recipients = [
+            address for _, address in getaddresses([
+                headers.get("reply-to") or headers.get("from", "")
+            ])
+            if address
+        ]
+        if not to_recipients:
+            raise ValueError(f"Could not determine reply recipient for Gmail message {message_id}")
+
+        cc_recipients: List[str] = []
+        if reply_all:
+            original_to = [address for _, address in getaddresses([headers.get("to", "")]) if address]
+            original_cc = [address for _, address in getaddresses([headers.get("cc", "")]) if address]
+            cc_recipients = [
+                address
+                for address in self._dedupe_recipients(original_to, original_cc)
+                if address.lower() not in {integration_email, *(addr.lower() for addr in to_recipients)}
+            ]
+
+        requested_cc = self._normalize_recipients(cc)
+        requested_bcc = self._normalize_recipients(bcc)
+        reply_subject = headers.get("subject", "").strip() or "(No Subject)"
+        if not reply_subject.lower().startswith("re:"):
+            reply_subject = f"Re: {reply_subject}"
+
+        references = " ".join(
+            part for part in [
+                headers.get("references", "").strip(),
+                headers.get("message-id", "").strip(),
+            ]
+            if part
+        ) or None
+
+        return await self.send_message(
+            to=to_recipients,
+            subject=reply_subject,
+            body_text=body_text,
+            cc=self._dedupe_recipients(cc_recipients, requested_cc),
+            bcc=requested_bcc,
+            body_html=body_html,
+            thread_id=original.get("threadId"),
+            in_reply_to=headers.get("message-id"),
+            references=references,
+        )
+
     # ========================================
     # HubIntegrationBase Implementation
     # ========================================
@@ -486,6 +758,7 @@ class GmailService(HubIntegrationBase):
                     "api_reachable": True,
                     "labels_count": len(labels),
                     "email": integration.email_address,
+                    "send_enabled": self.has_send_scope(),
                 },
                 "errors": []
             }

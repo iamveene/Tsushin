@@ -571,7 +571,7 @@ async def get_available_providers(
             providers.append({
                 "provider_type": "gmail",
                 "provider_name": "Gmail",
-                "description": "Read and search emails in Gmail",
+                "description": "Read, search, send, reply to, and draft emails in Gmail",
                 "requires_integration": True,
                 "available_integrations": gmail_integrations
             })

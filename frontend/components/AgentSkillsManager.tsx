@@ -1253,7 +1253,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     const result: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
     const providerEntries: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
       { providerKey: 'scheduler', displayName: 'Scheduler', skillType: 'flows', icon: CalendarIcon, description: 'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.' },
-      { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read and search emails. Connect your Gmail account to enable email access.' },
+      { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.' },
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
     ]
     for (const entry of providerEntries) {
