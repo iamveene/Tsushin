@@ -43,6 +43,19 @@ Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than wa
 
 **Still open in Phase 1 / Phase 3 / Phase 6:** `/settings/default-agents`, the shared `Wizard` primitive + Email Trigger wizard, Track A Phase 2 continuous-agent models, the live Gmail outbound integration gate (real send + Sent visibility), and the actual Phase 6 schema/API/UI work (`0049`, `0057`, `0058`, scratchpad exposure, multi-round loop).
 
+### Feat — Agent knowledge documents can be renamed and tagged without a schema migration (2026-04-23)
+
+Track E's first reviewable checkpoint adds lightweight metadata editing for per-agent knowledge documents without consuming migration slot `0055`.
+
+**Changed:**
+- `backend/api/routes_knowledge_base.py` now returns `tags` on knowledge-document reads and exposes `PATCH /api/agents/{id}/knowledge-base/{knowledge_id}` for renaming a document and updating its tags.
+- `backend/agent/knowledge/knowledge_service.py` persists document tags in an atomic sidecar metadata file next to the uploaded knowledge document, validates tag count/length instead of silently truncating user input, surfaces corrupt metadata as an error, and keeps rename operations limited to the stored `document_name` without moving the underlying file path.
+- `frontend/components/AgentKnowledgeManager.tsx` adds an Edit flow so tenant users can rename a document and manage comma/newline-separated tags directly from the agent knowledge screen, with client-side guidance for the 12-tag / 48-character limits.
+- `frontend/lib/client.ts` now models `tags` on `AgentKnowledge` and provides an `updateKnowledgeDocument()` helper for the new PATCH route.
+
+**Validated:**
+- Added focused backend coverage in `backend/tests/test_agent_knowledge_metadata.py` for name sanitization, explicit tag validation, atomic sidecar persistence/rollback behavior, and corrupt-metadata surfacing.
+
 ### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
 
 Phase 0 of v0.7.0 now has the serial foundation needed before release-track worktrees fan out.
