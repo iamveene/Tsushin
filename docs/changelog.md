@@ -60,12 +60,21 @@ Track E's first reviewable checkpoint adds lightweight metadata editing for per-
 
 **Added:**
 - Alembic `0048` and `ASRInstance` for tenant-scoped Whisper/Speaches rows, including encrypted per-instance auth tokens, default model selection, runtime URL, and managed-container metadata.
+- Alembic `0059` and `Tenant.default_asr_instance_id` so each tenant can choose a default local ASR instance while preserving OpenAI Whisper as the null/default fallback. Track D intentionally targets `down_revision='0051'` because Track F owns `0049`; root integration should merge this after Track A `0051`.
 - `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` to create/list/update/delete ASR instances and manage their container lifecycle on the reserved `6400-6499` port range.
 - `backend/hub/providers/asr_provider.py`, `backend/hub/providers/asr_registry.py`, `backend/hub/providers/openai_asr_provider.py`, and `backend/hub/providers/whisper_asr_provider.py` for a dedicated speech-to-text provider abstraction.
+- `/api/settings/asr/default`, frontend client methods for ASR instances/defaults, `/settings/asr`, and a shared transcript/ASR selector now used by the Audio Agents Wizard, the regular Agent Wizard audio step, and Agent Skills Manager.
 
 **Changed:**
-- `backend/agent/skills/audio_transcript.py` now prefers a configured `asr_instance_id` (Speaches/OpenAI-compatible Whisper endpoint) and falls back to the existing OpenAI Whisper path when no tenant ASR instance is configured or the local ASR request fails.
+- `backend/agent/skills/audio_transcript.py` now resolves `audio_transcript.config.asr_mode` (`openai`, `tenant_default`, `instance`), preserving the legacy `asr_instance_id` path for pinned local instances and falling back to OpenAI Whisper when the selected local route is unavailable.
 - Authenticated container warm-up now uses `POST /v1/audio/transcriptions` with the per-instance credentials instead of trusting the public `/health` endpoint alone, so ASR containers are only marked healthy after auth + model load succeed.
+- Speaches managed containers now mount the model cache at `/root/.cache/huggingface`, matching the root user used by the image rather than the previous `/home/ubuntu` path.
+- Tenant default ASR is cleared when the selected instance is deactivated, deleted, or detected stale/inactive during default lookup.
+- `backend/api/routes_skills.py` validates tenant-scoped `audio_transcript.asr_instance_id` values before persisting them, so agents cannot save cross-tenant ASR references.
+
+**Validated:**
+- `python -m pytest -q -p no:cacheprovider -o addopts='' backend/tests/test_audio_transcript_skill_asr.py backend/tests/test_whisper_container_manager.py` -> `15 passed` (explicit local instance, tenant default instance, forced OpenAI resolution, stale/deactivated tenant-default clearing, and existing ASR container-manager coverage).
+- `npx eslint --no-warn-ignored components/AgentSkillsManager.tsx components/agent-wizard/hooks/useCreateAgentChain.ts` -> passed.
 
 ### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
 
