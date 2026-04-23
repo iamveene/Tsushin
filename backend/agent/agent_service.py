@@ -567,6 +567,39 @@ class AgentService:
         bounded = self._bound_scratchpad(scratchpad, byte_cap)
         return json.dumps(bounded, ensure_ascii=False, indent=2)
 
+    async def _answer_followup_without_tool(
+        self,
+        *,
+        system_prompt: str,
+        context: str,
+        suppressed_tool_name: str,
+        agent_run_id: Optional[int],
+        sender_key: Optional[str],
+    ) -> Optional[str]:
+        """Answer from an injected DATA block when a redundant tool call was proposed."""
+        result = await self.ai_client.generate(
+            system_prompt,
+            (
+                f"{context}\n\n"
+                f"The model attempted to call {suppressed_tool_name} again, but this is a follow-up "
+                "over the DATA block already supplied above. Answer naturally from DATA and do not call tools."
+            ),
+            operation_type="tool_followup_reuse",
+            agent_id=self.agent_id,
+            agent_run_id=agent_run_id,
+            sender_key=sender_key,
+            tools=None,
+        )
+        if result.get("error"):
+            self.logger.warning(f"Suppressed follow-up tool retry failed: {result.get('error')}")
+            return None
+
+        answer = self._strip_reasoning_tags(result.get("answer") or "")
+        if answer:
+            answer = self._strip_internal_context(answer)
+            answer = self._filter_sensitive_content(answer)
+        return answer or None
+
     async def _execute_followup_tool_call(
         self,
         *,
@@ -1198,6 +1231,17 @@ You can add a brief message AFTER the tool call block if needed.
         if self.db and self.agent_id and not self.disable_skills:
             try:
                 skill_tools, shell_os_context = await skill_manager.get_skill_tool_definitions(self.db, self.agent_id)
+                suppressed_followup_tool = self.config.get("suppress_followup_tool_skill_type")
+                if suppressed_followup_tool and skill_tools:
+                    before_count = len(skill_tools)
+                    skill_tools = [
+                        tool for tool in skill_tools
+                        if tool.get("function", {}).get("name") != suppressed_followup_tool
+                    ]
+                    if len(skill_tools) != before_count:
+                        self.logger.info(
+                            f"[SKILL TOOLS] Suppressed {suppressed_followup_tool} for follow-up DATA reuse"
+                        )
                 if skill_tools:
                     self.logger.info(f"[SKILL TOOLS] Found {len(skill_tools)} skill tools for agent {self.agent_id}")
 
@@ -1406,9 +1450,28 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
                     # For shell tool, LLM may call it as "shell" but MCP def uses "run_shell_command"
                     effective_tool_name = 'run_shell_command' if is_shell_tool else tool_name
-                    skill_class = skill_manager.find_skill_by_tool_name(effective_tool_name) if skill_tools else None
+                    suppressed_followup_tool = self.config.get("suppress_followup_tool_skill_type")
+                    if suppressed_followup_tool and effective_tool_name == suppressed_followup_tool:
+                        self.logger.info(
+                            f"Suppressing redundant follow-up tool call to {effective_tool_name}; "
+                            "answering from injected DATA context"
+                        )
+                        no_tool_answer = await self._answer_followup_without_tool(
+                            system_prompt=system_prompt_with_date,
+                            context=context,
+                            suppressed_tool_name=effective_tool_name,
+                            agent_run_id=agent_run_id,
+                            sender_key=sender_key,
+                        )
+                        if no_tool_answer:
+                            ai_response = no_tool_answer
+                        tool_call = None
+                    if not tool_call:
+                        pass
+                    else:
+                        skill_class = skill_manager.find_skill_by_tool_name(effective_tool_name) if skill_tools else None
 
-                    if skill_class and skill_tools:
+                    if tool_call and skill_class and skill_tools:
                         # Phase 5: Execute skill-based tool via skill manager
                         self.logger.info(f"[SKILL TOOL] Executing skill tool '{tool_name}' via skill_manager")
 

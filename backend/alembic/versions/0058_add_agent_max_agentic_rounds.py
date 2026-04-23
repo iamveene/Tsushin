@@ -31,7 +31,7 @@ def upgrade() -> None:
     if "max_agentic_rounds" not in existing:
         op.add_column(
             "agent",
-            sa.Column("max_agentic_rounds", sa.Integer(), nullable=True, server_default="3"),
+            sa.Column("max_agentic_rounds", sa.Integer(), nullable=True, server_default="1"),
         )
     if "max_agentic_loop_bytes" not in existing:
         op.add_column(

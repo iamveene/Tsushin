@@ -72,13 +72,17 @@ def test_track_f_migration_chain_and_columns_are_scoped():
 
     rev_0049, down_0049, text_0049 = load_revision("0049_add_agent_skill_tool_result_columns.py")
     rev_0057, down_0057, _ = load_revision("0057_add_platform_agentic_bounds.py")
-    rev_0058, down_0058, _ = load_revision("0058_add_agent_max_agentic_rounds.py")
+    rev_0058, down_0058, text_0058 = load_revision("0058_add_agent_max_agentic_rounds.py")
 
     assert (rev_0049, down_0049) == ("0049", "0050")
     assert (rev_0057, down_0057) == ("0057", "0049")
     assert (rev_0058, down_0058) == ("0058", "0057")
     assert "conversation_thread" in text_0049
     assert "continuous_run" not in text_0049
+    assert "bool_columns" in text_0049
+    assert "int_columns" in text_0049
+    assert "(config::jsonb - :key)::json" in text_0049
+    assert 'server_default="1"' in text_0058
 
 
 def test_track_f_model_columns_exist():
@@ -172,6 +176,21 @@ def test_data_block_bounds_structured_tool_results():
     assert len(block.encode("utf-8")) < 400
 
 
+def test_followup_data_reuse_suppresses_matching_tool_call():
+    service_text = (Path(__file__).resolve().parents[1] / "services" / "playground_service.py").read_text()
+    agent_service_text = (Path(__file__).resolve().parents[1] / "agent" / "agent_service.py").read_text()
+
+    assert '"skill_type": skill_type' in service_text
+    assert 'config_dict["suppress_followup_tool_skill_type"]' in service_text
+    assert 'getattr(thread, "agentic_scratchpad", None)' in service_text
+    assert "suppress_direct_skill_processing = True" in service_text
+    assert "Skipping direct skill processing for follow-up DATA reuse" in service_text
+    assert "Preserving structured tool DATA scratchpad after follow-up reuse" in service_text
+    assert "suppress_followup_tool_skill_type" in agent_service_text
+    assert "Suppressing redundant follow-up tool call" in agent_service_text
+    assert "operation_type=\"tool_followup_reuse\"" in agent_service_text
+
+
 def test_agent_service_agentic_caps_preserve_single_round_and_bound_payload(monkeypatch):
     skills_stub = types.ModuleType("agent.skills")
     skills_stub.get_skill_manager = lambda: None
@@ -248,7 +267,9 @@ def test_api_v1_queue_status_includes_scratchpad_only_when_requested():
     with_trace = asyncio.run(poll_queue_status(42, include_scratchpad=True, db=_FakeDB(item), caller=caller))
 
     assert without.agentic_scratchpad is None
+    assert "agentic_scratchpad" not in without.result
     assert with_trace.agentic_scratchpad == [{"round": 1, "tool_name": "gmail"}]
+    assert "agentic_scratchpad" not in with_trace.result
 
 
 def test_api_v1_queue_status_rejects_other_api_client_queue_item():

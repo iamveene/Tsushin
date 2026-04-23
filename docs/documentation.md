@@ -187,6 +187,18 @@ Track A2 is a backend-first contract checkpoint. It adds the schema and read sur
 * **Routing rules** — channel routing rules use the generic route shape `/api/channels/{channel_type}/{instance_id}/routing-rules` with list/create/get/update/delete for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). The plan's Slack example maps directly to `POST /api/channels/slack/{id}/routing-rules`. The API validates both channel instance ownership and target-agent ownership before writes. Trigger details remain per-type APIs such as `/api/triggers/email` and `/api/triggers/webhook` in A2.
 * **Budget/Sentinel/Watcher hooks** — `ContinuousBudgetLimiter` extends the shared sliding-window limiter with a `budget_kind` dimension and returns `pause`, `degrade_to_hybrid`, or `notify_only` decisions. Gmail send/reply/draft checks Sentinel's `continuous_agent_action_approval` detection only when an explicit continuous-agent context is present. `WatcherActivityService` now emits `type=continuous_run`, `run_type=continuous` events for later UI badging.
 
+### 2.9 v0.7.0 Wave 3A Track C/F checkpoint
+
+Wave 3A connects the stable A2 read contracts to UI surfaces and lands the first real Track F agentic-loop core without enabling broad write-side continuous-agent workflows yet.
+
+* **Track F migrations** — Alembic `0049` adds `conversation_thread.agentic_scratchpad` and the five `agent_skill` tool-result toggles: `auto_inject_results`, `skip_ai_on_data_fetch`, `max_result_bytes`, `max_results_retained`, and `max_turns_lookback`. Alembic `0057` adds `Config.platform_min_agentic_rounds` / `platform_max_agentic_rounds`; Alembic `0058` adds `Agent.max_agentic_rounds` and `max_agentic_loop_bytes`. The default `max_agentic_rounds` is `1` to preserve single-shot behavior unless a caller opts into additional rounds.
+* **Structured DATA reuse** — tool results can be retained in thread scratchpad form, bounded by per-skill byte/count/lookback controls, and injected into follow-up prompts as structured DATA. The follow-up detector recognizes common English and Portuguese references while fresh-fetch phrases still force a new tool call.
+* **API v1 scratchpad contract** — async queue polling returns a top-level `agentic_scratchpad` only when `GET /api/v1/queue/{queue_id}?include_scratchpad=true` is used. Nested `result.agentic_scratchpad` is redacted regardless of the flag so older clients do not accidentally receive internal loop traces.
+* **Movl follow-up behavior** — the Gmail follow-up path now answers from the prior structured DATA block when the user asks a referential question such as which prior email is most important. The second turn records no fresh Gmail tool call and preserves the prior scratchpad.
+* **Track C read-only pages** — `/continuous-agents`, `/continuous-agents/{id}`, `/hub/wake-events`, `/hub/triggers/email/{id}`, and `/hub/triggers/webhook/{id}` read from existing A2/trigger APIs. Wake-event UI displays payload references and does not expose inline payload JSON.
+* **Hub routing rules** — Hub Communication exposes routing-rule management only for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). Email and webhook remain trigger-detail surfaces, not channel routing-rule surfaces.
+* **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and onboarding step 16 introduces "Triggers & Continuous Agents" with a CTA into Hub Communication.
+
 ---
 
 ## 3. Quick Start
@@ -3378,7 +3390,7 @@ Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM;
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v1/agents/{agent_id}/chat` | Send a message. Sync by default; append `?async=true` for queued delivery. SSE streaming supported. |
-| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. |
+| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. Append `?include_scratchpad=true` to include the top-level agentic scratchpad for authorized clients; nested result scratchpads are always redacted. |
 | GET | `/api/v1/agents/{agent_id}/threads` | List threads for an agent. |
 | GET | `/api/v1/agents/{agent_id}/threads/{thread_id}/messages` | Fetch messages in a thread. |
 | DELETE | `/api/v1/agents/{agent_id}/threads/{thread_id}` | Delete a thread. |
