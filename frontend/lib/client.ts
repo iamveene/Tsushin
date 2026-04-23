@@ -2915,6 +2915,44 @@ export interface VectorStoreInstanceCreate {
   cpu_quota?: number
 }
 
+// ==================== ASR Instances (v0.7.0 Track D) ====================
+
+export interface ASRInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // speaches
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  auth_username?: string | null
+  default_model?: string | null
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null
+  container_name?: string | null
+  container_port?: number | null
+  container_image?: string | null
+  volume_name?: string | null
+  mem_limit?: string | null
+  cpu_quota?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ASRInstanceCreate {
+  vendor?: string
+  instance_name: string
+  description?: string
+  base_url?: string
+  auto_provision?: boolean
+  mem_limit?: string
+  cpu_quota?: number
+  default_model?: string
+}
+
 // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
 
 export interface TTSInstance {
@@ -7743,6 +7781,83 @@ export const api = {
     })
     if (!res.ok) await handleApiError(res, 'Failed to assign TTS instance to agent')
     return res.json()
+  },
+
+  // ==================== ASR Instances (v0.7.0 Track D) ====================
+
+  async getASRInstances(vendor?: string): Promise<ASRInstance[]> {
+    const params = vendor ? `?vendor=${vendor}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch ASR instances')
+    return res.json()
+  },
+
+  async createASRInstance(data: ASRInstanceCreate): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok && res.status !== 202) await handleApiError(res, 'Failed to create ASR instance')
+    return res.json()
+  },
+
+  async getASRInstance(id: number): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch ASR instance')
+    return res.json()
+  },
+
+  async updateASRInstance(id: number, data: Partial<ASRInstanceCreate>): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update ASR instance')
+    return res.json()
+  },
+
+  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}?remove_volume=${removeVolume}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete ASR instance')
+  },
+
+  async asrContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/${action}`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} ASR container`)
+    return res.json()
+  },
+
+  async getASRContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get ASR container status')
+    return res.json()
+  },
+
+  async getASRContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get ASR container logs')
+    return res.json()
+  },
+
+  async getDefaultASRInstance(): Promise<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`)
+    if (!res.ok) await handleApiError(res, 'Failed to get default ASR instance')
+    return res.json()
+  },
+
+  async setDefaultASRInstance(instanceId: number | null): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_asr_instance_id: instanceId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update default ASR instance')
   },
 
   // ==================== SearXNG Instances (v0.6.0-patch.7 per-tenant) ====================

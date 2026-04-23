@@ -141,24 +141,44 @@ class AudioTranscriptSkill(BaseSkill):
             provider_name = "openai"
             provider_model = model
 
-            # Track D: prefer an explicitly configured tenant ASR instance, but
-            # never regress current behavior — on any miss/error we fall back to
-            # the existing OpenAI Whisper path.
+            # Track D: resolve ASR in this order:
+            # 1. Explicit agent-pinned instance (legacy ``asr_instance_id`` or
+            #    ``asr_mode='instance'``)
+            # 2. Tenant default instance (``asr_mode='tenant_default'``)
+            # 3. OpenAI Whisper fallback (explicit ``asr_mode='openai'`` or no
+            #    local/default instance available)
+            asr_mode = config.get("asr_mode")
             asr_instance_id = config.get("asr_instance_id")
-            if asr_instance_id and tenant_id and db:
+            resolved_asr_instance_id = asr_instance_id
+            resolved_asr_instance = None
+            if tenant_id and db and asr_mode != "openai":
                 try:
                     from services.whisper_instance_service import WhisperInstanceService
 
-                    asr_instance = WhisperInstanceService.get_instance(asr_instance_id, tenant_id, db)
-                    if asr_instance and asr_instance.is_active and asr_instance.vendor == "speaches":
+                    if asr_mode == "tenant_default":
+                        resolved_asr_instance_id, resolved_asr_instance = (
+                            WhisperInstanceService.get_tenant_default(tenant_id, db)
+                        )
+                    elif asr_instance_id:
+                        resolved_asr_instance = WhisperInstanceService.get_instance(
+                            asr_instance_id,
+                            tenant_id,
+                            db,
+                        )
+
+                    if (
+                        resolved_asr_instance
+                        and resolved_asr_instance.is_active
+                        and resolved_asr_instance.vendor == "speaches"
+                    ):
                         provider = ASRProviderRegistry.get_instance_provider(
-                            asr_instance,
+                            resolved_asr_instance,
                             db=db,
                             token_tracker=self.token_tracker,
                             tenant_id=tenant_id,
                         )
                         provider_model = (
-                            asr_instance.default_model
+                            resolved_asr_instance.default_model
                             if model == "whisper-1"
                             else model
                         )
@@ -179,13 +199,13 @@ class AudioTranscriptSkill(BaseSkill):
                         else:
                             logger.warning(
                                 "ASR instance %s transcription failed, falling back to OpenAI: %s",
-                                asr_instance_id,
+                                resolved_asr_instance_id,
                                 response.error,
                             )
                 except Exception as asr_err:
                     logger.warning(
                         "ASR instance %s path failed, falling back to OpenAI: %s",
-                        asr_instance_id,
+                        resolved_asr_instance_id,
                         asr_err,
                     )
 
@@ -353,6 +373,7 @@ class AudioTranscriptSkill(BaseSkill):
         """
         return {
             "api_key": None,  # Uses OPENAI_API_KEY from env if not provided
+            "asr_mode": "openai",  # openai | tenant_default | instance
             "asr_instance_id": None,  # Prefer a local Whisper/Speaches instance when set
             "language": "auto",  # Auto-detect language
             "model": "whisper-1",  # OpenAI Whisper model
@@ -375,9 +396,15 @@ class AudioTranscriptSkill(BaseSkill):
                     "description": "OpenAI API key (uses OPENAI_API_KEY env var if not provided)",
                     "format": "password"
                 },
+                "asr_mode": {
+                    "type": "string",
+                    "description": "ASR routing mode: use OpenAI directly, the tenant default ASR instance, or a specific ASR instance id.",
+                    "default": "openai",
+                    "enum": ["openai", "tenant_default", "instance"]
+                },
                 "asr_instance_id": {
                     "type": ["integer", "null"],
-                    "description": "Optional tenant ASR instance ID (Speaches/OpenAI-compatible Whisper endpoint). Falls back to OpenAI when unset or unavailable.",
+                    "description": "Optional tenant ASR instance ID (Speaches/OpenAI-compatible Whisper endpoint). Used when asr_mode='instance'.",
                     "default": None
                 },
                 "language": {
