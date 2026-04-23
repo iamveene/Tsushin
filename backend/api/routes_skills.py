@@ -94,6 +94,47 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
     return agent
 
 
+def _normalize_audio_transcript_config(
+    config: Optional[dict],
+    db: Session,
+    ctx: TenantContext,
+) -> dict:
+    """Validate tenant-scoped ASR references before persisting them."""
+    normalized = dict(config or {})
+    asr_mode = normalized.get("asr_mode")
+    asr_instance_id = normalized.get("asr_instance_id")
+
+    if asr_mode is None:
+        asr_mode = "instance" if asr_instance_id else "openai"
+
+    if asr_mode not in {"openai", "tenant_default", "instance"}:
+        raise HTTPException(
+            status_code=400,
+            detail="audio_transcript.asr_mode must be one of: openai, tenant_default, instance",
+        )
+
+    if asr_mode == "instance":
+        if asr_instance_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="audio_transcript.asr_instance_id is required when asr_mode='instance'",
+            )
+
+        from services.whisper_instance_service import WhisperInstanceService
+
+        instance = WhisperInstanceService.get_instance(int(asr_instance_id), ctx.tenant_id, db)
+        if not instance or not instance.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"ASR instance {asr_instance_id} not found",
+            )
+    else:
+        normalized["asr_instance_id"] = None
+
+    normalized["asr_mode"] = asr_mode
+    return normalized
+
+
 # API Endpoints
 
 @router.get("/skills/available")
@@ -263,6 +304,14 @@ async def update_skill(
                        f"Available: {list(skill_manager.registry.keys())}"
             )
 
+        config_payload = request.config
+        if skill_type == "audio_transcript":
+            config_payload = _normalize_audio_transcript_config(
+                request.config,
+                db,
+                ctx,
+            )
+
         # Check if skill already exists
         existing = db.query(AgentSkill)\
             .filter(AgentSkill.agent_id == agent_id)\
@@ -272,7 +321,7 @@ async def update_skill(
         if existing:
             # Update existing
             existing.is_enabled = request.is_enabled
-            existing.config = request.config
+            existing.config = config_payload
             db.commit()
             db.refresh(existing)
 
@@ -296,7 +345,7 @@ async def update_skill(
             db,
             agent_id,
             skill_type,
-            request.config
+            config_payload
         )
 
         logger.info(f"Created skill '{skill_type}' for agent {agent_id}")

@@ -61,6 +61,10 @@ class ASRInstanceUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class DefaultASRUpdate(BaseModel):
+    default_asr_instance_id: Optional[int] = None
+
+
 def _to_response(instance: ASRInstance) -> Dict[str, Any]:
     return {
         "id": instance.id,
@@ -304,3 +308,43 @@ async def asr_container_logs(
         return {"logs": mgr.get_logs(instance_id, ctx.tenant_id, db, tail=tail)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/settings/asr/default", tags=["ASR Instances"])
+async def get_default_asr(
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    from services.whisper_instance_service import WhisperInstanceService
+
+    default_id, instance = WhisperInstanceService.get_tenant_default(ctx.tenant_id, db)
+    return {
+        "default_asr_instance_id": default_id,
+        "provider": instance.vendor if instance else "openai",
+        "instance": _to_response(instance) if instance else None,
+    }
+
+
+@router.put("/settings/asr/default", tags=["ASR Instances"])
+async def set_default_asr(
+    data: DefaultASRUpdate,
+    ctx: TenantContext = Depends(require_permission("org.settings.write")),
+    db: Session = Depends(get_db),
+):
+    from services.whisper_instance_service import WhisperInstanceService
+
+    try:
+        new_id = WhisperInstanceService.set_tenant_default(
+            data.default_asr_instance_id,
+            ctx.tenant_id,
+            db,
+        )
+        return {"default_asr_instance_id": new_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to set default ASR instance: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to set default ASR instance",
+        )

@@ -135,11 +135,11 @@ Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.
 
 v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent, Whisper/Speaches, and policy tracks build on.
 
-* **Migration slots** — `docs/internal/v0.7.0-migration-slots.md` reserves `0045-0058` so parallel release tracks do not collide.
+* **Migration slots** — `docs/internal/v0.7.0-migration-slots.md` reserves `0045-0058` so parallel release tracks do not collide; Track D's tenant-default ASR follow-up uses `0059` after the readiness audit found Track F already owns `0049`.
 * **Queue durability** — `message_queue.message_type` distinguishes `inbound_message`, `trigger_event`, and `continuous_task`; Phase 0 keeps `agent_id` and `sender_key` non-null.
 * **Trigger-event dedupe** — `channel_event_dedupe` stores tenant-scoped idempotency outcomes with audit-style retention.
 * **Container ports** — `backend/services/container_runtime.py` owns inclusive `PORT_RANGES` for dynamically managed services, including Whisper/Speaches on `6400-6499` and SearXNG on `6500-6599`.
-* **Track D backend checkpoint** — `backend/models.py` now includes `ASRInstance`, while `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` provide the first backend-only Whisper/Speaches instance lifecycle. `audio_transcript.py` prefers a configured tenant `asr_instance_id` and falls back to OpenAI Whisper on misses or runtime failures.
+* **Track D ASR completion** — `backend/models.py` now includes `ASRInstance`, `backend/models_rbac.py` adds `Tenant.default_asr_instance_id` (migration `0059`, intentionally after Track A `0051` because Track F owns `0049`), and `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` provide the tenant-scoped Whisper/Speaches lifecycle plus `/api/settings/asr/default`. `audio_transcript.py` now resolves `audio_transcript.config.asr_mode` (`openai` / `tenant_default` / `instance`) so agents can stay on OpenAI Whisper, follow the tenant default, or pin a specific local ASR instance. Frontend delivery includes `/settings/asr`, the Audio Agents Wizard, the regular Agent Wizard audio step, and Agent Skills Manager.
 * **Sentinel detection defaults** — `continuous_agent_action_approval` is registered as a first-class detection type and exposed through `/api/sentinel/detection-types`.
 * **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
 * **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable. Phase 3.1 draft validation later adds the stricter `gmail.compose` requirement because Gmail drafts are not covered by `gmail.send` alone.
@@ -2122,7 +2122,7 @@ The page uses `MediaRecorder` to capture voice directly in the browser (`page.ts
 - Preferred MIME types (in order): `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg;codecs=opus`, `audio/mp4` (`:502-510`).
 - Audio capabilities are loaded per selected agent (`:484-490`) — determined by the agent's configured `audio_transcript` skill.
 
-Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using OpenAI Whisper or configured provider. Skill is `execution_mode="special"` (media-triggered).
+Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using one of three routes: explicit OpenAI Whisper, the tenant default ASR instance, or a specific pinned local Speaches/Whisper instance. When the selected local path is unavailable, the skill falls back to OpenAI Whisper. Skill is `execution_mode="special"` (media-triggered).
 
 ### 18.3 Document Uploads
 
@@ -2639,17 +2639,29 @@ This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (remove
 
 Five configuration steps + one progress step:
 
-1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
+1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*.
 2. **Provider** — four cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium), Google Gemini TTS (preview, reuses tenant Gemini key). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI / ElevenLabs / Gemini keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
-3. **Voice & credentials** — language first (filters Kokoro voices by language), then (for Gemini only) a **Model** dropdown sourced live from `GET /api/tts-providers/gemini/models` (3 preview models — Balanced default, Fast, Quality), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox. Gemini hides the speed slider and locks format to WAV (model constraints).
+3. **Voice & transcription settings** — language first (shared between TTS + STT), then:
+   for TTS, the existing provider-specific voice / speed / format controls (plus Kokoro memory-limit + "Set as tenant-default TTS");
+   for transcription, an **ASR backend** selector with *OpenAI Whisper*, *Use tenant default*, and *Pin a specific local instance*. The local-instance options are sourced from `GET /api/asr-instances`, while the tenant-default card reflects `GET /api/settings/asr/default`.
 4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
 5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
 
-On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
+On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs/Gemini path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format, model?}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called with `{response_mode, language, model, asr_mode, asr_instance_id?}`. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
 
 **Events.** The provider emits `window.dispatchEvent(new CustomEvent('tsushin:audio-wizard-closed'))` on close so the onboarding tour's step 12 callback can auto-advance to step 13 (mirrors the WhatsApp wizard pattern).
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
+
+### 25.8 `/settings/asr`
+
+`frontend/app/settings/asr/page.tsx` is the tenant-facing ASR control plane for Track D:
+
+1. **Default transcription path** — `GET/PUT /api/settings/asr/default`. `null` means OpenAI Whisper; a concrete `default_asr_instance_id` means "use this tenant's local Speaches/Whisper instance by default".
+2. **Local instance provisioning** — `POST /api/asr-instances` creates a managed or external ASR instance. The page exposes instance name, default model, memory limit, and auto-provision toggle.
+3. **Container lifecycle** — per-instance `start` / `stop` / `restart` / `delete` actions call `/api/asr-instances/{id}/container/*` and `/api/asr-instances/{id}`. Managed Speaches containers mount their Hugging Face cache at `/root/.cache/huggingface`; deactivating, deleting, or discovering a stale inactive default clears `Tenant.default_asr_instance_id` back to OpenAI fallback.
+
+Agent-level audio surfaces (Audio Agents Wizard, Agent Wizard, Agent Skills Manager) can then choose `openai`, `tenant_default`, or `instance` for `audio_transcript.config.asr_mode`.
 
 #### 20.6.2 Ollama Setup Wizard
 

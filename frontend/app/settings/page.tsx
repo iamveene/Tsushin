@@ -94,6 +94,13 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
     </svg>
   ),
+  audio: (
+    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18a3 3 0 003-3V7a3 3 0 10-6 0v8a3 3 0 003 3z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11v4a7 7 0 11-14 0v-4" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 19v3m-4 0h8" />
+    </svg>
+  ),
 }
 
 export default function SettingsHubPage() {
@@ -190,6 +197,13 @@ export default function SettingsHubPage() {
       description: 'Configure default vector store for agent memory',
       icon: icons.ai,
       href: '/settings/vector-stores',
+      permission: 'org.settings.read',
+    },
+    {
+      title: 'ASR / Whisper',
+      description: 'Set the default transcription backend and manage local Speaches instances',
+      icon: icons.audio,
+      href: '/settings/asr',
       permission: 'org.settings.read',
     },
     {
