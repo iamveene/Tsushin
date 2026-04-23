@@ -42,6 +42,20 @@ class SkillManager:
         self._register_builtin_skills()
         logger.info(f"SkillManager initialized with {len(self.registry)} registered skills")
 
+    # Reserved config keys that should stay out of per-skill AgentSkill.config
+    # payloads. Track A will eventually thread scratchpad/queue-style metadata
+    # through a separate contract; this audit surface is intentionally
+    # observational only for now.
+    RESERVED_AGENT_SKILL_CONFIG_KEYS = frozenset({
+        "execution_mode",
+        "keywords",
+        "use_ai_fallback",
+        "ai_model",
+        "scratchpad",
+        "queue",
+        "max_agentic_rounds",
+    })
+
     def _register_builtin_skills(self):
         """
         Register built-in skills.
@@ -263,6 +277,44 @@ class SkillManager:
         except Exception as e:
             logger.error(f"Error fetching skill config: {e}", exc_info=True)
             return None
+
+    @classmethod
+    def audit_agent_skill_config_key_collisions(
+        cls,
+        skill_configs: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Report top-level config key collisions against reserved agent-skill keys.
+
+        This is a prep-only audit helper. It does not mutate data or enforce any
+        schema/API contract. The goal is to surface keys that would clash with
+        future shared scratchpad/queue fields before Track A persists them.
+        """
+        collisions: List[Dict[str, Any]] = []
+        for skill_type, config in skill_configs.items():
+            config_keys = set((config or {}).keys())
+            overlapping_keys = sorted(config_keys & cls.RESERVED_AGENT_SKILL_CONFIG_KEYS)
+            if overlapping_keys:
+                collisions.append({
+                    "skill_type": skill_type,
+                    "colliding_keys": overlapping_keys,
+                })
+        return collisions
+
+    async def audit_agent_skill_config_collisions(
+        self,
+        db: Session,
+        agent_id: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Collect the current enabled skill configs and flag reserved-key overlap.
+
+        This is useful for prep-time audits, but it intentionally does not block
+        saves or imply any new persistence/API behavior.
+        """
+        skills = await self.get_agent_skills(db, agent_id)
+        skill_configs = {skill.skill_type: (skill.config or {}) for skill in skills}
+        return self.audit_agent_skill_config_key_collisions(skill_configs)
 
     async def get_skill_tool_definitions(
         self,

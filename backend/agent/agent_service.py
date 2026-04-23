@@ -419,6 +419,62 @@ class AgentService:
         cleaned = re.sub(r"\n\n\n+", "\n\n", cleaned).strip()
         return cleaned
 
+    @staticmethod
+    def _parse_tool_call_block(ai_response: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse the bracketed [TOOL_CALL] envelope used by skill prompts.
+
+        This helper intentionally only understands the envelope contract, not any
+        future scratchpad or queue metadata. Those additions should remain
+        additive and be threaded through without changing this parser boundary.
+        """
+        try:
+            start = ai_response.find("[TOOL_CALL]") + len("[TOOL_CALL]")
+            end = ai_response.find("[/TOOL_CALL]")
+            if end <= start:
+                return None
+
+            lines = [line.strip() for line in ai_response[start:end].strip().split("\n") if line.strip()]
+            tool_name, command_name, parameters, in_parameters = None, None, {}, False
+
+            for line in lines:
+                if line.startswith("tool_name:"):
+                    tool_name = line.split(":", 1)[1].strip()
+                elif line.startswith("command_name:"):
+                    command_name = line.split(":", 1)[1].strip()
+                elif line.startswith("parameters:"):
+                    in_parameters = True
+                elif in_parameters and ":" in line:
+                    key, value = line.split(":", 1)
+                    parameters[key.strip()] = value.strip()
+
+            if tool_name and command_name:
+                return {
+                    "tool_name": tool_name,
+                    "command_name": command_name,
+                    "parameters": parameters,
+                }
+        except Exception:
+            return None
+
+        return None
+
+    def _parse_tool_call_response(self, ai_response: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse any AI tool-call response while keeping the parser boundary local.
+
+        Prefer the sandboxed tool parser when available, then fall back to the
+        lightweight [TOOL_CALL] envelope parser used by skill prompts.
+        """
+        tool_call = None
+        if self.sandboxed_tools:
+            tool_call = self.sandboxed_tools.parse_tool_call(ai_response)
+
+        if tool_call is None and "[TOOL_CALL]" in ai_response and "[/TOOL_CALL]" in ai_response:
+            tool_call = self._parse_tool_call_block(ai_response)
+
+        return tool_call
+
     def _prefer_tool_result_when_response_empty(
         self,
         ai_response: Optional[str],
@@ -1019,36 +1075,12 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
             if has_backtick_format or has_simple_format or has_json_format or has_tool_call_format:
                 self.logger.info("Tool call detected in AI response")
-
-                # Try to parse the tool call
-                tool_call = None
-                if self.sandboxed_tools:
-                    tool_call = self.sandboxed_tools.parse_tool_call(ai_response)
-
-                # Fallback: parse [TOOL_CALL] blocks for skill-based tools (e.g. agent_communication)
-                # that don't require the sandboxed_tools skill to be enabled.
-                if tool_call is None and has_tool_call_format:
-                    try:
-                        start = ai_response.find("[TOOL_CALL]") + len("[TOOL_CALL]")
-                        end = ai_response.find("[/TOOL_CALL]")
-                        if end > start:
-                            lines = [l.strip() for l in ai_response[start:end].strip().split("\n") if l.strip()]
-                            t_name, c_name, params, in_params = None, None, {}, False
-                            for line in lines:
-                                if line.startswith("tool_name:"):
-                                    t_name = line.split(":", 1)[1].strip()
-                                elif line.startswith("command_name:"):
-                                    c_name = line.split(":", 1)[1].strip()
-                                elif line.startswith("parameters:"):
-                                    in_params = True
-                                elif in_params and ":" in line:
-                                    k, v = line.split(":", 1)
-                                    params[k.strip()] = v.strip()
-                            if t_name and c_name:
-                                tool_call = {"tool_name": t_name, "command_name": c_name, "parameters": params}
-                                self.logger.info(f"Parsed [TOOL_CALL] for skill tool (no sandboxed_tools): {t_name}/{c_name}")
-                    except Exception as e:
-                        self.logger.warning(f"Error in fallback [TOOL_CALL] parse: {e}")
+                tool_call = self._parse_tool_call_response(ai_response)
+                if tool_call and has_tool_call_format and not self.sandboxed_tools:
+                    self.logger.info(
+                        "Parsed [TOOL_CALL] for skill tool (no sandboxed_tools): "
+                        f"{tool_call.get('tool_name')}/{tool_call.get('command_name')}"
+                    )
 
                 if tool_call:
                     tool_name = tool_call.get('tool_name', '')
