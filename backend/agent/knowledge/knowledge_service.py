@@ -4,10 +4,13 @@ Manages agent knowledge base including document upload, processing, and retrieva
 """
 
 import logging
+import json
 import os
+import re
 import shutil
+import tempfile
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,65 @@ import chromadb
 from chromadb.config import Settings
 
 logger = logging.getLogger(__name__)
+
+_DOCUMENT_METADATA_SUFFIX = ".meta.json"
+_MAX_DOCUMENT_NAME_LENGTH = 255
+_MAX_DOCUMENT_TAGS = 12
+_MAX_DOCUMENT_TAG_LENGTH = 48
+
+
+class KnowledgeMetadataError(RuntimeError):
+    """Raised when a knowledge-document sidecar cannot be read or written safely."""
+
+
+def sanitize_document_name(document_name: str) -> str:
+    """Normalize a user-facing document name without changing the stored file path."""
+    cleaned = (document_name or "").strip()
+    cleaned = cleaned.replace("\x00", " ")
+    cleaned = re.sub(r"[\\/]+", " ", cleaned)
+    cleaned = re.sub(r"[\r\n\t]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.lstrip(". ").strip()
+
+    if not cleaned:
+        raise ValueError("Document name cannot be empty")
+
+    if len(cleaned) > _MAX_DOCUMENT_NAME_LENGTH:
+        raise ValueError(
+            f"Document name must be {_MAX_DOCUMENT_NAME_LENGTH} characters or fewer"
+        )
+
+    return cleaned
+
+
+def normalize_document_tags(tags: Optional[List[str]]) -> List[str]:
+    """Validate and normalize free-form document tags into a stable, deduplicated list."""
+    if not tags:
+        return []
+    if not isinstance(tags, list):
+        raise ValueError("Tags must be provided as a list")
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+
+    for raw_tag in tags:
+        if not isinstance(raw_tag, str):
+            raise ValueError("Each tag must be a string")
+        tag = re.sub(r"\s+", " ", raw_tag.strip().lower())
+        if not tag:
+            continue
+        if len(tag) > _MAX_DOCUMENT_TAG_LENGTH:
+            raise ValueError(
+                f"Each tag must be {_MAX_DOCUMENT_TAG_LENGTH} characters or fewer"
+            )
+        if tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+        if len(normalized) > _MAX_DOCUMENT_TAGS:
+            raise ValueError(f"You can assign up to {_MAX_DOCUMENT_TAGS} tags per document")
+
+    return normalized
 
 
 class KnowledgeService:
@@ -49,6 +111,165 @@ class KnowledgeService:
         self.storage_dir = Path("./data/knowledge")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
+    def _metadata_path(self, knowledge: AgentKnowledge) -> Path:
+        return Path(f"{knowledge.file_path}{_DOCUMENT_METADATA_SUFFIX}")
+
+    def _read_document_metadata(self, knowledge: AgentKnowledge) -> Dict[str, Any]:
+        metadata_path = self._metadata_path(knowledge)
+        if not metadata_path.exists():
+            return {}
+
+        try:
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata is unreadable for document {knowledge.id}"
+            ) from exc
+        except Exception as exc:
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata could not be read for document {knowledge.id}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata is malformed for document {knowledge.id}"
+            )
+
+        tags = data.get("tags", [])
+        if tags is not None and not isinstance(tags, list):
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata tags are malformed for document {knowledge.id}"
+            )
+
+        return data
+
+    def _write_document_metadata_atomically(self, knowledge: AgentKnowledge, metadata: Dict[str, Any]) -> None:
+        metadata_path = self._metadata_path(knowledge)
+        payload = dict(metadata or {})
+        payload["tags"] = normalize_document_tags(payload.get("tags"))
+
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: Optional[Path] = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(metadata_path.parent),
+                prefix=f".{metadata_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temp_path = Path(handle.name)
+                json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            os.replace(temp_path, metadata_path)
+        except Exception as exc:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata could not be written for document {knowledge.id}"
+            ) from exc
+
+    def _capture_metadata_snapshot(self, knowledge: AgentKnowledge) -> Optional[bytes]:
+        metadata_path = self._metadata_path(knowledge)
+        if not metadata_path.exists():
+            return None
+        return metadata_path.read_bytes()
+
+    def _restore_metadata_snapshot(self, knowledge: AgentKnowledge, snapshot: Optional[bytes]) -> None:
+        metadata_path = self._metadata_path(knowledge)
+        if snapshot is None:
+            metadata_path.unlink(missing_ok=True)
+            return
+
+        temp_path: Optional[Path] = None
+        try:
+            metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=str(metadata_path.parent),
+                prefix=f".{metadata_path.name}.",
+                suffix=".restore.tmp",
+                delete=False,
+            ) as handle:
+                temp_path = Path(handle.name)
+                handle.write(snapshot)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, metadata_path)
+        except Exception as exc:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise KnowledgeMetadataError(
+                f"Knowledge metadata rollback failed for document {knowledge.id}"
+            ) from exc
+
+    def _remove_metadata_file(self, knowledge: AgentKnowledge) -> None:
+        self._metadata_path(knowledge).unlink(missing_ok=True)
+
+    def get_document_tags(self, knowledge: AgentKnowledge) -> List[str]:
+        return normalize_document_tags(self._read_document_metadata(knowledge).get("tags"))
+
+    def attach_document_metadata(self, knowledge: AgentKnowledge) -> AgentKnowledge:
+        setattr(knowledge, "tags", self.get_document_tags(knowledge))
+        return knowledge
+
+    def update_document(
+        self,
+        knowledge_id: int,
+        *,
+        document_name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Optional[AgentKnowledge]:
+        """Update the editable document metadata for an AgentKnowledge record."""
+        knowledge = self.db.query(AgentKnowledge).get(knowledge_id)
+        if not knowledge:
+            return None
+
+        changed = False
+        metadata_changed = False
+
+        if document_name is not None:
+            cleaned_name = sanitize_document_name(document_name)
+            if cleaned_name != knowledge.document_name:
+                knowledge.document_name = cleaned_name
+                changed = True
+
+        metadata = self._read_document_metadata(knowledge)
+        if tags is not None:
+            normalized_tags = normalize_document_tags(tags)
+            if normalized_tags != normalize_document_tags(metadata.get("tags")):
+                metadata["tags"] = normalized_tags
+                metadata_changed = True
+                changed = True
+
+        if changed:
+            metadata_snapshot = self._capture_metadata_snapshot(knowledge)
+            try:
+                knowledge.updated_at = datetime.utcnow()
+                self.db.flush()
+                if metadata_changed:
+                    self._write_document_metadata_atomically(knowledge, metadata)
+                self.db.commit()
+                self.db.refresh(knowledge)
+            except Exception:
+                self.db.rollback()
+                if metadata_changed:
+                    self._restore_metadata_snapshot(knowledge, metadata_snapshot)
+                raise
+
+        return self.attach_document_metadata(knowledge)
+
     def upload_document(
         self,
         agent_id: int,
@@ -68,6 +289,8 @@ class KnowledgeService:
         Returns:
             AgentKnowledge record
         """
+        stored_path: Optional[Path] = None
+        knowledge: Optional[AgentKnowledge] = None
         try:
             # Get file size
             file_size = os.path.getsize(file_path)
@@ -97,6 +320,8 @@ class KnowledgeService:
             )
 
             self.db.add(knowledge)
+            self.db.flush()
+            self._write_document_metadata_atomically(knowledge, {"tags": []})
             self.db.commit()
             self.db.refresh(knowledge)
 
@@ -106,6 +331,24 @@ class KnowledgeService:
         except Exception as e:
             logger.error(f"Error uploading document: {e}")
             self.db.rollback()
+            if knowledge is not None:
+                try:
+                    self._remove_metadata_file(knowledge)
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Error cleaning metadata after upload failure for knowledge_id=%s: %s",
+                        getattr(knowledge, "id", None),
+                        cleanup_exc,
+                    )
+            if stored_path is not None and stored_path.exists():
+                try:
+                    stored_path.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Error cleaning stored file after upload failure for %s: %s",
+                        stored_path,
+                        cleanup_exc,
+                    )
             raise
 
     async def process_document(self, knowledge_id: int) -> bool:
@@ -353,6 +596,11 @@ class KnowledgeService:
                     file_path.unlink()
             except Exception as e:
                 logger.warning(f"Error deleting file {knowledge.file_path}: {e}")
+
+            try:
+                self._remove_metadata_file(knowledge)
+            except Exception as e:
+                logger.warning(f"Error deleting document metadata for knowledge {knowledge_id}: {e}")
 
             logger.info(f"Knowledge deleted: {knowledge.document_name} (ID: {knowledge_id})")
             return True
