@@ -141,7 +141,7 @@ v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent
 * **Container ports** — `backend/services/container_runtime.py` owns inclusive `PORT_RANGES` for dynamically managed services, including Whisper/Speaches on `6400-6499` and SearXNG on `6500-6599`.
 * **Sentinel detection defaults** — `continuous_agent_action_approval` is registered as a first-class detection type and exposed through `/api/sentinel/detection-types`.
 * **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
-* **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, and let the Hub Gmail re-authorize action request that send scope without a curl-only workaround.
+* **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable.
 
 ---
 

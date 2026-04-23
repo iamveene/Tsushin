@@ -224,6 +224,20 @@ def test_queue_router_preserves_all_inbound_channel_branches():
     asyncio.run(run())
 
 
+def test_queue_router_routes_webhook_trigger_events_through_current_webhook_path():
+    async def run():
+        router = QueueRouter()
+        worker = _FakeWorker()
+        item = SimpleNamespace(id=42, channel="webhook", message_type="trigger_event")
+
+        result = await router.dispatch(worker, None, item)
+
+        assert result == {"channel": "webhook"}
+        assert worker.calls == [("webhook", 42)]
+
+    asyncio.run(run())
+
+
 def test_queue_router_rejects_unknown_channel_and_reserved_continuous_task():
     async def run():
         router = QueueRouter()

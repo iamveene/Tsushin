@@ -1,7 +1,9 @@
 # v0.7.0 Phase 0 QA Summary
 
-Status: Phase 0 implementation validated with one pre-existing frontend lint
-baseline exception.
+Status: Phase 0 implementation validated and the serial unlock gate closed with
+one pre-existing frontend lint baseline exception. The final gate-unblock pass
+added explicit `trigger_event -> webhook` router coverage plus a real WhatsApp
+inbound smoke before Wave 1 fan-out.
 
 Private evidence is stored locally under `.private/qa/v0.7.0/` and is not
 committed. This sanitized summary is the committed pointer for reviewers.
@@ -13,7 +15,8 @@ committed. This sanitized summary is the committed pointer for reviewers.
 | Database backup | PASS | Primary DB backed up before migration to private artifact `.private/qa/v0.7.0/tsushin_phase0_pre0045.dump`. |
 | Migration round-trip | PASS | Scratch DB restore completed, then `upgrade 0045`, `downgrade 0044`, `upgrade head`, and `current` reported `0045 (head)`. |
 | Live migration | PASS | Rebuilt live backend applied `0044 -> 0045`; `docker exec tsushin-backend /opt/venv/bin/alembic current` reports `0045 (head)`. |
-| Backend tests | PASS | `docker exec tsushin-backend python -m pytest -o addopts='' tests/test_phase0_foundation.py tests/test_searxng_container_manager.py -q` -> `17 passed, 2 warnings`. |
+| Backend tests | PASS | Initial Phase 0 container slice `docker exec tsushin-backend python -m pytest -o addopts='' tests/test_phase0_foundation.py tests/test_searxng_container_manager.py -q` -> `17 passed, 2 warnings`; final gate-unblock rerun `docker exec tsushin-backend python -m pytest -q -o addopts='' tests/test_phase0_foundation.py` -> `10 passed, 2 warnings`, including explicit `trigger_event -> webhook` queue-router coverage. |
+| WhatsApp inbound smoke | PASS | Real tester-to-agent smoke on the running stack succeeded: the tester MCP sent a WhatsApp message to the agent number, backend logs showed `channel=whatsapp` processing start/end, and the bot replied on the live thread. Sanitized log excerpts remain in the private QA bundle. |
 | Sentinel endpoint | PASS | Authenticated `GET /api/sentinel/detection-types` returned 9 entries including `continuous_agent_action_approval`. |
 | Frontend visual tests | PASS | `npm --prefix frontend run test:visual:update` generated deterministic baselines; `npm --prefix frontend run test:visual` -> `5 passed`. |
 | Frontend targeted lint | PASS | `npm exec eslint playwright.config.ts tests/visual --max-warnings=0` from `frontend/` passed for the new visual-test files. |
@@ -22,9 +25,13 @@ committed. This sanitized summary is the committed pointer for reviewers.
 | Service health | PASS | Post-rebuild `docker-compose ps` shows backend, frontend, postgres, proxy healthy/up; `/api/health` healthy and `/api/readiness` ready. |
 | Backend logs | PASS | Post-rebuild backend logs reviewed; no `ERROR`, `Traceback`, `RemoteProtocolError`, `Exception`, `CRITICAL`, or `FATAL` matches in the checked window. Existing warnings include MCP legacy path, Google Generative AI deprecation, and JWT HMAC key length. |
 | Diff hygiene | PASS | `git diff --check` passed. |
+| Wave 1 unlock | PASS | Immediately before fan-out, `git worktree list` still showed only `/Users/vinicios/code/tsushin [release/0.7.0]`. After the Gmail + Phase 0 gate turned green, Wave 1 worktrees were created under `/Users/vinicios/.claude-worktrees/tsushin/v0.7.0/` for tracks A, D, E, F, and G. |
 
 Notes:
 - Existing local log artifacts were left untouched and untracked:
   `console-hub-warnings.txt`, `hub-all-requests.txt`, and
   `hub-network-errors.txt`.
-- No `track/*` branches or worktrees were created during Phase 0.
+- No parallel worktrees existed before the serial gate closed. After the final
+  Gmail + Phase 0 reruns turned green, Wave 1 worktrees were created for
+  `track-a-continuous-backend`, `track-d-whisper-asr`,
+  `track-e-enterprise`, `track-f-cross-cutting`, and `track-g-gmail-send`.
