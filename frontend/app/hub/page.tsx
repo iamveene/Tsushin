@@ -63,6 +63,7 @@ import WebhookSetupModal from '@/components/WebhookSetupModal'
 import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WebhookEditModal from '@/components/WebhookEditModal'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
+import ChannelRoutingRulesPanel from '@/components/hub/ChannelRoutingRulesPanel'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
 import ManagedContainerPanel from '@/components/hub/ManagedContainerPanel'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
@@ -4044,6 +4045,13 @@ export default function HubPage() {
                                 Delete
                               </button>
                             </div>
+                            {instance.instance_type === 'agent' && (
+                              <ChannelRoutingRulesPanel
+                                channelType="whatsapp"
+                                instanceId={instance.id}
+                                canWrite={canWriteHub}
+                              />
+                            )}
                           </div>
                         )
                       })}
@@ -4238,6 +4246,11 @@ export default function HubPage() {
                                 Delete
                               </button>
                             </div>
+                            <ChannelRoutingRulesPanel
+                              channelType="telegram"
+                              instanceId={instance.id}
+                              canWrite={canWriteHub}
+                            />
                           </div>
                         )
                       })}
@@ -4326,6 +4339,11 @@ export default function HubPage() {
                               Disconnect
                             </button>
                           </div>
+                          <ChannelRoutingRulesPanel
+                            channelType="slack"
+                            instanceId={integration.id}
+                            canWrite={canWriteHub}
+                          />
                         </div>
                       ))}
                     </div>
@@ -4413,6 +4431,11 @@ export default function HubPage() {
                               Disconnect
                             </button>
                           </div>
+                          <ChannelRoutingRulesPanel
+                            channelType="discord"
+                            instanceId={integration.id}
+                            canWrite={canWriteHub}
+                          />
                         </div>
                       ))}
                     </div>
@@ -4425,7 +4448,7 @@ export default function HubPage() {
                   <PublicBaseUrlCard canEdit={canEditSettings} />
                 )}
 
-                <div className="space-y-4 pt-2">
+                <div className="space-y-4 pt-2" data-testid="hub-triggers-section">
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-md font-semibold text-white flex items-center gap-2">
@@ -4435,14 +4458,28 @@ export default function HubPage() {
                         Event-driven entry points that wake agents from inbox activity or signed external events.
                       </p>
                     </div>
-                    {canWriteHub && (
-                      <button
-                        onClick={openTriggerWizard}
-                        className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <Link
+                        href="/hub/wake-events"
+                        className="px-3 py-2 bg-gray-800/70 text-gray-200 border border-gray-700 rounded hover:bg-gray-700 text-sm"
                       >
-                        + Add Trigger
-                      </button>
-                    )}
+                        Wake Events
+                      </Link>
+                      <Link
+                        href="/continuous-agents"
+                        className="px-3 py-2 bg-gray-800/70 text-gray-200 border border-gray-700 rounded hover:bg-gray-700 text-sm"
+                      >
+                        Continuous Agents
+                      </Link>
+                      {canWriteHub && (
+                        <button
+                          onClick={openTriggerWizard}
+                          className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                        >
+                          + Add Trigger
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {emailTriggers.length === 0 && webhookIntegrations.length === 0 && (
@@ -4507,7 +4544,13 @@ export default function HubPage() {
                             <p>Health: <span className="text-white">{emailTrigger.health_status}</span></p>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <Link
+                              href={`/hub/triggers/email/${emailTrigger.id}`}
+                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30 text-center"
+                            >
+                              Details
+                            </Link>
                             <button
                               onClick={() => {
                                 setEditingEmailTrigger(emailTrigger)
@@ -4650,7 +4693,14 @@ export default function HubPage() {
                             </button>
                           </label>
 
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-4 gap-2">
+                            <Link
+                              href={`/hub/triggers/webhook/${integration.id}`}
+                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600 text-center"
+                              title="View webhook details"
+                            >
+                              Details
+                            </Link>
                             <button
                               onClick={() => setWebhookEditTarget(integration)}
                               className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"

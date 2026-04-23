@@ -25,6 +25,10 @@ import { useAudioWizard } from '@/contexts/AudioWizardContext'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
 
+function getErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback
+}
+
 function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
   const [isBlock, setIsBlock] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
@@ -63,8 +67,8 @@ function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
         })
       }
       setIsBlock(next)
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save Sentinel setting')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save Sentinel setting'))
     } finally {
       setSaving(false)
     }
@@ -469,7 +473,23 @@ export default function OnboardingWizard() {
       customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
     },
     {
-      // Step 15 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 15 — v0.7.0: Trigger/continuous-agent readiness.
+      title: 'New in v0.7.0 - Triggers & Continuous Agents',
+      targetSelector: '[data-testid="hub-triggers-section"]',
+      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email and Webhook triggers live under Hub Communication, wake events are browsable in Hub, and continuous runs appear in Watcher with a continuous badge.',
+      highlightFeatures: [
+        'Email and Webhook trigger detail pages use the new /api/triggers namespace',
+        'Wake Events browser shows payload_ref instead of raw payload JSON',
+        'Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
+        'Conversational channel routing rules stay limited to WhatsApp, Telegram, Slack, and Discord'
+      ],
+      actionButton: {
+        label: 'Open Trigger Hub',
+        action: () => router.push('/hub?tab=communication')
+      }
+    },
+    {
+      // Step 16 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,
