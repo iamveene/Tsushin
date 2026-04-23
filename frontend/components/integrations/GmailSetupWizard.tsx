@@ -19,6 +19,7 @@ interface GmailIntegration {
   email_address: string
   health_status: string
   is_active: boolean
+  can_send: boolean
 }
 
 interface AssignmentResult {
@@ -138,7 +139,7 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
   const startNewAccountAuthorization = async () => {
     setPopupError(null)
     try {
-      const res = await authenticatedFetch('/api/hub/google/gmail/oauth/authorize', {
+      const res = await authenticatedFetch('/api/hub/google/gmail/oauth/authorize?include_send_scope=true', {
         method: 'POST',
       })
       if (!res.ok) {
@@ -274,15 +275,15 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
             <h3 className="text-lg font-semibold text-white mb-2">Connect Gmail to your agents</h3>
             <p className="text-sm text-gray-300 leading-relaxed">
               This wizard walks you through connecting a Gmail account so your agents can search
-              and read email. It's a 6-step guided flow — we'll also enable the{' '}
-              <span className="text-red-400">Gmail</span> skill on the agents you pick and link the
-              integration automatically.
+              read, send, reply to, and draft email. It&apos;s a 6-step guided flow — we&apos;ll also
+              enable the <span className="text-red-400">Gmail</span> skill on the agents you pick
+              and link the integration automatically.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Scope</div>
-              <div className="text-white">Read-only (gmail.readonly)</div>
+              <div className="text-white">Read + outbound (gmail.readonly + gmail.send)</div>
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Multi-account</div>
@@ -294,12 +295,12 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">What agents can do</div>
-              <div className="text-white">Search, list, and read emails</div>
+              <div className="text-white">Search, list, read, send, reply, and draft emails</div>
             </div>
           </div>
           <div className="text-xs text-gray-500 bg-red-500/5 border border-red-500/20 rounded-lg p-3">
-            <span className="text-red-400 font-medium">Read-only:</span> this integration cannot send,
-            draft, or delete messages.
+            <span className="text-red-400 font-medium">Note:</span> new Gmail connections include
+            outbound send/draft access. Older read-only integrations can be upgraded by re-authorizing them.
           </div>
         </div>
       </Modal>
@@ -392,7 +393,9 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
                     />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-white truncate">{i.email_address}</div>
-                      <div className="text-xs text-gray-500">{i.name}</div>
+                      <div className="text-xs text-gray-500">
+                        {i.name} · {i.can_send ? 'Read + send/draft' : 'Read-only — reauthorize to add send'}
+                      </div>
                     </div>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded ${
@@ -581,7 +584,9 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
             </div>
             <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Scope</div>
-              <div className="text-sm text-white">Read-only</div>
+              <div className="text-sm text-white">
+                {selectedIntegration?.can_send ? 'Read + send/draft' : 'Read-only (reauthorize to add send/draft)'}
+              </div>
             </div>
             <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Agents to enable</div>

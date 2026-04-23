@@ -495,7 +495,7 @@ async def list_providers(
         {
             "type": "gmail",
             "name": "Gmail",
-            "description": "Email integration. Read, search, and draft emails. Tool execution available via agent skills only.",
+            "description": "Email integration. Read, search, send, reply to, and draft emails. Tool execution available via agent skills only.",
             "supports_oauth": True,
             "capabilities": INTEGRATION_CAPABILITIES["gmail"],
         },

@@ -77,6 +77,7 @@ class IntegrationResponse(BaseModel):
     authorized_at: datetime
     health_status: str
     health_status_reason: Optional[str] = None
+    can_send: bool = False
 
     class Config:
         from_attributes = True
@@ -275,6 +276,10 @@ async def list_gmail_integrations(
     result = []
     for integration in integrations:
         base = db.query(HubIntegration).filter(HubIntegration.id == integration.id).first()
+        token = db.query(OAuthToken).filter(
+            OAuthToken.integration_id == integration.id
+        ).order_by(OAuthToken.created_at.desc()).first()
+        token_scopes = set((token.scope or "").split()) if token and token.scope else set()
         result.append(IntegrationResponse(
             id=integration.id,
             type='gmail',
@@ -284,7 +289,8 @@ async def list_gmail_integrations(
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
             health_status=base.health_status if base else "unknown",
-            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None,
+            can_send=GMAIL_SEND_SCOPE in token_scopes,
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))

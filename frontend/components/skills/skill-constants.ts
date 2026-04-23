@@ -39,7 +39,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   gmail: {
     displayName: 'Email',
-    description: 'Read and search emails. Connect your Gmail account to enable email access.',
+    description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.',
     category: 'communication',
     configType: 'provider',
     icon: MailIcon,
