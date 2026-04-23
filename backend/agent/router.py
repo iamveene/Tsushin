@@ -1030,6 +1030,10 @@ class AgentRouter:
             "memory_size": self.config.get("memory_size", 10),  # Inherit from config
             "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
             "provider_instance_id": getattr(agent, 'provider_instance_id', None),
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+            "platform_min_agentic_rounds": self.config.get("platform_min_agentic_rounds"),
+            "platform_max_agentic_rounds": self.config.get("platform_max_agentic_rounds"),
         }
 
     def _build_persona_context(self, persona) -> str:

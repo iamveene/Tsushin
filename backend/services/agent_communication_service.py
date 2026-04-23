@@ -854,7 +854,18 @@ class AgentCommunicationService:
             "enable_semantic_search": target_agent.enable_semantic_search or False,
             "context_message_count": target_agent.context_message_count or 10,
             "memory_isolation_mode": target_agent.memory_isolation_mode or "isolated",
+            "max_agentic_rounds": getattr(target_agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(target_agent, "max_agentic_loop_bytes", None),
         }
+        try:
+            from models import Config
+
+            platform_config = self.db.query(Config).first()
+            if platform_config:
+                agent_config["platform_min_agentic_rounds"] = getattr(platform_config, "platform_min_agentic_rounds", None)
+                agent_config["platform_max_agentic_rounds"] = getattr(platform_config, "platform_max_agentic_rounds", None)
+        except Exception as config_err:
+            logger.warning(f"Failed to load platform agentic bounds for A2A: {config_err}")
 
         # Get source agent's display name
         source_contact = self.db.query(Contact).filter(Contact.id == source_agent.contact_id).first()
