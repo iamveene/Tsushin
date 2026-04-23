@@ -288,3 +288,106 @@ def test_delete_searxng_instance_scopes_agent_skill_cleanup_to_tenant_agents():
         assert tenant_a_skill.config == {}
     finally:
         db.close()
+
+
+def _load_agent_service_parser_boundary():
+    backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _ensure_package(package_name: str, relative_path: str):
+        module = sys.modules.get(package_name)
+        if module is None:
+            module = types.ModuleType(package_name)
+            module.__path__ = [os.path.join(backend_root, relative_path)]
+            sys.modules[package_name] = module
+        return module
+
+    def _stub_dependency(module_name: str, **attributes):
+        module = types.ModuleType(module_name)
+        for key, value in attributes.items():
+            setattr(module, key, value)
+        sys.modules[module_name] = module
+        return module
+
+    _ensure_package("agent", "agent")
+    _ensure_package("agent.tools", os.path.join("agent", "tools"))
+    _ensure_package("agent.knowledge", os.path.join("agent", "knowledge"))
+    _ensure_package("agent.skills", os.path.join("agent", "skills"))
+    _ensure_package("services", "services")
+
+    _stub_dependency("agent.ai_client", AIClient=object)
+    _stub_dependency("agent.tools.sandboxed_tool_wrapper", SandboxedToolWrapper=object)
+    _stub_dependency("agent.knowledge.knowledge_service", KnowledgeService=object)
+    _stub_dependency(
+        "services.watcher_activity_service",
+        emit_kb_used_async=lambda *_args, **_kwargs: None,
+        emit_skill_used_async=lambda *_args, **_kwargs: None,
+    )
+
+    sys.modules["agent.skills"].get_skill_manager = lambda: SimpleNamespace()
+
+    from agent.agent_service import AgentService
+    from agent.skills.skill_manager import SkillManager
+
+    return AgentService, SkillManager
+
+
+def test_agent_service_parse_tool_call_block_extracts_skill_tool_fields():
+    AgentService, _SkillManager = _load_agent_service_parser_boundary()
+
+    ai_response = """
+Intro text
+[TOOL_CALL]
+tool_name: agent_communication
+command_name: send_message
+parameters:
+  recipient: ops
+  message: hello world
+[/TOOL_CALL]
+"""
+
+    parsed = AgentService._parse_tool_call_block(ai_response)
+
+    assert parsed == {
+        "tool_name": "agent_communication",
+        "command_name": "send_message",
+        "parameters": {
+            "recipient": "ops",
+            "message": "hello world",
+        },
+    }
+
+
+def test_agent_service_parse_tool_call_response_prefers_sandboxed_parser():
+    AgentService, _SkillManager = _load_agent_service_parser_boundary()
+
+    service = AgentService.__new__(AgentService)
+    service.sandboxed_tools = SimpleNamespace(
+        parse_tool_call=lambda _response: {
+            "tool_name": "shell",
+            "command_name": "run_shell_command",
+            "parameters": {"script": "hostname"},
+        }
+    )
+
+    parsed = service._parse_tool_call_response("ignored")
+
+    assert parsed == {
+        "tool_name": "shell",
+        "command_name": "run_shell_command",
+        "parameters": {"script": "hostname"},
+    }
+
+
+def test_skill_manager_audit_agent_skill_config_collisions_reports_reserved_keys():
+    _, SkillManager = _load_agent_service_parser_boundary()
+
+    collisions = SkillManager.audit_agent_skill_config_key_collisions({
+        "web_search": {"provider": "searxng", "queue": {"mode": "later"}},
+        "scheduler": {"timezone": "America/Sao_Paulo"},
+        "gmail": {"keywords": ["inbox"], "label": "priority"},
+    })
+
+    assert collisions == [
+        {"skill_type": "web_search", "colliding_keys": ["queue"]},
+        {"skill_type": "gmail", "colliding_keys": ["keywords"]},
+    ]
