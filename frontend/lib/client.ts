@@ -1403,6 +1403,122 @@ export interface EmailTriggerUpdateRequest {
   is_active?: boolean
 }
 
+export interface PageResponse<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface PageParams {
+  limit?: number
+  offset?: number
+}
+
+export interface ContinuousAgent {
+  id: number
+  tenant_id: string
+  agent_id: number
+  agent_name?: string | null
+  name?: string | null
+  execution_mode: string
+  status: string
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  is_system_owned: boolean
+  subscription_count: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousAgentListParams extends PageParams {
+  status?: string
+}
+
+export interface ContinuousRun {
+  id: number
+  tenant_id: string
+  continuous_agent_id: number
+  wake_event_ids: number[]
+  execution_mode?: string | null
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  watcher_run_ref?: string | null
+  memory_refs?: Record<string, unknown> | null
+  run_threat_signals?: Record<string, unknown> | null
+  outcome_state?: Record<string, unknown> | null
+  agentic_scratchpad?: unknown
+  run_type: string
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousRunListParams extends PageParams {
+  status?: string
+  continuous_agent_id?: number
+}
+
+export interface WakeEvent {
+  id: number
+  tenant_id: string
+  continuous_agent_id?: number | null
+  continuous_subscription_id?: number | null
+  channel_type: string
+  channel_instance_id: number
+  event_type: string
+  occurred_at: string
+  dedupe_key: string
+  importance: string
+  payload_ref?: string | null
+  status: string
+  created_at: string
+}
+
+export interface WakeEventListParams extends PageParams {
+  status?: string
+  channel_type?: string
+}
+
+export type ConversationalChannelType = 'whatsapp' | 'telegram' | 'slack' | 'discord'
+
+export interface ChannelRoutingRule {
+  id: number
+  tenant_id: string
+  channel_type: ConversationalChannelType
+  channel_instance_id: number
+  event_type?: string | null
+  criteria: Record<string, unknown>
+  priority: number
+  agent_id: number
+  is_active: boolean
+  created_by?: number | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ChannelRoutingRuleCreate {
+  event_type?: string | null
+  criteria?: Record<string, unknown>
+  priority?: number
+  agent_id: number
+  is_active?: boolean
+}
+
+export interface ChannelRoutingRuleUpdate {
+  event_type?: string | null
+  criteria?: Record<string, unknown>
+  priority?: number
+  agent_id?: number
+  is_active?: boolean
+}
+
+export type ChannelRoutingRuleListParams = PageParams
+
+export type TriggerDetailKind = 'email' | 'webhook'
+export type TriggerDetail = EmailTrigger | WebhookIntegration
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -1835,6 +1951,7 @@ export interface WhatsAppMCPInstance {
   id: number
   tenant_id: string
   container_name: string
+  instance_name?: string | null
   phone_number: string
   instance_type: 'agent' | 'tester'
   mcp_api_url: string
@@ -3861,6 +3978,59 @@ export const api = {
     return res.json()
   },
 
+  async getContinuousAgents(params: ContinuousAgentListParams = {}): Promise<PageResponse<ContinuousAgent>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous agents')
+    return res.json()
+  },
+
+  async getContinuousAgent(id: number): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous agent')
+    return res.json()
+  },
+
+  async getContinuousRuns(params: ContinuousRunListParams = {}): Promise<PageResponse<ContinuousRun>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    if (params.continuous_agent_id !== undefined) query.set('continuous_agent_id', String(params.continuous_agent_id))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-runs${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous runs')
+    return res.json()
+  },
+
+  async getContinuousRun(id: number): Promise<ContinuousRun> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-runs/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous run')
+    return res.json()
+  },
+
+  async getWakeEvents(params: WakeEventListParams = {}): Promise<PageResponse<WakeEvent>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    if (params.channel_type) query.set('channel_type', params.channel_type)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake events')
+    return res.json()
+  },
+
+  async getWakeEvent(id: number): Promise<WakeEvent> {
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake event')
+    return res.json()
+  },
+
   async getDefaultAgentSettings(): Promise<DefaultAgentsSettings> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch default agent settings')
@@ -5144,6 +5314,22 @@ export const api = {
     return res.json()
   },
 
+  async deleteEmailTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete email trigger')
+  },
+
+  async getTriggerDetail(kind: TriggerDetailKind, id: number): Promise<TriggerDetail> {
+    const path = kind === 'email'
+      ? `/api/triggers/email/${id}`
+      : `/api/triggers/webhook/${id}`
+    const res = await authenticatedFetch(`${API_URL}${path}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger detail')
+    return res.json()
+  },
+
   // v0.6.0: Webhook-as-a-Channel
   async listWebhookIntegrations(): Promise<WebhookIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook`)
@@ -5209,6 +5395,60 @@ export const api = {
       return { available: false, reason: 'Unable to check availability' }
     }
     return res.json()
+  },
+
+  async listChannelRoutingRules(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    params: ChannelRoutingRuleListParams = {},
+  ): Promise<PageResponse<ChannelRoutingRule>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel routing rules')
+    return res.json()
+  },
+
+  async createChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    data: ChannelRoutingRuleCreate,
+  ): Promise<ChannelRoutingRule> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create channel routing rule')
+    return res.json()
+  },
+
+  async updateChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    ruleId: number,
+    data: ChannelRoutingRuleUpdate,
+  ): Promise<ChannelRoutingRule> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/${ruleId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update channel routing rule')
+    return res.json()
+  },
+
+  async deleteChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    ruleId: number,
+  ): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/${ruleId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete channel routing rule')
   },
 
   // v0.6.0: Slack Integration
