@@ -54,6 +54,11 @@ class SkillManager:
         "scratchpad",
         "queue",
         "max_agentic_rounds",
+        "auto_inject_results",
+        "skip_ai_on_data_fetch",
+        "max_result_bytes",
+        "max_results_retained",
+        "max_turns_lookback",
     })
 
     def _register_builtin_skills(self):

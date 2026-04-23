@@ -63,6 +63,10 @@ class Config(Base):
     # Conversation delay (global, WhatsApp-only)
     whatsapp_conversation_delay_seconds = Column(Float, default=5.0)
 
+    # Agentic loop platform bounds (Track F / v0.7.0)
+    platform_min_agentic_rounds = Column(Integer, nullable=True, default=1)
+    platform_max_agentic_rounds = Column(Integer, nullable=True, default=8)
+
     # Group Message Context
     context_message_count = Column(Integer, default=10)  # Updated from 5 to 10
     context_char_limit = Column(Integer, default=1000)  # Already 1000, no change
@@ -392,6 +396,10 @@ class Agent(Base):
     memory_decay_lambda = Column(Float, default=0.01)  # Exponential decay rate (0.01 ≈ 69-day half-life)
     memory_decay_archive_threshold = Column(Float, default=0.05)  # Auto-archive below this effective score
     memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
+
+    # v0.7.0 Track F: bounded outer agentic loop configuration
+    max_agentic_rounds = Column(Integer, nullable=True, default=3)
+    max_agentic_loop_bytes = Column(Integer, nullable=True, default=8192)
 
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
@@ -792,6 +800,11 @@ class AgentSkill(Base):
     skill_type = Column(String(50), nullable=False)  # "audio_transcript" | "audio_response"
     is_enabled = Column(Boolean, default=True)
     config = Column(JSON, default=dict)  # Skill-specific configuration
+    auto_inject_results = Column(Boolean, nullable=True, default=True)
+    skip_ai_on_data_fetch = Column(Boolean, nullable=True, default=False)
+    max_result_bytes = Column(Integer, nullable=True, default=2048)
+    max_results_retained = Column(Integer, nullable=True, default=2)
+    max_turns_lookback = Column(Integer, nullable=True, default=6)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1861,6 +1874,7 @@ class ConversationThread(Base):
     # State Persistence
     conversation_history = Column(JSON, default=list)  # [{role: 'agent'|'user', content: str, timestamp: str}]
     context_data = Column(JSON, default=dict)  # Extracted data from conversation (for use in subsequent steps)
+    agentic_scratchpad = Column(JSON, nullable=True)  # Bounded multi-round agentic loop trace
 
     # Goal tracking
     goal_achieved = Column(Boolean, default=False)

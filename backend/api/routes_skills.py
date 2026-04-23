@@ -53,6 +53,11 @@ class SkillConfigRequest(BaseModel):
     """Request to enable or update a skill"""
     is_enabled: bool = Field(True, description="Enable or disable the skill")
     config: dict = Field(default_factory=dict, description="Skill configuration")
+    auto_inject_results: Optional[bool] = Field(None, description="Inject recent structured tool results into follow-up turns")
+    skip_ai_on_data_fetch: Optional[bool] = Field(None, description="Return data-fetch tool output directly instead of an AI-composed answer")
+    max_result_bytes: Optional[int] = Field(None, ge=256, le=65536, description="Maximum bytes per injected tool result")
+    max_results_retained: Optional[int] = Field(None, ge=1, le=10, description="Maximum structured tool results retained for injection")
+    max_turns_lookback: Optional[int] = Field(None, ge=1, le=50, description="Maximum turns to look back for follow-up data injection")
 
 
 class SkillResponse(BaseModel):
@@ -62,6 +67,11 @@ class SkillResponse(BaseModel):
     skill_type: str
     is_enabled: bool
     config: dict
+    auto_inject_results: Optional[bool] = None
+    skip_ai_on_data_fetch: Optional[bool] = None
+    max_result_bytes: Optional[int] = None
+    max_results_retained: Optional[int] = None
+    max_turns_lookback: Optional[int] = None
     created_at: str
     updated_at: str
 
@@ -202,6 +212,11 @@ async def get_agent_skills(
                     "skill_type": skill.skill_type,
                     "is_enabled": skill.is_enabled,
                     "config": skill.config or {},
+                    "auto_inject_results": skill.auto_inject_results,
+                    "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+                    "max_result_bytes": skill.max_result_bytes,
+                    "max_results_retained": skill.max_results_retained,
+                    "max_turns_lookback": skill.max_turns_lookback,
                     "created_at": skill.created_at.isoformat() if skill.created_at else None,
                     "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
                 }
@@ -257,6 +272,11 @@ async def get_skill_config(
             "skill_type": skill.skill_type,
             "is_enabled": skill.is_enabled,
             "config": skill.config or {},
+            "auto_inject_results": skill.auto_inject_results,
+            "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+            "max_result_bytes": skill.max_result_bytes,
+            "max_results_retained": skill.max_results_retained,
+            "max_turns_lookback": skill.max_turns_lookback,
             "created_at": skill.created_at.isoformat() if skill.created_at else None,
             "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
         }
@@ -322,6 +342,16 @@ async def update_skill(
             # Update existing
             existing.is_enabled = request.is_enabled
             existing.config = config_payload
+            if request.auto_inject_results is not None:
+                existing.auto_inject_results = request.auto_inject_results
+            if request.skip_ai_on_data_fetch is not None:
+                existing.skip_ai_on_data_fetch = request.skip_ai_on_data_fetch
+            if request.max_result_bytes is not None:
+                existing.max_result_bytes = request.max_result_bytes
+            if request.max_results_retained is not None:
+                existing.max_results_retained = request.max_results_retained
+            if request.max_turns_lookback is not None:
+                existing.max_turns_lookback = request.max_turns_lookback
             db.commit()
             db.refresh(existing)
 
@@ -336,6 +366,11 @@ async def update_skill(
                 "skill_type": existing.skill_type,
                 "is_enabled": existing.is_enabled,
                 "config": existing.config or {},
+                "auto_inject_results": existing.auto_inject_results,
+                "skip_ai_on_data_fetch": existing.skip_ai_on_data_fetch,
+                "max_result_bytes": existing.max_result_bytes,
+                "max_results_retained": existing.max_results_retained,
+                "max_turns_lookback": existing.max_turns_lookback,
                 "created_at": existing.created_at.isoformat() if existing.created_at else None,
                 "updated_at": existing.updated_at.isoformat() if existing.updated_at else None
             }
@@ -347,6 +382,18 @@ async def update_skill(
             skill_type,
             config_payload
         )
+        if request.auto_inject_results is not None:
+            skill.auto_inject_results = request.auto_inject_results
+        if request.skip_ai_on_data_fetch is not None:
+            skill.skip_ai_on_data_fetch = request.skip_ai_on_data_fetch
+        if request.max_result_bytes is not None:
+            skill.max_result_bytes = request.max_result_bytes
+        if request.max_results_retained is not None:
+            skill.max_results_retained = request.max_results_retained
+        if request.max_turns_lookback is not None:
+            skill.max_turns_lookback = request.max_turns_lookback
+        db.commit()
+        db.refresh(skill)
 
         logger.info(f"Created skill '{skill_type}' for agent {agent_id}")
 
@@ -356,6 +403,11 @@ async def update_skill(
             "skill_type": skill.skill_type,
             "is_enabled": skill.is_enabled,
             "config": skill.config or {},
+            "auto_inject_results": skill.auto_inject_results,
+            "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+            "max_result_bytes": skill.max_result_bytes,
+            "max_results_retained": skill.max_results_retained,
+            "max_turns_lookback": skill.max_turns_lookback,
             "created_at": skill.created_at.isoformat() if skill.created_at else None,
             "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
         }
