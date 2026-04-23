@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Track A Phase 1 control plane — Default Agents + Email Triggers (2026-04-23)
+
+Phase 1's routing control plane is now implemented in the Track A worktree and ready for integrated validation/merge sequencing.
+
+**Added:**
+- Alembic `0051_add_email_trigger_instance.py` and `EmailChannelInstance` so Gmail-backed trigger rows are first-class tenant resources rather than ad hoc wizard state.
+- `backend/api/routes_default_agents.py` with `GET /api/settings/default-agents`, `PUT /tenant`, `PUT /instances/{channel_type}/{instance_id}`, `POST /users`, and `DELETE /users/{id}`.
+- `backend/api/routes_email_triggers.py` with `GET/POST /api/triggers/email` and `GET/PATCH /api/triggers/email/{id}` for persisted email-trigger CRUD.
+- `frontend/app/settings/default-agents/page.tsx` plus a new Settings card linking to it.
+- Shared modal-based `frontend/components/ui/Wizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`, and `frontend/components/triggers/EmailTriggerWizard.tsx`.
+
+**Changed:**
+- `backend/channels/catalog.py` now exposes `email` in `TRIGGER_CATALOG`, and the default-agent service resolves `email` trigger rows through the trigger precedence chain.
+- Hub Communication now has a dedicated **Triggers** launcher and an **Email Triggers** section. Gmail remains managed as a reusable account resource under Productivity; it is no longer offered by the channel wizard.
+- Agent Studio (`frontend/app/agents/page.tsx`) removed the inline "set default" editing path and now points users to `/settings/default-agents` for routing changes.
+- `backend/tests/test_wizard_drift.py` now guards the Trigger wizard fallback array in addition to the existing channel/productivity/provider drift checks.
+
+**Validated:**
+- `python3 -m pytest -q -o addopts='' tests/test_default_agent_service.py tests/test_channel_trigger_split.py tests/test_routes_default_agents.py tests/test_routes_email_triggers.py` -> `16 passed, 123 warnings`
+- `./node_modules/.bin/eslint app/settings/default-agents/page.tsx components/triggers/TriggerWizard.tsx components/triggers/EmailTriggerWizard.tsx components/integrations/ChannelsWizard.tsx --max-warnings 0` -> clean
+- `git diff --check` -> clean
+
 ### Wave 1 checkpoints — Track A/F foundation + Track G Gmail send (2026-04-23)
 
 Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than waiting for every downstream phase to finish.
@@ -41,7 +63,7 @@ Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than wa
 - Playwright headed validation on `https://localhost/hub` confirmed a separate **Webhook Triggers** card group, `+ New Webhook Trigger`, and an `+ Add Channel` modal that offers WhatsApp / Telegram / Slack / Discord / Gmail (inbound) but no webhook. Console showed 0 errors; the only warnings were repeated CSS preload notices captured in private QA evidence.
 - Playwright headed validation on the Hub Gmail wizard confirmed the setup copy now advertises `Read + outbound (gmail.readonly + gmail.send)`, explains that existing read-only integrations need reauthorization, and logs 0 browser console errors beyond the same CSS preload warnings.
 
-**Still open in Phase 1 / Phase 3 / Phase 6:** `/settings/default-agents`, the shared `Wizard` primitive + Email Trigger wizard, Track A Phase 2 continuous-agent models, the live Gmail outbound integration gate (real send + Sent visibility), and the actual Phase 6 schema/API/UI work (`0049`, `0057`, `0058`, scratchpad exposure, multi-round loop).
+**Still open after that checkpoint:** Track A Phase 2 continuous-agent models, the live Gmail outbound integration gate (real send + Sent visibility), and the actual Phase 6 schema/API/UI work (`0049`, `0057`, `0058`, scratchpad exposure, multi-round loop).
 
 ### Feat — Agent knowledge documents can be renamed and tagged without a schema migration (2026-04-23)
 

@@ -5,7 +5,7 @@
  *
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
- * - Communication: WhatsApp, Telegram, Discord, Slack, Email (coming soon)
+ * - Communication: WhatsApp, Telegram, Discord, Slack, Email Triggers, Webhooks
  * - Productivity: Asana, Google Calendar
  * - Developer Tools: Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus
@@ -35,9 +35,18 @@ const ChannelsWizard = dynamic(
   () => import('@/components/integrations/ChannelsWizard'),
   { ssr: false },
 )
+const TriggerWizard = dynamic(
+  () => import('@/components/triggers/TriggerWizard'),
+  { ssr: false },
+)
+const EmailTriggerWizard = dynamic(
+  () => import('@/components/triggers/EmailTriggerWizard'),
+  { ssr: false },
+)
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
+import type { TriggerId } from '@/components/triggers/TriggerWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -75,7 +84,6 @@ import {
   LightningIcon,
   MicrophoneIcon,
   MessageIcon as MessageIconSvg,
-  MailIcon,
   PlaneIcon,
   GamepadIcon,
   BriefcaseIcon,
@@ -260,7 +268,6 @@ const AI_PROVIDERS: { value: string; label: string; Icon: React.FC<IconProps>; d
 
 const COMMUNICATION_CHANNELS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: MessageIconSvg, description: 'WhatsApp Business via MCP', status: 'available' },
-  { value: 'gmail', label: 'Gmail', Icon: MailIcon, description: 'Google Gmail for email actions', status: 'available' },
   { value: 'telegram', label: 'Telegram', Icon: PlaneIcon, description: 'Telegram Bot API', status: 'available' },  // Phase 10.1.1: Now available!
   { value: 'slack', label: 'Slack', Icon: SlackIcon, description: 'Slack workspace integration', status: 'available' },
   { value: 'discord', label: 'Discord', Icon: DiscordIcon, description: 'Discord bot integration', status: 'available' },
@@ -411,6 +418,7 @@ export default function HubPage() {
 
   // v0.6.0: Webhook-as-a-Channel
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
+  const [emailTriggers, setEmailTriggers] = useState<EmailTrigger[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
 
   // v0.7.0: Guided wizards for the Productivity + Communication tabs. These
@@ -421,6 +429,11 @@ export default function HubPage() {
   // once the user has picked a target on step 1.
   const [showProductivityWizard, setShowProductivityWizard] = useState(false)
   const [showChannelsWizard, setShowChannelsWizard] = useState(false)
+  const [channelsWizardSession, setChannelsWizardSession] = useState(0)
+  const [showTriggerWizard, setShowTriggerWizard] = useState(false)
+  const [triggerWizardSession, setTriggerWizardSession] = useState(0)
+  const [showEmailTriggerWizard, setShowEmailTriggerWizard] = useState(false)
+  const [editingEmailTrigger, setEditingEmailTrigger] = useState<EmailTrigger | null>(null)
   const [webhookRotateModal, setWebhookRotateModal] = useState<
     { open: boolean; secret: string; inboundUrl: string } | null
   >(null)
@@ -638,6 +651,7 @@ export default function HubPage() {
         loadTelegramInstances()  // Phase 10.1.1
         loadSlackIntegrations()  // v0.6.0
         loadDiscordIntegrations()  // v0.6.0
+        loadEmailTriggers()
         loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
         loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
       }
@@ -814,6 +828,7 @@ export default function HubPage() {
         loadTelegramInstances(),  // Phase 10.1.1
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
+        loadEmailTriggers(),
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
@@ -2344,6 +2359,15 @@ export default function HubPage() {
   }
 
   // v0.6.0: Webhook-as-a-Channel handlers
+  const loadEmailTriggers = useCallback(async () => {
+    try {
+      const data = await api.listEmailTriggers()
+      setEmailTriggers(data)
+    } catch (err) {
+      console.error('Failed to load email triggers:', err)
+    }
+  }, [])
+
   const loadWebhookIntegrations = useCallback(async () => {
     try {
       const data = await api.listWebhookIntegrations()
@@ -2566,6 +2590,16 @@ export default function HubPage() {
     }
   }
 
+  const openChannelsWizard = () => {
+    setChannelsWizardSession((current) => current + 1)
+    setShowChannelsWizard(true)
+  }
+
+  const openTriggerWizard = () => {
+    setTriggerWizardSession((current) => current + 1)
+    setShowTriggerWizard(true)
+  }
+
   const handleChannelsDispatch = (channelId: ChannelId) => {
     switch (channelId) {
       case 'whatsapp':
@@ -2580,13 +2614,33 @@ export default function HubPage() {
       case 'discord':
         setShowDiscordSetupModal(true)
         break
-      case 'gmail':
-        // Inbound email channel uses the same Google OAuth as Productivity Gmail.
-        handleGmailConnect()
-        break
       default:
         toast.error('Not yet supported', `No connect handler for '${channelId}' yet`)
     }
+  }
+
+  const handleTriggerDispatch = (triggerId: TriggerId) => {
+    switch (triggerId) {
+      case 'email':
+        setEditingEmailTrigger(null)
+        setShowEmailTriggerWizard(true)
+        break
+      case 'webhook':
+        setShowWebhookSetupModal(true)
+        break
+      default:
+        toast.error('Not yet supported', `No connect handler for '${triggerId}' yet`)
+    }
+  }
+
+  const handleEmailTriggerComplete = async (trigger: EmailTrigger) => {
+    const wasEditing = editingEmailTrigger !== null
+    await loadEmailTriggers()
+    await loadHubIntegrations()
+    setShowEmailTriggerWizard(false)
+    setEditingEmailTrigger(null)
+    setSuccessMessage(wasEditing ? `Email trigger updated: ${trigger.integration_name}` : `Email trigger created: ${trigger.integration_name}`)
+    setTimeout(() => setSuccessMessage(null), 3000)
   }
 
   // Re-authorize an expired/revoked integration
@@ -3773,31 +3827,29 @@ export default function HubPage() {
             {/* ==================== COMMUNICATION TAB ==================== */}
             {/* v0.7.0 rework — single "+ Add Channel" launcher opens
                 ChannelsWizard, which dispatches to the existing per-channel
-                setup modal (WhatsApp / Telegram / Slack / Discord /
-                Gmail-inbound). Webhook now lives in the trigger section below.
+                setup modal (WhatsApp / Telegram / Slack / Discord). Email now
+                lives in the trigger path below, alongside webhook triggers.
                 Per-channel sections are hidden when they
                 contain zero instances so empty shells don't dominate the tab.
                 The per-section "+ Create X" button inside each section (shown
                 only when at least one instance already exists) lets users add
                 another instance without going back through the wizard. */}
             {activeTab === 'communication' && (() => {
-              const communicationConfiguredCount =
+              const channelConfiguredCount =
                 mcpInstances.length +
                 telegramInstances.length +
                 slackIntegrations.length +
-                discordIntegrations.length +
-                webhookIntegrations.length +
-                hubIntegrations.filter(i => i.type === 'gmail').length
+                discordIntegrations.length
               return (
               <div className="space-y-6 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">Communication Channels</h2>
-                    <p className="text-sm text-tsushin-slate">Connect messaging platforms for agent interactions</p>
+                    <h2 className="text-lg font-display font-semibold text-white">Communication</h2>
+                    <p className="text-sm text-tsushin-slate">Connect real-time channels and trigger-driven entry points for agent interactions.</p>
                   </div>
                   {canWriteHub && (
                     <button
-                      onClick={() => setShowChannelsWizard(true)}
+                      onClick={openChannelsWizard}
                       className="btn-primary"
                     >
                       + Add Channel
@@ -3805,18 +3857,18 @@ export default function HubPage() {
                   )}
                 </div>
 
-                {communicationConfiguredCount === 0 && (
+                {channelConfiguredCount === 0 && (
                   <div className="card p-8 text-center border-dashed border-tsushin-border/60">
                     <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-tsushin-accent/10 flex items-center justify-center">
                       <MessageIconSvg size={24} className="text-tsushin-accent" />
                     </div>
                     <h3 className="text-white font-semibold mb-1">No channels configured yet</h3>
                     <p className="text-xs text-tsushin-slate mb-4 max-w-md mx-auto">
-                      Connect WhatsApp, Telegram, Slack, Discord, or a Gmail inbox so users can reach your agents on the platforms they already use.
+                      Connect WhatsApp, Telegram, Slack, or Discord so users can reach your agents on the platforms they already use.
                     </p>
                     {canWriteHub && (
                       <button
-                        onClick={() => setShowChannelsWizard(true)}
+                        onClick={openChannelsWizard}
                         className="btn-primary px-4 py-2 text-sm"
                       >
                         + Add Channel
@@ -4373,6 +4425,120 @@ export default function HubPage() {
                   <PublicBaseUrlCard canEdit={canEditSettings} />
                 )}
 
+                <div className="space-y-4 pt-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                        <WebhookIcon size={18} className="text-cyan-400" /> Triggers
+                      </h3>
+                      <p className="text-xs text-tsushin-slate mt-1">
+                        Event-driven entry points that wake agents from inbox activity or signed external events.
+                      </p>
+                    </div>
+                    {canWriteHub && (
+                      <button
+                        onClick={openTriggerWizard}
+                        className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
+                      >
+                        + Add Trigger
+                      </button>
+                    )}
+                  </div>
+
+                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && (
+                    <div className="card p-6 border-dashed border-tsushin-border/60">
+                      <h4 className="text-white font-semibold mb-1">No triggers configured yet</h4>
+                      <p className="text-sm text-tsushin-slate mb-4">
+                        Create an Email or Webhook trigger to wake agents from inbox activity or external events.
+                      </p>
+                      {canWriteHub && (
+                        <button onClick={openTriggerWizard} className="btn-primary px-4 py-2 text-sm">
+                          + Add Trigger
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                      <EnvelopeIcon size={18} className="text-red-400" /> Email Triggers
+                    </h3>
+                    <p className="text-xs text-tsushin-slate mt-1">
+                      Gmail-backed trigger rows that watch inbox activity, apply an optional search filter, and wake agents from matching messages.
+                    </p>
+                  </div>
+
+                  {emailTriggers.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-tsushin-border p-6">
+                      <div className="text-sm font-medium text-white mb-2">No email triggers yet</div>
+                      <p className="text-sm text-tsushin-slate mb-3">
+                        Email triggers reuse your connected Gmail accounts and a persisted default agent. Create one from the trigger launcher when you&apos;re ready.
+                      </p>
+                      <div className="text-xs text-tsushin-slate bg-tsushin-slate/5 border border-tsushin-border/70 rounded-lg px-3 py-2">
+                        Need a new inbox? The email trigger wizard can connect a Gmail account inline before you save the trigger.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {emailTriggers.map((emailTrigger) => (
+                        <div key={emailTrigger.id} className="card p-5 hover-glow border-red-700/30">
+                          <div className="flex items-start justify-between mb-3 gap-3">
+                            <div>
+                              <h3 className="font-semibold text-white">{emailTrigger.integration_name}</h3>
+                              <p className="text-xs text-tsushin-slate">
+                                {emailTrigger.gmail_account_email || emailTrigger.gmail_integration_name || 'Gmail inbox'}
+                              </p>
+                            </div>
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                              emailTrigger.is_active
+                                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                : 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
+                            }`}>
+                              {emailTrigger.is_active ? 'Active' : 'Paused'}
+                            </span>
+                          </div>
+
+                          <div className="text-xs text-tsushin-slate space-y-1 mb-4">
+                            <p>Default agent: <span className="text-white">{emailTrigger.default_agent_name || 'None'}</span></p>
+                            <p>Search: <span className="text-white">{emailTrigger.search_query || 'Inbox default'}</span></p>
+                            <p>Poll every: <span className="text-white">{emailTrigger.poll_interval_seconds}s</span></p>
+                            <p>Health: <span className="text-white">{emailTrigger.health_status}</span></p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingEmailTrigger(emailTrigger)
+                                setShowEmailTriggerWizard(true)
+                              }}
+                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await api.updateEmailTrigger(emailTrigger.id, { is_active: !emailTrigger.is_active })
+                                  await loadEmailTriggers()
+                                  setSuccessMessage(!emailTrigger.is_active ? 'Email trigger resumed' : 'Email trigger paused')
+                                  setTimeout(() => setSuccessMessage(null), 3000)
+                                } catch (err: any) {
+                                  setError(err.message || 'Failed to update email trigger')
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"
+                            >
+                              {emailTrigger.is_active ? 'Pause' : 'Resume'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Webhook trigger section remains visible so the trigger path
                     is still reachable after webhook leaves the channel wizard. */}
                 <div className="space-y-4">
@@ -4385,14 +4551,6 @@ export default function HubPage() {
                         Signed external events that can wake agents or continuous flows.
                       </p>
                     </div>
-                    {canWriteHub && (
-                      <button
-                        onClick={() => setShowWebhookSetupModal(true)}
-                        className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
-                      >
-                        + New Webhook Trigger
-                      </button>
-                    )}
                   </div>
 
                   {webhookIntegrations.length === 0 ? (
@@ -4520,82 +4678,6 @@ export default function HubPage() {
                   )}
                 </div>
 
-                {/* Gmail Integration — v0.7.0: hidden when empty; dashed
-                    "Add Another Gmail" placeholder removed. Users add Gmail
-                    via the "+ Add Channel" wizard (Gmail inbound channel) or
-                    via Productivity Wizard → Email; this section keeps per-
-                    instance management cards. */}
-                {hubIntegrations.filter(i => i.type === 'gmail').length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                      <EnvelopeIcon size={18} /> Email Integration
-                    </h3>
-                    {canWriteHub && (
-                      <button
-                        onClick={handleGmailConnect}
-                        disabled={!googleCredentials}
-                        className={`px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/50 rounded hover:bg-red-600/30 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        + Add Gmail Account
-                      </button>
-                    )}
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {hubIntegrations.filter(i => i.type === 'gmail').map(integration => (
-                      <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-red-700/30'}`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
-                              <EnvelopeIcon size={20} className="text-red-400" />
-                            </div>
-                            <h3 className="font-semibold text-white">Gmail</h3>
-                          </div>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            integration.health_status === 'healthy'
-                              ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                              : integration.health_status === 'unavailable'
-                              ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                              : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                            }`}>
-                            {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
-                          </span>
-                        </div>
-                        <p className="text-xs text-tsushin-slate mb-3">Email actions & reading</p>
-                        <div className="text-sm text-tsushin-slate mb-3">
-                          <p className="text-xs">Account: {integration.name?.replace('Gmail - ', '') || 'Unknown'}</p>
-                        </div>
-                        {integration.health_status === 'unavailable' && (
-                          <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                            <p className="text-xs text-red-400">
-                              <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
-                              Authorization expired. Re-authorize to restore access.
-                            </p>
-                          </div>
-                        )}
-                        <div className="flex gap-2">
-                          {integration.health_status === 'unavailable' ? (
-                            <button
-                              onClick={() => handleReauthorize(integration.id, integration.type)}
-                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
-                            >
-                              Re-authorize
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleGmailDisconnect(integration.id)}
-                              className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                            >
-                              Disconnect
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                )}
-
                 {/* More Channels and Push Notifications sections removed — all channels now have full integrations */}
               </div>
               )
@@ -4607,18 +4689,17 @@ export default function HubPage() {
                 integration cards render only when present; unconfigured
                 services live inside the wizard picker, so the tab no longer
                 shows "Asana — Not Connected" / "Google Calendar — Not
-                Connected" placeholder cards. Google OAuth credentials are
-                still configured in Settings → Integrations and surfaced as a
-                small badge so the user knows whether Google-backed connects
-                will proceed without a pre-setup step. */}
+                Connected" placeholder cards. Gmail stays in the productivity
+                area as a reusable Google account integration that also powers
+                email triggers. Google OAuth credentials are still configured
+                in Settings → Integrations and surfaced as a small badge so the
+                user knows whether Google-backed connects will proceed without
+                a pre-setup step. */}
             {activeTab === 'productivity' && (() => {
-              // Gmail intentionally excluded here — Gmail cards render under
-              // the Communication tab (email-as-channel). The productivity
-              // wizard still offers Gmail as a choice; the resulting card
-              // appears in Communication, not Productivity.
+              const gmailIntegrations = hubIntegrations.filter(i => i.type === 'gmail')
               const asanaIntegrations = hubIntegrations.filter(i => i.type === 'asana')
               const calendarIntegrations = hubIntegrations.filter(i => i.type === 'calendar')
-              const anyConfigured = asanaIntegrations.length + calendarIntegrations.length > 0
+              const anyConfigured = gmailIntegrations.length + asanaIntegrations.length + calendarIntegrations.length > 0
               return (
               <div className="space-y-6 animate-fade-in">
                 <div className="flex justify-between items-center">
@@ -4658,6 +4739,77 @@ export default function HubPage() {
                     {googleCredentials ? 'Manage' : 'Configure'}
                   </a>
                 </div>
+
+                {gmailIntegrations.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                        <EnvelopeIcon size={18} /> Gmail Accounts
+                      </h3>
+                      {canWriteHub && (
+                        <button
+                          onClick={handleGmailConnect}
+                          disabled={!googleCredentials}
+                          className={`px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/50 rounded hover:bg-red-600/30 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          + Add Gmail Account
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                      {gmailIntegrations.map(integration => (
+                        <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-red-700/30'}`}>
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                                <EnvelopeIcon size={20} className="text-red-400" />
+                              </div>
+                              <h3 className="font-semibold text-white">Gmail</h3>
+                            </div>
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                              integration.health_status === 'healthy'
+                                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                : integration.health_status === 'unavailable'
+                                ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                            }`}>
+                              {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
+                            </span>
+                          </div>
+                          <p className="text-xs text-tsushin-slate mb-3">Email actions and trigger inbox selection</p>
+                          <div className="text-sm text-tsushin-slate mb-3">
+                            <p className="text-xs">Account: {integration.name?.replace('Gmail - ', '') || 'Unknown'}</p>
+                          </div>
+                          {integration.health_status === 'unavailable' && (
+                            <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                              <p className="text-xs text-red-400">
+                                <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
+                                Authorization expired. Re-authorize to restore access.
+                              </p>
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            {integration.health_status === 'unavailable' ? (
+                              <button
+                                onClick={() => handleReauthorize(integration.id, integration.type)}
+                                className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
+                              >
+                                Re-authorize
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleGmailDisconnect(integration.id)}
+                                className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                              >
+                                Disconnect
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {!anyConfigured ? (
                   <div className="card p-8 text-center border-dashed border-tsushin-border/60">
@@ -6341,9 +6493,25 @@ export default function HubPage() {
         onServiceSelected={handleProductivityDispatch}
       />
       <ChannelsWizard
+        key={channelsWizardSession}
         isOpen={showChannelsWizard}
         onClose={() => setShowChannelsWizard(false)}
         onChannelSelected={handleChannelsDispatch}
+      />
+      <TriggerWizard
+        key={triggerWizardSession}
+        isOpen={showTriggerWizard}
+        onClose={() => setShowTriggerWizard(false)}
+        onTriggerSelected={handleTriggerDispatch}
+      />
+      <EmailTriggerWizard
+        isOpen={showEmailTriggerWizard}
+        onClose={() => {
+          setShowEmailTriggerWizard(false)
+          setEditingEmailTrigger(null)
+        }}
+        onComplete={handleEmailTriggerComplete}
+        triggerId={editingEmailTrigger?.id ?? null}
       />
     </div>
   )

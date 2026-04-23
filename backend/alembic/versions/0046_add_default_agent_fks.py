@@ -126,6 +126,7 @@ def upgrade() -> None:
             SELECT a.id
             FROM agent AS a
             WHERE a.whatsapp_integration_id = wmi.id
+              AND a.tenant_id = wmi.tenant_id
             ORDER BY a.id ASC
             LIMIT 1
         )
@@ -139,6 +140,7 @@ def upgrade() -> None:
             SELECT a.id
             FROM agent AS a
             WHERE a.telegram_integration_id = tbi.id
+              AND a.tenant_id = tbi.tenant_id
             ORDER BY a.id ASC
             LIMIT 1
         )
@@ -152,6 +154,7 @@ def upgrade() -> None:
             SELECT a.id
             FROM agent AS a
             WHERE a.slack_integration_id = si.id
+              AND a.tenant_id = si.tenant_id
             ORDER BY a.id ASC
             LIMIT 1
         )
@@ -165,6 +168,7 @@ def upgrade() -> None:
             SELECT a.id
             FROM agent AS a
             WHERE a.discord_integration_id = di.id
+              AND a.tenant_id = di.tenant_id
             ORDER BY a.id ASC
             LIMIT 1
         )
@@ -178,6 +182,7 @@ def upgrade() -> None:
             SELECT a.id
             FROM agent AS a
             WHERE a.webhook_integration_id = wi.id
+              AND a.tenant_id = wi.tenant_id
             ORDER BY a.id ASC
             LIMIT 1
         )

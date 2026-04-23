@@ -725,9 +725,9 @@ def test_channels_wizard_fallback_matches_backend():
     fallback matches backend CHANNEL_CATALOG; this one does the same for the
     Hub > Communication tab's ChannelsWizard (the "+ Add Channel" launcher).
     The two fallbacks aren't literally the same array — ChannelsWizard drops
-    'playground' (not actionable from the Hub) and adds 'gmail' (inbound
-    email-as-channel) — but every *actionable* channel id registered in
-    CHANNEL_CATALOG must appear in the ChannelsWizard fallback.
+    'playground' because it is not actionable from the Hub — but every
+    *actionable* channel id registered in CHANNEL_CATALOG must appear in the
+    ChannelsWizard fallback.
     """
     from channels.catalog import CHANNEL_CATALOG
 
@@ -757,23 +757,63 @@ def test_channels_wizard_fallback_matches_backend():
         f"setup for must also be offered in the + Add Channel launcher."
     )
 
-    # The wizard is allowed to include channels beyond CHANNEL_CATALOG (e.g.
-    # 'gmail' which is a productivity service re-exposed as an inbound
-    # channel). Enforce the extras stay on an explicit allowlist so new
-    # drift doesn't slip in under this exception.
-    wizard_extras = frontend_ids - actionable_backend_ids
-    allowed_extras = {"gmail"}
-    unexpected_extras = wizard_extras - allowed_extras
-    assert not unexpected_extras, (
-        f"ChannelsWizard fallback has channel ids not in CHANNEL_CATALOG "
-        f"and not on the extras allowlist ({sorted(allowed_extras)}): "
-        f"{sorted(unexpected_extras)}. Either register them in "
-        f"backend/channels/catalog.py or extend the allowlist in this test."
+    extra_in_wizard = frontend_ids - actionable_backend_ids
+    assert not extra_in_wizard, (
+        f"ChannelsWizard fallback has channel ids not in actionable "
+        f"CHANNEL_CATALOG: {sorted(extra_in_wizard)}. Either register them "
+        f"in backend/channels/catalog.py or remove them from the fallback."
     )
 
 
 # ---------------------------------------------------------------------------
-# Guard 10 — Gemini TTS model catalog drift
+# Guard 10 — Trigger wizard fallback vs. backend trigger catalog
+# ---------------------------------------------------------------------------
+
+def test_trigger_wizard_fallback_matches_backend():
+    """
+    The Hub trigger launcher keeps a static fallback in
+    ``frontend/components/triggers/TriggerWizard.tsx`` for degraded mode.
+    That fallback must stay aligned with ``TRIGGER_CATALOG`` so Email and
+    Webhook remain discoverable even if ``/api/triggers`` is temporarily
+    unavailable.
+    """
+    from channels.catalog import TRIGGER_CATALOG
+
+    backend_ids = {entry.id for entry in TRIGGER_CATALOG if entry.requires_setup}
+
+    wizard_path = FRONTEND / "components" / "triggers" / "TriggerWizard.tsx"
+    assert wizard_path.exists(), f"TriggerWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const FALLBACK_TRIGGERS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback FALLBACK_TRIGGERS array not found in TriggerWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_frontend = backend_ids - frontend_ids
+    extra_in_frontend = frontend_ids - backend_ids
+
+    assert not missing_in_frontend, (
+        f"Triggers registered in backend TRIGGER_CATALOG are missing from "
+        f"TriggerWizard.tsx: {sorted(missing_in_frontend)}. Add matching "
+        f"entries so offline mode still renders them."
+    )
+    assert not extra_in_frontend, (
+        f"Triggers present in TriggerWizard.tsx but not in backend "
+        f"TRIGGER_CATALOG: {sorted(extra_in_frontend)}. Either register "
+        f"them in backend/channels/catalog.py or remove them from the "
+        f"frontend fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 11 — Gemini TTS model catalog drift
 # ---------------------------------------------------------------------------
 
 def test_gemini_tts_models_frontend_fallback_matches_backend():

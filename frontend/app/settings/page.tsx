@@ -83,6 +83,12 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
     </svg>
   ),
+  defaultAgents: (
+    <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.036 3.19a1 1 0 00.95.69h3.354c.969 0 1.371 1.24.588 1.81l-2.714 1.971a1 1 0 00-.364 1.118l1.036 3.19c.3.922-.755 1.688-1.54 1.118l-2.713-1.971a1 1 0 00-1.176 0l-2.714 1.971c-.784.57-1.838-.196-1.539-1.118l1.036-3.19a1 1 0 00-.364-1.118L2.12 8.617c-.783-.57-.38-1.81.588-1.81h3.355a1 1 0 00.95-.69l1.036-3.19z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17.75h6M10.5 20.25h3" />
+    </svg>
+  ),
   apiClients: (
     <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -213,6 +219,13 @@ export default function SettingsHubPage() {
       icon: icons.filter,
       href: '/settings/filtering',
       permission: 'org.settings.write',
+    },
+    {
+      title: 'Default Agents',
+      description: 'Manage tenant, channel, trigger, and per-user fallback agent routing.',
+      icon: icons.defaultAgents,
+      href: '/settings/default-agents',
+      permission: 'org.settings.read',
     },
   ]
 

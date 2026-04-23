@@ -12,6 +12,7 @@ from models import (
     Agent,
     ContactAgentMapping,
     DiscordIntegration,
+    EmailChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
     UserChannelDefaultAgent,
@@ -74,7 +75,7 @@ def _resolve_trigger(
 ) -> Optional[int]:
     candidates = (
         explicit_agent_id,
-        _resolve_instance_default_agent(db, channel_type, instance_id),
+        _resolve_instance_default_agent(db, tenant_id, channel_type, instance_id),
         _resolve_legacy_bound_agent(db, tenant_id, channel_type, instance_id),
         _resolve_tenant_default_agent(db, tenant_id),
     )
@@ -94,7 +95,7 @@ def _resolve_channel(
         explicit_agent_id,
         _resolve_contact_mapping(db, tenant_id, contact_id),
         _resolve_user_channel_default_agent(db, tenant_id, channel_type, user_identifier),
-        _resolve_instance_default_agent(db, channel_type, instance_id),
+        _resolve_instance_default_agent(db, tenant_id, channel_type, instance_id),
         _resolve_legacy_bound_agent(db, tenant_id, channel_type, instance_id),
         _resolve_tenant_default_agent(db, tenant_id),
     )
@@ -149,6 +150,7 @@ def _resolve_user_channel_default_agent(
 
 def _resolve_instance_default_agent(
     db: Session,
+    tenant_id: str,
     channel_type: str,
     instance_id: Optional[int],
 ) -> Optional[int]:
@@ -161,11 +163,15 @@ def _resolve_instance_default_agent(
         "slack": SlackIntegration,
         "discord": DiscordIntegration,
         "webhook": WebhookIntegration,
+        "email": EmailChannelInstance,
     }.get(channel_type)
     if model is None or not hasattr(model, "default_agent_id"):
         return None
 
-    record = db.query(model).filter(model.id == instance_id).first()
+    query = db.query(model).filter(model.id == instance_id)
+    if hasattr(model, "tenant_id"):
+        query = query.filter(model.tenant_id == tenant_id)
+    record = query.first()
     return getattr(record, "default_agent_id", None) if record else None
 
 
