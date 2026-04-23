@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Wave 1 checkpoints — Track A/F foundation + Track G Gmail send (2026-04-23)
+
+Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than waiting for every downstream phase to finish.
+
+**Track A backend checkpoint merged:**
+- Introduced the `EntryPoint` split in `backend/channels/`: `Channel` now covers conversational transports, `Trigger` covers event-driven wake sources, and outbound dispatch is centralized in `backend/channels/dispatch.py` so conversational replies still call `Channel.send_message(...)` while webhook callbacks now flow through `Trigger.notify_external_system(...)`.
+- Moved webhook to the trigger catalog as `WebhookTrigger` (`backend/channels/webhook/trigger.py`), added `GET /api/triggers`, and made `/api/triggers/webhook/*` the canonical CRUD surface. The Hub Communication view now renders separate **Communication Channels** and **Webhook Triggers** sections, and the guided `+ Add Channel` flow no longer offers webhook as a selectable channel.
+- Added Alembic `0046_add_default_agent_fks.py`, which backfills `default_agent_id` onto WhatsApp / Telegram / Slack / Discord / Webhook instance rows and creates `user_channel_default_agent` with `tenant_id` stored as `String(50)` plus SQL backfills from the legacy reverse FKs on `agent`.
+- Added `backend/services/default_agent_service.py` to centralize v2 default-agent resolution. Channels now resolve explicit agent -> contact mapping -> user/channel override -> instance default -> legacy bound agent -> tenant default, while triggers use the shorter explicit -> instance default -> legacy bound agent -> tenant default chain.
+- Added targeted regression coverage in `backend/tests/test_channel_trigger_split.py` and `backend/tests/test_default_agent_service.py` for registry separation, outbound channel-vs-trigger dispatch, and trigger/channel default-agent resolution behavior.
+
+**Track F0 prep merged:**
+- Extracted `_parse_tool_call_block()` and `_parse_tool_call_response()` in `backend/agent/agent_service.py` so the upcoming multi-round loop work can extend one parser boundary instead of re-editing the live tool-call path inline.
+- Added reserved top-level config-key auditing to `backend/agent/skills/skill_manager.py` to protect future scratchpad / queue metadata from colliding with existing `agent_skill.config` payloads before the Phase 6 schema lands.
+- Added prep-only regression coverage in `backend/tests/test_provider_instance_hardening.py` for the new parser boundary and reserved-key audit helpers. No schema/API behavior changed in this Track F slice yet.
+
+**Track G Gmail-send checkpoint merged:**
+- Extended `backend/hub/google/gmail_service.py` with `send_message(...)`, `reply_to_message(...)`, and `create_draft(...)`, and threaded those capabilities through `backend/services/email_command_service.py` plus `backend/agent/skills/gmail_skill.py` so outbound Gmail actions are first-class tool calls instead of read-only placeholders.
+- Tightened the Gmail OAuth contract so outbound actions fail closed unless the integration has the `gmail.send` scope, and updated the Hub/API reauthorization surfaces to request `include_send_scope=true` when a tenant upgrades an older read-only Gmail integration.
+- Updated Gmail capability copy across the Hub setup wizard, agent skill descriptions, and privacy docs so the product now explicitly advertises read + send behavior rather than stale read-only messaging.
+- Added targeted regression coverage in `backend/tests/test_gmail_send_phase3_checkpoint.py` for send, draft, reply, and scope-gating behavior.
+
+**Verified:**
+- `docker-compose build --no-cache backend frontend`
+- `docker-compose up -d backend frontend`
+- `curl -fsS http://localhost:8081/api/health` -> healthy
+- `curl -fsS http://localhost:8081/api/readiness` -> ready
+- `docker exec tsushin-backend python -m pytest -q -o addopts='' tests/test_channel_trigger_split.py tests/test_default_agent_service.py` -> `6 passed, 2 warnings`
+- `docker exec tsushin-backend python -m pytest -q -o addopts='' tests/test_gmail_send_phase3_checkpoint.py` -> `6 passed, 2 warnings`
+- `python3 -m pytest -q -o addopts='' backend/tests/test_wizard_drift.py -k 'channel_catalog or channels_wizard'` -> `2 passed, 12 deselected`
+- `python3 -m pytest -q -o addopts='' backend/tests/test_provider_instance_hardening.py` -> `6 passed, 20 warnings`
+- Playwright headed validation on `https://localhost/hub` confirmed a separate **Webhook Triggers** card group, `+ New Webhook Trigger`, and an `+ Add Channel` modal that offers WhatsApp / Telegram / Slack / Discord / Gmail (inbound) but no webhook. Console showed 0 errors; the only warnings were repeated CSS preload notices captured in private QA evidence.
+- Playwright headed validation on the Hub Gmail wizard confirmed the setup copy now advertises `Read + outbound (gmail.readonly + gmail.send)`, explains that existing read-only integrations need reauthorization, and logs 0 browser console errors beyond the same CSS preload warnings.
+
+**Still open in Phase 1 / Phase 3 / Phase 6:** `/settings/default-agents`, the shared `Wizard` primitive + Email Trigger wizard, Track A Phase 2 continuous-agent models, the live Gmail outbound integration gate (real send + Sent visibility), and the actual Phase 6 schema/API/UI work (`0049`, `0057`, `0058`, scratchpad exposure, multi-round loop).
+
 ### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
 
 Phase 0 of v0.7.0 now has the serial foundation needed before release-track worktrees fan out.

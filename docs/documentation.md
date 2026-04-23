@@ -143,6 +143,26 @@ v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent
 * **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
 * **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable.
 
+### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
+
+The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
+
+* **Entry-point split** — `backend/channels/base.py` now defines `EntryPoint` / `Channel`, `backend/channels/trigger.py` adds `Trigger`, and `backend/channels/registry.py` plus `backend/channels/dispatch.py` distinguish conversational send paths from trigger callbacks.
+* **Webhook is now cataloged as a trigger** — `backend/channels/catalog.py` exposes separate `CHANNEL_CATALOG` and `TRIGGER_CATALOG`; `GET /api/channels` no longer lists webhook while `GET /api/triggers` does, and canonical webhook CRUD lives under `/api/triggers/webhook/*`.
+* **Default-agent v2 foundation** — Alembic `0046` adds per-instance `default_agent_id` columns plus `user_channel_default_agent`, and `backend/services/default_agent_service.py` centralizes channel-vs-trigger resolution while preserving legacy reverse-FK bindings as fallback during the migration window.
+* **Hub communication split** — the Hub Communication page now renders dedicated **Communication Channels** and **Webhook Triggers** sections, and the guided `+ Add Channel` launcher excludes webhook.
+* **Phase 6 prep-only hardening** — `backend/agent/agent_service.py` now routes tool-call parsing through one boundary, and `backend/agent/skills/skill_manager.py` audits reserved config keys ahead of scratchpad / queue metadata work. No agentic-loop schema/API changes have landed yet.
+
+### 2.6 v0.7.0 Wave 1 checkpoint (Track G Gmail send foundation)
+
+The first Gmail-send slice is also merged on `release/0.7.0`, but it is still a checkpoint rather than the full Phase 3 email-trigger flow.
+
+* **Outbound Gmail operations** — `backend/hub/google/gmail_service.py`, `backend/services/email_command_service.py`, and `backend/agent/skills/gmail_skill.py` now support send, reply, and draft actions in addition to read/search/list operations.
+* **Fail-closed send scope** — outbound Gmail actions require the integration to carry `gmail.send`; older read-only OAuth tokens stay readable but cannot send until the tenant reauthorizes with the expanded scope.
+* **Hub/API reauth contract** — Gmail reauthorization surfaces request `include_send_scope=true` so the upgrade path to `gmail.send` is explicit in both API and UI flows.
+* **User-facing capability copy** — the Gmail setup wizard, skill descriptions, and privacy copy now describe Gmail as read + outbound rather than read-only.
+* **Regression coverage** — `backend/tests/test_gmail_send_phase3_checkpoint.py` covers send, reply, draft, and scope-gating behavior. Live outbound delivery and the downstream Email Trigger / triage flow remain pending Phase 3 exit-gate validation.
+
 ---
 
 ## 3. Quick Start
@@ -651,7 +671,7 @@ Step graph (text agents skip step 4):
 | 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
 | 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
 | 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
-| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. Webhook moved to the trigger catalog in the v0.7.0 Wave 1 checkpoint and is created from Hub → Communication → Webhook Triggers instead of the guided channel picker. |
 | 8 | Review | Per-section summary with Edit buttons that jump back |
 | 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
 
@@ -691,8 +711,8 @@ Edit-time fields beyond the modal (surfaced in `AgentConfigurationManager` / Age
 - `avatar` slug — e.g. samurai, robot, ninja (`models.py:376`)
 - `provider_instance_id` — binds to a configured `ProviderInstance` so API keys/base URLs come from the tenant's provider configuration. (`models.py:369`, `models.py:437-458`)
 - `vector_store_instance_id` + `vector_store_mode` (`override|complement|shadow`) — Vector store binding. (`models.py:372-373`)
-- `enabled_channels` JSON — any of `playground, whatsapp, telegram, slack, discord, webhook`. (`models.py:363`)
-- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — per-channel FKs. (`models.py:364-368`)
+- `enabled_channels` JSON — conversational entry points such as `playground, whatsapp, telegram, slack, discord`. The guided wizard no longer offers webhook here because webhook is now modeled as a trigger; some legacy agent-management surfaces still carry the older webhook binding fields during the v0.7.0 transition. (`models.py:363`)
+- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — legacy per-instance bindings on `Agent`. v0.7.0 additionally introduces `*.default_agent_id` on instance rows plus `user_channel_default_agent`, with `default_agent_service.py` preferring the new resolution chain and falling back to these older FKs only when needed. (`models.py:364-368`, `backend/services/default_agent_service.py`)
 
 The agent detail page (`frontend/app/agents/[id]/page.tsx:18-20`) provides six tabs: Configuration, Channels, Memory Management, Skills, Knowledge Base, Shared Knowledge.
 
@@ -1766,52 +1786,54 @@ Capability flags (`adapter.py:27-33`):
 
 **Why HTTP Interactions, not Gateway:** Tsushin uses Discord's HTTP Interactions endpoint (Ed25519-signed) rather than the Gateway WebSocket because it's stateless, scales horizontally, and doesn't require per-process bot session tracking. Inbound interactions arrive at `/api/channels/discord/{integration_id}/interactions`; the route ACKs Discord with a Type 5 (deferred response) within the 3-second window, then enqueues the interaction into `message_queue` (channel='discord'). `QueueWorker._process_discord_message` routes the message through `AgentRouter` and the agent's reply is sent via `DiscordChannelAdapter` (REST API).
 
-### 15.5 Webhook
+### 15.5 Webhook Trigger
 
-**Source:** `backend/channels/webhook/adapter.py`
+**Source:** `backend/channels/webhook/trigger.py`, `backend/api/routes_webhook_instances.py`, `backend/api/routes_webhook_inbound.py`
 
-Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+Webhook is now a first-class **Trigger**, not a conversational channel. Inbound external systems still POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound responses use `WebhookTrigger.notify_external_system(...)` to POST back to the configured `callback_url`.
 
 **URI slug modes (v0.7.1):** each integration has a human-readable `slug` used in the inbound path.
 - **Auto** (default on create) — server generates `wh-{6-hex}`.
 - **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
 - Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
 - **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
-- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
+- **Live availability check:** `GET /api/triggers/webhook/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
 
 **Lifecycle: edit / pause / delete.** Each card exposes three actions in addition to Rotate Secret:
 - **Edit** — opens `WebhookEditModal` to change the name, slug, callback URL, rate limit, and IP allowlist. Secret rotation is intentionally separate (Rotate button) to avoid mixing destructive secret operations with non-destructive config edits.
-- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/webhook-integrations/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
+- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/triggers/webhook/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
 - **Delete** — removes the integration row; agent bindings are nulled via `ON DELETE SET NULL`.
 
-Capability flags (`adapter.py:39-46`):
+Capability flags (`trigger.py:19-27`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
 
-**Outbound callback POST** (`adapter.py:88-202`):
-- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the adapter reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
+**Outbound callback POST** (`trigger.py:74-171`):
+- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the trigger reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
 - SSRF-validated via `utils/ssrf_validator.validate_url()` before the POST.
-- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `adapter.py:33`).
-- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `adapter.py:32`).
+- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `trigger.py:17`).
+- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `trigger.py:16`).
 - `follow_redirects=False`.
 
-**HMAC signing** (`adapter.py:134-157`):
+**HMAC signing** (`trigger.py:108-121`):
 - Canonical payload JSON (sorted keys, compact separators) includes: `event`, `webhook_id`, `timestamp`, `text`, `agent_id`, `sender_key`, `source_id`.
 - Signature: `HMAC-SHA256(secret, f"{timestamp}.".bytes + body_bytes)` — replay-protected.
 - Headers emitted: `X-Tsushin-Signature: sha256={hex}`, `X-Tsushin-Timestamp`, `X-Tsushin-Event`, `X-Tsushin-Webhook-Id`, `User-Agent: Tsushin-Webhook/1.0`.
 
-**Secret encryption:** `api_secret_encrypted` decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`adapter.py:71-86`, `services/encryption_key_service.get_webhook_encryption_key`).
+**Secret encryption:** `api_secret_encrypted` is decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`trigger.py:52-68`, `services/encryption_key_service.get_webhook_encryption_key`).
 
-**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`adapter.py:204-222`).
+**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`trigger.py:173-190`).
 
 **Model:** `WebhookIntegration` (`backend/models.py:2918`).
 
-**E2E setup — Webhook channel:**
+**Canonical management surface:** `GET /api/triggers` lists trigger catalog entries, and `/api/triggers/webhook/*` is the canonical CRUD namespace. Legacy `Agent.webhook_integration_id` bindings still exist during the migration window, but the long-term routing model is instance-level `default_agent_id` plus trigger-aware default resolution.
 
-1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
-2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
+**E2E setup — Webhook trigger:**
+
+1. Navigate to **Hub → Communication → Webhook Triggers** in the UI.
+2. Click **+ New Webhook Trigger** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
 3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard) **plus a ready-to-paste `openssl`+`curl` snippet pre-filled with your secret and inbound URL** — copy the block, paste it into any shell with `openssl` + `curl`, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end without leaving the browser. **Save the secret now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
-5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
+5. **Choose the receiving agent** — during the Wave 1 checkpoint, routing can still fall back to the legacy `Agent.webhook_integration_id` binding where present; the v0.7.0 target model is the trigger's own `default_agent_id` plus `/settings/default-agents`.
 6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
 
 ```bash
@@ -3404,19 +3426,19 @@ A few illustrative endpoints (grepped verbatim from `backend/api/routes_*.py`):
 
 Source: `backend/app.py:1270-1309`.
 
-### 25.6 Webhooks (bidirectional, HMAC-signed)
+### 25.6 Webhooks (trigger-based, HMAC-signed)
 
-The webhook channel (`backend/channels/webhook/adapter.py`) is bidirectional:
+The webhook integration is now modeled as a trigger (`backend/channels/webhook/trigger.py`) even though the public inbound endpoint remains `POST /api/webhooks/{slug}/inbound` (numeric ids still work as a legacy fallback).
 
-**Inbound** — external systems POST signed events to `POST /api/webhooks/{webhook_id}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
+**Inbound** — external systems POST signed events to `POST /api/webhooks/{slug}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
 
-**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/adapter.py:148`). Outbound requests carry custom headers:
+**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url` via `Trigger.notify_external_system(...)`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/trigger.py`). Outbound requests carry custom headers:
 
 * `X-Tsushin-Webhook-Id: <int>`
 * `X-Tsushin-Signature: <hex sha256 HMAC>`
-* (plus timestamp fields — see `channels/webhook/adapter.py:131-155`)
+* (plus timestamp fields — see `channels/webhook/trigger.py:114-121`)
 
-Callback URLs are subject to SSRF policy enforcement (`channels/webhook/adapter.py:125`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/adapter.py:72-85`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty.
+Callback URLs are subject to SSRF policy enforcement (`channels/webhook/trigger.py`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/trigger.py`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty, and their canonical management surface is `/api/triggers/webhook/*` plus `GET /api/triggers`.
 
 ---
 
