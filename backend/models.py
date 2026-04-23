@@ -442,6 +442,23 @@ class ContactAgentMapping(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class UserChannelDefaultAgent(Base):
+    """Per-user default agent override for a channel within a tenant."""
+
+    __tablename__ = "user_channel_default_agent"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False, index=True)
+    user_identifier = Column(String(256), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "user_identifier", name="uq_user_channel_default_agent"),
+    )
+
+
 class ApiKey(Base):
     """
     Phase 4.6: Stores API keys for LLM providers and tool services.
@@ -2838,6 +2855,7 @@ class WhatsAppMCPInstance(Base):
     # Token-based auth to prevent cross-tenant MCP access
     api_secret = Column(String(64), nullable=True)  # 32-byte hex-encoded secret
     api_secret_created_at = Column(DateTime, nullable=True)  # For rotation tracking
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Relationships
     # tenant = relationship("Tenant")  # Requires models_rbac import
@@ -2892,6 +2910,7 @@ class TelegramBotInstance(Base):
 
     # Metadata
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -2934,6 +2953,7 @@ class SlackIntegration(Base):
     last_health_check = Column(DateTime, nullable=True)      # v0.6.0 Item 38
     dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
     allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -2973,6 +2993,7 @@ class DiscordIntegration(Base):
     dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
     allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
     guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -3045,6 +3066,7 @@ class WebhookIntegration(Base):
     # Retry config
     max_retry_attempts = Column(Integer, default=3)
     retry_timeout_seconds = Column(Integer, default=300)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Audit
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)

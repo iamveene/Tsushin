@@ -162,13 +162,19 @@ class AgentRouter:
                 self.logger.error(f"Failed to initialize TelegramSender: {e}", exc_info=True)
 
         # Item 32: Channel Abstraction Layer — register adapters per channel
+        from channels.base import Channel
+        from channels.dispatch import dispatch_outbound
         from channels.registry import ChannelRegistry
+        from channels.trigger import Trigger
         from channels.whatsapp.adapter import WhatsAppChannelAdapter
         from channels.telegram.adapter import TelegramChannelAdapter
         from channels.playground.adapter import PlaygroundChannelAdapter
-        from channels.webhook.adapter import WebhookChannelAdapter
+        from channels.webhook.trigger import WebhookTrigger
 
         self.channel_registry = ChannelRegistry()
+        self._channel_base_type = Channel
+        self._dispatch_outbound = dispatch_outbound
+        self._trigger_base_type = Trigger
 
         if mcp_instance_id:
             self.channel_registry.register(
@@ -183,7 +189,7 @@ class AgentRouter:
         if webhook_instance_id:
             self.channel_registry.register(
                 "webhook",
-                WebhookChannelAdapter(db_session, webhook_instance_id, self.logger)
+                WebhookTrigger(db_session, webhook_instance_id, self.logger)
             )
         self.channel_registry.register(
             "playground",
@@ -704,20 +710,24 @@ class AgentRouter:
             if channel == "slack" and self._inbound_slack_thread_ts:
                 send_kwargs["thread_ts"] = self._inbound_slack_thread_ts
 
-            result = await adapter.send_message(
-                to=recipient,
-                text=message_text,
+            result = await self._dispatch_outbound(
+                adapter,
+                recipient=recipient,
+                message_text=message_text,
                 media_path=media_path,
                 agent_id=agent_id,
                 **send_kwargs,
             )
 
-            if not result.success:
+            success = result.success if hasattr(result, "success") else bool(result.get("success"))
+            error = result.error if hasattr(result, "error") else result.get("error")
+
+            if not success:
                 self.logger.warning(
-                    f"Message send failed via {channel}: {result.error or 'unknown error'}"
+                    f"Message send failed via {channel}: {error or 'unknown error'}"
                 )
 
-            return result.success
+            return success
 
         except Exception as e:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
@@ -947,12 +957,34 @@ class AgentRouter:
             return None, None, None
 
         # Step 3: Default agent (fallback for DMs only - LOWEST PRIORITY)
-        # Phase 10: Also check channel validity for default agent
-        # MONITORING 2026-01-08: Log default agent usage for audit
-        default_query = self.db.query(Agent).filter(Agent.is_default == True)
-        if self.tenant_id:
-            default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
-        default_agent = default_query.first()
+        # Phase 1: centralize resolution through default_agent_service.
+        from services.default_agent_service import get_default_agent
+
+        default_channel_type = "playground"
+        default_instance_id = None
+        if self.webhook_instance_id:
+            default_channel_type = "webhook"
+            default_instance_id = self.webhook_instance_id
+        elif self.telegram_instance_id:
+            default_channel_type = "telegram"
+            default_instance_id = self.telegram_instance_id
+        elif self.mcp_instance_id:
+            default_channel_type = "whatsapp"
+            default_instance_id = self.mcp_instance_id
+
+        default_agent_id = get_default_agent(
+            db=self.db,
+            tenant_id=self.tenant_id,
+            channel_type=default_channel_type,
+            instance_id=default_instance_id,
+            user_identifier=sender,
+            contact_id=contact.id if contact else None,
+        )
+        default_agent = (
+            self.db.query(Agent).filter(Agent.id == default_agent_id).first()
+            if default_agent_id
+            else None
+        )
         if default_agent and is_agent_valid_for_channel(default_agent):
             self.logger.warning(f"⚠️ DEFAULT AGENT FALLBACK: Using agent {default_agent.id} for {sender} (no contact mapping, no mention, no keyword)")
             self.logger.warning(f"📊 AUDIT: Sender {sender} | Trigger: {trigger_type} | Default fallback used")
@@ -3910,14 +3942,29 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 except Exception:
                     pass
 
-            # If no saved session, try to get default agent
+            # If no saved session, try to get the resolved default agent
             if not agent_id:
-                default_query = self.db.query(Agent).filter(Agent.is_default == True)
-                if self.tenant_id:
-                    default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
-                default_agent = default_query.first()
-                if default_agent:
-                    agent_id = default_agent.id
+                from services.default_agent_service import get_default_agent
+
+                default_channel_type = "playground"
+                default_instance_id = None
+                if channel.startswith("whatsapp"):
+                    default_channel_type = "whatsapp"
+                    default_instance_id = self.mcp_instance_id
+                elif channel == "telegram":
+                    default_channel_type = "telegram"
+                    default_instance_id = self.telegram_instance_id
+                elif channel == "webhook":
+                    default_channel_type = "webhook"
+                    default_instance_id = self.webhook_instance_id
+
+                agent_id = get_default_agent(
+                    db=self.db,
+                    tenant_id=self.tenant_id,
+                    channel_type=default_channel_type,
+                    instance_id=default_instance_id,
+                    user_identifier=sender_key,
+                )
 
             # Get tenant_id from agent
             tenant_id = "_system"  # Default to system commands
