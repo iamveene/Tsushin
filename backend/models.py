@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -827,6 +827,9 @@ class CustomSkill(Base):
     sentinel_profile_id = Column(Integer, nullable=True)
     timeout_seconds = Column(Integer, nullable=False, default=30)
     is_enabled = Column(Boolean, nullable=False, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     scan_status = Column(String(20), default='pending')  # pending|clean|rejected
     last_scan_result = Column(JSON, nullable=True)
     version = Column(String(20), nullable=False, default='1.0.0')
@@ -1648,6 +1651,9 @@ class FlowDefinition(Base):
 
     # Existing fields
     is_active = Column(Boolean, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     version = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -3115,6 +3121,221 @@ class EmailChannelInstance(Base):
     __table_args__ = (
         Index("idx_email_channel_instance_tenant", "tenant_id"),
         Index("idx_email_channel_instance_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0 Phase 2: Continuous-Agent Control Plane
+# ============================================================================
+
+class DeliveryPolicy(Base):
+    """
+    Tenant-owned policy controlling wake-event batching, dedupe, and delivery
+    timing for continuous agents.
+    """
+    __tablename__ = "delivery_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    batch_window_seconds = Column(Integer, default=0, nullable=False)
+    dedupe_window_seconds = Column(Integer, default=300, nullable=False)
+    quiet_hours = Column(JSON, nullable=True)
+    importance_threshold = Column(String(16), default="normal", nullable=False)
+    cooldown_seconds = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_delivery_policy_tenant_name"),
+        Index("ix_delivery_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class BudgetPolicy(Base):
+    """
+    Tenant-owned budget/rate policy for continuous-agent execution.
+    on_exhaustion: pause | degrade_to_hybrid | notify_only.
+    """
+    __tablename__ = "budget_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    max_runs_per_day = Column(Integer, nullable=True)
+    max_agentic_runs_per_day = Column(Integer, nullable=True)
+    max_tokens_per_day = Column(BigInteger, nullable=True)
+    max_tool_invocations_per_day = Column(Integer, nullable=True)
+    on_exhaustion = Column(String(32), default="pause", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_budget_policy_tenant_name"),
+        Index("ix_budget_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class ContinuousAgent(Base):
+    """
+    Always-on wrapper around an Agent. Write APIs are intentionally deferred
+    beyond Track A2; this model is read by the control-plane APIs and later
+    consumed by trigger adapters.
+    """
+    __tablename__ = "continuous_agent"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=True)
+    execution_mode = Column(String(16), default="hybrid", nullable=False)  # autonomous | hybrid | notify_only
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    budget_policy_id = Column(Integer, ForeignKey("budget_policy.id", ondelete="SET NULL"), nullable=True)
+    approval_policy_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent", foreign_keys=[agent_id])
+    delivery_policy = relationship("DeliveryPolicy")
+    budget_policy = relationship("BudgetPolicy")
+
+    __table_args__ = (
+        Index("ix_continuous_agent_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_agent_agent", "agent_id"),
+    )
+
+
+class ContinuousSubscription(Base):
+    """
+    Links a continuous agent to a trigger/channel instance that can emit wakes.
+    channel_instance_id is validated by service/API code because the instance
+    table varies by channel_type.
+    """
+    __tablename__ = "continuous_subscription"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent")
+    delivery_policy = relationship("DeliveryPolicy")
+
+    __table_args__ = (
+        Index("ix_continuous_subscription_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_subscription_instance", "tenant_id", "channel_type", "channel_instance_id"),
+    )
+
+
+class WakeEvent(Base):
+    """
+    Audit-style event emitted by a trigger and consumed by a continuous run.
+    Payload content is not stored inline in v0.7.0 A2; payload_ref points to an
+    opaque local file path or future blob key after upstream redaction.
+    """
+    __tablename__ = "wake_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    continuous_subscription_id = Column(Integer, ForeignKey("continuous_subscription.id", ondelete="SET NULL"), nullable=True, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=False)
+    occurred_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    dedupe_key = Column(String(512), nullable=False)
+    importance = Column(String(16), default="normal", nullable=False)  # low | normal | high
+    payload_ref = Column(String(512), nullable=True)
+    status = Column(String(16), default="pending", nullable=False)  # pending | claimed | processed | filtered | failed
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    continuous_agent = relationship("ContinuousAgent")
+    continuous_subscription = relationship("ContinuousSubscription")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "channel_instance_id", "dedupe_key", name="uq_wake_event_dedupe"),
+        Index("ix_wake_event_tenant_occurred", "tenant_id", "occurred_at"),
+        Index("ix_wake_event_continuous_agent", "continuous_agent_id", "occurred_at"),
+        Index("ix_wake_event_subscription", "continuous_subscription_id", "occurred_at"),
+    )
+
+
+class ContinuousRun(Base):
+    """
+    Execution history for a continuous-agent wake. It is retained with
+    RESTRICT tenant semantics for audit/incident review.
+    """
+    __tablename__ = "continuous_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    wake_event_ids = Column(JSON, nullable=True)
+    execution_mode = Column(String(16), nullable=True)
+    status = Column(String(16), default="queued", nullable=False)  # queued | running | succeeded | failed | cancelled | skipped
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    watcher_run_ref = Column(String(128), nullable=True)
+    memory_refs = Column(JSON, nullable=True)
+    run_threat_signals = Column(JSON, nullable=True)
+    outcome_state = Column(JSON, nullable=True)
+    agentic_scratchpad = Column(JSON, nullable=True)
+    run_type = Column(String(32), default="continuous", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent")
+
+    __table_args__ = (
+        Index("ix_continuous_run_tenant_status", "tenant_id", "status", "started_at"),
+        Index("ix_continuous_run_agent_started", "continuous_agent_id", "started_at"),
+    )
+
+
+class ChannelEventRule(Base):
+    """
+    Per-channel routing rule evaluated before default-agent fallback. Trigger
+    details remain per-type APIs in A2; this table is the generic channel rule
+    contract for later UI/adapter work.
+    """
+    __tablename__ = "channel_event_rule"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    criteria = Column(JSON, nullable=False, default=dict)
+    priority = Column(Integer, default=100, nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "channel_instance_id",
+            "priority",
+            name="uq_channel_event_rule_priority",
+        ),
+        Index("ix_channel_event_rule_instance", "tenant_id", "channel_type", "channel_instance_id", "is_active"),
+        Index("ix_channel_event_rule_agent", "agent_id"),
     )
 
 

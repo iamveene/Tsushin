@@ -1013,6 +1013,7 @@ class GmailSkill(BaseSkill):
             elif action == "send":
                 return await self._execute_send(
                     gmail_service,
+                    config=config,
                     to=recipients,
                     subject=subject_filter,
                     body=body,
@@ -1023,6 +1024,7 @@ class GmailSkill(BaseSkill):
             elif action == "reply":
                 return await self._execute_reply(
                     gmail_service,
+                    config=config,
                     body=body,
                     body_html=body_html,
                     message_id=message_id,
@@ -1034,6 +1036,7 @@ class GmailSkill(BaseSkill):
             elif action == "draft":
                 return await self._execute_draft(
                     gmail_service,
+                    config=config,
                     to=recipients,
                     subject=subject_filter,
                     body=body,
@@ -1220,10 +1223,75 @@ class GmailSkill(BaseSkill):
         capability = merged.get(capability_name, {})
         return capability.get("enabled", True)
 
+    async def _continuous_approval_gate(
+        self,
+        *,
+        config: Dict[str, Any],
+        action: str,
+        summary: str,
+    ) -> Optional[SkillResult]:
+        """Run Sentinel approval detection only for explicit continuous-agent contexts."""
+        if not self._db_session:
+            return None
+        try:
+            from services.continuous_agent_service import (
+                analyze_continuous_action_approval,
+                continuous_context_from_config,
+            )
+
+            context = continuous_context_from_config(config)
+            if not context:
+                return None
+        except Exception as exc:
+            logger.warning("Gmail continuous context lookup skipped: %s", exc)
+            return None
+
+        try:
+            result = await analyze_continuous_action_approval(
+                self._db_session,
+                tenant_id=context["tenant_id"],
+                agent_id=context.get("agent_id"),
+                sender_key=context.get("sender_key"),
+                action_text=f"Gmail {action}: {summary}",
+            )
+            if getattr(result, "is_threat_detected", False) and getattr(result, "action", None) == "blocked":
+                return SkillResult(
+                    success=False,
+                    output=(
+                        "Continuous-agent outbound action requires approval "
+                        f"before Gmail {action}: {result.threat_reason or 'approval gate triggered'}"
+                    ),
+                    metadata={
+                        "error": "continuous_agent_action_approval_required",
+                        "action": action,
+                        "sentinel_detection_type": getattr(
+                            result,
+                            "detection_type",
+                            "continuous_agent_action_approval",
+                        ),
+                        "threat_score": getattr(result, "threat_score", None),
+                    },
+                )
+        except Exception as exc:
+            logger.error("Gmail continuous approval gate failed closed: %s", exc)
+            return SkillResult(
+                success=False,
+                output=(
+                    "Continuous-agent outbound action could not be security-checked; "
+                    f"Gmail {action} was not sent."
+                ),
+                metadata={
+                    "error": "continuous_agent_action_approval_unavailable",
+                    "action": action,
+                },
+            )
+        return None
+
     async def _execute_send(
         self,
         gmail_service,
         *,
+        config: Dict[str, Any],
         to: Any,
         subject: Optional[str],
         body: str,
@@ -1239,6 +1307,14 @@ class GmailSkill(BaseSkill):
                 output="Send requires at least one recipient in 'to'.",
                 metadata={"error": "missing_recipients"}
             )
+
+        gated = await self._continuous_approval_gate(
+            config=config,
+            action="send",
+            summary=f"to={recipients}; subject={subject or '(No Subject)'}; body={body[:500]}",
+        )
+        if gated is not None:
+            return gated
 
         response = await gmail_service.send_message(
             to=recipients,
@@ -1271,6 +1347,7 @@ class GmailSkill(BaseSkill):
         self,
         gmail_service,
         *,
+        config: Dict[str, Any],
         to: Any,
         subject: Optional[str],
         body: str,
@@ -1286,6 +1363,14 @@ class GmailSkill(BaseSkill):
                 output="Draft creation requires at least one recipient in 'to'.",
                 metadata={"error": "missing_recipients"}
             )
+
+        gated = await self._continuous_approval_gate(
+            config=config,
+            action="draft",
+            summary=f"to={recipients}; subject={subject or '(No Subject)'}; body={body[:500]}",
+        )
+        if gated is not None:
+            return gated
 
         response = await gmail_service.create_draft(
             to=recipients,
@@ -1318,6 +1403,7 @@ class GmailSkill(BaseSkill):
         self,
         gmail_service,
         *,
+        config: Dict[str, Any],
         body: str,
         body_html: Optional[str],
         message_id: Optional[str],
@@ -1339,6 +1425,14 @@ class GmailSkill(BaseSkill):
                 output="Reply requires a message_id or a query that matches an email.",
                 metadata={"error": "missing_reply_target"}
             )
+
+        gated = await self._continuous_approval_gate(
+            config=config,
+            action="reply",
+            summary=f"message_id={target_message_id}; reply_all={reply_all}; body={body[:500]}",
+        )
+        if gated is not None:
+            return gated
 
         response = await gmail_service.reply_to_message(
             target_message_id,
