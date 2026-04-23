@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Track A2 — Continuous-Agent Control Plane backend contracts (2026-04-23)
+
+**Added:**
+- Alembic `0047_add_continuous_agent_models.py` for `delivery_policy`, `budget_policy`, `continuous_agent`, `continuous_subscription`, `wake_event`, `continuous_run`, plus managed `is_system_owned` flags on `custom_skill` and `flow_definition`.
+- Alembic `0050_add_channel_event_rule.py` for channel routing rules. `0047` revises current release head `0059`, and `0050` revises `0047` to avoid multi-heads while preserving Track A2's allocated IDs.
+- Read-only continuous-agent APIs: `GET /api/continuous-agents`, `/api/continuous-runs`, and `/api/wake-events` plus `{id}` detail endpoints. Pagination returns `items`, `total`, `limit`, `offset`.
+- Generic routing-rule API at `/api/channels/{channel_type}/{instance_id}/routing-rules` for conversational channels; `POST /api/channels/slack/{id}/routing-rules` is the Slack contract Track C can target.
+- `ContinuousBudgetLimiter` with `budget_kind` keying and exhaustion decisions (`pause`, `degrade_to_hybrid`, `notify_only`), plus `WatcherActivityService` events for `type=continuous_run`.
+
+**Changed:**
+- Gmail send/reply/draft now invokes Sentinel's `continuous_agent_action_approval` detection when the skill config carries explicit continuous-agent context.
+- `docs/internal/v0.7.0-fk-cascades.md` now records Phase 2 FK behavior, including `wake_event.tenant_id` and `continuous_run.tenant_id` as `RESTRICT`.
+
+**Contract notes:**
+- Continuous-agent write endpoints are intentionally deferred in this checkpoint.
+- `wake_event` stores only `payload_ref`; inline payload and payload-fetch APIs are not part of A2.
+- Trigger details remain per-type APIs (`/api/triggers/email`, `/api/triggers/webhook`) for now.
+- `continuous_run.wake_event_ids` is JSONB to match the ORM JSON list contract used by the control-plane APIs.
+
 ### Track A Phase 1 control plane — Default Agents + Email Triggers (2026-04-23)
 
 Phase 1's routing control plane is now implemented in the Track A worktree and ready for integrated validation/merge sequencing.

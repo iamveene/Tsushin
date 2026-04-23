@@ -36,8 +36,21 @@ class SlidingWindowRateLimiter:
         self._windows: dict[str, list[float]] = defaultdict(list)
         self._lock = Lock()
 
-    def allow(self, key: str, max_requests: int, window_seconds: int = 60) -> bool:
+    @staticmethod
+    def _scoped_key(key: str, budget_kind: Optional[str] = None) -> str:
+        if not budget_kind:
+            return key
+        return f"{key}:budget:{budget_kind}"
+
+    def allow(
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int = 60,
+        budget_kind: Optional[str] = None,
+    ) -> bool:
         """Check if a request is allowed within the rate limit."""
+        key = self._scoped_key(key, budget_kind)
         now = time.time()
         cutoff = now - window_seconds
 
@@ -51,8 +64,15 @@ class SlidingWindowRateLimiter:
             self._windows[key].append(now)
             return True
 
-    def remaining(self, key: str, max_requests: int, window_seconds: int = 60) -> int:
+    def remaining(
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int = 60,
+        budget_kind: Optional[str] = None,
+    ) -> int:
         """Get remaining requests in the current window."""
+        key = self._scoped_key(key, budget_kind)
         now = time.time()
         cutoff = now - window_seconds
 
@@ -66,8 +86,14 @@ class SlidingWindowRateLimiter:
                 return max(0, max_requests - len(self._windows[key]))
             return max_requests
 
-    def reset_time(self, key: str, window_seconds: int = 60) -> int:
+    def reset_time(
+        self,
+        key: str,
+        window_seconds: int = 60,
+        budget_kind: Optional[str] = None,
+    ) -> int:
         """Get the UTC epoch timestamp when the oldest request in the window expires."""
+        key = self._scoped_key(key, budget_kind)
         now = time.time()
         cutoff = now - window_seconds
 
