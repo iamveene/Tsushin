@@ -58,6 +58,8 @@ export interface AudioConfig {
   memLimit: string
   autoProvision: boolean
   setAsDefaultTTS: boolean
+  /** Provider-specific TTS model id (Gemini today). */
+  model?: string
 }
 
 export interface SkillsConfig {

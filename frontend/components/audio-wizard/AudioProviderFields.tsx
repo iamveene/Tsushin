@@ -20,11 +20,13 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
-import type { TTSInstance, TTSProviderInfo, TTSVoice } from '@/lib/client'
+import type { TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
   GEMINI_VOICES,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_DEFAULT_MODEL,
   LANGUAGES,
   MEM_LIMITS,
   type AudioProvider,
@@ -158,6 +160,9 @@ export interface AudioVoiceFieldsValue {
   format: string
   memLimit: string
   setAsDefaultTTS: boolean
+  /** Provider-specific model id. Today only Gemini exposes a model picker; for
+   *  other providers this is `undefined` and the dropdown stays hidden. */
+  model?: string
 }
 
 export interface AudioVoiceFieldsProps {
@@ -192,6 +197,7 @@ export function AudioVoiceFields({
   hideDefaultTTSOption,
 }: AudioVoiceFieldsProps) {
   const [liveVoices, setLiveVoices] = useState<Record<string, TTSVoice[]>>({})
+  const [liveModels, setLiveModels] = useState<Record<string, TTSModelInfo[]>>({})
   const [keyStatusByProvider, setKeyStatusByProvider] = useState<Record<string, boolean>>({})
 
   // One-shot load of the provider list so we know per-tenant credential status
@@ -222,6 +228,56 @@ export function AudioVoiceFields({
       .catch(() => { /* fall through to static fallback */ })
     return () => { cancelled = true }
   }, [value.provider, wantsTTS, liveVoices])
+
+  // Fetch the provider's model catalog (empty for providers without
+  // SUPPORTED_MODELS). When the call fails for Gemini, fall back to the
+  // static GEMINI_TTS_MODELS list so the picker still works offline.
+  useEffect(() => {
+    if (!wantsTTS) return
+    if (liveModels[value.provider]) return
+    let cancelled = false
+    api.getTTSProviderModels(value.provider)
+      .then(models => {
+        if (cancelled) return
+        setLiveModels(prev => ({ ...prev, [value.provider]: models }))
+      })
+      .catch(() => {
+        if (cancelled) return
+        if (value.provider === 'gemini') {
+          const fallback: TTSModelInfo[] = GEMINI_TTS_MODELS.map(m => ({
+            model_id: m.id,
+            label: m.label,
+            is_default: m.id === GEMINI_TTS_DEFAULT_MODEL,
+          }))
+          setLiveModels(prev => ({ ...prev, [value.provider]: fallback }))
+        } else {
+          setLiveModels(prev => ({ ...prev, [value.provider]: [] }))
+        }
+      })
+    return () => { cancelled = true }
+  }, [value.provider, wantsTTS, liveModels])
+
+  // When the provider exposes models and no model is selected yet, default to
+  // the provider's `is_default` entry (or the first one). Clears `model` when
+  // the provider doesn't expose any.
+  useEffect(() => {
+    if (!wantsTTS) return
+    const models = liveModels[value.provider]
+    if (!models) return
+    if (models.length === 0) {
+      if (value.model !== undefined) onChange({ model: undefined })
+      return
+    }
+    const ids = models.map(m => m.model_id)
+    if (!value.model || !ids.includes(value.model)) {
+      const def = models.find(m => m.is_default)?.model_id || models[0].model_id
+      onChange({ model: def })
+    }
+    // We intentionally leave `value` and `onChange` out of the deps to avoid
+    // re-running on every parent re-render — only when the model catalog or
+    // provider changes do we want to reconcile.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.provider, wantsTTS, liveModels])
 
   const availableVoices = useMemo(() => {
     const live = liveVoices[value.provider]
@@ -256,6 +312,21 @@ export function AudioVoiceFields({
 
       {wantsTTS && (
         <>
+          {(liveModels[value.provider] || []).length > 0 && (
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Model</label>
+              <select
+                value={value.model || ''}
+                onChange={(e) => onChange({ model: e.target.value })}
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+              >
+                {(liveModels[value.provider] || []).map(m => (
+                  <option key={m.model_id} value={m.model_id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs text-gray-400 mb-1">Voice</label>
             <select

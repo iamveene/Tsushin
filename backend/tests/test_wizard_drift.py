@@ -166,6 +166,125 @@ def test_tts_providers_registered_match_frontend_fallback():
         f"Update frontend/components/audio-wizard/defaults.ts."
     )
 
+    # Surface 2: AudioProviderFields.tsx — `FALLBACK_PROVIDER_CARDS` (cards
+    # rendered before the live /api/tts-providers fetch resolves) AND
+    # `PROVIDER_COPY` (marketing copy keyed by provider id). Both must contain
+    # every backend-registered provider so the offline / first-paint UX matches
+    # what the backend will serve a moment later.
+    fields_path = FRONTEND / "components" / "audio-wizard" / "AudioProviderFields.tsx"
+    assert fields_path.exists(), f"AudioProviderFields.tsx not found at {fields_path}"
+    fields_text = _read(fields_path)
+
+    fallback_block = re.search(
+        r"FALLBACK_PROVIDER_CARDS[^=]*=\s*\[(.*?)\n\]",
+        fields_text,
+        re.DOTALL,
+    )
+    assert fallback_block, "FALLBACK_PROVIDER_CARDS not found in AudioProviderFields.tsx"
+    fallback_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_block.group(1)))
+    missing_in_fallback = registered - fallback_ids
+    assert not missing_in_fallback, (
+        f"TTS providers registered in backend but missing from "
+        f"FALLBACK_PROVIDER_CARDS: {sorted(missing_in_fallback)}. "
+        f"Add a card entry in frontend/components/audio-wizard/AudioProviderFields.tsx."
+    )
+
+    copy_block = re.search(
+        r"PROVIDER_COPY[^=]*=\s*\{(.*?)\n\}",
+        fields_text,
+        re.DOTALL,
+    )
+    assert copy_block, "PROVIDER_COPY not found in AudioProviderFields.tsx"
+    copy_ids = set(re.findall(r"^\s*([a-z_]+):\s*\{", copy_block.group(1), re.MULTILINE))
+    missing_in_copy = registered - copy_ids
+    assert not missing_in_copy, (
+        f"TTS providers registered in backend but missing from "
+        f"PROVIDER_COPY: {sorted(missing_in_copy)}. "
+        f"Add a copy entry in frontend/components/audio-wizard/AudioProviderFields.tsx."
+    )
+
+    # Surface 3: VOICE_AGENT_DEFAULTS — system-prompt template per provider.
+    # If a provider can be picked it needs a default agent template, otherwise
+    # the AudioAgentsWizard New-Agent path can't seed sensible defaults.
+    defaults_block = re.search(
+        r"VOICE_AGENT_DEFAULTS[^=]*=\s*\{(.*?)\n\}",
+        text,
+        re.DOTALL,
+    )
+    assert defaults_block, "VOICE_AGENT_DEFAULTS not found in defaults.ts"
+    voice_agent_ids = set(re.findall(r"^\s*([a-z_]+):\s*\{", defaults_block.group(1), re.MULTILINE))
+    missing_in_voice_agent = registered - voice_agent_ids
+    assert not missing_in_voice_agent, (
+        f"TTS providers registered in backend but missing from "
+        f"VOICE_AGENT_DEFAULTS: {sorted(missing_in_voice_agent)}. "
+        f"Add a defaults entry in frontend/components/audio-wizard/defaults.ts."
+    )
+
+    # Surface 4: ProviderWizard's TTS_CLOUD + TTS_LOCAL. This is the Hub →
+    # Add Provider → modality=tts → hosting picker → vendor list. Historically
+    # this list missed OpenAI + Gemini because the registry exposed them but
+    # the wizard's hardcoded array only had ElevenLabs / Kokoro — that drift
+    # made tenants unable to add Gemini TTS via the standard provider flow
+    # despite the backend supporting it.
+    pw_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepVendorSelect.tsx"
+    assert pw_path.exists(), f"StepVendorSelect.tsx not found at {pw_path}"
+    pw_text = _read(pw_path)
+
+    tts_cloud_block = re.search(
+        r"TTS_CLOUD[^=]*=\s*\[(.*?)\n\]",
+        pw_text,
+        re.DOTALL,
+    )
+    assert tts_cloud_block, "TTS_CLOUD not found in StepVendorSelect.tsx"
+    tts_cloud_ids = set(re.findall(r"id:\s*'([^']+)'", tts_cloud_block.group(1)))
+
+    tts_local_block = re.search(
+        r"TTS_LOCAL[^=]*=\s*\[(.*?)\n\]",
+        pw_text,
+        re.DOTALL,
+    )
+    assert tts_local_block, "TTS_LOCAL not found in StepVendorSelect.tsx"
+    tts_local_ids = set(re.findall(r"id:\s*'([^']+)'", tts_local_block.group(1)))
+
+    pw_combined = tts_cloud_ids | tts_local_ids
+    missing_in_pw = registered - pw_combined
+    assert not missing_in_pw, (
+        f"TTS providers registered in backend but missing from ProviderWizard "
+        f"TTS_CLOUD + TTS_LOCAL: {sorted(missing_in_pw)}. "
+        f"Add the vendor card in "
+        f"frontend/components/provider-wizard/steps/StepVendorSelect.tsx."
+    )
+
+    # Surface 5: ProviderWizard's StepProgress save branch. Cloud TTS providers
+    # whose key is persisted via /api/api-keys (i.e. NOT Kokoro, which has its
+    # own TTSInstance path) must be enumerated in the save-branch condition,
+    # otherwise the wizard finalize step will silently fall through to the LLM
+    # /api/provider-instances path, which then 400s on missing available_models.
+    progress_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepProgress.tsx"
+    assert progress_path.exists(), f"StepProgress.tsx not found at {progress_path}"
+    progress_text = _read(progress_path)
+
+    # Look for the TTS-cloud branch condition. Format: a guard clause referencing
+    # `draft.modality === 'tts'` plus an OR-chain of `draft.vendor === '<id>'`.
+    save_branch = re.search(
+        r"draft\.modality\s*===\s*'tts'\s*&&\s*\(([^)]+)\)",
+        progress_text,
+    )
+    assert save_branch, (
+        "Could not locate the cloud-TTS save branch in StepProgress.tsx — "
+        "if you refactored the conditional shape, update this regex."
+    )
+    save_vendor_ids = set(re.findall(r"draft\.vendor\s*===\s*'([^']+)'", save_branch.group(1)))
+
+    cloud_tts = registered - {"kokoro"}  # Kokoro has its own TTSInstance path
+    missing_in_save = cloud_tts - save_vendor_ids
+    assert not missing_in_save, (
+        f"Cloud TTS providers in backend registry but missing from the cloud "
+        f"save branch in StepProgress.tsx: {sorted(missing_in_save)}. The "
+        f"save will silently fall through to the LLM provider-instances path "
+        f"and 400 on missing available_models. Add the vendor to the OR-chain."
+    )
+
 
 # ---------------------------------------------------------------------------
 # Guard 3 — PREDEFINED_MODELS single source of truth
@@ -650,6 +769,60 @@ def test_channels_wizard_fallback_matches_backend():
         f"and not on the extras allowlist ({sorted(allowed_extras)}): "
         f"{sorted(unexpected_extras)}. Either register them in "
         f"backend/channels/catalog.py or extend the allowlist in this test."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 10 — Gemini TTS model catalog drift
+# ---------------------------------------------------------------------------
+
+def test_gemini_tts_models_frontend_fallback_matches_backend():
+    """
+    GeminiTTSProvider.SUPPORTED_MODELS is the authoritative catalog of Gemini
+    TTS preview models. The frontend's offline fallback in
+    `frontend/components/audio-wizard/defaults.ts` (`GEMINI_TTS_MODELS`) must
+    list the same model_ids — otherwise a degraded /api/tts-providers/gemini/models
+    response will surface a different set than what the backend can actually
+    invoke, causing silent fallback to the default model on save.
+    """
+    from hub.providers.gemini_tts_provider import GeminiTTSProvider
+
+    backend_models = set(GeminiTTSProvider.SUPPORTED_MODELS.keys())
+    assert backend_models, "GeminiTTSProvider.SUPPORTED_MODELS is empty"
+    assert GeminiTTSProvider.DEFAULT_MODEL in backend_models, (
+        f"DEFAULT_MODEL='{GeminiTTSProvider.DEFAULT_MODEL}' is not in SUPPORTED_MODELS"
+    )
+
+    defaults_path = FRONTEND / "components" / "audio-wizard" / "defaults.ts"
+    assert defaults_path.exists(), f"defaults.ts not found at {defaults_path}"
+    text = _read(defaults_path)
+
+    block = re.search(
+        r"GEMINI_TTS_MODELS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert block, (
+        "GEMINI_TTS_MODELS array not found in defaults.ts. If you renamed it, "
+        "update this regex too."
+    )
+    frontend_models = set(re.findall(r"id:\s*'([^']+)'", block.group(1)))
+
+    assert backend_models == frontend_models, (
+        f"GEMINI_TTS_MODELS drift: backend SUPPORTED_MODELS={sorted(backend_models)}, "
+        f"frontend GEMINI_TTS_MODELS={sorted(frontend_models)}. "
+        f"Add/remove the matching entry in defaults.ts."
+    )
+
+    # Default-model constant in defaults.ts must match the backend default.
+    default_match = re.search(
+        r"GEMINI_TTS_DEFAULT_MODEL\s*=\s*'([^']+)'",
+        text,
+    )
+    assert default_match, "GEMINI_TTS_DEFAULT_MODEL constant missing in defaults.ts"
+    assert default_match.group(1) == GeminiTTSProvider.DEFAULT_MODEL, (
+        f"Default model drift: backend='{GeminiTTSProvider.DEFAULT_MODEL}', "
+        f"frontend='{default_match.group(1)}'."
     )
 
 

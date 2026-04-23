@@ -50,15 +50,17 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
         response_format: audio.format,
       })
     } else {
+      const cfg: Record<string, any> = {
+        provider: audio.provider,
+        voice: audio.voice,
+        language: audio.language,
+        speed: audio.speed,
+        response_format: audio.format,
+      }
+      if (audio.model) cfg.model = audio.model
       await api.updateAgentSkill(agentId, 'audio_tts', {
         is_enabled: true,
-        config: {
-          provider: audio.provider,
-          voice: audio.voice,
-          language: audio.language,
-          speed: audio.speed,
-          response_format: audio.format,
-        },
+        config: cfg,
       })
     }
   }

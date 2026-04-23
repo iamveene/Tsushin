@@ -63,19 +63,27 @@ export default function StepProgress() {
         createdInstanceId = result.id
         setProgress({ message: 'TTS container provisioning...' })
       }
-      // Branch 2: TTS ElevenLabs — legacy api_keys surface (/api/api-keys)
-      else if (draft.modality === 'tts' && draft.vendor === 'elevenlabs') {
+      // Branch 2: TTS cloud (ElevenLabs / OpenAI / Gemini) — legacy api_keys
+      // surface (/api/api-keys). The endpoint is upsert (create_or_update_api_key
+      // in routes_api_keys.py) so re-saving an existing OpenAI/Gemini key the
+      // user already added via the LLM/Image flow is non-destructive — it just
+      // refreshes the encrypted blob and bumps `updated_at`. ElevenLabs is
+      // TTS-only so for that vendor this is the sole save path.
+      else if (
+        draft.modality === 'tts' &&
+        (draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini')
+      ) {
         const res = await authenticatedFetch('/api/api-keys', {
           method: 'POST',
           body: JSON.stringify({
-            service: 'elevenlabs',
+            service: draft.vendor,
             api_key: draft.api_key,
             is_active: true,
           }),
         })
         if (!res.ok) {
           const txt = await res.text().catch(() => '')
-          throw new Error(`Failed to save ElevenLabs API key (${res.status}) ${txt}`)
+          throw new Error(`Failed to save ${draft.vendor} API key (${res.status}) ${txt}`)
         }
       }
       // Branch 3: LLM/Image cloud or Ollama local — /api/provider-instances
