@@ -1319,6 +1319,16 @@ export interface ChannelCatalogEntry {
   tenant_has_configured: boolean
 }
 
+export interface TriggerCatalogEntry {
+  id: string
+  display_name: string
+  description: string
+  requires_setup: boolean
+  setup_hint: string
+  icon_hint: string
+  tenant_has_configured: boolean
+}
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -3727,6 +3737,12 @@ export const api = {
     return res.json()
   },
 
+  async getTriggerCatalog(): Promise<TriggerCatalogEntry[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger catalog')
+    return res.json()
+  },
+
   async getAgentSkills(agentId: number): Promise<AgentSkill[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skills`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent skills')
@@ -4915,19 +4931,19 @@ export const api = {
 
   // v0.6.0: Webhook-as-a-Channel
   async listWebhookIntegrations(): Promise<WebhookIntegration[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`)
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integrations')
     return res.json()
   },
 
   async getWebhookIntegration(id: number): Promise<WebhookIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`)
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integration')
     return res.json()
   },
 
   async createWebhookIntegration(data: WebhookIntegrationCreate): Promise<WebhookIntegrationCreateResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4940,7 +4956,7 @@ export const api = {
   },
 
   async updateWebhookIntegration(id: number, data: WebhookIntegrationUpdate): Promise<WebhookIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4950,7 +4966,7 @@ export const api = {
   },
 
   async rotateWebhookSecret(id: number): Promise<WebhookSecretRotateResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}/rotate-secret`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}/rotate-secret`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to rotate webhook secret')
@@ -4958,7 +4974,7 @@ export const api = {
   },
 
   async deleteWebhookIntegration(id: number): Promise<{ status: string; id: number }> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
@@ -4972,7 +4988,7 @@ export const api = {
     const params = new URLSearchParams({ slug })
     if (typeof excludeId === 'number') params.set('exclude_id', String(excludeId))
     const res = await authenticatedFetch(
-      `${API_URL}/api/webhook-integrations/slug-available?${params.toString()}`
+      `${API_URL}/api/triggers/webhook/slug-available?${params.toString()}`
     )
     if (!res.ok) {
       return { available: false, reason: 'Unable to check availability' }

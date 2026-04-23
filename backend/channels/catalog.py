@@ -1,18 +1,4 @@
-"""
-Channel Catalog — single source of truth for channel metadata surfaced by the
-Agent Wizard (and any UI that needs to render the set of supported channels).
-
-Historically the channel list was hardcoded in
-``frontend/components/agent-wizard/steps/StepChannels.tsx``; adding a new
-backend channel required a parallel frontend edit, which drifted silently.
-This module + ``api.routes_channels`` give the frontend a live catalog to
-fetch from, while the frontend keeps a static fallback for offline mode.
-
-If you add a new channel adapter under ``backend/channels/<name>/``:
-  1. Add a new ``ChannelInfo`` entry below.
-  2. Update the fallback array in ``StepChannels.tsx``.
-  3. ``backend/tests/test_wizard_drift.py`` will assert the two stay in sync.
-"""
+"""Catalogs for conversational channels and event-driven triggers."""
 
 from __future__ import annotations
 
@@ -21,8 +7,8 @@ from typing import List
 
 
 @dataclass(frozen=True)
-class ChannelInfo:
-    """Wizard-facing metadata for a single channel."""
+class EntryPointInfo:
+    """Wizard-facing metadata for a single entry point."""
     id: str                 # Stable channel identifier (e.g. "whatsapp")
     display_name: str       # Human label for the wizard card
     description: str        # One-sentence summary
@@ -34,11 +20,9 @@ class ChannelInfo:
         return asdict(self)
 
 
-# Seeded with the same 6 channels the wizard renders today. Ordering matches
-# StepChannels.tsx so visual parity is preserved when the frontend falls back
-# to its local copy.
-CHANNEL_CATALOG: List[ChannelInfo] = [
-    ChannelInfo(
+# Ordering matches the frontend fallbacks to keep the visual layout stable.
+CHANNEL_CATALOG: List[EntryPointInfo] = [
+    EntryPointInfo(
         id="playground",
         display_name="Playground",
         description="Chat in the web playground (always recommended for testing).",
@@ -46,7 +30,7 @@ CHANNEL_CATALOG: List[ChannelInfo] = [
         setup_hint="Available out of the box — no configuration required.",
         icon_hint="playground",
     ),
-    ChannelInfo(
+    EntryPointInfo(
         id="whatsapp",
         display_name="WhatsApp",
         description="Route incoming WhatsApp DMs/groups to this agent.",
@@ -54,7 +38,7 @@ CHANNEL_CATALOG: List[ChannelInfo] = [
         setup_hint="Pair via WhatsApp Setup Wizard under Settings -> Channels.",
         icon_hint="whatsapp",
     ),
-    ChannelInfo(
+    EntryPointInfo(
         id="telegram",
         display_name="Telegram",
         description="Route Telegram messages to this agent.",
@@ -62,7 +46,7 @@ CHANNEL_CATALOG: List[ChannelInfo] = [
         setup_hint="Add a bot token under Settings -> Channels -> Telegram.",
         icon_hint="telegram",
     ),
-    ChannelInfo(
+    EntryPointInfo(
         id="slack",
         display_name="Slack",
         description="Respond to Slack messages and mentions.",
@@ -70,7 +54,7 @@ CHANNEL_CATALOG: List[ChannelInfo] = [
         setup_hint="Install the Slack app from Settings -> Channels -> Slack.",
         icon_hint="slack",
     ),
-    ChannelInfo(
+    EntryPointInfo(
         id="discord",
         display_name="Discord",
         description="Respond to Discord messages and mentions.",
@@ -78,17 +62,25 @@ CHANNEL_CATALOG: List[ChannelInfo] = [
         setup_hint="Connect a Discord bot under Settings -> Channels -> Discord.",
         icon_hint="discord",
     ),
-    ChannelInfo(
+]
+
+TRIGGER_CATALOG: List[EntryPointInfo] = [
+    EntryPointInfo(
         id="webhook",
         display_name="Webhook",
-        description="Expose a webhook endpoint for custom integrations.",
+        description="Receive signed external events and optionally call back a customer system.",
         requires_setup=True,
-        setup_hint="Create a webhook under Settings -> Channels -> Webhooks.",
+        setup_hint="Create a webhook trigger under Hub -> Communication -> Triggers.",
         icon_hint="webhook",
     ),
 ]
 
 
-def get_channel_catalog() -> List[ChannelInfo]:
+def get_channel_catalog() -> List[EntryPointInfo]:
     """Return the static channel catalog (stable ordering)."""
     return list(CHANNEL_CATALOG)
+
+
+def get_trigger_catalog() -> List[EntryPointInfo]:
+    """Return the static trigger catalog (stable ordering)."""
+    return list(TRIGGER_CATALOG)

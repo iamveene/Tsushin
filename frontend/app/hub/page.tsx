@@ -2580,9 +2580,6 @@ export default function HubPage() {
       case 'discord':
         setShowDiscordSetupModal(true)
         break
-      case 'webhook':
-        setShowWebhookSetupModal(true)
-        break
       case 'gmail':
         // Inbound email channel uses the same Google OAuth as Productivity Gmail.
         handleGmailConnect()
@@ -3776,8 +3773,9 @@ export default function HubPage() {
             {/* ==================== COMMUNICATION TAB ==================== */}
             {/* v0.7.0 rework — single "+ Add Channel" launcher opens
                 ChannelsWizard, which dispatches to the existing per-channel
-                setup modal (WhatsApp / Telegram / Slack / Discord / Webhook /
-                Gmail-inbound). Per-channel sections are hidden when they
+                setup modal (WhatsApp / Telegram / Slack / Discord /
+                Gmail-inbound). Webhook now lives in the trigger section below.
+                Per-channel sections are hidden when they
                 contain zero instances so empty shells don't dominate the tab.
                 The per-section "+ Create X" button inside each section (shown
                 only when at least one instance already exists) lets users add
@@ -3814,7 +3812,7 @@ export default function HubPage() {
                     </div>
                     <h3 className="text-white font-semibold mb-1">No channels configured yet</h3>
                     <p className="text-xs text-tsushin-slate mb-4 max-w-md mx-auto">
-                      Connect WhatsApp, Telegram, Slack, Discord, Webhooks, or a Gmail inbox so users can reach your agents on the platforms they already use.
+                      Connect WhatsApp, Telegram, Slack, Discord, or a Gmail inbox so users can reach your agents on the platforms they already use.
                     </p>
                     {canWriteHub && (
                       <button
@@ -4375,19 +4373,24 @@ export default function HubPage() {
                   <PublicBaseUrlCard canEdit={canEditSettings} />
                 )}
 
-                {/* v0.6.0: Webhook-as-a-Channel Integrations — v0.7.0: hidden when empty. */}
-                {webhookIntegrations.length > 0 && (
+                {/* Webhook trigger section remains visible so the trigger path
+                    is still reachable after webhook leaves the channel wizard. */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                      <WebhookIcon size={18} className="text-cyan-400" /> Webhook Integrations
-                    </h3>
+                    <div>
+                      <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                        <WebhookIcon size={18} className="text-cyan-400" /> Webhook Triggers
+                      </h3>
+                      <p className="text-xs text-tsushin-slate mt-1">
+                        Signed external events that can wake agents or continuous flows.
+                      </p>
+                    </div>
                     {canWriteHub && (
                       <button
                         onClick={() => setShowWebhookSetupModal(true)}
                         className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
                       >
-                        + New Webhook
+                        + New Webhook Trigger
                       </button>
                     )}
                   </div>
@@ -4397,16 +4400,16 @@ export default function HubPage() {
                       <div className="empty-state-icon">
                         <WebhookIcon size={36} className="text-cyan-400" />
                       </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">No Webhook Integrations</h3>
+                      <h3 className="text-lg font-semibold text-white mb-2">No Webhook Triggers</h3>
                       <p className="text-tsushin-slate mb-4">
-                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhooks
+                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhook triggers
                       </p>
                       {canWriteHub && (
                         <button
                           onClick={() => setShowWebhookSetupModal(true)}
                           className="btn-primary"
                         >
-                          Create Webhook
+                          Create Webhook Trigger
                         </button>
                       )}
                     </div>
@@ -4516,7 +4519,6 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
-                )}
 
                 {/* Gmail Integration — v0.7.0: hidden when empty; dashed
                     "Add Another Gmail" placeholder removed. Users add Gmail
