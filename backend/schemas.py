@@ -36,6 +36,8 @@ class ConfigResponse(BaseModel):
     ollama_api_key: Optional[str]
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: float
+    platform_min_agentic_rounds: Optional[int] = None
+    platform_max_agentic_rounds: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -73,6 +75,8 @@ class ConfigUpdate(BaseModel):
     ollama_api_key: Optional[str] = None
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: Optional[float] = None
+    platform_min_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    platform_max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
 
     @field_validator('ollama_base_url')
     @classmethod

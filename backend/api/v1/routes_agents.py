@@ -39,6 +39,11 @@ class AgentSkillInfo(BaseModel):
     skill_type: str
     is_enabled: bool
     config: Optional[dict] = None
+    auto_inject_results: Optional[bool] = None
+    skip_ai_on_data_fetch: Optional[bool] = None
+    max_result_bytes: Optional[int] = None
+    max_results_retained: Optional[int] = None
+    max_turns_lookback: Optional[int] = None
 
 
 class PublicAgentPersona(BaseModel):
@@ -83,6 +88,8 @@ class PublicAgentDetailResponse(PublicAgentSummary):
     semantic_search_results: Optional[int] = None
     semantic_similarity_threshold: Optional[float] = None
     response_template: Optional[str] = None
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
     contact_id: int
     tenant_id: str
     sandboxed_tool_ids: List[int] = []
@@ -108,6 +115,8 @@ class AgentCreateRequest(BaseModel):
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: bool = True
@@ -171,6 +180,8 @@ class AgentUpdateRequest(BaseModel):
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: Optional[bool] = None
@@ -310,6 +321,8 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
         "semantic_search_results": agent.semantic_search_results,
         "semantic_similarity_threshold": agent.semantic_similarity_threshold,
         "response_template": agent.response_template,
+        "max_agentic_rounds": agent.max_agentic_rounds,
+        "max_agentic_loop_bytes": agent.max_agentic_loop_bytes,
         "contact_id": agent.contact_id,
         "tenant_id": agent.tenant_id,
     })
@@ -325,7 +338,16 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
     # Add skill details
     skills = db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).all()
     base["skills_detail"] = [
-        {"skill_type": s.skill_type, "is_enabled": s.is_enabled, "config": s.config}
+        {
+            "skill_type": s.skill_type,
+            "is_enabled": s.is_enabled,
+            "config": s.config,
+            "auto_inject_results": s.auto_inject_results,
+            "skip_ai_on_data_fetch": s.skip_ai_on_data_fetch,
+            "max_result_bytes": s.max_result_bytes,
+            "max_results_retained": s.max_results_retained,
+            "max_turns_lookback": s.max_turns_lookback,
+        }
         for s in skills
     ]
 
@@ -486,6 +508,8 @@ async def create_agent(
         avatar=request.avatar,
         memory_size=request.memory_size,
         memory_isolation_mode=request.memory_isolation_mode or "isolated",
+        max_agentic_rounds=request.max_agentic_rounds,
+        max_agentic_loop_bytes=request.max_agentic_loop_bytes,
         trigger_dm_enabled=request.trigger_dm_enabled,
         enable_semantic_search=request.enable_semantic_search if request.enable_semantic_search is not None else True,
         is_active=request.is_active,
