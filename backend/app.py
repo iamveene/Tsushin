@@ -60,6 +60,8 @@ from api.routes_memory import router as memory_router, set_engine as set_memory_
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
 from api.routes_channels import router as channels_router
 from api.routes_triggers import router as triggers_router
+from api.routes_channel_event_rules import router as channel_event_rules_router
+from api.routes_continuous import router as continuous_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -1308,6 +1310,8 @@ app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
 app.include_router(triggers_router)  # Trigger catalog (/api/triggers)
+app.include_router(channel_event_rules_router)  # Channel routing rules (/api/channels/{type}/{id}/routing-rules)
+app.include_router(continuous_router)  # Continuous-agent read APIs (/api/continuous-*)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
