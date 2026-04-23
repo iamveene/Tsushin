@@ -216,7 +216,12 @@ export default function StepTestAndModels() {
       </div>
       )}
 
-      {/* Default instance */}
+      {/* Default instance — only meaningful for paths that create a real
+          instance row (ProviderInstance for LLM/Image, TTSInstance for Kokoro).
+          Cloud TTS via api_keys (ElevenLabs / OpenAI / Gemini) has at most one
+          api_key per service per tenant, so the concept of "default" doesn't
+          apply — hide the toggle. */}
+      {!(isTTS && (vendor === 'elevenlabs' || vendor === 'openai' || vendor === 'gemini')) && (
       <label className="flex items-center gap-3 cursor-pointer p-3 bg-tsushin-ink rounded-lg border border-tsushin-border">
         <input
           type="checkbox"
@@ -229,6 +234,7 @@ export default function StepTestAndModels() {
           <div className="text-xs text-tsushin-slate">Agents that reference this vendor without a specific instance will use this one.</div>
         </div>
       </label>
+      )}
     </div>
   )
 }
