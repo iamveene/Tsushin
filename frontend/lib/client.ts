@@ -1332,6 +1332,12 @@ export interface AgentKnowledge {
   error_message?: string
   upload_date: string
   processed_date?: string
+  tags?: string[]
+}
+
+export interface AgentKnowledgeUpdate {
+  document_name?: string
+  tags?: string[]
 }
 
 export interface KnowledgeChunk {
@@ -3885,6 +3891,16 @@ export const api = {
       body: formData,
     })
     if (!res.ok) await handleApiError(res, 'Failed to upload knowledge document')
+    return res.json()
+  },
+
+  async updateKnowledgeDocument(agentId: number, docId: number, patch: AgentKnowledgeUpdate): Promise<AgentKnowledge> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update knowledge document')
     return res.json()
   },
 

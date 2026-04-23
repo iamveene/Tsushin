@@ -1144,9 +1144,12 @@ Additional endpoints (`routes_knowledge_base.py`):
 - `GET /agents/{id}/knowledge-base` — list documents
 - `GET /agents/{id}/knowledge-base/stats` — stats
 - `GET /agents/{id}/knowledge-base/{knowledge_id}` — detail
+- `PATCH /agents/{id}/knowledge-base/{knowledge_id}` — rename document and update lightweight tags (stored without a DB migration)
 - `GET /agents/{id}/knowledge-base/{knowledge_id}/chunks` — chunks
 - `POST /agents/{id}/knowledge-base/search` — semantic search over KB
 - `POST /agents/{id}/knowledge-base/{knowledge_id}/reprocess` — reprocess
+
+Knowledge-document tags are normalized to lowercase, deduplicated, and stored as sidecar metadata beside the uploaded file so existing databases do not need a schema change just to support document organization.
 
 ### 10.3 OKG (Ontology Knowledge Graph)
 

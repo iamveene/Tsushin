@@ -14,7 +14,7 @@ import filetype as ft
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models import AgentKnowledge, KnowledgeChunk, Agent
 from models_rbac import User
@@ -95,6 +95,16 @@ def get_db():
         db.close()
 
 
+def _verify_agent_access(agent_id: int, current_user: User, db: Session) -> Agent:
+    """Resolve an agent and enforce tenant ownership for knowledge operations."""
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
 # Pydantic Models
 class KnowledgeResponse(BaseModel):
     id: int
@@ -107,12 +117,13 @@ class KnowledgeResponse(BaseModel):
     error_message: str | None
     upload_date: str
     processed_date: str | None
+    tags: List[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
 
     @classmethod
-    def from_orm(cls, obj):
+    def from_record(cls, obj, tags: List[str] | None = None):
         """Custom ORM converter to handle datetime serialization."""
         data = {
             "id": obj.id,
@@ -124,9 +135,15 @@ class KnowledgeResponse(BaseModel):
             "status": obj.status,
             "error_message": obj.error_message,
             "upload_date": obj.upload_date.isoformat() if obj.upload_date else None,
-            "processed_date": obj.processed_date.isoformat() if obj.processed_date else None
+            "processed_date": obj.processed_date.isoformat() if obj.processed_date else None,
+            "tags": tags or [],
         }
         return cls(**data)
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    document_name: str | None = Field(default=None, min_length=1, max_length=255)
+    tags: List[str] | None = None
 
 
 class KnowledgeChunkResponse(BaseModel):
@@ -176,12 +193,7 @@ async def upload_knowledge(
     The document will be processed asynchronously in the background.
     """
     # Verify agent exists and user has access (same tenant or global admin)
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     # Sanitize filename to prevent path traversal attacks
     safe_filename = secure_filename(file.filename or "document")
@@ -276,7 +288,7 @@ async def upload_knowledge(
         except Exception as e:
             logger.warning(f"Error deleting temp file: {e}")
 
-        return KnowledgeResponse.from_orm(knowledge)
+        return KnowledgeResponse.from_record(knowledge, tags=service.get_document_tags(knowledge))
 
     except HTTPException:
         raise
@@ -293,17 +305,12 @@ def list_knowledge(
     _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all knowledge documents for an agent (requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     knowledge_list = service.get_agent_knowledge(agent_id)
 
-    return [KnowledgeResponse.from_orm(k) for k in knowledge_list]
+    return [KnowledgeResponse.from_record(k, tags=service.get_document_tags(k)) for k in knowledge_list]
 
 
 @router.get("/agents/{agent_id}/knowledge-base/stats")
@@ -314,12 +321,7 @@ def get_knowledge_stats(
     _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get statistics about agent's knowledge base (requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     return service.get_knowledge_stats(agent_id)
@@ -334,12 +336,7 @@ def get_knowledge_detail(
     _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get details of a specific knowledge document (requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -350,7 +347,40 @@ def get_knowledge_detail(
     if knowledge.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    return KnowledgeResponse.from_orm(knowledge)
+    return KnowledgeResponse.from_record(knowledge, tags=service.get_document_tags(knowledge))
+
+
+@router.patch("/agents/{agent_id}/knowledge-base/{knowledge_id}", response_model=KnowledgeResponse)
+def update_knowledge_detail(
+    agent_id: int,
+    knowledge_id: int,
+    request: KnowledgeUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required),
+    _perm: None = Depends(require_permission("knowledge.write")),
+):
+    """Rename a knowledge document and/or update its tags."""
+    _verify_agent_access(agent_id, current_user, db)
+
+    service = KnowledgeService(db)
+    knowledge = service.get_knowledge_by_id(knowledge_id)
+
+    if not knowledge or knowledge.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Knowledge not found")
+
+    try:
+        updated = service.update_document(
+            knowledge_id=knowledge_id,
+            document_name=request.document_name,
+            tags=request.tags,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Knowledge not found")
+
+    return KnowledgeResponse.from_record(updated, tags=service.get_document_tags(updated))
 
 
 @router.get("/agents/{agent_id}/knowledge-base/{knowledge_id}/chunks", response_model=List[KnowledgeChunkResponse])
@@ -362,12 +392,7 @@ def get_knowledge_chunks(
     _perm: None = Depends(require_permission("knowledge.read")),
 ):
     """Get all chunks for a knowledge document (requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -391,12 +416,7 @@ def delete_knowledge(
     _perm: None = Depends(require_permission("knowledge.delete")),
 ):
     """Delete a knowledge document and all its chunks (requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -428,12 +448,7 @@ async def search_knowledge(
 
     Returns relevant chunks ranked by similarity.
     """
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     results = await service.search_knowledge(
@@ -456,12 +471,7 @@ def reprocess_knowledge(
     _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Reprocess a knowledge document (re-chunk and re-embed, requires authentication)."""
-    # Verify agent exists and user has access
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _verify_agent_access(agent_id, current_user, db)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
