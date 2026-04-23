@@ -4,10 +4,12 @@ Manages agent knowledge base including document upload, processing, and retrieva
 """
 
 import logging
+import json
 import os
+import re
 import shutil
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,55 @@ import chromadb
 from chromadb.config import Settings
 
 logger = logging.getLogger(__name__)
+
+_DOCUMENT_METADATA_SUFFIX = ".meta.json"
+_MAX_DOCUMENT_NAME_LENGTH = 255
+_MAX_DOCUMENT_TAGS = 12
+_MAX_DOCUMENT_TAG_LENGTH = 48
+
+
+def sanitize_document_name(document_name: str) -> str:
+    """Normalize a user-facing document name without changing the stored file path."""
+    cleaned = (document_name or "").strip()
+    cleaned = cleaned.replace("\x00", " ")
+    cleaned = re.sub(r"[\\/]+", " ", cleaned)
+    cleaned = re.sub(r"[\r\n\t]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.lstrip(". ").strip()
+
+    if not cleaned:
+        raise ValueError("Document name cannot be empty")
+
+    if len(cleaned) > _MAX_DOCUMENT_NAME_LENGTH:
+        cleaned = cleaned[:_MAX_DOCUMENT_NAME_LENGTH].rstrip()
+
+    return cleaned
+
+
+def normalize_document_tags(tags: Optional[List[str]]) -> List[str]:
+    """Normalize free-form document tags into a stable, deduplicated list."""
+    if not tags:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+
+    for raw_tag in tags:
+        if not isinstance(raw_tag, str):
+            continue
+        tag = re.sub(r"\s+", " ", raw_tag.strip().lower())
+        if not tag:
+            continue
+        if len(tag) > _MAX_DOCUMENT_TAG_LENGTH:
+            tag = tag[:_MAX_DOCUMENT_TAG_LENGTH].rstrip()
+        if tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+        if len(normalized) >= _MAX_DOCUMENT_TAGS:
+            break
+
+    return normalized
 
 
 class KnowledgeService:
@@ -48,6 +99,77 @@ class KnowledgeService:
         # Storage directory for uploaded files
         self.storage_dir = Path("./data/knowledge")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _metadata_path(self, knowledge: AgentKnowledge) -> Path:
+        return Path(f"{knowledge.file_path}{_DOCUMENT_METADATA_SUFFIX}")
+
+    def _read_document_metadata(self, knowledge: AgentKnowledge) -> Dict[str, Any]:
+        metadata_path = self._metadata_path(knowledge)
+        if not metadata_path.exists():
+            return {}
+
+        try:
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.warning(
+                "Failed to read knowledge metadata for knowledge_id=%s: %s",
+                knowledge.id,
+                exc,
+            )
+            return {}
+
+    def _write_document_metadata(self, knowledge: AgentKnowledge, metadata: Dict[str, Any]) -> None:
+        metadata_path = self._metadata_path(knowledge)
+        payload = dict(metadata or {})
+        payload["tags"] = normalize_document_tags(payload.get("tags"))
+
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        with metadata_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+
+    def get_document_tags(self, knowledge: AgentKnowledge) -> List[str]:
+        return normalize_document_tags(self._read_document_metadata(knowledge).get("tags"))
+
+    def attach_document_metadata(self, knowledge: AgentKnowledge) -> AgentKnowledge:
+        setattr(knowledge, "tags", self.get_document_tags(knowledge))
+        return knowledge
+
+    def update_document(
+        self,
+        knowledge_id: int,
+        *,
+        document_name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Optional[AgentKnowledge]:
+        """Update the editable document metadata for an AgentKnowledge record."""
+        knowledge = self.db.query(AgentKnowledge).get(knowledge_id)
+        if not knowledge:
+            return None
+
+        changed = False
+
+        if document_name is not None:
+            cleaned_name = sanitize_document_name(document_name)
+            if cleaned_name != knowledge.document_name:
+                knowledge.document_name = cleaned_name
+                changed = True
+
+        metadata = self._read_document_metadata(knowledge)
+        if tags is not None:
+            normalized_tags = normalize_document_tags(tags)
+            if normalized_tags != normalize_document_tags(metadata.get("tags")):
+                metadata["tags"] = normalized_tags
+                self._write_document_metadata(knowledge, metadata)
+                changed = True
+
+        if changed:
+            knowledge.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(knowledge)
+
+        return self.attach_document_metadata(knowledge)
 
     def upload_document(
         self,
@@ -99,6 +221,7 @@ class KnowledgeService:
             self.db.add(knowledge)
             self.db.commit()
             self.db.refresh(knowledge)
+            self._write_document_metadata(knowledge, {"tags": []})
 
             logger.info(f"Document uploaded: {document_name} (ID: {knowledge.id})")
             return knowledge
@@ -353,6 +476,13 @@ class KnowledgeService:
                     file_path.unlink()
             except Exception as e:
                 logger.warning(f"Error deleting file {knowledge.file_path}: {e}")
+
+            try:
+                metadata_path = self._metadata_path(knowledge)
+                if metadata_path.exists():
+                    metadata_path.unlink()
+            except Exception as e:
+                logger.warning(f"Error deleting document metadata for knowledge {knowledge_id}: {e}")
 
             logger.info(f"Knowledge deleted: {knowledge.document_name} (ID: {knowledge_id})")
             return True

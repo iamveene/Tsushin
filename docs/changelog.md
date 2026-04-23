@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Feat — Agent knowledge documents can be renamed and tagged without a schema migration (2026-04-23)
+
+Track E's first reviewable checkpoint adds lightweight metadata editing for per-agent knowledge documents without consuming migration slot `0055`.
+
+**Changed:**
+- `backend/api/routes_knowledge_base.py` now returns `tags` on knowledge-document reads and exposes `PATCH /api/agents/{id}/knowledge-base/{knowledge_id}` for renaming a document and updating its tags.
+- `backend/agent/knowledge/knowledge_service.py` persists document tags in a sidecar metadata file next to the uploaded knowledge document, normalizes user-entered tags, and keeps rename operations limited to the stored `document_name` without moving the underlying file path.
+- `frontend/components/AgentKnowledgeManager.tsx` adds an Edit flow so tenant users can rename a document and manage comma/newline-separated tags directly from the agent knowledge screen.
+- `frontend/lib/client.ts` now models `tags` on `AgentKnowledge` and provides an `updateKnowledgeDocument()` helper for the new PATCH route.
+
+**Validated:**
+- Added focused backend coverage in `backend/tests/test_agent_knowledge_metadata.py` for name sanitization, tag normalization, sidecar metadata persistence, and missing-metadata fallback behavior.
+
 ### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
 
 Phase 0 of v0.7.0 now has the serial foundation needed before release-track worktrees fan out.
