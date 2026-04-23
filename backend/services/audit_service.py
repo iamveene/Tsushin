@@ -292,6 +292,15 @@ class TenantAuditActions:
     AGENT_COMM_PERMISSION_UPDATE = "agent_comm.permission.update"
     AGENT_COMM_PERMISSION_DELETE = "agent_comm.permission.delete"
 
+    # Shell / Beacon
+    SHELL_COMMAND_QUEUED = "shell.command_queued"
+    SHELL_COMMAND_BLOCKED = "shell.command_blocked"
+    SHELL_COMMAND_PENDING_APPROVAL = "shell.command_pending_approval"
+    SHELL_APPROVAL_REQUESTED = "shell.approval_requested"
+    SHELL_APPROVED = "shell.approved"
+    SHELL_REJECTED = "shell.rejected"
+    SHELL_EXPIRED = "shell.expired"
+
 
 class TenantAuditService:
     """Service for tenant-scoped audit event recording and querying."""

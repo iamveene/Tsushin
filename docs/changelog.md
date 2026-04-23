@@ -29,6 +29,16 @@ Phase 1's routing control plane is now implemented in the Track A worktree and r
 - `./node_modules/.bin/eslint app/settings/default-agents/page.tsx components/triggers/TriggerWizard.tsx components/triggers/EmailTriggerWizard.tsx components/integrations/ChannelsWizard.tsx --max-warnings 0` -> clean
 - `git diff --check` -> clean
 
+### Track E — audit-log hardening + shell/beacon throttles (2026-04-23)
+
+- Tightened tenant audit filtering in `backend/api/routes_audit.py` so date-only `from_date` / `to_date` inputs expand to whole-day bounds and inverted ranges fail fast with `400` instead of silently dropping same-day events after midnight.
+- Added shell audit action constants and fixed `backend/services/shell_approval_service.py` to write real tenant-scoped `AuditEvent` rows for approval requested / approved / rejected / expired transitions; the old path imported a non-existent helper and only fell back to logger output.
+- Closed the Shell Command Center REST bypass in `backend/api/routes_shell.py`: direct `POST /api/shell/commands/{shell_id}` now enforces the shared per-command rate limiter before security-pattern checks, persists blocked attempts for auditability, emits tenant audit events for queued / blocked / pending-approval commands, and returns `429` with `Retry-After: 60` on command bursts.
+- Added per-beacon throttles on the Shell Beacon HTTP endpoints in `backend/api/routes_shell.py`: `/register`, `/checkin`, `/result`, `/beacon/version`, and `/beacon/download` now use bounded in-memory rate limits keyed by beacon + action, with check-in / result caps derived from `poll_interval` so noisy or looping beacons cannot spam the backend indefinitely. Session-authenticated beacon downloads are also capped per user.
+- Fixed `POST /api/shell/approvals/expire-old` to expire only the current tenant's stale approvals instead of sweeping pending approvals across tenants.
+- Hardened the audit UI in `frontend/app/settings/audit-logs/page.tsx` and `frontend/components/rbac/AuditLogEntry.tsx`: Shell is now a first-class audit/syslog category with dedicated iconography, CSV export is only shown to `audit.export`, and export failures surface to the user instead of failing silently.
+- Added focused regression coverage in `backend/tests/test_track_e_shell_audit_hardening.py` for audit date bounds, beacon-rate math/enforcement, the REST shell 429 audit path, tenant-scoped approval expiry, and shell-approval actor resolution.
+
 ### Wave 1 checkpoints — Track A/F foundation + Track G Gmail send (2026-04-23)
 
 Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than waiting for every downstream phase to finish.
