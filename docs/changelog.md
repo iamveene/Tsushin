@@ -39,6 +39,24 @@ Phase 1's routing control plane is now implemented in the Track A worktree and r
 - Hardened the audit UI in `frontend/app/settings/audit-logs/page.tsx` and `frontend/components/rbac/AuditLogEntry.tsx`: Shell is now a first-class audit/syslog category with dedicated iconography, CSV export is only shown to `audit.export`, and export failures surface to the user instead of failing silently.
 - Added focused regression coverage in `backend/tests/test_track_e_shell_audit_hardening.py` for audit date bounds, beacon-rate math/enforcement, the REST shell 429 audit path, tenant-scoped approval expiry, and shell-approval actor resolution.
 
+### Fix — Gmail draft capability now tracks `gmail.compose`, and the live gate exposes incomplete outbound upgrades (2026-04-23)
+
+Track G's Phase 3.1 exit proof against the dedicated Gmail fixture account surfaced a real scope mismatch: `users.messages.send` and `reply_to_message()` succeeded with the current `gmail.send`-scoped integration, but `users.drafts.create` returned `403 Forbidden` because Gmail draft creation requires `gmail.compose`, `gmail.modify`, or `mail.google.com/` ([users.drafts.create](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create), [users.messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [Choose Gmail API scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)).
+
+**Changed:**
+- `backend/hub/google/gmail_service.py` now distinguishes send-compatible scopes from draft-compatible scopes. `send_message()` / `reply_to_message()` accept any Gmail scope that Google documents for `users.messages.send`, while `create_draft()` now fails fast with an explicit `gmail.compose` reauthorization error instead of surfacing Gmail's raw 403 after the request has already gone out.
+- `backend/api/routes_google.py` now requests both `gmail.send` and `gmail.compose` when `include_send_scope=true` is used, and Gmail integration list responses expose `can_send` and `can_draft` separately so UI flows can distinguish "send/reply only" from "full send + draft".
+- `frontend/components/integrations/GmailSetupWizard.tsx` now advertises the full outbound scope set (`gmail.readonly + gmail.send + gmail.compose`) and labels legacy integrations accurately: send/reply can be enabled before drafts are.
+- `backend/services/email_command_service.py` now reports outbound send/reply vs. draft readiness separately in `/email info`.
+- Added regression coverage in `backend/tests/test_gmail_send_phase3_checkpoint.py` for compose-compatible send and draft-scope enforcement, plus an opt-in root-only live gate in `backend/tests/test_gmail_send_phase3_live_gate.py` that is skipped by default and fails if root runs it before the fixture has a draft-compatible scope.
+
+**Validated:**
+- Direct live `GmailService.send_message()` against integration `1` succeeded and was discoverable via `in:sent`.
+- Direct live `GmailService.reply_to_message()` succeeded and the live Gmail thread reached 2 messages.
+- Live `GmailSkill.execute_tool({"action":"send", ...})` succeeded and the sent mail was discoverable via `in:sent`.
+- Direct live `GmailService.create_draft()` is still blocked on the current fixture account because that integration has `gmail.send` but not `gmail.compose`; the new behavior now surfaces that as an explicit permission error instead of a downstream 403.
+- Full Phase 3.1 completion is not claimed here: root must re-authorize the fixture with `gmail.compose` or a broader Gmail write scope, then run the opt-in live gate and optional full API/agent-chat scaffold.
+
 ### Wave 1 checkpoints — Track A/F foundation + Track G Gmail send (2026-04-23)
 
 Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than waiting for every downstream phase to finish.
@@ -57,7 +75,7 @@ Wave 1 has started landing on `release/0.7.0` in safe checkpoints rather than wa
 
 **Track G Gmail-send checkpoint merged:**
 - Extended `backend/hub/google/gmail_service.py` with `send_message(...)`, `reply_to_message(...)`, and `create_draft(...)`, and threaded those capabilities through `backend/services/email_command_service.py` plus `backend/agent/skills/gmail_skill.py` so outbound Gmail actions are first-class tool calls instead of read-only placeholders.
-- Tightened the Gmail OAuth contract so outbound actions fail closed unless the integration has the `gmail.send` scope, and updated the Hub/API reauthorization surfaces to request `include_send_scope=true` when a tenant upgrades an older read-only Gmail integration.
+- Tightened the Gmail OAuth contract so outbound send/reply actions fail closed unless the integration has a Gmail send-compatible scope, draft creation requires `gmail.compose` (or a broader Gmail write scope), and the Hub/API reauthorization surfaces request `include_send_scope=true` to add both `gmail.send` and `gmail.compose` when a tenant upgrades an older read-only Gmail integration.
 - Updated Gmail capability copy across the Hub setup wizard, agent skill descriptions, and privacy docs so the product now explicitly advertises read + send behavior rather than stale read-only messaging.
 - Added targeted regression coverage in `backend/tests/test_gmail_send_phase3_checkpoint.py` for send, draft, reply, and scope-gating behavior.
 
