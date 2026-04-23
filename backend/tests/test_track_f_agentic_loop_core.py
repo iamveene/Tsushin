@@ -1,4 +1,6 @@
 import asyncio
+import importlib.util
+import json
 import re
 import sys
 import types
@@ -49,7 +51,11 @@ playground_thread_service_stub.build_api_thread_recipient = lambda thread_id, ap
 )
 sys.modules.setdefault("services.playground_thread_service", playground_thread_service_stub)
 
-from agent.followup_detector import is_followup_to_prior_skill
+knowledge_service_stub = types.ModuleType("agent.knowledge.knowledge_service")
+knowledge_service_stub.KnowledgeService = object
+sys.modules.setdefault("agent.knowledge.knowledge_service", knowledge_service_stub)
+
+from agent.followup_detector import build_data_block, is_followup_to_prior_skill
 from models import Agent, AgentSkill, Config, ConversationThread
 
 
@@ -118,6 +124,84 @@ def test_followup_detector_pronouns_and_fresh_fetch_override(message, expected):
     ]
 
     assert is_followup_to_prior_skill(message, history) == expected
+
+
+def test_sender_memory_promotes_structured_tool_result_to_message_top_level():
+    memory_path = Path(__file__).resolve().parents[1] / "agent" / "memory.py"
+    spec = importlib.util.spec_from_file_location("track_f_sender_memory", memory_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    memory = module.SenderMemory(max_size=5)
+    structured = {
+        "skill_type": "gmail",
+        "operation": "list_emails",
+        "summary": "2 emails",
+        "data": {"emails": [{"subject": "Budget"}]},
+        "ts": "2026-04-23T00:00:00Z",
+    }
+
+    memory.add_message(
+        "sender-a",
+        "assistant",
+        "Here are your emails",
+        metadata={"tool_result": structured, "tool_used": "skill:gmail"},
+        message_id="msg-1",
+    )
+
+    [message] = memory.get_messages("sender-a")
+    assert message["tool_result"] == structured
+    assert message["metadata"]["tool_result"] == structured
+
+
+def test_data_block_bounds_structured_tool_results():
+    block = build_data_block(
+        [
+            {
+                "skill_type": "gmail",
+                "operation": "list_emails",
+                "data": {"emails": [{"subject": "Budget"}, {"subject": "Launch"}]},
+            }
+        ],
+        max_bytes=220,
+    )
+
+    assert block.startswith("DATA:\n")
+    assert "gmail" in block
+    assert len(block.encode("utf-8")) < 400
+
+
+def test_agent_service_agentic_caps_preserve_single_round_and_bound_payload(monkeypatch):
+    skills_stub = types.ModuleType("agent.skills")
+    skills_stub.get_skill_manager = lambda: None
+    monkeypatch.setitem(sys.modules, "agent.skills", skills_stub)
+
+    from agent.agent_service import AgentService
+
+    service = object.__new__(AgentService)
+    service.config = {
+        "max_agentic_rounds": 1,
+        "platform_min_agentic_rounds": 1,
+        "platform_max_agentic_rounds": 8,
+    }
+    assert service._get_max_agentic_rounds() == 1
+
+    service.config = {
+        "max_agentic_rounds": 12,
+        "platform_min_agentic_rounds": 2,
+        "platform_max_agentic_rounds": 4,
+    }
+    assert service._get_max_agentic_rounds() == 4
+
+    scratchpad = [
+        {"round": idx, "tool_result": {"data": "x" * 200}}
+        for idx in range(5)
+    ]
+    bounded = service._bound_scratchpad(scratchpad, 500)
+
+    assert bounded[-1]["round"] == 4
+    assert len(json.dumps(bounded, ensure_ascii=False).encode("utf-8")) <= 500
 
 
 class _FakeQuery:
