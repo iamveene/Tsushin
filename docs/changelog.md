@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — ProviderWizard Review step showed misleading "Models — Missing" deadlock for TTS (2026-04-22)
+
+After the previous fix made OpenAI/Gemini TTS visible in the Add Provider wizard, the user reported the Review step (Step 6) still showed "**Models — Missing — go back and add at least one.**" in red for cloud TTS providers. Even though the Create button was technically enabled (no `disabled` attribute), the strong visual signal made the UX appear deadlocked — the user couldn't tell whether finalizing would work. Same pattern as the StepTestAndModels gate fix: a row that's load-bearing for LLM providers (`available_models`) was rendered uncritically for TTS, where the concept doesn't apply.
+
+**Fix:**
+- `frontend/components/provider-wizard/steps/StepReview.tsx`: when `modality === 'tts'`, the row now renders as **"Voices & models — Picked per-agent in the Audio Agents Wizard"** (gray, informational) instead of the LLM-shaped "Models — Missing" red error. Discovery URL is `/api/tts-providers/{provider}/voices` and `/models`, both surfaced in the Audio Agents Wizard.
+- `frontend/components/provider-wizard/steps/StepReview.tsx`: hides the **"Default instance"** row entirely for cloud-TTS-via-api_keys (ElevenLabs/OpenAI/Gemini). Those vendors save through `POST /api/api-keys` which is keyed `(service, tenant_id)` — there's at most one row per service per tenant, so "default" doesn't apply. Kokoro (TTS local) and LLM/Image still show the row because they create real `TTSInstance` / `ProviderInstance` rows that support multi-instance default routing.
+- `frontend/components/provider-wizard/steps/StepTestAndModels.tsx`: same logic — hides the **"Set as default for {vendor}"** checkbox at the bottom of Step 5 for the same cloud-TTS-via-api_keys cases, so the toggle never shows up only to be ignored at save time.
+
+**Verified end-to-end (Playwright):** Walked the wizard Modality=TTS → Cloud → Gemini → Step 4 (throwaway `AIza`-prefixed key) → Step 5 (no Set-as-default checkbox, info card visible) → Step 6 (Voices & models row in gray, no Models/Missing row, no Default instance row, Create button enabled). Discarded without clicking Create — verified the production Gemini key (`AIza...Dlug`, id 1) was not overwritten. 0 console errors.
+
 ### Fix — ProviderWizard (Hub → Add Provider) was missing OpenAI TTS and Gemini TTS vendor cards (2026-04-22)
 
 User-visible symptom: opening Hub → AI Providers → "+ New Instance" → Modality=TTS → Hosting=Cloud showed only **ElevenLabs** with the message "Only one provider fits your choices — click to continue". Tenants couldn't use this wizard to register Google Gemini TTS or OpenAI TTS as a provider, despite the backend `TTSProviderRegistry` already supporting them and the Audio Agents Wizard surfacing them correctly.

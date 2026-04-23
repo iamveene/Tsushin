@@ -68,16 +68,39 @@ export default function StepReview() {
   // Single Models row — for Ollama local the model list is captured on the
   // consolidated `pullModels` step (pull = expose); for cloud/image it lives
   // on `testAndModels`. Point the row's editStep at whichever step is in
-  // the current flow so "click any row to jump back" works.
+  // the current flow so "click any row to jump back" works. For TTS modality,
+  // there is no per-instance model list (voices and TTS-model presets are
+  // discovered via /api/tts-providers/{provider}/voices and /models and
+  // selected per-agent in the Audio Agents Wizard) — surface that explicitly
+  // so the user doesn't see a red "Missing" prompt for a field that does
+  // not apply to TTS instances.
   const modelsEditStep = draft.vendor === 'ollama' && draft.hosting === 'local' ? 'pullModels' : 'testAndModels'
-  rows.push({
-    label: 'Models',
-    value: draft.available_models.length > 0
-      ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
-      : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,
-    editStep: modelsEditStep,
-  })
-  rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
+  if (draft.modality === 'tts') {
+    rows.push({
+      label: 'Voices & models',
+      value: <span className="text-xs text-tsushin-slate">Picked per-agent in the Audio Agents Wizard</span>,
+      editStep: modelsEditStep,
+    })
+  } else {
+    rows.push({
+      label: 'Models',
+      value: draft.available_models.length > 0
+        ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
+        : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,
+      editStep: modelsEditStep,
+    })
+  }
+  // The "Default instance" toggle only applies to surfaces that produce a
+  // ProviderInstance row (LLM cloud, Ollama local) or a TTSInstance row
+  // (Kokoro). For cloud TTS via api_keys (ElevenLabs / OpenAI / Gemini) the
+  // tenant has at most one api_key per service, so default-routing is
+  // meaningless — hide the row to avoid confusion.
+  const cloudTtsViaApiKey = draft.modality === 'tts' && (
+    draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini'
+  )
+  if (!cloudTtsViaApiKey) {
+    rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
+  }
 
   return (
     <div className="space-y-4">
