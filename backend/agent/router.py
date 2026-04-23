@@ -1030,6 +1030,10 @@ class AgentRouter:
             "memory_size": self.config.get("memory_size", 10),  # Inherit from config
             "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
             "provider_instance_id": getattr(agent, 'provider_instance_id', None),
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+            "platform_min_agentic_rounds": self.config.get("platform_min_agentic_rounds"),
+            "platform_max_agentic_rounds": self.config.get("platform_max_agentic_rounds"),
         }
 
     def _build_persona_context(self, persona) -> str:
@@ -2481,6 +2485,8 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             if result.get('tool_used'):
                 memory_metadata['is_tool_output'] = True
                 memory_metadata['tool_used'] = result.get('tool_used')
+                if result.get('tool_result_structured'):
+                    memory_metadata['tool_result'] = result.get('tool_result_structured')
 
                 # Layer 5: Store FULL tool output in ephemeral buffer for follow-up interactions
                 # This enables agentic analysis of tool results without polluting long-term memory
@@ -3446,6 +3452,9 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 original_query=message_content
             )
 
+            if result.get("agentic_scratchpad") is not None:
+                thread.agentic_scratchpad = result.get("agentic_scratchpad")
+
             ai_reply = result.get("answer", "")
 
             if ai_reply:
@@ -3486,11 +3495,14 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 self.logger.info(f"Thread {thread.id}: Response clean, using: '{ai_reply[:80]}...')")
 
                 # Add AI response to history
-                history.append({
+                history_entry = {
                     "role": "agent",
                     "content": ai_reply,
                     "timestamp": datetime.utcnow().isoformat() + "Z"
-                })
+                }
+                if result.get("tool_result_structured"):
+                    history_entry["tool_result"] = result.get("tool_result_structured")
+                history.append(history_entry)
                 thread.conversation_history = history
 
                 # Check for goal completion in both user message and agent response

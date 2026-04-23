@@ -748,6 +748,7 @@ class QueueWorker:
             "thread_id": thread_id,
             "timestamp": result.get("timestamp"),
             "kb_used": result.get("kb_used"),
+            "agentic_scratchpad": result.get("agentic_scratchpad"),
         }
 
     @property
