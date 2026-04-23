@@ -70,6 +70,7 @@ from services.continuous_agent_service import (  # noqa: E402
     BudgetKind,
     ContinuousBudgetLimiter,
 )
+from services.api_client_service import API_ROLE_SCOPES  # noqa: E402
 
 
 @pytest.fixture
@@ -235,6 +236,11 @@ def test_budget_limiter_keys_by_budget_kind():
     assert second_run.allowed is False
     assert second_run.decision == BudgetDecision.DEGRADE_TO_HYBRID
     assert first_tool.allowed is True
+
+
+def test_api_client_roles_can_read_watcher_continuous_surfaces():
+    for role in ("api_readonly", "api_member", "api_admin", "api_owner"):
+        assert "watcher.read" in API_ROLE_SCOPES[role]
 
 
 def test_channel_event_rule_create_validates_instance_and_agent_tenant(db_session):

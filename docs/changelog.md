@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wake_event` stores only `payload_ref`; inline payload and payload-fetch APIs are not part of A2.
 - Trigger details remain per-type APIs (`/api/triggers/email`, `/api/triggers/webhook`) for now.
 - `continuous_run.wake_event_ids` is JSONB to match the ORM JSON list contract used by the control-plane APIs.
+- API-client `api_readonly`, `api_member`, `api_admin`, and `api_owner` scopes include `watcher.read` so `/api/continuous-runs*` and `/api/wake-events*` work through the same public API auth path as `/api/continuous-agents*`.
 
 ### Track A Phase 1 control plane — Default Agents + Email Triggers (2026-04-23)
 
