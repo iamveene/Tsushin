@@ -59,6 +59,7 @@ from api.routes_shared_memory import router as shared_memory_router, set_engine 
 from api.routes_memory import router as memory_router, set_engine as set_memory_engine
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
 from api.routes_channels import router as channels_router
+from api.routes_triggers import router as triggers_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -102,8 +103,8 @@ from api.routes_agents_protected import router as agents_protected_router
 from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
-from api.routes_webhook_inbound import router as webhook_inbound_router  # v0.6.0: Webhook-as-Channel
-from api.routes_webhook_instances import router as webhook_instances_router  # v0.6.0: Webhook-as-Channel
+from api.routes_webhook_inbound import router as webhook_inbound_router
+from api.routes_webhook_instances import router as webhook_instances_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -613,13 +614,23 @@ async def lifespan(app: FastAPI):
                         if "telegram" in enabled_channels:
                             matching_agents.append(agent)
 
-                    # Fallback: if no agents explicitly linked, try default agent for this tenant
+                    # Fallback: resolve the tenant's Telegram default agent.
                     if not matching_agents and bot_instance:
-                        default_agent = request_session.query(Agent).filter(
-                            Agent.tenant_id == bot_instance.tenant_id,
-                            Agent.is_default == True,
-                            Agent.is_active == True
-                        ).first()
+                        from services.default_agent_service import get_default_agent
+
+                        default_agent_id = get_default_agent(
+                            db=request_session,
+                            tenant_id=bot_instance.tenant_id,
+                            channel_type="telegram",
+                            instance_id=telegram_instance_id,
+                        )
+                        default_agent = (
+                            request_session.query(Agent)
+                            .filter(Agent.id == default_agent_id)
+                            .first()
+                            if default_agent_id
+                            else None
+                        )
 
                         if default_agent:
                             default_channels = default_agent.enabled_channels if isinstance(default_agent.enabled_channels, list) else (
@@ -629,12 +640,6 @@ async def lifespan(app: FastAPI):
                                 matching_agents.append(default_agent)
                                 logging.info(
                                     f"Using default agent {default_agent.id} as fallback for Telegram instance {telegram_instance_id}"
-                                )
-                                # Auto-fix: link this instance to the default agent for future messages
-                                default_agent.telegram_integration_id = telegram_instance_id
-                                request_session.commit()
-                                logging.info(
-                                    f"Auto-linked Telegram instance {telegram_instance_id} to default agent {default_agent.id}"
                                 )
 
                     if not matching_agents:
@@ -1283,6 +1288,7 @@ app.include_router(shared_memory_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
+app.include_router(triggers_router)  # Trigger catalog (/api/triggers)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
@@ -1318,7 +1324,7 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
-app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
+app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/triggers/webhook/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router

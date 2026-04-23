@@ -10,11 +10,11 @@ import asyncio
 import logging
 from typing import ClassVar, Optional
 
-from channels.base import ChannelAdapter
+from channels.base import Channel
 from channels.types import SendResult, HealthResult
 
 
-class SlackChannelAdapter(ChannelAdapter):
+class SlackChannelAdapter(Channel):
     """Slack channel via Bot API (Socket Mode or HTTP Events API)."""
 
     channel_type: ClassVar[str] = "slack"

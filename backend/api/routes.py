@@ -677,6 +677,7 @@ async def trigger_test(
     """
     from models import Agent, Contact
     import json
+    from services.default_agent_service import get_default_agent
 
     # Load agent configuration with tenant check
     if request.agent_id:
@@ -686,12 +687,17 @@ async def trigger_test(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found or access denied")
     else:
-        # Use default agent from user's tenant
+        resolved_agent_id = get_default_agent(
+            db=db,
+            tenant_id=ctx.tenant_id,
+            channel_type="playground",
+            user_identifier=request.sender_key,
+        )
+        if not resolved_agent_id:
+            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
         agent = ctx.filter_by_tenant(
             db.query(Agent), Agent.tenant_id
-        ).filter(Agent.is_default == True).first()
-        if not agent:
-            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
+        ).filter(Agent.id == resolved_agent_id).first()
 
     # Build config_dict from agent
     # Get agent name from contact relationship
