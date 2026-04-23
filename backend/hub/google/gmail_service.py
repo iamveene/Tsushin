@@ -15,7 +15,8 @@ Features:
 
 Required Gmail API Scopes:
 - https://www.googleapis.com/auth/gmail.readonly
-- https://www.googleapis.com/auth/gmail.send
+- https://www.googleapis.com/auth/gmail.send (send/reply)
+- https://www.googleapis.com/auth/gmail.compose, gmail.modify, or mail.google.com/ (drafts)
 """
 
 import base64
@@ -39,6 +40,25 @@ from models import GmailIntegration, OAuthToken, HubIntegration
 logger = logging.getLogger(__name__)
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+GMAIL_FULL_ACCESS_SCOPE = "https://mail.google.com/"
+
+GMAIL_SEND_COMPATIBLE_SCOPES = frozenset(
+    {
+        GMAIL_SEND_SCOPE,
+        GMAIL_COMPOSE_SCOPE,
+        GMAIL_MODIFY_SCOPE,
+        GMAIL_FULL_ACCESS_SCOPE,
+    }
+)
+GMAIL_DRAFT_COMPATIBLE_SCOPES = frozenset(
+    {
+        GMAIL_COMPOSE_SCOPE,
+        GMAIL_MODIFY_SCOPE,
+        GMAIL_FULL_ACCESS_SCOPE,
+    }
+)
 
 
 class GmailService(HubIntegrationBase):
@@ -238,6 +258,13 @@ class GmailService(HubIntegrationBase):
             OAuthToken.integration_id == self.integration_id
         ).order_by(OAuthToken.created_at.desc()).first()
 
+    def _get_token_scopes(self) -> set[str]:
+        """Return the latest OAuth token scopes as a normalized set."""
+        token = self._get_latest_token()
+        if not token or not token.scope:
+            return set()
+        return {scope for scope in token.scope.split() if scope}
+
     def has_send_scope(self) -> bool:
         """
         Whether the stored OAuth token explicitly includes gmail.send.
@@ -246,24 +273,47 @@ class GmailService(HubIntegrationBase):
         mention gmail.send. A missing scope string is treated as unknown and also
         returns False so callers can surface an actionable re-auth hint.
         """
-        token = self._get_latest_token()
-        if not token or not token.scope:
-            return False
-        return GMAIL_SEND_SCOPE in {scope for scope in token.scope.split() if scope}
+        return GMAIL_SEND_SCOPE in self._get_token_scopes()
 
-    def _ensure_send_scope(self) -> None:
+    def has_compose_scope(self) -> bool:
+        """Whether the stored OAuth token explicitly includes gmail.compose."""
+        return GMAIL_COMPOSE_SCOPE in self._get_token_scopes()
+
+    def can_send_messages(self) -> bool:
+        """Whether the current Gmail scopes allow users.messages.send."""
+        return bool(self._get_token_scopes() & GMAIL_SEND_COMPATIBLE_SCOPES)
+
+    def can_create_drafts(self) -> bool:
+        """Whether the current Gmail scopes allow users.drafts.create."""
+        return bool(self._get_token_scopes() & GMAIL_DRAFT_COMPATIBLE_SCOPES)
+
+    def _ensure_send_capability(self) -> None:
         """
-        Require gmail.send before performing outbound actions.
+        Require a Gmail write scope that supports users.messages.send.
 
         Older Gmail integrations may have been authorized before outbound mail
         was introduced. Those integrations must be re-authorized to add the
-        gmail.send scope.
+        Gmail send/compose scopes.
         """
-        token = self._get_latest_token()
-        if not token or not token.scope or not self.has_send_scope():
+        if not self.can_send_messages():
             raise PermissionError(
-                "Gmail integration is missing gmail.send. Re-authorize the "
-                "integration to enable send, reply, and draft operations."
+                "Gmail integration is missing outbound Gmail send permission. "
+                "Re-authorize the integration with gmail.send + gmail.compose "
+                "(or a broader Gmail write scope) to enable send and reply operations."
+            )
+
+    def _ensure_draft_capability(self) -> None:
+        """
+        Require a Gmail write scope that supports users.drafts.create.
+
+        Gmail draft creation is stricter than messages.send and requires
+        gmail.compose, gmail.modify, or full-mail scope.
+        """
+        if not self.can_create_drafts():
+            raise PermissionError(
+                "Gmail integration is missing gmail.compose. Re-authorize the "
+                "integration with gmail.compose, gmail.modify, or mail.google.com/ "
+                "to enable draft creation."
             )
 
     @staticmethod
@@ -598,9 +648,9 @@ class GmailService(HubIntegrationBase):
         Send a Gmail message immediately.
 
         Raises:
-            PermissionError: If the integration lacks gmail.send.
+            PermissionError: If the integration lacks a Gmail send-compatible scope.
         """
-        self._ensure_send_scope()
+        self._ensure_send_capability()
         payload = self._build_raw_message(
             to=self._normalize_recipients(to),
             subject=subject,
@@ -637,9 +687,9 @@ class GmailService(HubIntegrationBase):
         Create a Gmail draft without sending it.
 
         Raises:
-            PermissionError: If the integration lacks gmail.send.
+            PermissionError: If the integration lacks a Gmail draft-compatible scope.
         """
-        self._ensure_send_scope()
+        self._ensure_draft_capability()
         message_payload = self._build_raw_message(
             to=self._normalize_recipients(to),
             subject=subject,
@@ -678,10 +728,10 @@ class GmailService(HubIntegrationBase):
                 connected mailbox itself.
 
         Raises:
-            PermissionError: If the integration lacks gmail.send.
+            PermissionError: If the integration lacks a Gmail send-compatible scope.
             ValueError: If the original message is missing reply metadata.
         """
-        self._ensure_send_scope()
+        self._ensure_send_capability()
         original = await self.get_message(message_id, format="full")
         headers = self._extract_headers(original)
         integration_email = self._get_integration().email_address.lower()
@@ -758,7 +808,10 @@ class GmailService(HubIntegrationBase):
                     "api_reachable": True,
                     "labels_count": len(labels),
                     "email": integration.email_address,
-                    "send_enabled": self.has_send_scope(),
+                    "send_enabled": self.can_send_messages(),
+                    "draft_enabled": self.can_create_drafts(),
+                    "send_scope_present": self.has_send_scope(),
+                    "compose_scope_present": self.has_compose_scope(),
                 },
                 "errors": []
             }
