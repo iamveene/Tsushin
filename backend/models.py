@@ -3859,6 +3859,73 @@ class TTSInstance(Base):
 
 
 # ============================================================================
+# v0.7.0 Track D: ASR Instance (Auto-Provisioned Whisper/Speaches Containers)
+# Per-tenant speech-to-text container lifecycle — mirrors the Kokoro/SearXNG pattern.
+# ============================================================================
+
+class ASRInstance(Base):
+    """Per-tenant ASR provider instance with optional auto-provisioned container.
+
+    Track D starts with vendor='speaches', an OpenAI-compatible Whisper/faster-
+    whisper server that Tsushin provisions per tenant. The row stores the
+    runtime URL plus the encrypted per-instance API token used by the backend
+    provider and warm-up path.
+    """
+    __tablename__ = "asr_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    vendor = Column(String(20), nullable=False, default="speaches")
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection — base_url populated post-provision with DNS alias URL, or
+    # set directly for externally hosted OpenAI-compatible Whisper endpoints.
+    base_url = Column(String(500), nullable=True)
+
+    # Per-instance auth. The token is encrypted at rest using the same
+    # tenant-scoped TokenEncryption conventions as provider API keys.
+    auth_username = Column(String(50), nullable=True, default="tsushin")
+    api_token_encrypted = Column(Text, nullable=True)
+
+    # Default model used for warm-up and as the provider fallback when the
+    # skill config doesn't specify a concrete model id.
+    default_model = Column(
+        String(200),
+        nullable=True,
+        default="Systran/faster-distil-whisper-small.en",
+    )
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+
+    # Auto-provisioning (Docker-managed containers)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_asr_instance_tenant_name"),
+        Index("idx_asri_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+# ============================================================================
 # v0.6.0-patch.6: SearXNG Instance (Auto-Provisioned Self-Hosted Metasearch)
 # Per-tenant SearXNG container lifecycle — mirrors the Kokoro/Ollama pattern.
 # Replaces the shipped-by-default compose service introduced in PR #24.
