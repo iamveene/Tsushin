@@ -56,6 +56,17 @@ Track E's first reviewable checkpoint adds lightweight metadata editing for per-
 **Validated:**
 - Added focused backend coverage in `backend/tests/test_agent_knowledge_metadata.py` for name sanitization, explicit tag validation, atomic sidecar persistence/rollback behavior, and corrupt-metadata surfacing.
 
+### Track D — backend-only Whisper/Speaches ASR checkpoint (2026-04-23)
+
+**Added:**
+- Alembic `0048` and `ASRInstance` for tenant-scoped Whisper/Speaches rows, including encrypted per-instance auth tokens, default model selection, runtime URL, and managed-container metadata.
+- `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` to create/list/update/delete ASR instances and manage their container lifecycle on the reserved `6400-6499` port range.
+- `backend/hub/providers/asr_provider.py`, `backend/hub/providers/asr_registry.py`, `backend/hub/providers/openai_asr_provider.py`, and `backend/hub/providers/whisper_asr_provider.py` for a dedicated speech-to-text provider abstraction.
+
+**Changed:**
+- `backend/agent/skills/audio_transcript.py` now prefers a configured `asr_instance_id` (Speaches/OpenAI-compatible Whisper endpoint) and falls back to the existing OpenAI Whisper path when no tenant ASR instance is configured or the local ASR request fails.
+- Authenticated container warm-up now uses `POST /v1/audio/transcriptions` with the per-instance credentials instead of trusting the public `/health` endpoint alone, so ASR containers are only marked healthy after auth + model load succeed.
+
 ### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
 
 Phase 0 of v0.7.0 now has the serial foundation needed before release-track worktrees fan out.
