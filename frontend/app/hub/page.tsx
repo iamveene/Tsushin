@@ -2593,10 +2593,13 @@ export default function HubPage() {
   }
 
   // Re-authorize an expired/revoked integration
-  const handleReauthorize = async (integrationId: number) => {
+  const handleReauthorize = async (integrationId: number, integrationType?: string) => {
     try {
       const apiUrl = ''
       const params = new URLSearchParams({ redirect_url: '/hub' })
+      if (integrationType === 'gmail') {
+        params.set('include_send_scope', 'true')
+      }
       const response = await authenticatedFetch(`${apiUrl}/api/hub/google/reauthorize/${integrationId}?${params}`, {
         method: 'POST'
       })
@@ -4571,7 +4574,7 @@ export default function HubPage() {
                         <div className="flex gap-2">
                           {integration.health_status === 'unavailable' ? (
                             <button
-                              onClick={() => handleReauthorize(integration.id)}
+                              onClick={() => handleReauthorize(integration.id, integration.type)}
                               className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
                             >
                               Re-authorize
@@ -4746,7 +4749,7 @@ export default function HubPage() {
                         <div className="flex gap-2">
                           {integration.health_status === 'unavailable' ? (
                             <button
-                              onClick={() => handleReauthorize(integration.id)}
+                              onClick={() => handleReauthorize(integration.id, integration.type)}
                               className="flex-1 py-2 text-sm rounded-lg font-medium bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20 transition-all"
                             >
                               Re-authorize
