@@ -3080,6 +3080,45 @@ class WebhookIntegration(Base):
 
 
 # ============================================================================
+# v0.7.0: Email Trigger Instances
+# ============================================================================
+
+class EmailChannelInstance(Base):
+    """
+    v0.7.0: Persisted email trigger configuration.
+
+    Phase 1 stores the control-plane row only: which Gmail integration to
+    watch, which agent should receive wakeups by default, and the basic
+    query/poll metadata the later EmailTrigger adapter will consume.
+    """
+    __tablename__ = "email_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    provider = Column(String(32), default="gmail", nullable=False)
+    gmail_integration_id = Column(Integer, ForeignKey("gmail_integration.id", ondelete="CASCADE"), nullable=True, index=True)
+    search_query = Column(String(500), nullable=True)
+    poll_interval_seconds = Column(Integer, default=60, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)  # active | paused | error
+    health_status = Column(String(20), default="unknown", nullable=False)  # unknown | healthy | unhealthy
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_email_channel_instance_tenant", "tenant_id"),
+        Index("idx_email_channel_instance_status", "status"),
+    )
+
+
+# ============================================================================
 # Phase 9: Google Integration Models (Gmail, Calendar)
 # ============================================================================
 

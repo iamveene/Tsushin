@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 
 from channels.base import Channel, ChannelAdapter
+from channels.catalog import TRIGGER_CATALOG
+from channels.trigger_criteria import TriggerCriteria
 from channels.dispatch import dispatch_outbound
 from channels.registry import ChannelRegistry
 from channels.trigger import Trigger
@@ -104,3 +106,37 @@ def test_channel_registry_separates_channels_and_triggers():
     assert registry.list_triggers() == ["webhook"]
     assert registry.has_channel("playground") is True
     assert registry.has_channel("webhook") is False
+
+
+def test_trigger_catalog_includes_email():
+    assert {entry.id for entry in TRIGGER_CATALOG} >= {"email", "webhook"}
+
+
+def test_trigger_criteria_accepts_valid_envelope():
+    payload = {
+        "criteria_version": 1,
+        "filters": {"from": "client@example.com"},
+        "window": {"mode": "since_cursor"},
+        "ordering": "oldest_first",
+        "rate_limit": {"max_events_per_poll": 10},
+        "dedupe_scope": "instance",
+    }
+
+    assert TriggerCriteria.validate(payload) is payload
+
+
+def test_trigger_criteria_rejects_invalid_shapes():
+    invalid_payloads = [
+        {},
+        {"criteria_version": 0, "filters": {}, "window": {"mode": "since_cursor"}, "ordering": "oldest_first"},
+        {"criteria_version": 1, "filters": [], "window": {"mode": "since_cursor"}, "ordering": "oldest_first"},
+        {"criteria_version": 1, "filters": {}, "window": {"mode": "bad"}, "ordering": "oldest_first"},
+        {"criteria_version": 1, "filters": {}, "window": {"mode": "since_cursor"}, "ordering": "sideways"},
+    ]
+
+    for payload in invalid_payloads:
+        try:
+            TriggerCriteria.validate(payload)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected invalid trigger criteria to fail: {payload!r}")
