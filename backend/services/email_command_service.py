@@ -95,7 +95,11 @@ class EmailCommandService:
         Returns connected email, authorization date, and capabilities.
         """
         try:
-            from models import AgentSkill, AgentSkillIntegration, GmailIntegration
+            from models import AgentSkill, AgentSkillIntegration, GmailIntegration, OAuthToken
+            from hub.google.gmail_service import (
+                GMAIL_SEND_COMPATIBLE_SCOPES,
+                GMAIL_DRAFT_COMPATIBLE_SCOPES,
+            )
 
             # Check if Gmail skill is enabled for this agent
             skill = self.db.query(AgentSkill).filter(
@@ -157,6 +161,14 @@ class EmailCommandService:
 
             # Format authorization date
             auth_date = gmail_integration.authorized_at.strftime("%B %d, %Y at %H:%M") if gmail_integration.authorized_at else "Unknown"
+            token = self.db.query(OAuthToken).filter(
+                OAuthToken.integration_id == integration_id
+            ).order_by(OAuthToken.created_at.desc()).first()
+            token_scopes = set((token.scope or "").split()) if token and token.scope else set()
+            can_send = bool(token_scopes & GMAIL_SEND_COMPATIBLE_SCOPES)
+            can_draft = bool(token_scopes & GMAIL_DRAFT_COMPATIBLE_SCOPES)
+            send_status = "Enabled" if can_send else "Requires reauthorization"
+            draft_status = "Enabled" if can_draft else "Requires gmail.compose reauthorization"
 
             # Build message
             message = f"""📧 **Gmail Configuration**
@@ -169,11 +181,13 @@ class EmailCommandService:
 - Read emails
 - Search emails
 - List labels
-- Send, reply to, and draft emails when gmail.send is authorized
+- Send and reply emails when Gmail outbound scopes are authorized
+- Create drafts when gmail.compose (or a broader Gmail write scope) is authorized
 
-**Permissions:**
+**Outbound status:**
 - Read access
-- Outbound send/draft access when gmail.send is present
+- Send / reply: {send_status}
+- Drafts: {draft_status}
 
 Use `/email list` to see recent emails"""
 

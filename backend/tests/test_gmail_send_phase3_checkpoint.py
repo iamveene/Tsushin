@@ -3,7 +3,7 @@ Phase 3.1 Gmail send checkpoint tests.
 
 Small, fast unit-style tests that prove the Track G scope:
 - GmailService can build/send outbound requests for send/draft/reply
-- GmailService blocks outbound calls when gmail.send is unavailable
+- GmailService blocks outbound calls when the required Gmail write scopes are unavailable
 - GmailSkill dispatches outbound tool actions and respects capability gating
 """
 
@@ -62,12 +62,18 @@ GmailService = _load_module(
     os.path.join("hub", "google", "gmail_service.py"),
 ).GmailService
 
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+GMAIL_FULL_ACCESS_SCOPE = "https://mail.google.com/"
+
 
 def _decode_raw(raw_message: str) -> str:
     return base64.urlsafe_b64decode(raw_message.encode("utf-8")).decode("utf-8", errors="replace")
 
 
-def _make_service(scope: str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"):
+def _make_service(scope: str = f"{GMAIL_READONLY_SCOPE} {GMAIL_SEND_SCOPE} {GMAIL_COMPOSE_SCOPE}"):
     service = object.__new__(GmailService)
     service.integration_id = 123
     service._get_latest_token = lambda: SimpleNamespace(scope=scope) if scope is not None else None
@@ -78,7 +84,7 @@ def _make_service(scope: str = "https://www.googleapis.com/auth/gmail.readonly h
 
 
 def test_gmail_service_send_message_posts_raw_payload():
-    service = _make_service()
+    service = _make_service(scope=f"{GMAIL_READONLY_SCOPE} {GMAIL_SEND_SCOPE}")
     captured = {}
 
     async def fake_make_request(method, endpoint, params=None, json_data=None, timeout=10.0):
@@ -114,6 +120,28 @@ def test_gmail_service_send_message_posts_raw_payload():
     assert result["id"] == "msg-123"
 
 
+def test_gmail_service_send_accepts_gmail_compose_scope():
+    service = _make_service(scope=f"{GMAIL_READONLY_SCOPE} {GMAIL_COMPOSE_SCOPE}")
+
+    async def fake_make_request(method, endpoint, params=None, json_data=None, timeout=10.0):
+        assert method == "POST"
+        assert endpoint == "/users/me/messages/send"
+        assert "raw" in json_data
+        return {"id": "msg-compose-123"}
+
+    service._make_request = fake_make_request
+
+    result = asyncio.run(
+        service.send_message(
+            to="compose@example.com",
+            subject="Compose Subject",
+            body_text="Compose Body",
+        )
+    )
+
+    assert result["id"] == "msg-compose-123"
+
+
 def test_gmail_service_create_draft_wraps_message_payload():
     service = _make_service()
     captured = {}
@@ -141,8 +169,31 @@ def test_gmail_service_create_draft_wraps_message_payload():
     assert result["id"] == "draft-123"
 
 
+def test_gmail_service_create_draft_accepts_draft_compatible_scopes():
+    for scope in (GMAIL_COMPOSE_SCOPE, GMAIL_MODIFY_SCOPE, GMAIL_FULL_ACCESS_SCOPE):
+        service = _make_service(scope=f"{GMAIL_READONLY_SCOPE} {scope}")
+
+        async def fake_make_request(method, endpoint, params=None, json_data=None, timeout=10.0):
+            assert method == "POST"
+            assert endpoint == "/users/me/drafts"
+            assert "raw" in json_data["message"]
+            return {"id": f"draft-{scope}", "message": {"id": "msg-draft"}}
+
+        service._make_request = fake_make_request
+
+        result = asyncio.run(
+            service.create_draft(
+                to="draft@example.com",
+                subject="Draft-compatible scope",
+                body_text="Draft Body",
+            )
+        )
+
+        assert result["id"] == f"draft-{scope}"
+
+
 def test_gmail_service_reply_to_message_uses_thread_headers_and_reply_all():
-    service = _make_service()
+    service = _make_service(scope=f"{GMAIL_READONLY_SCOPE} {GMAIL_SEND_SCOPE}")
 
     async def fake_get_message(message_id, format="full"):
         assert message_id == "orig-msg"
@@ -189,8 +240,8 @@ def test_gmail_service_reply_to_message_uses_thread_headers_and_reply_all():
     assert result["id"] == "reply-123"
 
 
-def test_gmail_service_send_requires_gmail_send_scope():
-    service = _make_service(scope="https://www.googleapis.com/auth/gmail.readonly")
+def test_gmail_service_send_requires_send_compatible_scope():
+    service = _make_service(scope=GMAIL_READONLY_SCOPE)
 
     try:
         asyncio.run(
@@ -202,8 +253,28 @@ def test_gmail_service_send_requires_gmail_send_scope():
         )
     except PermissionError as exc:
         assert "gmail.send" in str(exc)
+        assert "gmail.compose" in str(exc)
     else:
-        raise AssertionError("send_message should require gmail.send")
+        raise AssertionError("send_message should require a send-compatible Gmail scope")
+
+
+def test_gmail_service_draft_requires_compose_scope():
+    service = _make_service(scope=f"{GMAIL_READONLY_SCOPE} {GMAIL_SEND_SCOPE}")
+
+    try:
+        asyncio.run(
+            service.create_draft(
+                to="draft@example.com",
+                subject="Draft Scope",
+                body_text="Blocked",
+            )
+        )
+    except PermissionError as exc:
+        assert "gmail.compose" in str(exc)
+        assert "gmail.modify" in str(exc)
+        assert "mail.google.com/" in str(exc)
+    else:
+        raise AssertionError("create_draft should require gmail.compose or broader Gmail write scope")
 
 
 def test_gmail_skill_outbound_actions_dispatch_to_service():

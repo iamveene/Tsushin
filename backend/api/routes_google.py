@@ -32,14 +32,18 @@ from models import (
     OAuthToken,
 )
 from hub.google import GoogleOAuthHandler, get_google_oauth_handler, GmailService, CalendarService
+from hub.google.gmail_service import (
+    GMAIL_SEND_SCOPE,
+    GMAIL_COMPOSE_SCOPE,
+    GMAIL_SEND_COMPATIBLE_SCOPES,
+    GMAIL_DRAFT_COMPATIBLE_SCOPES,
+)
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_google_encryption_key
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hub/google", tags=["Google Integration"])
-
-GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 
 
 # ============================================
@@ -78,6 +82,7 @@ class IntegrationResponse(BaseModel):
     health_status: str
     health_status_reason: Optional[str] = None
     can_send: bool = False
+    can_draft: bool = False
 
     class Config:
         from_attributes = True
@@ -119,8 +124,10 @@ def get_encryption_key(db: Session) -> str:
 
 def get_gmail_oauth_scopes(include_send_scope: bool) -> List[str]:
     scopes = list(GoogleOAuthHandler.DEFAULT_SCOPES["gmail"])
-    if include_send_scope and GMAIL_SEND_SCOPE not in scopes:
-        scopes.append(GMAIL_SEND_SCOPE)
+    if include_send_scope:
+        for scope in (GMAIL_SEND_SCOPE, GMAIL_COMPOSE_SCOPE):
+            if scope not in scopes:
+                scopes.append(scope)
     return scopes
 
 
@@ -290,7 +297,8 @@ async def list_gmail_integrations(
             authorized_at=integration.authorized_at,
             health_status=base.health_status if base else "unknown",
             health_status_reason=getattr(base, 'health_status_reason', None) if base else None,
-            can_send=GMAIL_SEND_SCOPE in token_scopes,
+            can_send=bool(token_scopes & GMAIL_SEND_COMPATIBLE_SCOPES),
+            can_draft=bool(token_scopes & GMAIL_DRAFT_COMPATIBLE_SCOPES),
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -303,7 +311,7 @@ async def gmail_oauth_authorize(
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     include_send_scope: bool = Query(
         False,
-        description="When true, request gmail.send in addition to the default Gmail scopes.",
+        description="When true, request Gmail outbound scopes (gmail.send + gmail.compose) in addition to the default Gmail scopes.",
     ),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session),
@@ -705,7 +713,7 @@ async def reauthorize_integration(
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
     include_send_scope: bool = Query(
         False,
-        description="When true for Gmail integrations, request gmail.send in addition to the default Gmail scopes.",
+        description="When true for Gmail integrations, request Gmail outbound scopes (gmail.send + gmail.compose) in addition to the default Gmail scopes.",
     ),
     current_user: User = Depends(require_permission("hub.write")),
     ctx: TenantContext = Depends(get_current_tenant_context),

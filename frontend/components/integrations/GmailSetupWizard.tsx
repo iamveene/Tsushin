@@ -20,6 +20,7 @@ interface GmailIntegration {
   health_status: string
   is_active: boolean
   can_send: boolean
+  can_draft: boolean
 }
 
 interface AssignmentResult {
@@ -31,6 +32,13 @@ interface AssignmentResult {
 
 const POLL_INTERVAL_MS = 3000
 const POLL_MAX_TICKS = 120 // 6 minutes
+
+function getCapabilityLabel(integration?: GmailIntegration | null): string {
+  if (!integration) return '—'
+  if (integration.can_send && integration.can_draft) return 'Read + send/draft'
+  if (integration.can_send) return 'Read + send/reply only — reauthorize to add drafts'
+  return 'Read-only — reauthorize to add outbound'
+}
 
 export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props) {
   const [step, setStep] = useState<Step>(1)
@@ -283,7 +291,7 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Scope</div>
-              <div className="text-white">Read + outbound (gmail.readonly + gmail.send)</div>
+              <div className="text-white">Read + outbound (gmail.readonly + gmail.send + gmail.compose)</div>
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Multi-account</div>
@@ -300,7 +308,8 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
           </div>
           <div className="text-xs text-gray-500 bg-red-500/5 border border-red-500/20 rounded-lg p-3">
             <span className="text-red-400 font-medium">Note:</span> new Gmail connections include
-            outbound send/draft access. Older read-only integrations can be upgraded by re-authorizing them.
+            outbound send/reply plus draft access. Older integrations with only `gmail.send`
+            can still send and reply, but must be re-authorized to add draft creation.
           </div>
         </div>
       </Modal>
@@ -394,7 +403,7 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-white truncate">{i.email_address}</div>
                       <div className="text-xs text-gray-500">
-                        {i.name} · {i.can_send ? 'Read + send/draft' : 'Read-only — reauthorize to add send'}
+                        {i.name} · {getCapabilityLabel(i)}
                       </div>
                     </div>
                     <span
@@ -585,7 +594,7 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
             <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Scope</div>
               <div className="text-sm text-white">
-                {selectedIntegration?.can_send ? 'Read + send/draft' : 'Read-only (reauthorize to add send/draft)'}
+                {getCapabilityLabel(selectedIntegration)}
               </div>
             </div>
             <div className="p-4 rounded-lg bg-white/[0.02] border border-white/5">
