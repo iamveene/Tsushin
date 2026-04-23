@@ -18,6 +18,7 @@ from urllib.parse import quote_plus
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 
 
 REPO_BACKEND = Path(__file__).resolve().parents[1]
@@ -26,6 +27,7 @@ if str(REPO_BACKEND) not in sys.path:
     sys.path.insert(0, str(REPO_BACKEND))
 
 from hub.security import TokenEncryption  # noqa: E402
+from services.encryption_key_service import _is_valid_fernet_key, _unwrap_key  # noqa: E402
 
 
 REQUIRED_SCOPES = {
@@ -65,11 +67,30 @@ def _get_database_url(env_values: dict[str, str]) -> str:
     return f"postgresql://{user}:{quote_plus(password)}@{host}:{port}/{db_name}"
 
 
-def _get_google_key(env_values: dict[str, str]) -> str:
+def _get_google_key(env_values: dict[str, str], session) -> str:
     explicit = os.getenv("GOOGLE_ENCRYPTION_KEY") or env_values.get("GOOGLE_ENCRYPTION_KEY")
     if explicit:
         return explicit
-    raise SystemExit("GOOGLE_ENCRYPTION_KEY is not set in the environment or .env.")
+
+    stored_key = session.execute(
+        text(
+            """
+            SELECT google_encryption_key
+            FROM config
+            WHERE google_encryption_key IS NOT NULL
+            ORDER BY id
+            LIMIT 1
+            """
+        )
+    ).scalar()
+    if stored_key:
+        db_key = _unwrap_key(stored_key)
+        if _is_valid_fernet_key(db_key):
+            return db_key
+
+    raise SystemExit(
+        "GOOGLE_ENCRYPTION_KEY is not set in the environment, .env, or Config-backed encryption key store."
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,7 +119,10 @@ def main() -> int:
         )
 
     engine = create_engine(_get_database_url(env_values))
-    with engine.connect() as conn:
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        google_key = _get_google_key(env_values, session)
+        conn = session.connection()
         integration = conn.execute(
             text(
                 """
@@ -152,7 +176,7 @@ def main() -> int:
                 f"No Google OAuth credentials configured for tenant {integration['tenant_id']}."
             )
 
-    token_encryption = TokenEncryption(_get_google_key(env_values).encode("utf-8"))
+    token_encryption = TokenEncryption(google_key.encode("utf-8"))
     client_secret = token_encryption.decrypt(
         credentials["client_secret_encrypted"],
         integration["tenant_id"],
