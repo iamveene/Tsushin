@@ -107,6 +107,7 @@ export default function GraphViewTab() {
     activeA2ASessions,
     fadingA2ASessions,
     agentA2ADepths,
+    activeContinuousRuns,
   } = useWatcherActivity({
     enabled: viewType === 'agents' // Only connect when viewing agents
   })
@@ -317,6 +318,8 @@ export default function GraphViewTab() {
     )
   }
 
+  const continuousRunList = Array.from(activeContinuousRuns.values())
+
   return (
     <div className="space-y-4 animate-fade-in">
       {/* View Type Selector */}
@@ -351,6 +354,43 @@ export default function GraphViewTab() {
           )}
         </div>
       </div>
+
+      {viewType === 'agents' && continuousRunList.length > 0 && (
+        <div className="glass-card rounded-xl border border-cyan-500/25 bg-cyan-500/5 px-4 py-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-white flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+                Continuous agent activity
+              </div>
+              <p className="text-xs text-tsushin-slate mt-1">
+                Backend WebSocket events with <code className="font-mono">type=continuous_run</code> are being tracked separately from user-initiated runs.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {continuousRunList.slice(0, 4).map(run => (
+                <span
+                  key={run.runId}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
+                    run.isEnding
+                      ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-200/70'
+                      : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                  }`}
+                >
+                  <span className="font-mono">#{run.runId}</span>
+                  <span>{run.status}</span>
+                  {run.channelType && <span className="text-cyan-300/70">{run.channelType}</span>}
+                </span>
+              ))}
+              {continuousRunList.length > 4 && (
+                <span className="rounded-full border border-cyan-500/20 bg-cyan-500/5 px-2.5 py-1 text-xs text-cyan-200/70">
+                  +{continuousRunList.length - 4}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Phase 10: Fullscreen backdrop */}
       {isMaximized && (
