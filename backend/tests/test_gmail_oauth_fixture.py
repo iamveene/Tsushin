@@ -1,16 +1,43 @@
 import base64
 import email.utils
+import os
 import time
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
 import httpx
+import pytest
 
 
 REQUIRED_SCOPES = {
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 }
+DRAFT_COMPATIBLE_SCOPES = {
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://mail.google.com/",
+}
+REQUIRE_COMPOSE_ENV = "TSN_GMAIL_REQUIRE_COMPOSE_SCOPE"
+
+
+def test_gmail_oauth_fixture_compose_readiness_is_explicit(gmail_oauth_fixture):
+    scopes = set(gmail_oauth_fixture["scopes"])
+    has_draft_scope = bool(scopes & DRAFT_COMPATIBLE_SCOPES)
+    if os.getenv(REQUIRE_COMPOSE_ENV) == "1":
+        assert has_draft_scope, (
+            "Gmail fixture is not Phase 3.1 draft-ready. Re-authorize with "
+            "gmail.compose, gmail.modify, or mail.google.com/ before treating "
+            "compose/draft live gates as green."
+        )
+        return
+
+    if not has_draft_scope:
+        pytest.xfail(
+            "Current Gmail fixture is send-only. Set "
+            f"{REQUIRE_COMPOSE_ENV}=1 after root reauthorization to enforce "
+            "the Phase 3.1 compose/draft gate."
+        )
 
 
 def test_gmail_oauth_fixture_authenticates_lists_and_sends_email(gmail_oauth_fixture):
