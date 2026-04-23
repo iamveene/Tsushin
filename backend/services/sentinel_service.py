@@ -202,7 +202,10 @@ class SentinelService:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_memory_poisoning=True,
             detect_browser_ssrf=True,
+            detect_vector_store_poisoning=True,
+            detect_continuous_agent_action_approval=True,
             aggressiveness_level=1,
             llm_provider="gemini",
             llm_model="gemini-2.5-flash-lite",
@@ -238,7 +241,10 @@ class SentinelService:
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=getattr(system_config, 'detect_memory_poisoning', True),
             detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
+            detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
+            detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -268,7 +274,10 @@ class SentinelService:
             merged.detect_agent_takeover = tenant_config.detect_agent_takeover
             merged.detect_poisoning = tenant_config.detect_poisoning
             merged.detect_shell_malicious_intent = tenant_config.detect_shell_malicious_intent
+            merged.detect_memory_poisoning = getattr(tenant_config, 'detect_memory_poisoning', True)
             merged.detect_browser_ssrf = getattr(tenant_config, 'detect_browser_ssrf', True)
+            merged.detect_vector_store_poisoning = getattr(tenant_config, 'detect_vector_store_poisoning', True)
+            merged.detect_continuous_agent_action_approval = getattr(tenant_config, 'detect_continuous_agent_action_approval', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
@@ -294,6 +303,10 @@ class SentinelService:
                 merged.memory_poisoning_prompt = tenant_config.memory_poisoning_prompt
             if getattr(tenant_config, 'browser_ssrf_prompt', None):
                 merged.browser_ssrf_prompt = tenant_config.browser_ssrf_prompt
+            if getattr(tenant_config, 'vector_store_poisoning_prompt', None):
+                merged.vector_store_poisoning_prompt = tenant_config.vector_store_poisoning_prompt
+            if getattr(tenant_config, 'continuous_agent_action_approval_prompt', None):
+                merged.continuous_agent_action_approval_prompt = tenant_config.continuous_agent_action_approval_prompt
 
         # Override with agent config if present (only non-None values)
         if agent_override:
@@ -307,6 +320,8 @@ class SentinelService:
                 merged.enable_shell_analysis = agent_override.enable_shell_analysis
             if agent_override.aggressiveness_level is not None:
                 merged.aggressiveness_level = agent_override.aggressiveness_level
+            if getattr(agent_override, 'detect_continuous_agent_action_approval', None) is not None:
+                merged.detect_continuous_agent_action_approval = agent_override.detect_continuous_agent_action_approval
 
         return merged
 

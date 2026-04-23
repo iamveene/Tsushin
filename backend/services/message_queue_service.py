@@ -28,11 +28,13 @@ class MessageQueueService:
         sender_key: str,
         payload: dict,
         priority: int = 0,
+        message_type: str = "inbound_message",
     ) -> MessageQueue:
         """Queue a message for processing."""
         item = MessageQueue(
             tenant_id=tenant_id,
             channel=channel,
+            message_type=message_type,
             agent_id=agent_id,
             sender_key=sender_key,
             payload=payload,
@@ -43,7 +45,7 @@ class MessageQueueService:
         self.db.refresh(item)
         logger.info(
             f"Enqueued message queue item {item.id} "
-            f"(channel={channel}, tenant={tenant_id}, agent={agent_id})"
+            f"(type={message_type}, channel={channel}, tenant={tenant_id}, agent={agent_id})"
         )
         return item
 

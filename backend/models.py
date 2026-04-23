@@ -2240,6 +2240,7 @@ class SentinelConfig(Base):
     detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
     detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
     detect_vector_store_poisoning = Column(Boolean, default=True, nullable=False)
+    detect_continuous_agent_action_approval = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
@@ -2258,6 +2259,7 @@ class SentinelConfig(Base):
     memory_poisoning_prompt = Column(Text, nullable=True)
     browser_ssrf_prompt = Column(Text, nullable=True)
     vector_store_poisoning_prompt = Column(Text, nullable=True)
+    continuous_agent_action_approval_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache
@@ -2327,6 +2329,7 @@ class SentinelAgentConfig(Base):
     # Vector store access controls (Item 5)
     vector_store_access_enabled = Column(Boolean, nullable=True)  # NULL = inherit
     vector_store_allowed_configs = Column(JSON, nullable=True)  # List of allowed VectorStoreInstance IDs
+    detect_continuous_agent_action_approval = Column(Boolean, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -3411,6 +3414,7 @@ class MessageQueue(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
     channel = Column(String(20), nullable=False, index=True)  # "playground"|"whatsapp"|"telegram"|"api"
+    message_type = Column(String(32), nullable=False, default="inbound_message", index=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
     # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
@@ -3436,6 +3440,40 @@ class MessageQueue(Base):
     __table_args__ = (
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
+    )
+
+
+class ChannelEventDedupe(Base):
+    """
+    v0.7.0 Phase 0: durable dedupe/outcome ledger for trigger events.
+    Instance ownership is validated in service code because trigger instance
+    tables vary by channel type.
+    """
+    __tablename__ = "channel_event_dedupe"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    channel_type = Column(String(32), nullable=False)
+    instance_id = Column(Integer, nullable=False)
+    dedupe_key = Column(String(512), nullable=False)
+    outcome = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "instance_id",
+            "dedupe_key",
+            name="uq_channel_event_dedupe",
+        ),
+        Index("ix_channel_event_dedupe_tenant_created", "tenant_id", "created_at"),
+        Index("ix_channel_event_dedupe_instance", "tenant_id", "instance_id", "created_at"),
     )
 
 
