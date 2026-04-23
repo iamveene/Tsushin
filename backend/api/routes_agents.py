@@ -169,12 +169,12 @@ class AgentResponse(BaseModel):
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
     discord_integration_id: Optional[int] = None  # Discord bot integration
-    webhook_integration_id: Optional[int] = None  # v0.6.0: Webhook integration
+    webhook_integration_id: Optional[int] = None  # Legacy v0.6.0 binding; webhook is a Trigger in v0.7.0
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -223,12 +223,12 @@ class AgentCreate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -272,12 +272,12 @@ class AgentUpdate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None

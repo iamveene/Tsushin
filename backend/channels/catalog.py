@@ -66,6 +66,14 @@ CHANNEL_CATALOG: List[EntryPointInfo] = [
 
 TRIGGER_CATALOG: List[EntryPointInfo] = [
     EntryPointInfo(
+        id="email",
+        display_name="Email",
+        description="Watch Gmail inbox activity and wake agents from matching messages.",
+        requires_setup=True,
+        setup_hint="Create an email trigger under Hub -> Communication -> Triggers.",
+        icon_hint="gmail",
+    ),
+    EntryPointInfo(
         id="webhook",
         display_name="Webhook",
         description="Receive signed external events and optionally call back a customer system.",

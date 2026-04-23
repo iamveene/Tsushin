@@ -5,18 +5,18 @@
  *
  * Replaces the six scattered per-channel CTAs ("+ Create WhatsApp Instance"
  * at tab level, "+ Create Bot" / "+ Connect Workspace" / "+ Connect Bot" /
- * "Add Another Gmail" per-section, plus duplicate empty-
- * state body buttons) with a single "+ Add Channel" launcher. The wizard
+ * duplicate empty-state body buttons) with a single "+ Add Channel"
+ * launcher. The wizard
  * shows the channel catalog as a picker, then hands off to the existing
  * per-channel setup modal (WhatsAppSetupWizard, Telegram modal,
- * SlackSetupWizard, DiscordSetupWizard, GmailSetupWizard).
+ * SlackSetupWizard, DiscordSetupWizard).
  *
  * Catalog source: /api/channels (see backend/api/routes_channels.py and
  * backend/channels/catalog.py). The frontend keeps a static fallback so
  * the picker works offline / pre-catalog.
  *
  * backend/tests/test_wizard_drift.py cross-checks every backend catalog
- * entry against the fallback array below (Guard 5).
+ * entry against the fallback array below (Guard 9).
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -28,7 +28,6 @@ export type ChannelId =
   | 'telegram'
   | 'slack'
   | 'discord'
-  | 'gmail'
 
 interface Props {
   isOpen: boolean
@@ -39,10 +38,9 @@ interface Props {
   onChannelSelected: (channelId: ChannelId) => void
 }
 
-// Fallback catalog — matches CHANNEL_CATALOG in
-// backend/channels/catalog.py plus a 'gmail' entry that doubles as an
-// inbound email channel in the Communication tab. Drift guard:
-// backend/tests/test_wizard_drift.py Guard 5.
+// Fallback catalog — matches actionable entries in CHANNEL_CATALOG from
+// backend/channels/catalog.py. Drift guard:
+// backend/tests/test_wizard_drift.py Guard 9.
 const FALLBACK_CHANNELS: Array<ChannelCatalogEntry & { channel_id: ChannelId }> = [
   {
     channel_id: 'whatsapp',
@@ -84,16 +82,6 @@ const FALLBACK_CHANNELS: Array<ChannelCatalogEntry & { channel_id: ChannelId }> 
     icon_hint: 'discord',
     tenant_has_configured: false,
   },
-  {
-    channel_id: 'gmail',
-    id: 'gmail',
-    display_name: 'Gmail (inbound)',
-    description: 'Treat a Gmail inbox as a message channel.',
-    requires_setup: true,
-    setup_hint: 'Uses the same Google OAuth as Productivity Gmail.',
-    icon_hint: 'gmail',
-    tenant_has_configured: false,
-  },
 ]
 
 export default function ChannelsWizard({ isOpen, onClose, onChannelSelected }: Props) {
@@ -103,8 +91,6 @@ export default function ChannelsWizard({ isOpen, onClose, onChannelSelected }: P
 
   useEffect(() => {
     if (!isOpen) return
-    setSelectedChannel(null)
-    setLoadError(null)
     let cancelled = false
     api.getChannelCatalog()
       .then(list => {
@@ -112,8 +98,7 @@ export default function ChannelsWizard({ isOpen, onClose, onChannelSelected }: P
         if (!Array.isArray(list) || list.length === 0) return
         // Merge live catalog with fallback. Live rows provide the
         // per-tenant `tenant_has_configured` flag; the fallback supplies
-        // channel_id (typed union) and the Gmail entry the backend
-        // catalog doesn't currently ship.
+        // the typed `channel_id` union the Hub dispatches on.
         const liveById = new Map(list.map(r => [r.id, r]))
         const merged = FALLBACK_CHANNELS.map(fb => {
           const live = liveById.get(fb.id)
@@ -164,9 +149,10 @@ export default function ChannelsWizard({ isOpen, onClose, onChannelSelected }: P
         )}
 
         <p className="text-sm text-tsushin-slate">
-          Pick the channel to connect. We'll hand you off to the channel-specific setup wizard with the
-          fields it needs (tokens, OAuth, webhook secret, etc.). You can add multiple instances of any
-          channel — e.g. two Slack workspaces, two Telegram bots.
+          Pick the channel to connect. We&apos;ll hand you off to the channel-specific setup wizard with the
+          fields it needs (tokens, permissions, QR pairing, etc.). Email and webhook inputs now live
+          in the Triggers section below. You can add multiple instances of any channel — e.g. two Slack
+          workspaces or two Telegram bots.
         </p>
 
         <div className="grid gap-3 md:grid-cols-2">

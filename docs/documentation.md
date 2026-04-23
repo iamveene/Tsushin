@@ -164,6 +164,16 @@ The first Gmail-send slice is also merged on `release/0.7.0`, but it is still a 
 * **User-facing capability copy** — the Gmail setup wizard, skill descriptions, and privacy copy now describe Gmail as read + outbound rather than read-only.
 * **Regression coverage** — `backend/tests/test_gmail_send_phase3_checkpoint.py` covers send, reply, draft, and scope-gating behavior. Live outbound delivery and the downstream Email Trigger / triage flow remain pending Phase 3 exit-gate validation.
 
+### 2.7 v0.7.0 Wave 1 checkpoint (Track A Phase 1 control plane)
+
+Track A Phase 1 now has the routing-control surfaces needed before continuous-agent work can stack on top.
+
+* **Persisted email trigger rows** — Alembic `0051` adds `EmailChannelInstance`, and `backend/api/routes_email_triggers.py` exposes `GET/POST /api/triggers/email` plus `GET/PATCH /api/triggers/email/{id}` for Gmail-backed trigger rows with a trigger name, Gmail integration, per-trigger `default_agent_id`, optional Gmail search query, poll interval, and active/paused status.
+* **Default-agent control plane** — `backend/api/routes_default_agents.py` plus `/settings/default-agents` expose tenant defaults, per-instance channel defaults, per-instance trigger defaults, and per-user channel overrides while keeping resolution centralized in `backend/services/default_agent_service.py`.
+* **Hub trigger launcher** — `frontend/components/ui/Wizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`, and `frontend/components/triggers/EmailTriggerWizard.tsx` add a real Trigger setup path under Hub → Communication. Email is now trigger-only; Gmail account resources continue to live under Hub → Productivity.
+* **Agent Studio cleanup** — `/agents` no longer edits the tenant default inline. It shows the current default agent as a read-only indicator and links to `/settings/default-agents`.
+* **Drift protection** — `backend/tests/test_wizard_drift.py` now cross-checks the Trigger wizard fallback against `TRIGGER_CATALOG`, in addition to the existing channel/productivity/provider guards.
+
 ---
 
 ## 3. Quick Start
@@ -1857,6 +1867,37 @@ curl -X POST https://localhost/api/webhooks/<slug>/inbound \
 7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
 8. **Rotate Secret** — the button on each card invalidates the previous secret and opens the same reveal modal showing the fresh plaintext. Update your external system before the next request, or it will start failing with `403`.
 
+#### Email triggers (Gmail-backed control plane)
+
+**Source:** `backend/api/routes_email_triggers.py`, `backend/models.py`, `frontend/components/triggers/EmailTriggerWizard.tsx`
+
+Email triggers are modeled as trigger rows, not communication channels. The Gmail account remains a reusable integration resource, and the trigger stores the control-plane configuration that will later drive inbox polling and wake-event emission.
+
+**Model:** `EmailChannelInstance` stores:
+- trigger display name (`integration_name`)
+- `gmail_integration_id`
+- `default_agent_id`
+- optional Gmail search query (`search_query`)
+- poll interval (`30-3600` seconds)
+- `is_active`, `status`, and health snapshot fields
+
+**API surface:**
+- `GET /api/triggers/email` — list the tenant's persisted email trigger rows
+- `POST /api/triggers/email` — create a trigger row bound to an existing Gmail integration
+- `GET /api/triggers/email/{id}` — fetch one trigger
+- `PATCH /api/triggers/email/{id}` — rename, rebind the Gmail integration, change the default agent, search query, poll interval, or active state
+
+**Hub flow:** Hub → Communication → **Triggers** → **+ New Trigger** → **Email**
+- Confirms Google OAuth app credentials
+- Reuses or creates a Gmail account through the existing OAuth popup contract
+- Captures the trigger name, Gmail search query, poll interval, default agent, and active/paused state
+- Saves a persisted trigger row without treating Gmail as a conversational channel
+
+**Runtime notes:**
+- This phase is control-plane only. Actual inbox polling, dedupe, wake-event emission, and downstream triage execution land in a later phase.
+- Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
+- If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
+
 ### 15.6 Playground
 
 **Source:** `backend/channels/playground/adapter.py`
@@ -2707,7 +2748,7 @@ Lists system and tenant-defined roles with display names and permission badges. 
 
 "Coming Soon" section (`:277`) lists planned integrations. Removing Google credentials warns that it will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO (`:79`).
 
-**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** and **"+ Add Channel"** launchers dispatch to. The Hub wizards (`frontend/components/integrations/ProductivityWizard.tsx`, `ChannelsWizard.tsx`) run a category/service (or channel) picker step and then hand off to the per-service sub-wizard — this is the same pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
+**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** launcher dispatches to. Gmail is no longer offered from the channel picker; inbound email automation now starts from Hub → Communication → Triggers → Email Trigger. The Hub wizards (`frontend/components/integrations/ProductivityWizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`) run a picker step and then hand off to the per-service sub-wizard — this is the same pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
 1. Confirms Google OAuth app credentials are configured.
 2. Opens a popup to `/api/hub/google/{gmail|calendar}/oauth/authorize` and polls `/api/hub/google/{gmail|calendar}/integrations` for the new row.
 3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
@@ -2719,6 +2760,24 @@ Either caller page can subscribe to completion via `useGoogleWizardComplete(kind
 **OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
 
 **Integration type is carried through the callback.** `backend/hub/google/oauth_handler.py::handle_callback` receives `integration_type` as an explicit argument; the outer `backend/api/routes_google.py::oauth_callback` reads it from the `OAuthState.integration_type` prefix (`google_gmail` → `gmail`, `google_calendar` → `calendar`) and passes it in. The legacy fallback that parsed the type from the `redirect_url` query string is still there for the direct-redirect flow, but if neither source yields a valid type the handler raises `ValueError` rather than defaulting to calendar — the popup-driven wizard flow never sets a `redirect_url`, and silently defaulting used to cause gmail OAuth to upsert into the calendar integration tables.
+
+### 21.4.1 Default Agents (`frontend/app/settings/default-agents/page.tsx`)
+
+**Purpose:** central routing control for tenant-wide fallback agent resolution. This page replaces the old inline "set default" affordance in Agent Studio.
+
+**Sections:**
+- **Tenant Default** — last-resort fallback when no more specific match exists
+- **Channel Defaults** — per-instance defaults for conversational channels such as WhatsApp, Telegram, Slack, and Discord
+- **Trigger Defaults** — per-instance defaults for trigger rows such as webhook and email
+- **User Defaults** — per-channel sender identifier overrides for known raw channel IDs before a contact-level mapping exists
+
+**Runtime resolution order** (`backend/services/default_agent_service.py`):
+- Channels: explicit agent -> `ContactAgentMapping` -> `UserChannelDefaultAgent` -> instance `default_agent_id` -> legacy bound agent FK -> tenant default
+- Triggers: explicit agent -> trigger instance `default_agent_id` -> legacy bound agent FK -> tenant default
+
+**Fail-closed trigger behavior:** if no active agent resolves for a trigger, runtime execution is expected to stop with an explicit error/health signal instead of silently queueing work.
+
+**Related UI changes:** `frontend/app/agents/page.tsx` still shows the current tenant default as a read-only stat card, but all edits now route to `/settings/default-agents`.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 

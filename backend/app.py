@@ -105,6 +105,7 @@ from api.routes_agent_builder import router as agent_builder_router
 from api.routes_mcp_instances import router as mcp_instances_router
 from api.routes_webhook_inbound import router as webhook_inbound_router
 from api.routes_webhook_instances import router as webhook_instances_router
+from api.routes_email_triggers import router as email_triggers_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -115,6 +116,7 @@ from api.routes_user_contact_mapping import router as user_contact_mapping_route
 # Phase 7.9: RBAC & Multi-tenancy
 from api.routes_tenants import router as tenants_router
 from api.routes_tenant_settings import router as tenant_settings_router
+from api.routes_default_agents import router as default_agents_router
 from api.routes_team import router as team_router
 # Plans Management
 from api.routes_plans import router as plans_router
@@ -1330,6 +1332,7 @@ app.include_router(commands_router)  # Phase 16: Slash Commands
 app.include_router(user_contact_mapping_router)  # Playground - User Contact Mapping
 app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
 app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
+app.include_router(default_agents_router)
 app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
@@ -1342,6 +1345,7 @@ app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Setti
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
 app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/triggers/webhook/*)
+app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router

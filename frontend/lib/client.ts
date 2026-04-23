@@ -1329,6 +1329,80 @@ export interface TriggerCatalogEntry {
   tenant_has_configured: boolean
 }
 
+export interface DefaultAgentOption {
+  id: number
+  name: string
+  is_default: boolean
+}
+
+export interface DefaultAgentInstanceBinding {
+  kind: 'channel' | 'trigger'
+  channel_type: string
+  instance_id: number
+  display_name: string
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  status?: string | null
+  health_status?: string | null
+}
+
+export interface UserChannelDefaultAgent {
+  id: number
+  channel_type: string
+  user_identifier: string
+  agent_id: number
+  agent_name?: string | null
+}
+
+export interface DefaultAgentsSettings {
+  tenant_default_agent_id?: number | null
+  tenant_default_agent_name?: string | null
+  available_agents: DefaultAgentOption[]
+  channel_defaults: DefaultAgentInstanceBinding[]
+  trigger_defaults: DefaultAgentInstanceBinding[]
+  user_defaults: UserChannelDefaultAgent[]
+}
+
+export interface EmailTrigger {
+  id: number
+  tenant_id: string
+  integration_name: string
+  provider: string
+  gmail_integration_id?: number | null
+  gmail_account_email?: string | null
+  gmail_integration_name?: string | null
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  search_query?: string | null
+  poll_interval_seconds: number
+  is_active: boolean
+  status: string
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_activity_at?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface EmailTriggerCreateRequest {
+  integration_name: string
+  gmail_integration_id: number
+  default_agent_id?: number | null
+  search_query?: string | null
+  poll_interval_seconds?: number
+  is_active?: boolean
+}
+
+export interface EmailTriggerUpdateRequest {
+  integration_name?: string
+  gmail_integration_id?: number
+  default_agent_id?: number | null
+  search_query?: string | null
+  poll_interval_seconds?: number
+  is_active?: boolean
+}
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -3749,6 +3823,61 @@ export const api = {
     return res.json()
   },
 
+  async getDefaultAgentSettings(): Promise<DefaultAgentsSettings> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch default agent settings')
+    return res.json()
+  },
+
+  async updateTenantDefaultAgent(agentId: number | null): Promise<{ tenant_default_agent_id: number | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/tenant`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: agentId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update tenant default agent')
+    return res.json()
+  },
+
+  async updateInstanceDefaultAgent(
+    channelType: string,
+    instanceId: number,
+    agentId: number | null,
+  ): Promise<DefaultAgentInstanceBinding> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/settings/default-agents/instances/${encodeURIComponent(channelType)}/${instanceId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: agentId }),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to update instance default agent')
+    return res.json()
+  },
+
+  async upsertUserChannelDefaultAgent(payload: {
+    channel_type: string
+    user_identifier: string
+    agent_id: number
+  }): Promise<UserChannelDefaultAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save user default agent')
+    return res.json()
+  },
+
+  async deleteUserChannelDefaultAgent(userDefaultId: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/users/${userDefaultId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete user default agent')
+    return res.json()
+  },
+
   async getAgentSkills(agentId: number): Promise<AgentSkill[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skills`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent skills')
@@ -4942,6 +5071,38 @@ export const api = {
   async getTelegramHealth(id: number): Promise<TelegramHealthStatus> {
     const res = await authenticatedFetch(`${API_URL}/api/telegram/instances/${id}/health`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Telegram health')
+    return res.json()
+  },
+
+  async listEmailTriggers(): Promise<EmailTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch email triggers')
+    return res.json()
+  },
+
+  async getEmailTrigger(id: number): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch email trigger')
+    return res.json()
+  },
+
+  async createEmailTrigger(data: EmailTriggerCreateRequest): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create email trigger')
+    return res.json()
+  },
+
+  async updateEmailTrigger(id: number, data: EmailTriggerUpdateRequest): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update email trigger')
     return res.json()
   },
 
