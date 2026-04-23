@@ -9,6 +9,16 @@ interface Props {
   agentId: number
 }
 
+const MAX_DOCUMENT_TAGS = 12
+const MAX_DOCUMENT_TAG_LENGTH = 48
+
+function parseKnowledgeTags(input: string): string[] {
+  return input
+    .split(/[,\n]/)
+    .map((tag) => tag.trim().toLowerCase().replace(/\s+/g, ' '))
+    .filter(Boolean)
+}
+
 export default function AgentKnowledgeManager({ agentId }: Props) {
   const [documents, setDocuments] = useState<AgentKnowledge[]>([])
   const [selectedDoc, setSelectedDoc] = useState<AgentKnowledge | null>(null)
@@ -23,6 +33,16 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
   const [editDocumentName, setEditDocumentName] = useState('')
   const [editTagsText, setEditTagsText] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+
+  const normalizedEditTags = parseKnowledgeTags(editTagsText)
+  const uniqueEditTags = Array.from(new Set(normalizedEditTags))
+  const overlongTag = uniqueEditTags.find((tag) => tag.length > MAX_DOCUMENT_TAG_LENGTH)
+  const tagValidationError =
+    uniqueEditTags.length > MAX_DOCUMENT_TAGS
+      ? `Use up to ${MAX_DOCUMENT_TAGS} tags per document.`
+      : overlongTag
+        ? `Each tag must be ${MAX_DOCUMENT_TAG_LENGTH} characters or fewer.`
+        : null
 
   useEffect(() => {
     loadDocuments()
@@ -136,10 +156,12 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       return
     }
 
-    const tags = editTagsText
-      .split(/[,\n]/)
-      .map((tag) => tag.trim())
-      .filter(Boolean)
+    if (tagValidationError) {
+      alert(tagValidationError)
+      return
+    }
+
+    const tags = uniqueEditTags
 
     setSavingEdit(true)
     try {
@@ -152,7 +174,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       closeEditDocument()
     } catch (err) {
       console.error('Failed to update document metadata:', err)
-      alert('Failed to update document details')
+      alert(err instanceof Error ? err.message : 'Failed to update document details')
       setSavingEdit(false)
     }
   }
@@ -477,8 +499,14 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                   className="w-full px-4 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
                 />
                 <p className="text-xs text-tsushin-muted mt-2">
-                  Separate tags with commas or line breaks. Tags are normalized to lowercase and deduplicated.
+                  Separate tags with commas or line breaks. Up to {MAX_DOCUMENT_TAGS} tags, {MAX_DOCUMENT_TAG_LENGTH} characters each. Tags are normalized to lowercase and deduplicated before save.
                 </p>
+                <p className="text-xs text-tsushin-muted mt-1">
+                  {uniqueEditTags.length}/{MAX_DOCUMENT_TAGS} tags
+                </p>
+                {tagValidationError && (
+                  <p className="text-xs text-red-400 mt-2">{tagValidationError}</p>
+                )}
               </div>
             </div>
 
@@ -493,7 +521,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
               <button
                 onClick={saveDocumentMetadata}
                 className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
-                disabled={savingEdit}
+                disabled={savingEdit || !!tagValidationError}
               >
                 {savingEdit ? 'Saving...' : 'Save Changes'}
               </button>
