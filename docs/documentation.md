@@ -131,6 +131,17 @@ Tsushin spawns per-tenant containers outside the compose stack, all joining `tsu
 
 Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.py:114`, `backend/services/mcp_container_manager.py:234`.
 
+### 2.4 v0.7.0 Phase 0 foundation
+
+v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent, Whisper/Speaches, and policy tracks build on.
+
+* **Migration slots** — `docs/internal/v0.7.0-migration-slots.md` reserves `0045-0058` so parallel release tracks do not collide.
+* **Queue durability** — `message_queue.message_type` distinguishes `inbound_message`, `trigger_event`, and `continuous_task`; Phase 0 keeps `agent_id` and `sender_key` non-null.
+* **Trigger-event dedupe** — `channel_event_dedupe` stores tenant-scoped idempotency outcomes with audit-style retention.
+* **Container ports** — `backend/services/container_runtime.py` owns inclusive `PORT_RANGES` for dynamically managed services, including Whisper/Speaches on `6400-6499` and SearXNG on `6500-6599`.
+* **Sentinel detection defaults** — `continuous_agent_action_approval` is registered as a first-class detection type and exposed through `/api/sentinel/detection-types`.
+* **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
+
 ---
 
 ## 3. Quick Start

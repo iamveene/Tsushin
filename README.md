@@ -137,6 +137,16 @@ curl http://localhost:8081/api/readiness   # Readiness (checks PostgreSQL)
 docker compose ps                          # Container states
 ```
 
+### Development QA
+
+v0.7.0 adds a frontend visual baseline suite for release preparation:
+
+```bash
+npm --prefix frontend run test:visual
+```
+
+The committed baselines live under `frontend/tests/visual/`; private reports, traces, and temporary screenshots stay in `.private/qa/v0.7.0/`.
+
 ---
 
 ## Architecture

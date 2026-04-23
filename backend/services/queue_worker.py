@@ -38,6 +38,8 @@ class QueueWorker:
         # Active processing tasks per (tenant_id, agent_id)
         self._active_tasks: Dict[Tuple[str, int], asyncio.Task] = {}
         self.SessionLocal = sessionmaker(bind=engine)
+        from services.queue_router import queue_router
+        self.queue_router = queue_router
 
     async def start(self):
         """Start the queue worker."""
@@ -240,11 +242,12 @@ class QueueWorker:
 
                 queue_id = item.id
                 channel = item.channel
+                message_type = getattr(item, "message_type", None) or "inbound_message"
                 payload = item.payload
 
                 logger.info(
                     f"Processing queue item {queue_id} "
-                    f"(channel={channel}, tenant={tenant_id}, agent={agent_id})"
+                    f"(type={message_type}, channel={channel}, tenant={tenant_id}, agent={agent_id})"
                 )
 
                 # Send WebSocket notification that processing has started
@@ -254,25 +257,7 @@ class QueueWorker:
                     logger.warning(f"Failed to send processing_started WebSocket notification: {e}")
 
                 try:
-                    result = None
-                    if channel == "playground":
-                        result = await self._process_playground_message(db, item)
-                    elif channel == "whatsapp":
-                        await self._process_whatsapp_message(db, item)
-                    elif channel == "telegram":
-                        await self._process_telegram_message(db, item)
-                    elif channel == "webhook":
-                        result = await self._process_webhook_message(db, item)
-                    elif channel == "api":
-                        result = await self._process_api_message(db, item)
-                    elif channel == "slack":
-                        # V060-CHN-002
-                        await self._process_slack_message(db, item)
-                    elif channel == "discord":
-                        # V060-CHN-002
-                        await self._process_discord_message(db, item)
-                    else:
-                        raise ValueError(f"Unknown channel: {channel}")
+                    result = await self.queue_router.dispatch(self, db, item)
 
                     # Mark as completed, persisting result for poll retrieval
                     service.mark_completed(queue_id, result=result)

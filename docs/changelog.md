@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Build Prep — v0.7.0 Phase 0 foundation (2026-04-23)
+
+Phase 0 of v0.7.0 now has the serial foundation needed before release-track worktrees fan out.
+
+**Added:**
+- Alembic `0045` for `message_queue.message_type`, the `channel_event_dedupe` audit ledger, and Sentinel continuous-agent approval toggles.
+- Central inclusive `PORT_RANGES` in `backend/services/container_runtime.py`, shared by vector-store, SearXNG, Kokoro, Ollama, MCP, and future Whisper/Speaches provisioning.
+- `backend/services/queue_router.py`, preserving the existing `playground`, `whatsapp`, `telegram`, `webhook`, `api`, `slack`, and `discord` inbound branches while reserving `trigger_event` and `continuous_task` discriminators.
+- Sentinel `continuous_agent_action_approval` detection registration, heuristics, idempotent seed defaults, and effective-config plumbing surfaced through `/api/sentinel/detection-types`.
+- Frontend Playwright visual baseline scaffolding under `frontend/tests/visual/` with deterministic committed baselines and private runtime output under `.private/qa/v0.7.0/`.
+- Internal Phase 0 docs for migration slots, FK cascade decisions, Speaches auth, and background-job durability.
+
 ### Fix — ProviderWizard Review step showed misleading "Models — Missing" deadlock for TTS (2026-04-22)
 
 After the previous fix made OpenAI/Gemini TTS visible in the Add Provider wizard, the user reported the Review step (Step 6) still showed "**Models — Missing — go back and add at least one.**" in red for cloud TTS providers. Even though the Create button was technically enabled (no `disabled` attribute), the strong visual signal made the UX appear deadlocked — the user couldn't tell whether finalizing would work. Same pattern as the StepTestAndModels gate fix: a row that's load-bearing for LLM providers (`available_models`) was rendered uncritically for TTS, where the concept doesn't apply.

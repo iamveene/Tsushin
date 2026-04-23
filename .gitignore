@@ -91,6 +91,8 @@ frontend/build/
 
 # Build artifacts
 frontend/tsconfig.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
 
 # Dependencies
 /package-lock.json

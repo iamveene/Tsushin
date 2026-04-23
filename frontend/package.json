@@ -7,7 +7,10 @@
     "dev": "next dev -p 3030",
     "build": "next build --webpack",
     "start": "next start -p 3030",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:visual": "playwright test -c playwright.config.ts",
+    "test:visual:update": "playwright test -c playwright.config.ts --update-snapshots"
   },
   "dependencies": {
     "@xyflow/react": "^12.0.0",
@@ -22,6 +25,7 @@
     "typescript": "^5.3.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/dagre": "^0.7.53",
     "@types/node": "^20.11.5",
     "@types/react": "^19.2.2",
