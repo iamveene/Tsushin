@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fix — ProviderWizard (Hub → Add Provider) was missing OpenAI TTS and Gemini TTS vendor cards (2026-04-22)
+
+User-visible symptom: opening Hub → AI Providers → "+ New Instance" → Modality=TTS → Hosting=Cloud showed only **ElevenLabs** with the message "Only one provider fits your choices — click to continue". Tenants couldn't use this wizard to register Google Gemini TTS or OpenAI TTS as a provider, despite the backend `TTSProviderRegistry` already supporting them and the Audio Agents Wizard surfacing them correctly.
+
+**Root cause — drift between three frontend surfaces vs. one backend registry.** `frontend/components/provider-wizard/steps/StepVendorSelect.tsx:44` had a hardcoded `TTS_CLOUD: VendorOption[]` array containing only ElevenLabs, while `frontend/components/audio-wizard/AudioProviderFields.tsx:44-49` (FALLBACK_PROVIDER_CARDS), `frontend/components/audio-wizard/defaults.ts:9` (AudioProvider type union), and `backend/hub/providers/tts_registry.py` all listed 4 providers. The existing wizard-drift guard (Guard 2 in `backend/tests/test_wizard_drift.py`) only checked the `AudioProvider` type union — it never noticed the ProviderWizard's parallel hardcoded list.
+
+**Fix:**
+- `frontend/components/provider-wizard/steps/StepVendorSelect.tsx`: added OpenAI TTS and Gemini TTS to `TTS_CLOUD` with copy that explicitly notes the API key is reused from the LLM/Image cards (no need to re-enter). Now tenants see all 3 cloud TTS vendors in step 3 of the wizard.
+- `frontend/components/provider-wizard/steps/StepProgress.tsx`: extended the cloud-TTS save branch (previously only matched `vendor === 'elevenlabs'`) to also handle `openai` and `gemini` via the same `POST /api/api-keys` upsert path. The endpoint is idempotent (`create_or_update_api_key`) so re-saving an existing key from the LLM flow is non-destructive — refreshes the encrypted blob and bumps `updated_at`.
+- `frontend/components/provider-wizard/steps/StepTestAndModels.tsx`: previously gated Next on `draft.available_models.length > 0`, which broke the TTS path entirely (TTS providers don't expose `available_models` the same way LLMs do). Now bypasses the gate when `modality === 'tts'` and renders a per-vendor info card explaining that voices and TTS models are picked per-agent in the Audio Agents Wizard (`/api/tts-providers/{provider}/models` and `/voices` are the runtime source of truth, not this credential step).
+
+**Drift prevention — Guard 2 expanded to cover ALL TTS-provider surfaces.** The wizard-drift test in `backend/tests/test_wizard_drift.py` now asserts that every backend-registered TTS provider appears in **5 frontend surfaces**, not just 1:
+1. `AudioProvider` type union in `defaults.ts` (existing)
+2. `FALLBACK_PROVIDER_CARDS` in `AudioProviderFields.tsx` (new)
+3. `PROVIDER_COPY` marketing dict in `AudioProviderFields.tsx` (new)
+4. `VOICE_AGENT_DEFAULTS` per-provider templates in `defaults.ts` (new)
+5. `TTS_CLOUD` + `TTS_LOCAL` in `provider-wizard/StepVendorSelect.tsx` (new — the surface that drifted in this bug)
+6. The cloud-TTS save branch condition in `StepProgress.tsx` (new — registered providers minus Kokoro must all appear in the OR-chain, otherwise save silently falls through to the LLM path and 400s)
+
+If any of these 6 surfaces miss a backend-registered provider in the future, the test fails with a precise pointer to which surface and which provider id is missing.
+
+**Studio audit — no additional drift found.** The Studio's quick-create modal (`frontend/components/watcher/studio/StudioAgentSelector.tsx`) for Voice/Hybrid agents already delegates to `openAudioWizard()` (the AudioAgentsWizard with the new model picker), and its LLM picker is fully API-driven via `api.getProviderInstances()`. The "Open full create flow" link routes to the regular Agent Wizard's `StepAudio` (also fixed). No hardcoded TTS provider lists in the Studio surfaces.
+
+**Verified end-to-end (Playwright, 9/9 checks):** Hub → Add Provider → TTS + Cloud now shows all 3 vendors with correct copy; selecting Gemini → Step 4 credentials renders normally; Step 5 unblocks for TTS modality and shows a "Voices & TTS models" info card pointing to the Audio Agents Wizard; Self-hosted shows only Kokoro (TTS_LOCAL unchanged). 0 console errors.
+
 ### Feat — Gemini TTS multi-model support + image-generation catalog consolidation (2026-04-22)
 
 **TTS:** Tsushin's Gemini TTS provider previously hardcoded a single model id (`gemini-3.1-flash-tts-preview`). Tenants can now pick between three Gemini TTS preview models per agent — Fast (`gemini-2.5-flash-tts-preview`), Balanced (`gemini-3.1-flash-tts-preview`, default — preserves prior behavior), and Quality (`gemini-2.5-pro-tts-preview`). The selection is exposed in both the Audio Agents Wizard and the regular Agent Wizard's audio step, persists into `AgentSkill.config.model`, and is delivered into the SDK call without changing the existing voice / language / format surface.
