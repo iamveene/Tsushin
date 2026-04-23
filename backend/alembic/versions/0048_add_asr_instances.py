@@ -13,7 +13,7 @@ Idempotency is guarded via `sa.inspect(bind)` so partially-applied schemas
 remain safe to re-run.
 
 Revision ID: 0048
-Revises: 0045
+Revises: 0046
 Create Date: 2026-04-23
 """
 from typing import Sequence, Union
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0048"
-down_revision: Union[str, None] = "0045"
+down_revision: Union[str, None] = "0046"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
