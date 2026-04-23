@@ -42,7 +42,7 @@ def _speaches_image() -> str:
 VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     "speaches": {
         "internal_port": 8000,
-        "volume_bind": "/home/ubuntu/.cache/huggingface/hub",
+        "volume_bind": "/root/.cache/huggingface",
         "default_mem_limit": "2g",
         "healthcheck_path": "/health",
     },

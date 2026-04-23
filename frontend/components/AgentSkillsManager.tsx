@@ -6,12 +6,13 @@ import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
-  SearchIcon, AlertTriangleIcon, CheckIcon, MessageIcon, FileTextIcon,
+  SearchIcon, AlertTriangleIcon, CheckIcon,
   IconProps,
 } from '@/components/ui/icons'
 import AddSkillModal from './skills/AddSkillModal'
 import ToggleSwitch from './ui/ToggleSwitch'
 import { HIDDEN_SKILLS, SPECIAL_RENDERED_SKILLS, SKILL_DISPLAY_INFO, getSkillDisplay } from './skills/skill-constants'
+import { AudioTranscriptFields } from '@/components/audio-wizard/AudioProviderFields'
 
 interface Props {
   agentId: number
@@ -26,6 +27,99 @@ const PROVIDER_SKILLS = {
 
 // Audio sub-skill tabs
 type AudioTab = 'tts' | 'transcript'
+type TranscriptResponseMode = 'conversational' | 'transcript_only'
+type TranscriptASRMode = 'openai' | 'tenant_default' | 'instance'
+type SkillConfig = Record<string, unknown>
+
+interface ConfigSchemaProperty extends SkillConfig {
+  type?: string
+  default?: unknown
+  title?: string
+  description?: string
+  options?: Array<string | number>
+  enum?: Array<string | number>
+  min?: number
+  max?: number
+  step?: number
+}
+
+interface CapabilityConfig extends SkillConfig {
+  enabled?: boolean
+  label?: string
+  description?: string
+}
+
+interface CustomSkillAssignment {
+  custom_skill_id: number
+}
+
+interface CustomSkillSummary {
+  id: number
+  is_enabled: boolean
+  name?: string
+  description?: string
+}
+
+interface ShellSkillConfig extends SkillConfig {
+  execution_mode?: string
+  wait_for_result?: boolean
+  default_timeout?: number
+}
+
+interface ShellBeacon {
+  is_online?: boolean
+  hostname?: string
+  name?: string
+  last_seen?: string
+}
+
+interface WebSearchProviderWithPricing extends SkillProvider {
+  pricing?: {
+    description?: string
+  }
+}
+
+interface SkillProviderWithDefault extends SkillProvider {
+  is_default?: boolean
+}
+
+interface TranscriptSkillConfig extends Record<string, unknown> {
+  language: string
+  model: string
+  response_mode: TranscriptResponseMode
+  asr_mode: TranscriptASRMode
+  asr_instance_id: number | null
+}
+
+function normalizeTranscriptConfig(
+  config: Record<string, unknown> | null | undefined,
+): TranscriptSkillConfig {
+  const raw = config || {}
+  const rawAsrMode = raw.asr_mode
+  const asrMode: TranscriptASRMode =
+    rawAsrMode === 'openai' || rawAsrMode === 'tenant_default' || rawAsrMode === 'instance'
+      ? rawAsrMode
+      : raw.asr_instance_id
+        ? 'instance'
+        : 'openai'
+
+  const normalized: TranscriptSkillConfig = {
+    ...raw,
+    language: typeof raw.language === 'string' ? raw.language : 'auto',
+    model: typeof raw.model === 'string' ? raw.model : 'whisper-1',
+    response_mode: raw.response_mode === 'transcript_only' ? 'transcript_only' : 'conversational',
+    asr_mode: asrMode,
+    asr_instance_id: typeof raw.asr_instance_id === 'number' ? raw.asr_instance_id : null,
+  }
+  if (normalized.asr_mode !== 'instance') {
+    normalized.asr_instance_id = null
+  }
+  return normalized
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
 
 export default function AgentSkillsManager({ agentId }: Props) {
   const [availableSkills, setAvailableSkills] = useState<SkillDefinition[]>([])
@@ -34,7 +128,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [loading, setLoading] = useState(true)
   const [configuring, setConfiguring] = useState<string | null>(null)
   const [configuringProvider, setConfiguringProvider] = useState<string | null>(null)
-  const [configData, setConfigData] = useState<Record<string, any>>({})
+  const [configData, setConfigData] = useState<SkillConfig>({})
 
   // Provider configuration state
   const [schedulerProviders, setSchedulerProviders] = useState<SkillProvider[]>([])
@@ -60,12 +154,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [ttsConfig, setTTSConfig] = useState<AgentTTSConfig>({ provider: 'kokoro', voice: 'pf_dora', language: 'pt', speed: 1.0 })
 
   // Transcript config state
-  const [transcriptConfig, setTranscriptConfig] = useState<Record<string, any>>({ language: 'auto', model: 'whisper-1', response_mode: 'conversational' })
+  const [transcriptConfig, setTranscriptConfig] = useState<TranscriptSkillConfig>(normalizeTranscriptConfig(undefined))
 
   // Shell skill state
   const [configuringShell, setConfiguringShell] = useState(false)
-  const [shellConfig, setShellConfig] = useState<Record<string, any>>({ wait_for_result: false, default_timeout: 60 })
-  const [shellBeacons, setShellBeacons] = useState<any[]>([])
+  const [shellConfig, setShellConfig] = useState<ShellSkillConfig>({ wait_for_result: false, default_timeout: 60 })
+  const [shellBeacons, setShellBeacons] = useState<ShellBeacon[]>([])
 
   // Skill-level security profile state (v1.6.0 Phase E)
   const [securityProfiles, setSecurityProfiles] = useState<SentinelProfile[]>([])
@@ -74,9 +168,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const securityPopoverRef = useRef<HTMLDivElement>(null)
 
   // Phase 24: Custom Skills state
-  const [customSkillAssignments, setCustomSkillAssignments] = useState<any[]>([])
-  const [availableCustomSkills, setAvailableCustomSkills] = useState<any[]>([])
-  const [showCustomSkillPicker, setShowCustomSkillPicker] = useState(false)
+  const [customSkillAssignments, setCustomSkillAssignments] = useState<CustomSkillAssignment[]>([])
+  const [availableCustomSkills, setAvailableCustomSkills] = useState<CustomSkillSummary[]>([])
 
   // Add Skill modal state
   const [showAddSkillModal, setShowAddSkillModal] = useState(false)
@@ -123,6 +216,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }, [agentId])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [loadData])
 
@@ -142,15 +236,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
     return agentSkills.some(s => s.skill_type === skillType && s.is_enabled)
   }
 
-  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): Record<string, any> => {
+  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): SkillConfig => {
     if (!skillDef) return {}
 
-    const schemaDefaults: Record<string, any> = {}
-    const schemaProperties = skillDef.config_schema?.properties || {}
+    const schemaDefaults: SkillConfig = {}
+    const schemaProperties = (skillDef.config_schema?.properties || {}) as Record<string, ConfigSchemaProperty>
 
     Object.entries(schemaProperties).forEach(([key, schema]) => {
-      if ((schema as any).default !== undefined) {
-        schemaDefaults[key] = (schema as any).default
+      if (schema.default !== undefined) {
+        schemaDefaults[key] = schema.default
       }
     })
 
@@ -160,7 +254,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const getSkillConfig = (skillType: string): Record<string, any> => {
+  const getSkillConfig = (skillType: string): SkillConfig => {
     const skill = agentSkills.find(s => s.skill_type === skillType)
     const skillDef = availableSkills.find(s => s.skill_type === skillType)
     return {
@@ -183,9 +277,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
         await api.disableAgentSkill(agentId, skillType)
       }
       loadData()
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to toggle skill:', err)
-      alert(err?.message || 'Failed to toggle skill')
+      alert(errorMessage(err, 'Failed to toggle skill'))
     }
   }
 
@@ -209,9 +303,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       } else {
         openConfig(skillType)
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to add skill:', err)
-      alert(err?.message || 'Failed to add skill')
+      alert(errorMessage(err, 'Failed to add skill'))
     }
   }
 
@@ -311,8 +405,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Load current integration for this skill
       const skillType = PROVIDER_SKILLS[providerKey].skillType
       const integration = getSkillIntegration(skillType)
+      const providersWithDefaults = providers as SkillProviderWithDefault[]
       const defaultProvider =
-        (providers.find((p: any) => p.is_default)?.provider_type)
+        (providersWithDefaults.find(p => p.is_default)?.provider_type)
         || providers[0]?.provider_type
         || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : 'brave'))
 
@@ -350,7 +445,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       const skillType = PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].skillType
 
       // Build config with permissions (for Google Calendar)
-      const config: Record<string, any> = {}
+      const config: SkillConfig = {}
       if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar') {
         config.permissions = providerPermissions
       }
@@ -380,10 +475,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
         // Make sure the skill is enabled
         if (!isSkillEnabled(skillType)) {
           const skillDef = availableSkills.find(s => s.skill_type === skillType)
-          const defaultConfig: Record<string, any> = {}
+          const defaultConfig: SkillConfig = {}
           if (skillDef) {
-            Object.entries(skillDef.config_schema || {}).forEach(([key, schema]) => {
-              defaultConfig[key] = (schema as any).default
+            Object.entries((skillDef.config_schema || {}) as Record<string, ConfigSchemaProperty>).forEach(([key, schema]) => {
+              defaultConfig[key] = schema.default
             })
           }
           await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
@@ -431,9 +526,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Load current transcript config
       const transcriptSkill = agentSkills.find(s => s.skill_type === 'audio_transcript')
       if (transcriptSkill?.config) {
-        setTranscriptConfig(transcriptSkill.config)
+        setTranscriptConfig(normalizeTranscriptConfig(transcriptSkill.config))
       } else {
-        setTranscriptConfig({ language: 'auto', model: 'whisper-1', response_mode: 'conversational' })
+        setTranscriptConfig(normalizeTranscriptConfig(undefined))
       }
     } catch (err) {
       console.error('Failed to load audio config:', err)
@@ -519,13 +614,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const renderCapabilitiesConfig = (capabilities: Record<string, any>) => {
+  const renderCapabilitiesConfig = (capabilities: Record<string, unknown>) => {
     return (
       <div className="space-y-3">
-        {Object.entries(capabilities).map(([capKey, capValue]: [string, any]) => {
-          const capEnabled = capValue?.enabled ?? true
-          const capLabel = capValue?.label || capKey.replace(/_/g, ' ')
-          const capDesc = capValue?.description || ''
+        {Object.entries(capabilities).map(([capKey, capValue]) => {
+          const capConfig = (
+            typeof capValue === 'object' && capValue !== null ? capValue : {}
+          ) as CapabilityConfig
+          const capEnabled = capConfig.enabled ?? true
+          const capLabel = capConfig.label || capKey.replace(/_/g, ' ')
+          const capDesc = capConfig.description || ''
 
           return (
             <div
@@ -538,10 +636,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 onChange={(e) => {
                   const newConfig = { ...configData }
                   if (!newConfig.capabilities) newConfig.capabilities = {}
-                  if (!newConfig.capabilities[capKey]) {
-                    newConfig.capabilities[capKey] = { ...capValue }
+                  const capabilityMap = newConfig.capabilities as Record<string, CapabilityConfig>
+                  if (!capabilityMap[capKey]) {
+                    capabilityMap[capKey] = { ...capConfig }
                   }
-                  newConfig.capabilities[capKey].enabled = e.target.checked
+                  capabilityMap[capKey].enabled = e.target.checked
                   setConfigData(newConfig)
                 }}
                 className="mt-1 w-5 h-5"
@@ -563,11 +662,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
-  const renderConfigInput = (key: string, schema: any, value: any) => {
+  const renderConfigInput = (key: string, schema: ConfigSchemaProperty, value: unknown) => {
     const inputClasses = "w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
 
     if (key === 'capabilities' && schema.type === 'object' && value) {
-      return renderCapabilitiesConfig(value)
+      return renderCapabilitiesConfig(value as Record<string, unknown>)
     }
 
     if (schema.type === 'boolean') {
@@ -575,7 +674,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         <label className="flex items-center cursor-pointer">
           <input
             type="checkbox"
-            checked={value !== undefined ? value : schema.default}
+            checked={Boolean(value !== undefined ? value : schema.default)}
             onChange={(e) => setConfigData({ ...configData, [key]: e.target.checked })}
             className="mr-2 w-5 h-5"
           />
@@ -587,7 +686,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
 
     if (schema.type === 'array') {
-      const arrayValue = value || schema.default || []
+      const arrayValue = Array.isArray(value)
+        ? value.map(String)
+        : Array.isArray(schema.default)
+          ? schema.default.map(String)
+          : []
       return (
         <ArrayConfigInput
           value={arrayValue}
@@ -601,11 +704,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
       const options = schema.options || schema.enum || []
       return (
         <select
-          value={value || schema.default}
+          value={String(value || schema.default || '')}
           onChange={(e) => setConfigData({ ...configData, [key]: e.target.value })}
           className={inputClasses}
         >
-          {options.map((opt: string) => (
+          {options.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
@@ -616,7 +719,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       return (
         <input
           type="number"
-          value={value !== undefined ? value : (schema.default || 0)}
+          value={String(value !== undefined ? value : (schema.default || 0))}
           onChange={(e) => setConfigData({ ...configData, [key]: parseFloat(e.target.value) })}
           className={inputClasses}
           min={schema.min}
@@ -629,7 +732,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     return (
       <input
         type="text"
-        value={value || schema.default || ''}
+        value={String(value || schema.default || '')}
         onChange={(e) => setConfigData({ ...configData, [key]: e.target.value })}
         className={inputClasses}
       />
@@ -653,7 +756,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       }
       setSkillSecurityPopover(null)
       loadData()
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to update skill security:', err)
     }
   }
@@ -959,7 +1062,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
             {transcriptEnabled && (
               <div className="text-xs text-tsushin-muted">
-                Whisper • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
+                {transcriptConfigData.asr_mode === 'instance'
+                  ? 'Pinned local ASR'
+                  : transcriptConfigData.asr_mode === 'tenant_default'
+                    ? 'Tenant default ASR'
+                    : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
               </div>
             )}
           </div>
@@ -989,7 +1096,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
                     <div className="text-xs text-tsushin-muted mb-1">STT Model</div>
                     <div className="font-medium text-sm text-white">
-                      Whisper
+                      {transcriptConfigData.asr_mode === 'instance'
+                        ? 'Pinned local'
+                        : transcriptConfigData.asr_mode === 'tenant_default'
+                          ? 'Tenant default'
+                          : 'OpenAI Whisper'}
                     </div>
                   </div>
                   <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
@@ -1044,8 +1155,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
       try {
         const response = await fetch('/api/shell/beacons')
         if (response.ok) {
-          const beacons = await response.json()
-          setShellBeacons(beacons.filter((b: any) => b.is_online))
+          const beacons = (await response.json()) as ShellBeacon[]
+          setShellBeacons(beacons.filter(b => b.is_online))
         }
       } catch {
         setShellBeacons([])
@@ -1245,7 +1356,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }, [agentSkills])
 
   const assignedCustomSkillIds = useMemo(() => {
-    return new Set(customSkillAssignments.map((a: any) => a.custom_skill_id))
+    return new Set(customSkillAssignments.map(a => a.custom_skill_id))
   }, [customSkillAssignments])
 
   // Filter which provider skills are enabled
@@ -1507,7 +1618,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           }
                         </p>
                         <p className="text-xs mt-1">
-                          {(selectedProviderData as any).pricing?.description || 'Web search provider'}
+                          {(selectedProviderData as WebSearchProviderWithPricing).pricing?.description || 'Web search provider'}
                         </p>
                       </div>
                     </div>
@@ -1802,112 +1913,30 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     />
                   </div>
 
-                  {/* Response Mode */}
-                  <div>
-                    <label className="block text-sm font-medium mb-3">Response Mode</label>
-                    <div className="space-y-2">
-                      <div
-                        onClick={() => setTranscriptConfig(prev => ({ ...prev, response_mode: 'conversational' }))}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          transcriptConfig.response_mode === 'conversational'
-                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-tsushin-border hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium flex items-center gap-1.5"><MessageIcon size={14} /> Conversational</div>
-                            <div className="text-sm text-tsushin-muted">
-                              Transcribe audio → Pass to AI → Natural response
-                            </div>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            transcriptConfig.response_mode === 'conversational'
-                              ? 'border-teal-500 bg-teal-500'
-                              : 'border-tsushin-border'
-                          }`}>
-                            {transcriptConfig.response_mode === 'conversational' && (
-                              <div className="w-2 h-2 rounded-full bg-white" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        onClick={() => setTranscriptConfig(prev => ({ ...prev, response_mode: 'transcript_only' }))}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          transcriptConfig.response_mode === 'transcript_only'
-                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-tsushin-border hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium flex items-center gap-1.5"><FileTextIcon size={14} /> Transcript Only</div>
-                            <div className="text-sm text-tsushin-muted">
-                              Transcribe audio → Return raw transcript text (no AI)
-                            </div>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            transcriptConfig.response_mode === 'transcript_only'
-                              ? 'border-teal-500 bg-teal-500'
-                              : 'border-tsushin-border'
-                          }`}>
-                            {transcriptConfig.response_mode === 'transcript_only' && (
-                              <div className="w-2 h-2 rounded-full bg-white" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Language */}
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Language Detection</label>
-                    <select
-                      value={transcriptConfig.language || 'auto'}
-                      onChange={(e) => setTranscriptConfig(prev => ({ ...prev, language: e.target.value }))}
-                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-                    >
-                      <option value="auto">Auto-detect</option>
-                      <option value="pt">🇧🇷 Portuguese</option>
-                      <option value="en">🇺🇸 English</option>
-                      <option value="es">🇪🇸 Spanish</option>
-                      <option value="fr">🇫🇷 French</option>
-                      <option value="de">🇩🇪 German</option>
-                      <option value="it">🇮🇹 Italian</option>
-                      <option value="ja">🇯🇵 Japanese</option>
-                      <option value="ko">🇰🇷 Korean</option>
-                      <option value="zh">🇨🇳 Chinese</option>
-                    </select>
-                  </div>
-
-                  {/* Model */}
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Whisper Model</label>
-                    <select
-                      value={transcriptConfig.model || 'whisper-1'}
-                      onChange={(e) => setTranscriptConfig(prev => ({ ...prev, model: e.target.value }))}
-                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-                    >
-                      <option value="whisper-1">whisper-1 (Standard)</option>
-                    </select>
-                  </div>
-
-                  {/* Info Box */}
-                  <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg">
-                    <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200 flex items-center gap-1.5"><AlertTriangleIcon size={14} /> OpenAI API Key Required</p>
-                    <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
-                      Uses OpenAI Whisper API. Cost: ~$0.006 per minute of audio.
-                    </p>
-                  </div>
+                  <AudioTranscriptFields
+                    value={{
+                      responseMode: transcriptConfig.response_mode || 'conversational',
+                      language: transcriptConfig.language || 'auto',
+                      model: transcriptConfig.model || 'whisper-1',
+                      asrMode: transcriptConfig.asr_mode || 'openai',
+                      asrInstanceId: transcriptConfig.asr_instance_id ?? null,
+                    }}
+                    onChange={(patch) => setTranscriptConfig(prev => normalizeTranscriptConfig({
+                      ...prev,
+                      response_mode: patch.responseMode !== undefined ? patch.responseMode : prev.response_mode,
+                      language: patch.language !== undefined ? patch.language : prev.language,
+                      model: patch.model !== undefined ? patch.model : prev.model,
+                      asr_mode: patch.asrMode !== undefined ? patch.asrMode : prev.asr_mode,
+                      asr_instance_id: patch.asrInstanceId !== undefined ? patch.asrInstanceId : prev.asr_instance_id,
+                    }))}
+                  />
 
                   {/* TTS Conflict Warning */}
                   {transcriptConfig.response_mode === 'transcript_only' && isSkillEnabled('audio_tts') && (
                     <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg">
                       <p className="text-sm font-medium text-red-800 dark:text-red-200 flex items-center gap-1.5"><AlertTriangleIcon size={14} /> TTS Conflict</p>
                       <p className="text-xs text-red-700 dark:text-red-300 mt-1">
-                        "Transcript Only" mode cannot be used with TTS Response enabled. The transcript bypasses AI processing, so there's no text to convert to speech.
+                        &quot;Transcript Only&quot; mode cannot be used with TTS Response enabled. The transcript bypasses AI processing, so there&apos;s no text to convert to speech.
                       </p>
                     </div>
                   )}
@@ -2019,7 +2048,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><BotIcon size={14} /> Agentic (Natural Language)</div>
                             <div className="text-sm text-tsushin-muted">
-                              Both <code>/shell</code> AND natural language like "list files in /tmp" work.
+                              Both <code>/shell</code> AND natural language like &quot;list files in /tmp&quot; work.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
@@ -2120,7 +2149,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <label className="block text-sm font-medium mb-2">Connected Beacons</label>
                     {shellBeacons.length > 0 ? (
                       <div className="space-y-2">
-                        {shellBeacons.map((beacon: any, idx: number) => (
+                        {shellBeacons.map((beacon, idx) => (
                           <div key={idx} className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg flex items-center justify-between">
                             <div>
                               <div className="font-medium text-green-700 dark:text-green-300 flex items-center gap-1.5">
@@ -2148,7 +2177,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <p className="text-sm font-medium text-orange-800 dark:text-orange-200 flex items-center gap-1.5"><TerminalIcon size={14} /> Shell Skill Usage</p>
                     <ul className="text-xs text-orange-700 dark:text-orange-300 mt-2 space-y-1">
                       <li>• <strong>Programmatic:</strong> Use <code>/shell &lt;command&gt;</code> for direct execution</li>
-                      <li>• <strong>Agentic:</strong> Ask naturally: "List files in /tmp"</li>
+                      <li>• <strong>Agentic:</strong> Ask naturally: &quot;List files in /tmp&quot;</li>
                       <li>• <strong>Note:</strong> /shell always uses fire-and-forget to avoid UI freezing</li>
                     </ul>
                   </div>
@@ -2192,14 +2221,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
             <div className="overflow-y-auto p-6 space-y-4 flex-1">
               {availableSkills.find(s => s.skill_type === configuring)?.config_schema?.properties &&
-                Object.entries(availableSkills.find(s => s.skill_type === configuring)!.config_schema.properties).map(([key, schema]) => (
+                Object.entries((availableSkills.find(s => s.skill_type === configuring)!.config_schema.properties || {}) as Record<string, ConfigSchemaProperty>).map(([key, schema]) => (
                   <div key={key}>
                     <label className="block text-sm font-medium mb-2 capitalize">
-                      {(schema as any).title || key.replace(/_/g, ' ')}
+                      {schema.title || key.replace(/_/g, ' ')}
                     </label>
                     {renderConfigInput(key, schema, configData[key])}
-                    {(schema as any).description && (
-                      <p className="text-xs text-tsushin-muted mt-1">{(schema as any).description}</p>
+                    {schema.description && (
+                      <p className="text-xs text-tsushin-muted mt-1">{schema.description}</p>
                     )}
                   </div>
                 ))}

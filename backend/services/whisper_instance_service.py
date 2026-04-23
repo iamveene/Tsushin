@@ -8,12 +8,15 @@ OpenAI-compatible Whisper/Speaches endpoints.
 import logging
 import secrets
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hub.security import TokenEncryption
 from models import ASRInstance
+from models_rbac import Tenant
 from services.encryption_key_service import get_api_key_encryption_key
 
 logger = logging.getLogger(__name__)
@@ -142,7 +145,7 @@ class WhisperInstanceService:
             error_detail = getattr(instance, "health_status_reason", None) or str(e)
             return (
                 f"{context} could not be auto-provisioned. "
-                "You can retry from Hub > Audio / ASR. "
+                "You can retry from Settings > ASR. "
                 f"Error: {error_detail}"
             )
 
@@ -161,6 +164,12 @@ class WhisperInstanceService:
             if value is not None and hasattr(instance, key):
                 setattr(instance, key, value)
         instance.updated_at = datetime.utcnow()
+        if instance.is_active is False:
+            WhisperInstanceService._clear_tenant_default_if_matches(
+                instance_id,
+                tenant_id,
+                db,
+            )
         db.commit()
         db.refresh(instance)
         return instance
@@ -172,8 +181,111 @@ class WhisperInstanceService:
             return False
         instance.is_active = False
         instance.updated_at = datetime.utcnow()
+        WhisperInstanceService._clear_tenant_default_if_matches(instance_id, tenant_id, db)
         db.commit()
         return True
+
+    @staticmethod
+    def set_tenant_default(
+        instance_id_or_none: Optional[int],
+        tenant_id: str,
+        db: Session,
+    ) -> Optional[int]:
+        """Atomically set the tenant's default ASR instance.
+
+        ``None`` means "use OpenAI Whisper by default". A concrete instance id
+        must belong to the calling tenant and remain active.
+        """
+        for attempt in range(2):
+            try:
+                tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+                if not tenant:
+                    raise ValueError(f"Tenant {tenant_id} not found")
+
+                db.execute(
+                    text("SELECT id FROM tenant WHERE id = :id FOR UPDATE"),
+                    {"id": tenant_id},
+                )
+
+                if instance_id_or_none is not None:
+                    instance = (
+                        db.query(ASRInstance)
+                        .filter(
+                            ASRInstance.id == instance_id_or_none,
+                            ASRInstance.tenant_id == tenant_id,
+                            ASRInstance.is_active == True,
+                        )
+                        .first()
+                    )
+                    if not instance:
+                        raise ValueError(
+                            f"ASR instance {instance_id_or_none} not found for tenant"
+                        )
+
+                tenant.default_asr_instance_id = instance_id_or_none
+                tenant.updated_at = datetime.utcnow()
+                db.commit()
+                return instance_id_or_none
+
+            except IntegrityError as e:
+                db.rollback()
+                if attempt == 0:
+                    logger.warning(
+                        "set_tenant_default IntegrityError for tenant=%s, retrying: %s",
+                        tenant_id,
+                        e,
+                    )
+                    continue
+                logger.error(
+                    "set_tenant_default failed after retry for tenant=%s: %s",
+                    tenant_id,
+                    e,
+                )
+                raise
+
+        return instance_id_or_none
+
+    @staticmethod
+    def get_tenant_default(
+        tenant_id: str, db: Session
+    ) -> Tuple[Optional[int], Optional[ASRInstance]]:
+        """Return the tenant default ASR instance, if one is configured."""
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant or not tenant.default_asr_instance_id:
+            return None, None
+
+        instance = (
+            db.query(ASRInstance)
+            .filter(
+                ASRInstance.id == tenant.default_asr_instance_id,
+                ASRInstance.tenant_id == tenant_id,
+                ASRInstance.is_active == True,
+            )
+            .first()
+        )
+        if not instance:
+            stale_id = tenant.default_asr_instance_id
+            tenant.default_asr_instance_id = None
+            tenant.updated_at = datetime.utcnow()
+            db.commit()
+            logger.info(
+                "Cleared stale default ASR instance tenant=%s instance=%s",
+                tenant_id,
+                stale_id,
+            )
+            return None, None
+        return tenant.default_asr_instance_id, instance
+
+    @staticmethod
+    def _clear_tenant_default_if_matches(
+        instance_id: int,
+        tenant_id: str,
+        db: Session,
+    ) -> None:
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if tenant and tenant.default_asr_instance_id == instance_id:
+            tenant.default_asr_instance_id = None
+            tenant.updated_at = datetime.utcnow()
 
     @staticmethod
     def resolve_api_token(instance: ASRInstance, db: Session) -> Optional[str]:
