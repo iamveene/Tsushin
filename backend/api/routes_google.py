@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hub/google", tags=["Google Integration"])
 
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+
 
 # ============================================
 # Pydantic Models
@@ -112,6 +114,13 @@ def get_encryption_key(db: Session) -> str:
             detail="GOOGLE_ENCRYPTION_KEY not configured in database or environment"
         )
     return key
+
+
+def get_gmail_oauth_scopes(include_send_scope: bool) -> List[str]:
+    scopes = list(GoogleOAuthHandler.DEFAULT_SCOPES["gmail"])
+    if include_send_scope and GMAIL_SEND_SCOPE not in scopes:
+        scopes.append(GMAIL_SEND_SCOPE)
+    return scopes
 
 
 # ============================================
@@ -286,6 +295,10 @@ async def gmail_oauth_authorize(
     display_name: Optional[str] = Query(None, description="User-friendly name for this account"),
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
+    include_send_scope: bool = Query(
+        False,
+        description="When true, request gmail.send in addition to the default Gmail scopes.",
+    ),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session),
     current_user: User = Depends(require_permission("hub.write"))
@@ -300,6 +313,7 @@ async def gmail_oauth_authorize(
 
         auth_url, state = await handler.generate_authorization_url(
             integration_type="gmail",
+            scopes=get_gmail_oauth_scopes(include_send_scope),
             redirect_url=redirect_url,
             display_name=display_name,
             login_hint=login_hint
@@ -683,6 +697,10 @@ async def check_calendar_health(
 async def reauthorize_integration(
     integration_id: int,
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
+    include_send_scope: bool = Query(
+        False,
+        description="When true for Gmail integrations, request gmail.send in addition to the default Gmail scopes.",
+    ),
     current_user: User = Depends(require_permission("hub.write")),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session)
@@ -719,6 +737,7 @@ async def reauthorize_integration(
 
         auth_url, state = await handler.generate_authorization_url(
             integration_type=integration.type,
+            scopes=get_gmail_oauth_scopes(include_send_scope) if integration.type == 'gmail' else None,
             redirect_url=redirect_url or f"{settings.FRONTEND_URL}/hub",
             display_name=integration.display_name,
             login_hint=email

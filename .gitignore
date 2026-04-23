@@ -189,6 +189,9 @@ tmp/
 
 # Development test scripts (not CI/CD tests)
 backend/dev_tests/
+!backend/dev_tests/
+backend/dev_tests/*
+!backend/dev_tests/export_gmail_oauth_fixture.py
 
 # Individual test files outside tests/ directory
 # (prevents accidental commits of dev test scripts)
@@ -270,6 +273,14 @@ backend/tests/*
 !backend/tests/test_invitation_scope.py
 !backend/tests/test_invitation_link_portability.py
 !backend/tests/test_skill_integration_tenant_isolation.py
+!backend/tests/conftest.py
+!backend/tests/test_gmail_oauth_fixture.py
+!backend/tests/test_phase0_5_fixtures.py
+!backend/tests/fixtures/
+backend/tests/fixtures/*
+!backend/tests/fixtures/asr_test_en.ogg
+!backend/tests/fixtures/asr_test_pt.ogg
+!backend/tests/fixtures/gmail_oauth.enc
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py

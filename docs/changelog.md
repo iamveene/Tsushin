@@ -18,6 +18,7 @@ Phase 0 of v0.7.0 now has the serial foundation needed before release-track work
 - Sentinel `continuous_agent_action_approval` detection registration, heuristics, idempotent seed defaults, and effective-config plumbing surfaced through `/api/sentinel/detection-types`.
 - Frontend Playwright visual baseline scaffolding under `frontend/tests/visual/` with deterministic committed baselines and private runtime output under `.private/qa/v0.7.0/`.
 - Internal Phase 0 docs for migration slots, FK cascade decisions, Speaches auth, and background-job durability.
+- Phase 0.5 fixture gate hardening: committed ASR speech clips under `backend/tests/fixtures/`, validation coverage in `backend/tests/test_phase0_5_fixtures.py`, a canonical Gmail fixture path shared by exporter/loader, a fail-closed Gmail OAuth release gate, and Gmail re-authorization paths (API + Hub UI) that request `gmail.send` for the dedicated Phase 0.5 fixture account.
 
 ### Fix — ProviderWizard Review step showed misleading "Models — Missing" deadlock for TTS (2026-04-22)
 
