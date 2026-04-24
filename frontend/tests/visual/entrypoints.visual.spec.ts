@@ -26,17 +26,31 @@ test.describe('v0.7.0 Phase 0 visual baselines', () => {
   test('hub communication baseline', async ({ page }) => {
     await page.goto('/hub?tab=communication')
     await stabilize(page)
-    await expect(page.getByRole('heading', { name: 'Communication Channels' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
     await expect(page).toHaveScreenshot('hub-communication.png', { fullPage: true })
   })
 
   test('hub channel wizard baseline', async ({ page }) => {
     await page.goto('/hub?tab=communication')
     await stabilize(page)
-    await expect(page.getByRole('heading', { name: 'Communication Channels' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: /add channel/i }).first().click()
     await expect(page.getByRole('heading', { name: 'Add Channel' })).toBeVisible()
     await expect(page).toHaveScreenshot('hub-channel-wizard.png', { fullPage: true })
+  })
+
+  test('slack setup wizard baseline', async ({ page }) => {
+    await page.goto('/hub?tab=communication')
+    await stabilize(page)
+    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: /add channel/i }).first().click()
+    await expect(page.getByRole('heading', { name: 'Add Channel' })).toBeVisible()
+    const addChannelModal = page.locator('.fixed').filter({ has: page.getByRole('heading', { name: 'Add Channel' }) })
+    await addChannelModal.locator('button').filter({ hasText: /^Slack/ }).click()
+    await addChannelModal.getByRole('button', { name: /continue to connect/i }).click()
+    await expect(page.getByRole('heading', { name: 'Slack Setup' })).toBeVisible()
+    await expect(page.getByText('Step 1 of 5')).toBeVisible()
+    await expect(page).toHaveScreenshot('hub-slack-setup-wizard.png', { fullPage: true })
   })
 
   test('hub provider wizard baseline', async ({ page }) => {
