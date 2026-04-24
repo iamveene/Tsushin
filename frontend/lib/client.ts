@@ -1641,6 +1641,14 @@ export interface WakeEventListParams extends PageParams {
   status?: string
   channel_type?: string
   channel_instance_id?: number
+  occurred_after?: string
+  occurred_before?: string
+}
+
+export interface WakeEventPayload {
+  wake_event_id: number
+  payload_ref: string
+  payload: unknown
 }
 
 export type ConversationalChannelType = 'whatsapp' | 'telegram' | 'slack' | 'discord'
@@ -4203,6 +4211,8 @@ export const api = {
     if (params.status) query.set('status', params.status)
     if (params.channel_type) query.set('channel_type', params.channel_type)
     if (params.channel_instance_id !== undefined) query.set('channel_instance_id', String(params.channel_instance_id))
+    if (params.occurred_after) query.set('occurred_after', params.occurred_after)
+    if (params.occurred_before) query.set('occurred_before', params.occurred_before)
     const suffix = query.toString() ? `?${query.toString()}` : ''
     const res = await authenticatedFetch(`${API_URL}/api/wake-events${suffix}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch wake events')
@@ -4212,6 +4222,12 @@ export const api = {
   async getWakeEvent(id: number): Promise<WakeEvent> {
     const res = await authenticatedFetch(`${API_URL}/api/wake-events/${id}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch wake event')
+    return res.json()
+  },
+
+  async getWakeEventPayload(id: number): Promise<WakeEventPayload> {
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events/${id}/payload`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake event payload')
     return res.json()
   },
 

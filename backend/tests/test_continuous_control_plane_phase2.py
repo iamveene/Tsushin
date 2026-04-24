@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -45,9 +46,11 @@ from api.routes_channel_event_rules import (  # noqa: E402
     list_channel_event_rules,
     reorder_channel_event_rules,
 )
+from api import routes_continuous as continuous_routes  # noqa: E402
 from api.routes_continuous import (  # noqa: E402
     ContinuousCaller,
     get_continuous_run,
+    get_wake_event_payload,
     list_continuous_agents,
     list_wake_events,
 )
@@ -189,6 +192,8 @@ def test_read_only_continuous_apis_are_tenant_scoped_and_paginated(db_session):
         status_filter=None,
         channel_type=None,
         channel_instance_id=None,
+        occurred_after=None,
+        occurred_before=None,
         caller=caller,
         db=db_session,
     )
@@ -204,6 +209,133 @@ def test_read_only_continuous_apis_are_tenant_scoped_and_paginated(db_session):
     with pytest.raises(HTTPException) as exc_info:
         get_continuous_run(continuous_run_id=foreign_run.id, caller=caller, db=db_session)
     assert exc_info.value.status_code == 403
+
+
+def test_wake_events_filter_by_occurred_window(db_session):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, agent_id=101, contact_id=201)
+    ca = _seed_continuous_agent(db_session, tenant_id="tenant-a", agent_id=101, continuous_agent_id=301)
+    base = datetime(2026, 4, 24, 12, 0, 0)
+    for idx, occurred_at in enumerate((base, base + timedelta(hours=1), base + timedelta(hours=2))):
+        db_session.add(
+            WakeEvent(
+                tenant_id="tenant-a",
+                continuous_agent_id=ca.id,
+                channel_type="email",
+                channel_instance_id=7,
+                event_type="message.new",
+                occurred_at=occurred_at,
+                dedupe_key=f"window-{idx}",
+                payload_ref=f"backend/data/wake_events/window-{idx}.json",
+            )
+        )
+    db_session.commit()
+
+    page = list_wake_events(
+        limit=50,
+        offset=0,
+        status_filter=None,
+        channel_type="email",
+        channel_instance_id=7,
+        occurred_after=base + timedelta(minutes=30),
+        occurred_before=base + timedelta(minutes=90),
+        caller=ContinuousCaller(tenant_id="tenant-a", user_id=1),
+        db=db_session,
+    )
+
+    assert page.total == 1
+    assert page.items[0].dedupe_key == "window-1"
+
+
+def test_wake_event_payload_endpoint_enforces_tenant_and_safe_path(db_session, tmp_path, monkeypatch):
+    payload_root = tmp_path / "backend" / "data" / "wake_events"
+    payload_root.mkdir(parents=True)
+    monkeypatch.setattr(continuous_routes, "WAKE_EVENT_PAYLOAD_ROOT", payload_root.resolve())
+
+    (payload_root / "good.json").write_text(
+        json.dumps({"payload": {"subject": "Hello", "token": "[REDACTED]"}}),
+        encoding="utf-8",
+    )
+    secret_path = tmp_path / "backend" / "data" / "secret.json"
+    secret_path.write_text(json.dumps({"token": "must-not-read"}), encoding="utf-8")
+
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, agent_id=101, contact_id=201)
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, agent_id=102, contact_id=202)
+    ca_a = _seed_continuous_agent(db_session, tenant_id="tenant-a", agent_id=101, continuous_agent_id=301)
+    ca_b = _seed_continuous_agent(db_session, tenant_id="tenant-b", agent_id=102, continuous_agent_id=302)
+
+    good = WakeEvent(
+        tenant_id="tenant-a",
+        continuous_agent_id=ca_a.id,
+        channel_type="email",
+        channel_instance_id=1,
+        event_type="message.new",
+        occurred_at=datetime.utcnow(),
+        dedupe_key="good",
+        payload_ref="backend/data/wake_events/good.json",
+    )
+    missing_ref = WakeEvent(
+        tenant_id="tenant-a",
+        continuous_agent_id=ca_a.id,
+        channel_type="email",
+        channel_instance_id=1,
+        event_type="message.new",
+        occurred_at=datetime.utcnow(),
+        dedupe_key="missing-ref",
+        payload_ref=None,
+    )
+    missing_file = WakeEvent(
+        tenant_id="tenant-a",
+        continuous_agent_id=ca_a.id,
+        channel_type="email",
+        channel_instance_id=1,
+        event_type="message.new",
+        occurred_at=datetime.utcnow(),
+        dedupe_key="missing-file",
+        payload_ref="backend/data/wake_events/missing.json",
+    )
+    unsafe_ref = WakeEvent(
+        tenant_id="tenant-a",
+        continuous_agent_id=ca_a.id,
+        channel_type="email",
+        channel_instance_id=1,
+        event_type="message.new",
+        occurred_at=datetime.utcnow(),
+        dedupe_key="unsafe",
+        payload_ref="backend/data/wake_events/../secret.json",
+    )
+    foreign = WakeEvent(
+        tenant_id="tenant-b",
+        continuous_agent_id=ca_b.id,
+        channel_type="email",
+        channel_instance_id=1,
+        event_type="message.new",
+        occurred_at=datetime.utcnow(),
+        dedupe_key="foreign",
+        payload_ref="backend/data/wake_events/good.json",
+    )
+    db_session.add_all([good, missing_ref, missing_file, unsafe_ref, foreign])
+    db_session.commit()
+
+    caller = ContinuousCaller(tenant_id="tenant-a", user_id=1)
+    response = get_wake_event_payload(wake_event_id=good.id, caller=caller, db=db_session)
+    assert response.payload_ref == "backend/data/wake_events/good.json"
+    assert response.payload["payload"]["token"] == "[REDACTED]"
+
+    with pytest.raises(HTTPException) as missing_ref_exc:
+        get_wake_event_payload(wake_event_id=missing_ref.id, caller=caller, db=db_session)
+    assert missing_ref_exc.value.status_code == 404
+
+    with pytest.raises(HTTPException) as missing_file_exc:
+        get_wake_event_payload(wake_event_id=missing_file.id, caller=caller, db=db_session)
+    assert missing_file_exc.value.status_code == 410
+
+    with pytest.raises(HTTPException) as unsafe_exc:
+        get_wake_event_payload(wake_event_id=unsafe_ref.id, caller=caller, db=db_session)
+    assert unsafe_exc.value.status_code == 404
+
+    with pytest.raises(HTTPException) as foreign_exc:
+        get_wake_event_payload(wake_event_id=foreign.id, caller=caller, db=db_session)
+    assert foreign_exc.value.status_code == 403
 
 
 def test_budget_limiter_keys_by_budget_kind():
