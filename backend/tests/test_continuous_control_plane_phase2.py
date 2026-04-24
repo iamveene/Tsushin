@@ -40,8 +40,10 @@ sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
 
 from api.routes_channel_event_rules import (  # noqa: E402
     ChannelEventRuleCreate,
+    ChannelEventRuleReorder,
     create_channel_event_rule,
     list_channel_event_rules,
+    reorder_channel_event_rules,
 )
 from api.routes_continuous import (  # noqa: E402
     ContinuousCaller,
@@ -186,6 +188,7 @@ def test_read_only_continuous_apis_are_tenant_scoped_and_paginated(db_session):
         offset=50,
         status_filter=None,
         channel_type=None,
+        channel_instance_id=None,
         caller=caller,
         db=db_session,
     )
@@ -308,6 +311,155 @@ def test_channel_event_rule_create_validates_instance_and_agent_tenant(db_sessio
             payload=ChannelEventRuleCreate(criteria={}, priority=20, agent_id=102),
             ctx=_ctx("tenant-a"),
             current_user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 403
+
+
+def test_channel_event_rule_reorder_validates_full_tenant_scoped_rule_set(db_session):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, agent_id=101, contact_id=201)
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, agent_id=102, contact_id=202)
+    slack_a = SlackIntegration(
+        id=401,
+        tenant_id="tenant-a",
+        workspace_id="T-A",
+        workspace_name="A",
+        bot_token_encrypted="secret",
+    )
+    slack_a_other = SlackIntegration(
+        id=403,
+        tenant_id="tenant-a",
+        workspace_id="T-A2",
+        workspace_name="A2",
+        bot_token_encrypted="secret",
+    )
+    slack_b = SlackIntegration(
+        id=402,
+        tenant_id="tenant-b",
+        workspace_id="T-B",
+        workspace_name="B",
+        bot_token_encrypted="secret",
+    )
+    db_session.add_all([slack_a, slack_a_other, slack_b])
+    db_session.add_all(
+        [
+            ChannelEventRule(
+                id=501,
+                tenant_id="tenant-a",
+                channel_type="slack",
+                channel_instance_id=slack_a.id,
+                event_type="message",
+                criteria={"contains": "one"},
+                priority=10,
+                agent_id=101,
+            ),
+            ChannelEventRule(
+                id=502,
+                tenant_id="tenant-a",
+                channel_type="slack",
+                channel_instance_id=slack_a.id,
+                event_type="message",
+                criteria={"contains": "two"},
+                priority=20,
+                agent_id=101,
+            ),
+            ChannelEventRule(
+                id=503,
+                tenant_id="tenant-a",
+                channel_type="slack",
+                channel_instance_id=slack_a.id,
+                event_type="message",
+                criteria={"contains": "three"},
+                priority=30,
+                agent_id=101,
+            ),
+            ChannelEventRule(
+                id=504,
+                tenant_id="tenant-a",
+                channel_type="slack",
+                channel_instance_id=slack_a_other.id,
+                event_type="message",
+                criteria={},
+                priority=10,
+                agent_id=101,
+            ),
+            ChannelEventRule(
+                id=601,
+                tenant_id="tenant-b",
+                channel_type="slack",
+                channel_instance_id=slack_b.id,
+                event_type="message",
+                criteria={},
+                priority=10,
+                agent_id=102,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    reordered = reorder_channel_event_rules(
+        channel_type="slack",
+        instance_id=slack_a.id,
+        payload=ChannelEventRuleReorder(rule_ids=[503, 501, 502]),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    assert [item.id for item in reordered.items] == [503, 501, 502]
+    assert [item.priority for item in reordered.items] == [10, 20, 30]
+
+    listed = list_channel_event_rules(
+        channel_type="slack",
+        instance_id=slack_a.id,
+        limit=50,
+        offset=0,
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+    assert [item.id for item in listed.items] == [503, 501, 502]
+
+    with pytest.raises(HTTPException) as exc_info:
+        reorder_channel_event_rules(
+            channel_type="slack",
+            instance_id=slack_a.id,
+            payload=ChannelEventRuleReorder(rule_ids=[503, 503, 502]),
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_info:
+        reorder_channel_event_rules(
+            channel_type="slack",
+            instance_id=slack_a.id,
+            payload=ChannelEventRuleReorder(rule_ids=[503, 501]),
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_info:
+        reorder_channel_event_rules(
+            channel_type="slack",
+            instance_id=slack_a.id,
+            payload=ChannelEventRuleReorder(rule_ids=[503, 501, 504]),
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_info:
+        reorder_channel_event_rules(
+            channel_type="slack",
+            instance_id=slack_a.id,
+            payload=ChannelEventRuleReorder(rule_ids=[503, 501, 601]),
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
             db=db_session,
         )
     assert exc_info.value.status_code == 403

@@ -63,6 +63,17 @@ class ChannelEventRuleUpdate(BaseModel):
         return value
 
 
+class ChannelEventRuleReorder(BaseModel):
+    rule_ids: list[int] = Field(default_factory=list)
+
+    @field_validator("rule_ids")
+    @classmethod
+    def _validate_rule_ids(cls, value: list[int]) -> list[int]:
+        if any(rule_id <= 0 for rule_id in value):
+            raise ValueError("rule_ids must contain positive integers")
+        return value
+
+
 class ChannelEventRuleRead(BaseModel):
     id: int
     tenant_id: str
@@ -149,6 +160,15 @@ def _to_read(row: ChannelEventRule) -> ChannelEventRuleRead:
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _page_from_rows(rows: list[ChannelEventRule]) -> ChannelEventRulePage:
+    return ChannelEventRulePage(
+        items=[_to_read(row) for row in rows],
+        total=len(rows),
+        limit=len(rows),
+        offset=0,
     )
 
 
@@ -265,6 +285,67 @@ def update_channel_event_rule(
         raise HTTPException(status_code=409, detail="Routing rule priority already exists") from exc
     db.refresh(row)
     return _to_read(row)
+
+
+@router.post("/{channel_type}/{instance_id}/routing-rules/reorder", response_model=ChannelEventRulePage)
+def reorder_channel_event_rules(
+    channel_type: str,
+    instance_id: int,
+    payload: ChannelEventRuleReorder,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> ChannelEventRulePage:
+    channel_type = _normalize_channel_type(channel_type)
+    _assert_instance_owned(db, ctx.tenant_id, channel_type, instance_id)
+
+    ordered_ids = payload.rule_ids
+    if len(ordered_ids) != len(set(ordered_ids)):
+        raise HTTPException(status_code=400, detail="rule_ids must not contain duplicates")
+
+    existing_rows = db.query(ChannelEventRule).filter(
+        ChannelEventRule.tenant_id == ctx.tenant_id,
+        ChannelEventRule.channel_type == channel_type,
+        ChannelEventRule.channel_instance_id == instance_id,
+    ).order_by(ChannelEventRule.priority.asc(), ChannelEventRule.id.asc()).all()
+    existing_ids = {row.id for row in existing_rows}
+    requested_ids = set(ordered_ids)
+
+    if requested_ids != existing_ids:
+        listed_rows = db.query(ChannelEventRule).filter(ChannelEventRule.id.in_(ordered_ids)).all() if ordered_ids else []
+        listed_by_id = {row.id: row for row in listed_rows}
+
+        if requested_ids - set(listed_by_id):
+            raise HTTPException(status_code=404, detail="Routing rule not found")
+
+        if any(row.tenant_id != ctx.tenant_id for row in listed_rows):
+            raise HTTPException(status_code=403, detail="Cross-tenant access denied")
+
+        wrong_instance_ids = [
+            row.id for row in listed_rows
+            if row.channel_type != channel_type or row.channel_instance_id != instance_id
+        ]
+        if wrong_instance_ids:
+            raise HTTPException(status_code=400, detail="rule_ids must only include rules for this channel instance")
+
+        raise HTTPException(status_code=400, detail="rule_ids must include every existing routing rule")
+
+    rows_by_id = {row.id: row for row in existing_rows}
+    for index, rule_id in enumerate(ordered_ids, start=1):
+        rows_by_id[rule_id].priority = -index
+    db.flush()
+
+    reordered_rows: list[ChannelEventRule] = []
+    for index, rule_id in enumerate(ordered_ids, start=1):
+        row = rows_by_id[rule_id]
+        row.priority = index * 10
+        reordered_rows.append(row)
+
+    db.commit()
+    for row in reordered_rows:
+        db.refresh(row)
+    reordered_rows.sort(key=lambda row: (row.priority, row.id))
+    return _page_from_rows(reordered_rows)
 
 
 @router.delete("/{channel_type}/{instance_id}/routing-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
