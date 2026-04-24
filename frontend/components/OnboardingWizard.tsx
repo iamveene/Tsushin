@@ -14,7 +14,9 @@
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
  * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
- *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
+ *           custom skills/MCP, and A2A + long-term memory (vector stores).
+ * v0.7.0 showcase: Total steps is now 16, with voice, Playground Mini, Sentinel,
+ *           and a Triggers & Continuous Agents step before the finale.
  */
 
 import React, { useEffect, useCallback, useState } from 'react'
@@ -268,17 +270,17 @@ export default function OnboardingWizard() {
     },
     {
       // Step 3 — v0.6.0 showcase: New communication channels
-      title: "What's New in v0.6.0 — Slack, Discord, Webhooks & More",
+      title: "What's New in v0.6.0 — Slack, Discord, Webhook Triggers & More",
       targetSelector: null,
-      content: 'Tsushin now speaks six channels through a unified adapter layer. The router normalises every inbound message into the same shape so agents, skills, flows, and Sentinel behave identically whether the message came from WhatsApp, a Slack thread, a Discord guild, or your own service via a signed webhook. Each channel has its own guided setup wizard, per-instance health + circuit breakers, and per-agent routing via enabled_channels.',
+      content: 'Tsushin now speaks through a unified entry-point layer. Conversational channels route chats from WhatsApp, Telegram, Slack, and Discord, while signed webhook events live under Triggers. Agents, skills, flows, and Sentinel use the same normalized shape no matter where the event starts.',
       highlightFeatures: [
         'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
         'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
         'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
         'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
-        'Webhooks — HMAC-signed bidirectional HTTP, timestamp replay guard, IP allowlist, rate limit',
+        'Webhook triggers — HMAC-signed HTTP events with timestamp replay guard, IP allowlist, and rate limits',
         'Playground — built-in internal WebSocket channel for safe testing',
-        'Per-agent enabled_channels routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
+        'Per-agent channel routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
         'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
       ],
       actionButton: {
@@ -375,11 +377,11 @@ export default function OnboardingWizard() {
       // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
+      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Custom HTTP events are configured later as Triggers, not conversational channels.',
       highlightFeatures: [
         'WhatsApp: scan QR code to connect your phone',
         'Telegram: add your bot token',
-        'Webhooks: connect Slack, Discord, or custom services',
+        'Slack and Discord: connect workspace and community conversations',
         'Each channel can be independently routed to agents'
       ],
       actionButton: {
@@ -473,18 +475,18 @@ export default function OnboardingWizard() {
       customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
     },
     {
-      // Step 15 — v0.7.0: Trigger/continuous-agent readiness.
+      // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
       title: 'New in v0.7.0 - Triggers & Continuous Agents',
       targetSelector: '[data-testid="hub-triggers-section"]',
-      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email and Webhook triggers live under Hub Communication, wake events are browsable in Hub, and continuous runs appear in Watcher with a continuous badge.',
+      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email, Webhook, Jira, Schedule, and GitHub triggers live in the Hub Communication tab; Wake Events and Continuous Agents are linked directly from that Triggers section.',
       highlightFeatures: [
-        'Email and Webhook trigger detail pages use the new /api/triggers namespace',
+        'Trigger detail pages use the new /api/triggers namespace',
         'Wake Events browser shows payload_ref instead of raw payload JSON',
         'Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
         'Conversational channel routing rules stay limited to WhatsApp, Telegram, Slack, and Discord'
       ],
       actionButton: {
-        label: 'Open Trigger Hub',
+        label: 'Open Hub Triggers',
         action: () => router.push('/hub?tab=communication')
       }
     },

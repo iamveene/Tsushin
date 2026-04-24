@@ -197,7 +197,7 @@ Wave 3A connects the stable A2 read contracts to UI surfaces and lands the first
 * **Movl follow-up behavior** — the Gmail follow-up path now answers from the prior structured DATA block when the user asks a referential question such as which prior email is most important. The second turn records no fresh Gmail tool call and preserves the prior scratchpad.
 * **Track C read-only pages** — `/continuous-agents`, `/continuous-agents/{id}`, `/hub/wake-events`, `/hub/triggers/email/{id}`, and `/hub/triggers/webhook/{id}` read from existing A2/trigger APIs. Wake-event UI displays payload references and does not expose inline payload JSON.
 * **Hub routing rules** — Hub Communication exposes routing-rule management only for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). Email and webhook remain trigger-detail surfaces, not channel routing-rule surfaces.
-* **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and onboarding step 16 introduces "Triggers & Continuous Agents" with a CTA into Hub Communication.
+* **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and the 16-step onboarding tour now includes a "Triggers & Continuous Agents" step before the finale with a CTA into Hub Communication's Triggers section.
 
 ### 2.10 v0.7.0 Track B Trigger Dispatch Foundation
 
@@ -231,6 +231,15 @@ Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release
 * **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
 * **Hub UI** — the Email trigger setup/detail flow includes source matching, recent wake events, danger-zone actions, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
 * **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
+
+### 2.13 v0.7.0 Phase 8 onboarding/deprecation/docs sync
+
+Phase 8's polish slice keeps user guidance aligned with the v0.7.0 trigger/control-plane split without claiming a new runtime validation pass.
+
+* **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` remains at `TOTAL_STEPS = 16`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and sends the Triggers & Continuous Agents CTA to `/hub?tab=communication`, where the Hub Triggers section is marked with `data-testid="hub-triggers-section"`.
+* **Webhook deprecation** — v0.7.0 intentionally has no Webhook deprecation banner/header path; Webhook moved directly to the Trigger catalog and Hub Triggers UI.
+* **Kokoro successor path** — legacy `/api/services/kokoro/{start,stop,status}` callers receive HTTP 410 and a `Link: </api/tts-instances>; rel="successor-version"` successor header. Hub copy points users to per-tenant Kokoro instances rather than the removed stack-level compose service.
+* **Phase 3 docs reconciliation** — Phase 3.1 docs now distinguish the completed Gmail send/reply/draft and Email poll/triage/MemGuard live gates from the remaining optional API-agent proof and Ubuntu fresh-install sudo handoff.
 
 ---
 
@@ -338,8 +347,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (12 steps) auto-opens. Steps 1 and 6–12 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground → You're All Set). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) the new Slack / Discord / Webhook channels, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
-6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, Discord, or a generic Webhook) via the Hub to enable agent messaging.
+5. On first login an **onboarding tour** (16 steps) auto-opens. Steps 1 and 6–11 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) Slack / Discord channels plus Webhook Triggers, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Steps 12–15 cover optional voice setup, Playground Mini, Sentinel block mode, and v0.7.0 Triggers & Continuous Agents. Step 16 is the "You're All Set" finale. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
+6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, or Discord) via the Hub to enable agent messaging. Signed HTTP events use the separate Webhook Trigger path in Hub → Communication.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
@@ -1657,7 +1666,7 @@ The **WhatsApp Setup Wizard** (Hub → Communication → Setup Wizard) walks thr
 7. **Bind Agent** — select which AI agent handles this WhatsApp number. Auto-creates ContactAgentMapping for user and bot contacts.
 8. **All Done** — summary of all configured items with green/amber indicators.
 
-The wizard can also be launched manually from the Hub Communication tab or auto-launches after the onboarding tour if no WhatsApp instances exist.
+The wizard can also be launched manually from the Hub Communication tab or from the onboarding tour's Communication Channels action. It no longer auto-launches after the main onboarding tour completes.
 
 **Manual setup (alternative):**
 
