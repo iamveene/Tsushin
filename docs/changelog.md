@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChannelEventRule` remains conversational-channel-only; trigger criteria storage and UI builders remain deferred.
 - `continuous_task` queue dispatch remains reserved and is not enqueued by this foundation.
 
+**Validated:**
+- Local and integrated root backend regression bundles both passed the Track B/provider/control-plane slice (`43 passed` after integration).
+- Root backend no-cache rebuild succeeded via `docker-compose build --no-cache backend && docker-compose up -d backend`; backend/frontend/postgres/proxy were healthy.
+- Direct backend and HTTPS proxy `/api/health` returned healthy, and Alembic `current`/`heads` both reported `0058 (head)`.
+- Live signed webhook smoke returned the existing `202 {status, queue_id, poll_url}` contract, duplicate delivery returned the same queue id, matching continuous subscriptions produced one wake event plus one queued continuous run, payload redaction stored secrets out-of-row, and cross-tenant wake detail access returned `403`.
+- Browser smoke covered Hub Communication, `/hub/wake-events`, `/continuous-agents`, webhook trigger detail, email trigger detail, and Watcher Dashboard with no console errors, page errors, failed requests, or HTTP 4xx/5xx responses.
+
 ### Wave 3A — Track C UI readiness + Track F agentic-loop core (2026-04-23)
 
 **Added:**
