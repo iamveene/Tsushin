@@ -8,8 +8,16 @@ import { api, authenticatedFetch, type EmailTrigger, type PageResponse, type Wak
 import { useAuth } from '@/contexts/AuthContext'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { AlertTriangleIcon, BellIcon, ClockIcon, EnvelopeIcon, RefreshIcon, SparklesIcon, TrashIcon } from '@/components/ui/icons'
+import CriteriaBuilder, {
+  buildEmailSearchQuery,
+  buildCriteriaTemplate,
+  emailSourceFromSearchQuery,
+  formatCriteriaText,
+  parseCriteriaText,
+  type CriteriaSourceValues,
+} from '@/components/triggers/CriteriaBuilder'
 
-type TabId = 'overview' | 'matching' | 'events' | 'danger'
+type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
 interface GmailIntegrationSummary {
   id: number
@@ -24,7 +32,7 @@ interface GmailIntegrationSummary {
 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'overview', label: 'Overview' },
-  { id: 'matching', label: 'Source matching' },
+  { id: 'criteria', label: 'Criteria' },
   { id: 'events', label: 'Recent wake events' },
   { id: 'danger', label: 'Danger zone' },
 ]
@@ -122,6 +130,8 @@ export default function EmailTriggerDetailPage() {
   const [triageLoading, setTriageLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [criteriaText, setCriteriaText] = useState('')
+  const [criteriaSource, setCriteriaSource] = useState<CriteriaSourceValues>({})
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -130,12 +140,15 @@ export default function EmailTriggerDetailPage() {
     try {
       const [triggerData, wakeEvents, integrations] = await Promise.all([
         api.getEmailTrigger(triggerId),
-        api.getWakeEvents({ limit: 25, channel_type: 'email', channel_instance_id: triggerId }).catch(() => null),
+        api.getWakeEvents({ limit: 50, channel_type: 'email', channel_instance_id: triggerId }).catch(() => null),
         fetchGmailIntegrations().catch(() => []),
       ])
+      const source = emailSourceFromSearchQuery(triggerData.search_query)
       setTrigger(triggerData)
       setEventsPage(wakeEvents)
       setGmailIntegrations(integrations)
+      setCriteriaSource(source)
+      setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', source)))
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to load email trigger'))
     } finally {
@@ -205,6 +218,27 @@ export default function EmailTriggerDetailPage() {
       setError(getErrorMessage(err, 'Failed to enable email triage'))
     } finally {
       setTriageLoading(false)
+    }
+  }
+
+  const saveCriteria = async () => {
+    if (!trigger) return
+    setSaving(true)
+    setError(null)
+    try {
+      parseCriteriaText(criteriaText)
+      const nextSearchQuery = buildEmailSearchQuery(criteriaSource) || null
+      const updated = await api.updateEmailTrigger(trigger.id, { search_query: nextSearchQuery })
+      const source = emailSourceFromSearchQuery(updated.search_query)
+      setTrigger(updated)
+      setCriteriaSource(source)
+      setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', source)))
+      setSuccess('Criteria saved')
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to save criteria'))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -469,25 +503,27 @@ export default function EmailTriggerDetailPage() {
             </div>
           )}
 
-          {activeTab === 'matching' && (
-            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                <EnvelopeIcon size={18} /> Source matching
-              </h2>
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <Field
-                  label="Gmail search query"
-                  value={(
-                    <code className="block rounded-lg border border-tsushin-border bg-black/30 p-3 text-xs text-cyan-200">
-                      {trigger.search_query || 'Inbox default'}
-                    </code>
-                  )}
-                />
-                <Field label="Polling cadence" value={`${trigger.poll_interval_seconds}s`} />
-              </div>
-              <p className="mt-4 text-sm text-tsushin-slate">
-                Gmail search is the source filter for email trigger wakeups. Leave the query blank to watch new inbox activity.
-              </p>
+          {activeTab === 'criteria' && (
+            <div className="space-y-3">
+              <CriteriaBuilder
+                kind="email"
+                value={criteriaText}
+                onChange={setCriteriaText}
+                disabled={!canWriteHub || saving}
+                source={criteriaSource}
+                onSourceChange={(patch) => setCriteriaSource((current) => ({ ...current, ...patch }))}
+                readOnlyReason={!canWriteHub ? 'Read-only view. Your role can view criteria but cannot change it.' : null}
+              />
+              {canWriteHub && (
+                <button
+                  type="button"
+                  onClick={saveCriteria}
+                  disabled={saving}
+                  className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save Criteria'}
+                </button>
+              )}
             </div>
           )}
 
