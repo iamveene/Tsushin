@@ -19,10 +19,17 @@ interface GmailIntegration {
   health_status: string
   is_active: boolean
   can_send: boolean
+  can_draft?: boolean
 }
 
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback
+
+function gmailCapabilityLabel(integration: GmailIntegration): string {
+  if (integration.can_send && integration.can_draft) return 'Read + send/draft'
+  if (integration.can_send) return 'Read + send/reply'
+  return 'Read-only'
+}
 
 const STEPS: WizardStep[] = [
   {
@@ -555,8 +562,13 @@ export default function EmailTriggerWizard({
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-white">{integration.email_address}</div>
                       <div className="mt-1 text-xs text-tsushin-slate">
-                        {integration.name} · {integration.can_send ? 'Read + send/draft' : 'Read-only'}
+                        {integration.name} · {gmailCapabilityLabel(integration)}
                       </div>
+                      {integration.can_send && !integration.can_draft && (
+                        <div className="mt-1 text-xs text-yellow-200">
+                          Re-authorize with gmail.compose before draft-based triage can run.
+                        </div>
+                      )}
                     </div>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${

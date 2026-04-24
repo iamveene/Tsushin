@@ -40,6 +40,7 @@ from api.routes_email_triggers import (  # noqa: E402
     EmailTriggerCreate,
     EmailTriggerUpdate,
     create_email_trigger,
+    create_email_triage_subscription,
     delete_email_trigger,
     list_email_triggers,
     update_email_trigger,
@@ -48,9 +49,17 @@ from api.routes_triggers import list_triggers  # noqa: E402
 from models import (  # noqa: E402
     Agent,
     Contact,
+    ContinuousAgent,
+    ContinuousSubscription,
+    BudgetPolicy,
+    DeliveryPolicy,
     EmailChannelInstance,
     GmailIntegration,
+    GitHubChannelInstance,
     HubIntegration,
+    JiraChannelInstance,
+    ScheduleChannelInstance,
+    SentinelProfile,
     WebhookIntegration,
     Base,
 )
@@ -67,10 +76,18 @@ def db_session():
             User.__table__,
             Contact.__table__,
             Agent.__table__,
+            DeliveryPolicy.__table__,
+            BudgetPolicy.__table__,
+            SentinelProfile.__table__,
+            ContinuousAgent.__table__,
+            ContinuousSubscription.__table__,
             HubIntegration.__table__,
             GmailIntegration.__table__,
             EmailChannelInstance.__table__,
             WebhookIntegration.__table__,
+            JiraChannelInstance.__table__,
+            ScheduleChannelInstance.__table__,
+            GitHubChannelInstance.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -295,3 +312,70 @@ def test_trigger_catalog_marks_email_as_configured(db_session):
 
     assert trigger_map["email"] is True
     assert "webhook" in trigger_map
+
+
+def test_create_email_triage_subscription_is_idempotent(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    first = create_email_triage_subscription(
+        trigger_id=trigger.id,
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+    second = create_email_triage_subscription(
+        trigger_id=trigger.id,
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    assert first.created_agent is True
+    assert first.created_subscription is True
+    assert second.created_agent is False
+    assert second.created_subscription is False
+    assert second.continuous_agent_id == first.continuous_agent_id
+    assert second.continuous_subscription_id == first.continuous_subscription_id
+    assert db_session.query(ContinuousAgent).count() == 1
+    assert db_session.query(ContinuousSubscription).count() == 1
+
+
+def test_create_email_triage_subscription_requires_default_agent(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=None,
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_email_triage_subscription(
+            trigger_id=trigger.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "default agent" in exc_info.value.detail

@@ -1424,6 +1424,16 @@ export interface EmailTriggerUpdateRequest {
   is_active?: boolean
 }
 
+export interface EmailTriageSubscription {
+  email_trigger_id: number
+  continuous_agent_id: number
+  continuous_subscription_id: number
+  agent_id: number
+  created_agent: boolean
+  created_subscription: boolean
+  status: string
+}
+
 export interface JiraTrigger extends TriggerInstanceBase {
   site_url: string
   project_key?: string | null
@@ -5489,6 +5499,14 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete email trigger')
+  },
+
+  async createEmailTriageSubscription(id: number): Promise<EmailTriageSubscription> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/triage-subscription`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable email triage')
+    return res.json()
   },
 
   async listJiraTriggers(): Promise<JiraTrigger[]> {

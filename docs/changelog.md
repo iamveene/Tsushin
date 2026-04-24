@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Phase 3 — Email Trigger/Triage runtime checkpoint (2026-04-24)
+
+**Added:**
+- Added the Gmail-backed Email trigger runtime at `backend/channels/email/trigger.py`, including bounded Gmail polling, search-query/list support, normalized message payloads, stable `internalDate:id` cursor advancement, deterministic `gmail:{message_id}` dedupe keys, tenant-owned Gmail integration checks, and dispatch through `TriggerDispatchService`.
+- Added managed Email Triage wiring: `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for `email.message.received`, and dispatched Email wakes can create Gmail drafts through `GmailSkill` with continuous-agent Sentinel approval context.
+- Added a Sentinel-config-gated MemGuard pre-check in `TriggerDispatchService` so malicious trigger payloads can record `blocked_by_security` without emitting wake/run rows.
+- Added Email trigger detail/setup parity in Hub with source matching, recent wake events, danger-zone controls, managed triage setup, and explicit `gmail.compose` draft-scope messaging.
+
+**Changed:**
+- Corrected the v0.7.0 implementation plan so Track B breadth is marked complete with its Phase 4 QA evidence instead of stale "foundation only / adapters deferred" language.
+
+**Validation:**
+- Local targeted backend checks passed for Email polling/cursor/tenant-safety/triage, Email trigger routes, trigger dispatch/MemGuard, and Gmail send/draft checkpoint coverage. Root no-cache rebuild, health checks, Alembic current/head checks, and browser smoke also passed. The Phase 3 live draft gate remains blocked until the Gmail fixture is reauthorized with `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
+
 ### Track B — Trigger Breadth (2026-04-24)
 
 **Added:**

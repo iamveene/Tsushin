@@ -220,6 +220,18 @@ Track B breadth turns the dispatch foundation into user-facing trigger adapters 
 * **Runtime adapters** — Jira normalizes JQL issue payloads, Schedule polls due cron rows without creating legacy `ScheduledEvent` duplicates, and GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`.
 * **Hub UI** — Hub → Communication now supports Email, Webhook, Jira, Schedule, and GitHub trigger setup. Jira/Schedule/GitHub have compact creation flows, cards, `/hub/triggers/{type}/{id}` detail pages, criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
 
+### 2.12 v0.7.0 Phase 3 Email Trigger/Triage Checkpoint
+
+Phase 3 now has a local runtime checkpoint on the release branch. It is still not a full phase-exit claim until the Gmail fixture has draft-compatible OAuth scope and live end-to-end evidence is recorded.
+
+* **Gmail outbound** — `GmailService`, `EmailCommandService`, and `gmail_skill` support send/reply/draft operations with fail-closed scope checks. Send/reply accept Gmail send-compatible scopes; draft creation requires `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
+* **Email trigger control plane** — `EmailChannelInstance` and `/api/triggers/email` CRUD persist Gmail-backed trigger rows with search query, poll interval, active/paused state, and default-agent routing.
+* **Runtime polling** — `backend/channels/email/trigger.py` polls active Gmail-backed Email triggers, fetches message deltas through Gmail list/search APIs, normalizes payloads, advances a stable cursor, rejects missing/foreign/inactive Gmail integrations, and dispatches wake events through `TriggerDispatchService`.
+* **Managed triage** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for `email.message.received`. When a dispatched Email wake matches that subscription, the runtime creates a Gmail draft through `GmailSkill` with continuous-agent Sentinel approval context.
+* **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
+* **Hub UI** — the Email trigger setup/detail flow includes source matching, recent wake events, danger-zone actions, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
+* **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the release-note boundary and remaining risks.
+
 ---
 
 ## 3. Quick Start
@@ -1934,6 +1946,7 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 - `POST /api/triggers/email` — create a trigger row bound to an existing Gmail integration
 - `GET /api/triggers/email/{id}` — fetch one trigger
 - `PATCH /api/triggers/email/{id}` — rename, rebind the Gmail integration, change the default agent, search query, poll interval, or active state
+- `DELETE /api/triggers/email/{id}` — delete one trigger row
 
 **Hub flow:** Hub → Communication → **Triggers** → **+ New Trigger** → **Email**
 - Confirms Google OAuth app credentials
@@ -1942,7 +1955,8 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 - Saves a persisted trigger row without treating Gmail as a conversational channel
 
 **Runtime notes:**
-- This phase is control-plane only. Actual inbox polling, dedupe, wake-event emission, and downstream triage execution land in a later phase.
+- Gmail-backed Email triggers are polled by the scheduler worker through `EmailTrigger.poll_active()`. The poller supports Gmail search queries, cursor/dedupe advancement, wake-event dispatch, and system-owned managed triage subscriptions.
+- Managed triage creates Gmail drafts only when the linked Gmail integration has a draft-compatible scope. Without `gmail.compose`, `gmail.modify`, or `mail.google.com/`, triage runs fail closed with a missing-scope result rather than sending mail.
 - Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
 - If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
 
