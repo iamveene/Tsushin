@@ -5,7 +5,7 @@ import type { ComponentType } from 'react'
 import Modal from '@/components/ui/Modal'
 import { api, type Agent, type GitHubTrigger, type GitHubTriggerAuthMethod, type JiraTrigger, type ScheduleTrigger, type TriggerCriteria, type TriggerKind } from '@/lib/client'
 import { CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, type IconProps } from '@/components/ui/icons'
-import CriteriaBuilder, { parseCriteriaText } from '@/components/triggers/CriteriaBuilder'
+import CriteriaBuilder, { parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type SavedTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -297,6 +297,18 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
         ? current.filter((item) => item !== eventName)
         : [...current, eventName]
     ))
+  }
+
+  const updateCriteriaSource = (patch: Partial<CriteriaSourceValues>) => {
+    if (patch.jiraProjectKey !== undefined) setJiraProjectKey(patch.jiraProjectKey || '')
+    if (patch.jiraJql !== undefined) setJiraJql(patch.jiraJql || '')
+    if (patch.cronExpression !== undefined) setCronExpression(patch.cronExpression || '')
+    if (patch.timezone !== undefined) setTimezone(patch.timezone || '')
+    if (patch.payloadTemplateText !== undefined) setPayloadTemplateText(patch.payloadTemplateText || '')
+    if (patch.githubEventsText !== undefined) setGithubEvents(splitList(patch.githubEventsText || '') || [])
+    if (patch.githubBranchFilter !== undefined) setBranchFilter(patch.githubBranchFilter || '')
+    if (patch.githubPathFiltersText !== undefined) setPathFiltersText(patch.githubPathFiltersText || '')
+    if (patch.githubAuthorFilter !== undefined) setAuthorFilter(patch.githubAuthorFilter || '')
   }
 
   const testLabel = triggerType === 'schedule' ? 'Preview' : 'Test'
@@ -597,7 +609,24 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
           </div>
         )}
 
-        <CriteriaBuilder value={criteriaText} onChange={setCriteriaText} disabled={saving} />
+        <CriteriaBuilder
+          kind={triggerType}
+          value={criteriaText}
+          onChange={setCriteriaText}
+          disabled={saving}
+          source={{
+            jiraProjectKey,
+            jiraJql,
+            cronExpression,
+            timezone,
+            payloadTemplateText,
+            githubEventsText: githubEvents.join(', '),
+            githubBranchFilter: branchFilter,
+            githubPathFiltersText: pathFiltersText,
+            githubAuthorFilter: authorFilter,
+          }}
+          onSourceChange={updateCriteriaSource}
+        />
 
         <label className="flex items-start gap-3 rounded-xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
           <input

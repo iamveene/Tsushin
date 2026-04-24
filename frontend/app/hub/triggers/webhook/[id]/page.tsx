@@ -65,7 +65,7 @@ export default function WebhookTriggerDetailPage() {
       const [triggerData, ingressData, wakeEvents] = await Promise.all([
         api.getWebhookIntegration(triggerId),
         api.getMyPublicIngress().catch(() => null),
-        api.getWakeEvents({ limit: 25, channel_type: 'webhook', channel_instance_id: triggerId }).catch(() => null),
+        api.getWakeEvents({ limit: 50, channel_type: 'webhook', channel_instance_id: triggerId }).catch(() => null),
       ])
       setTrigger(triggerData)
       setCriteriaText(formatCriteriaText(triggerData.trigger_criteria))
@@ -203,6 +203,12 @@ export default function WebhookTriggerDetailPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {!canWriteHub && (
+            <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-100">
+              Read-only view. Your role does not have <code className="font-mono">hub.write</code>.
+            </div>
+          )}
+
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger)}`}>{trigger.is_active ? trigger.status : 'paused'}</span>} />
             <Field label="Circuit breaker" value={trigger.circuit_breaker_state} />
@@ -311,9 +317,11 @@ export default function WebhookTriggerDetailPage() {
           {activeTab === 'criteria' && (
             <div>
               <CriteriaBuilder
+                kind="webhook"
                 value={criteriaText}
                 onChange={setCriteriaText}
                 disabled={!canWriteHub || saving}
+                readOnlyReason={!canWriteHub ? 'Read-only view. Your role can view criteria but cannot change it.' : null}
                 onTest={(triggerCriteria, payload) => api.testWebhookCriteria(trigger.id, { payload, trigger_criteria: triggerCriteria })}
               />
               {canWriteHub && (

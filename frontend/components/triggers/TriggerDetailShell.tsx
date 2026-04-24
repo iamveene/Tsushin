@@ -8,7 +8,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { api, type GitHubTrigger, type JiraTrigger, type PageResponse, type ScheduleTrigger, type TriggerKind, type WakeEvent } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, RefreshIcon, TrashIcon, type IconProps } from '@/components/ui/icons'
-import CriteriaBuilder, { formatCriteriaText, parseCriteriaText } from '@/components/triggers/CriteriaBuilder'
+import CriteriaBuilder, { formatCriteriaText, parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -104,6 +104,53 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
+function formatJsonText(value: Record<string, unknown> | null | undefined): string {
+  return value ? JSON.stringify(value, null, 2) : ''
+}
+
+function parseJsonObjectText(text: string, label: string): Record<string, unknown> | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const parsed = JSON.parse(trimmed)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`)
+  }
+  return parsed as Record<string, unknown>
+}
+
+function splitList(text?: string | null): string[] | null {
+  const values = (text || '')
+    .split(/[\n,]/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+  return values.length > 0 ? values : null
+}
+
+function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): CriteriaSourceValues {
+  if (kind === 'jira') {
+    const jira = trigger as JiraTrigger
+    return {
+      jiraJql: jira.jql,
+      jiraProjectKey: jira.project_key || '',
+    }
+  }
+  if (kind === 'schedule') {
+    const schedule = trigger as ScheduleTrigger
+    return {
+      cronExpression: schedule.cron_expression,
+      timezone: schedule.timezone,
+      payloadTemplateText: formatJsonText(schedule.payload_template),
+    }
+  }
+  const github = trigger as GitHubTrigger
+  return {
+    githubEventsText: (github.events || []).join(', '),
+    githubBranchFilter: github.branch_filter || '',
+    githubPathFiltersText: (github.path_filters || []).join('\n'),
+    githubAuthorFilter: github.author_filter || '',
+  }
+}
+
 export default function TriggerDetailShell({ kind }: Props) {
   const params = useParams()
   const router = useRouter()
@@ -122,6 +169,7 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [criteriaText, setCriteriaText] = useState('')
+  const [sourceDraft, setSourceDraft] = useState<CriteriaSourceValues>({})
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -130,11 +178,12 @@ export default function TriggerDetailShell({ kind }: Props) {
     try {
       const [triggerData, wakeEvents] = await Promise.all([
         api.getTriggerDetail(kind, triggerId),
-        api.getWakeEvents({ limit: 25, channel_type: kind, channel_instance_id: triggerId }).catch(() => null),
+        api.getWakeEvents({ limit: 50, channel_type: kind, channel_instance_id: triggerId }).catch(() => null),
       ])
       const nextTrigger = triggerData as BreadthTrigger
       setTrigger(nextTrigger)
       setCriteriaText(formatCriteriaText(nextTrigger.trigger_criteria))
+      setSourceDraft(sourceFromTrigger(kind, nextTrigger))
       setEventsPage(wakeEvents)
     } catch (err: unknown) {
       setError(getErrorMessage(err, `Failed to load ${kind} trigger`))
@@ -184,12 +233,28 @@ export default function TriggerDetailShell({ kind }: Props) {
     try {
       const triggerCriteria = parseCriteriaText(criteriaText)
       const updated = kind === 'jira'
-        ? await api.updateJiraTrigger(trigger.id, { trigger_criteria: triggerCriteria })
+        ? await api.updateJiraTrigger(trigger.id, {
+          trigger_criteria: triggerCriteria,
+          project_key: sourceDraft.jiraProjectKey?.trim() || null,
+          jql: sourceDraft.jiraJql?.trim() || (trigger as JiraTrigger).jql,
+        })
         : kind === 'schedule'
-        ? await api.updateScheduleTrigger(trigger.id, { trigger_criteria: triggerCriteria })
-        : await api.updateGitHubTrigger(trigger.id, { trigger_criteria: triggerCriteria })
+        ? await api.updateScheduleTrigger(trigger.id, {
+          trigger_criteria: triggerCriteria,
+          cron_expression: sourceDraft.cronExpression?.trim() || (trigger as ScheduleTrigger).cron_expression,
+          timezone: sourceDraft.timezone?.trim() || (trigger as ScheduleTrigger).timezone,
+          payload_template: parseJsonObjectText(sourceDraft.payloadTemplateText || '', 'Payload template'),
+        })
+        : await api.updateGitHubTrigger(trigger.id, {
+          trigger_criteria: triggerCriteria,
+          events: splitList(sourceDraft.githubEventsText),
+          branch_filter: sourceDraft.githubBranchFilter?.trim() || null,
+          path_filters: splitList(sourceDraft.githubPathFiltersText),
+          author_filter: sourceDraft.githubAuthorFilter?.trim() || null,
+        })
       setTrigger(updated)
       setCriteriaText(formatCriteriaText(updated.trigger_criteria))
+      setSourceDraft(sourceFromTrigger(kind, updated as BreadthTrigger))
       setSuccess('Criteria saved')
       setTimeout(() => setSuccess(null), 3000)
     } catch (err: unknown) {
@@ -259,7 +324,15 @@ export default function TriggerDetailShell({ kind }: Props) {
     return (
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div>
-          <CriteriaBuilder value={criteriaText} onChange={setCriteriaText} disabled={!canWriteHub || saving} />
+          <CriteriaBuilder
+            kind={kind}
+            value={criteriaText}
+            onChange={setCriteriaText}
+            disabled={!canWriteHub || saving}
+            source={sourceDraft}
+            onSourceChange={(patch) => setSourceDraft((current) => ({ ...current, ...patch }))}
+            readOnlyReason={!canWriteHub ? 'Read-only view. Your role can view criteria but cannot change it.' : null}
+          />
           {canWriteHub && (
             <button
               type="button"
