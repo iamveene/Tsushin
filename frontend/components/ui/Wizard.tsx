@@ -24,6 +24,7 @@ interface WizardProps {
   currentStep: number
   footer?: ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  autoHeight?: boolean
   showCloseButton?: boolean
   closePrompt?: string | null
   status?: 'idle' | 'loading' | 'success' | 'error' | WizardStatus | null
@@ -32,7 +33,8 @@ interface WizardProps {
   statusBody?: ReactNode
   stepTitle?: string
   stepDescription?: string
-  tone?: 'default' | 'gmail'
+  showProgress?: boolean
+  tone?: 'default' | 'gmail' | 'discord' | 'slack' | 'whatsapp' | 'mcp'
 }
 
 const STATUS_STYLES: Record<NonNullable<WizardStatus['tone']>, string> = {
@@ -41,14 +43,38 @@ const STATUS_STYLES: Record<NonNullable<WizardStatus['tone']>, string> = {
   error: 'bg-tsushin-vermilion/10 border-tsushin-vermilion/30 text-tsushin-vermilion',
 }
 
-const STEP_ACCENT: Record<'default' | 'gmail', { active: string; complete: string }> = {
+type WizardTone = NonNullable<WizardProps['tone']>
+
+const STEP_ACCENT: Record<WizardTone, { active: string; complete: string; progress: string }> = {
   default: {
     active: 'bg-tsushin-accent text-white border-tsushin-accent',
     complete: 'bg-tsushin-success/20 text-tsushin-success border-tsushin-success/40',
+    progress: 'bg-tsushin-accent',
   },
   gmail: {
     active: 'bg-red-600 text-white border-red-500',
     complete: 'bg-red-500/15 text-red-300 border-red-500/30',
+    progress: 'bg-red-500',
+  },
+  discord: {
+    active: 'bg-indigo-600 text-white border-indigo-500',
+    complete: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
+    progress: 'bg-indigo-500',
+  },
+  slack: {
+    active: 'bg-purple-600 text-white border-purple-500',
+    complete: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+    progress: 'bg-purple-500',
+  },
+  whatsapp: {
+    active: 'bg-teal-600 text-white border-teal-500',
+    complete: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+    progress: 'bg-teal-500',
+  },
+  mcp: {
+    active: 'bg-emerald-600 text-white border-emerald-500',
+    complete: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    progress: 'bg-emerald-500',
   },
 }
 
@@ -90,6 +116,7 @@ export default function Wizard({
   currentStep,
   footer,
   size = 'lg',
+  autoHeight = false,
   showCloseButton = true,
   closePrompt = null,
   status = null,
@@ -98,10 +125,15 @@ export default function Wizard({
   statusBody,
   stepTitle,
   stepDescription,
+  showProgress = false,
   tone = 'default',
 }: WizardProps) {
   const accent = STEP_ACCENT[tone]
   const normalizedStatus = normalizeStatus(status, statusTitle, statusDescription)
+  const currentStepLabel = steps[currentStep - 1]?.label
+  const progressPercent = steps.length > 0
+    ? Math.min(100, Math.max(0, Math.round((currentStep / steps.length) * 100)))
+    : 0
 
   const handleClose = () => {
     if (closePrompt && typeof window !== 'undefined' && !window.confirm(closePrompt)) {
@@ -117,6 +149,7 @@ export default function Wizard({
       title={title}
       footer={footer}
       size={size}
+      autoHeight={autoHeight}
       showCloseButton={showCloseButton}
     >
       <div className="space-y-5">
@@ -157,6 +190,21 @@ export default function Wizard({
             )
           })}
         </div>
+
+        {showProgress && (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-4 text-xs text-tsushin-slate">
+              <span>Step {currentStep} of {steps.length}</span>
+              {currentStepLabel && <span className="truncate">{currentStepLabel}</span>}
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-tsushin-deep">
+              <div
+                className={`h-1.5 rounded-full transition-all duration-300 ${accent.progress}`}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {(stepTitle || stepDescription) && (
           <div className="space-y-1">
