@@ -8,7 +8,7 @@ import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { BellIcon, ClockIcon, EyeIcon, FilterIcon, RefreshIcon, ZapIcon } from '@/components/ui/icons'
 
 const STATUS_OPTIONS = ['all', 'pending', 'claimed', 'processed', 'failed', 'filtered']
-const CHANNEL_OPTIONS = ['all', 'email', 'webhook', 'whatsapp', 'telegram', 'slack', 'discord']
+const CHANNEL_OPTIONS = ['all', 'email', 'webhook', 'jira', 'schedule', 'github', 'whatsapp', 'telegram', 'slack', 'discord']
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
@@ -33,9 +33,10 @@ function importanceClass(importance: string): string {
 export default function WakeEventsPage() {
   const searchParams = useSearchParams()
   const highlightId = Number(searchParams.get('highlight'))
+  const requestedChannel = searchParams.get('channel_type') || 'all'
   const [eventsPage, setEventsPage] = useState<PageResponse<WakeEvent> | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
-  const [channelFilter, setChannelFilter] = useState('all')
+  const [channelFilter, setChannelFilter] = useState(CHANNEL_OPTIONS.includes(requestedChannel) ? requestedChannel : 'all')
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

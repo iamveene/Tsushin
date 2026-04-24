@@ -3087,6 +3087,7 @@ class WebhookIntegration(Base):
     max_retry_attempts = Column(Integer, default=3)
     retry_timeout_seconds = Column(Integer, default=300)
     default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    trigger_criteria = Column(JSON, nullable=True)
 
     # Audit
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
@@ -3135,6 +3136,121 @@ class EmailChannelInstance(Base):
     __table_args__ = (
         Index("idx_email_channel_instance_tenant", "tenant_id"),
         Index("idx_email_channel_instance_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Jira, Schedule, and GitHub Trigger Instances
+# ============================================================================
+
+class JiraChannelInstance(Base):
+    """Persisted Jira trigger configuration for JQL-polled wake events."""
+
+    __tablename__ = "jira_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    jql = Column(Text, nullable=False)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=300, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_jira_channel_instance_tenant", "tenant_id"),
+        Index("idx_jira_channel_instance_status", "status"),
+        Index("idx_jira_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+class ScheduleChannelInstance(Base):
+    """Persisted cron-style trigger configuration for scheduled wake events."""
+
+    __tablename__ = "schedule_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    cron_expression = Column(String(120), nullable=False)
+    timezone = Column(String(64), default="UTC", nullable=False)
+    payload_template = Column(JSON, nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    next_fire_at = Column(DateTime, nullable=True, index=True)
+    last_fire_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_schedule_channel_instance_tenant", "tenant_id"),
+        Index("idx_schedule_channel_instance_status", "status"),
+        Index("idx_schedule_channel_instance_next_fire_at", "next_fire_at"),
+        Index("idx_schedule_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+class GitHubChannelInstance(Base):
+    """Persisted GitHub trigger configuration for signed webhook deliveries."""
+
+    __tablename__ = "github_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    auth_method = Column(String(20), default="pat", nullable=False)  # pat | app
+    repo_owner = Column(String(100), nullable=False)
+    repo_name = Column(String(100), nullable=False)
+    installation_id = Column(String(64), nullable=True)
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    webhook_secret_encrypted = Column(Text, nullable=True)
+    webhook_secret_preview = Column(String(32), nullable=True)
+    events = Column(JSON, nullable=True)
+    branch_filter = Column(String(255), nullable=True)
+    path_filters = Column(JSON, nullable=True)
+    author_filter = Column(String(255), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    last_delivery_id = Column(String(128), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_github_channel_instance_tenant", "tenant_id"),
+        Index("idx_github_channel_instance_status", "status"),
+        Index("idx_github_channel_instance_repo", "tenant_id", "repo_owner", "repo_name"),
+        Index("idx_github_channel_instance_default_agent_id", "default_agent_id"),
     )
 
 

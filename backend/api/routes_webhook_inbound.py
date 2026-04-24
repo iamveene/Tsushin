@@ -24,7 +24,7 @@ import time
 from datetime import UTC, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -137,7 +137,7 @@ async def _maybe_dispatch_trigger_event(
     payload: dict,
     dedupe_key: str,
     occurred_at: datetime,
-) -> Optional[dict]:
+) -> Optional[dict | Response]:
     """Best-effort bridge to the shared trigger dispatcher when it exists.
 
     The direct message_queue path remains authoritative for webhook replies;
@@ -166,6 +166,10 @@ async def _maybe_dispatch_trigger_event(
                 source_id=payload.get("source_id"),
             )
         )
+        if _result_status(result) == "filtered" and str(getattr(result, "reason", "")).startswith(
+            ("criteria_no_match", "invalid_trigger_criteria")
+        ):
+            return Response(status_code=204)
         if _result_status(result) == "duplicate":
             existing = _find_existing_webhook_queue_item(
                 db=db,

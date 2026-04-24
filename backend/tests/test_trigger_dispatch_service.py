@@ -29,8 +29,11 @@ from models import (  # noqa: E402
     ContinuousSubscription,
     DeliveryPolicy,
     EmailChannelInstance,
+    GitHubChannelInstance,
     GmailIntegration,
     HubIntegration,
+    JiraChannelInstance,
+    ScheduleChannelInstance,
     SentinelProfile,
     WakeEvent,
     WebhookIntegration,
@@ -57,6 +60,9 @@ def db_session():
             HubIntegration.__table__,
             GmailIntegration.__table__,
             EmailChannelInstance.__table__,
+            JiraChannelInstance.__table__,
+            ScheduleChannelInstance.__table__,
+            GitHubChannelInstance.__table__,
             SentinelProfile.__table__,
             DeliveryPolicy.__table__,
             BudgetPolicy.__table__,
@@ -135,6 +141,55 @@ def _seed_email(db, *, instance_id: int, tenant_id: str, created_by: int, defaul
             tenant_id=tenant_id,
             integration_name=f"Email {tenant_id}",
             provider="gmail",
+            default_agent_id=default_agent_id,
+            created_by=created_by,
+            is_active=True,
+            status="active",
+        )
+    )
+
+
+def _seed_jira(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
+    db.add(
+        JiraChannelInstance(
+            id=instance_id,
+            tenant_id=tenant_id,
+            integration_name=f"Jira {tenant_id}",
+            site_url="https://example.atlassian.net",
+            project_key="TSN",
+            jql="project = TSN",
+            default_agent_id=default_agent_id,
+            created_by=created_by,
+            is_active=True,
+            status="active",
+        )
+    )
+
+
+def _seed_schedule(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
+    db.add(
+        ScheduleChannelInstance(
+            id=instance_id,
+            tenant_id=tenant_id,
+            integration_name=f"Schedule {tenant_id}",
+            cron_expression="*/5 * * * *",
+            timezone="UTC",
+            default_agent_id=default_agent_id,
+            created_by=created_by,
+            is_active=True,
+            status="active",
+        )
+    )
+
+
+def _seed_github(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
+    db.add(
+        GitHubChannelInstance(
+            id=instance_id,
+            tenant_id=tenant_id,
+            integration_name=f"GitHub {tenant_id}",
+            repo_owner="octo",
+            repo_name="repo",
             default_agent_id=default_agent_id,
             created_by=created_by,
             is_active=True,
@@ -391,6 +446,125 @@ def test_dispatch_creates_redacted_payload_ref_for_email_instance(db_session, tm
     assert document["payload"]["access_token"] == "[REDACTED]"
     assert db_session.query(WakeEvent).one().payload_ref == result.payload_ref
     assert db_session.query(ContinuousRun).one().status == "queued"
+
+
+@pytest.mark.parametrize(
+    ("trigger_type", "instance_id", "event_type", "seed_fn"),
+    [
+        ("jira", 701, "jira.issue.updated", _seed_jira),
+        ("schedule", 801, "schedule.fire", _seed_schedule),
+        ("github", 901, "github.pull_request", _seed_github),
+    ],
+)
+def test_dispatch_supports_track_b_trigger_instances(
+    db_session,
+    tmp_path,
+    trigger_type,
+    instance_id,
+    event_type,
+    seed_fn,
+):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    seed_fn(db_session, instance_id=instance_id, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type=trigger_type,
+        instance_id=instance_id,
+        event_type=event_type,
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type=trigger_type,
+            instance_id=instance_id,
+            event_type=event_type,
+            dedupe_key=f"{trigger_type}-evt-1",
+            payload={"source": trigger_type, "secret": "redact-me"},
+        )
+    )
+
+    assert result.status == "dispatched"
+    assert result.tenant_id == "tenant-a"
+    assert result.continuous_subscription_ids == [501]
+    wake_event = db_session.query(WakeEvent).one()
+    assert wake_event.channel_type == trigger_type
+    assert wake_event.channel_instance_id == instance_id
+    assert db_session.query(ContinuousRun).one().status == "queued"
+
+
+def test_dispatch_filters_webhook_payload_when_trigger_criteria_misses(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    webhook = db_session.query(WebhookIntegration).filter(WebhookIntegration.id == 401).one()
+    webhook.trigger_criteria = {
+        "criteria_version": 1,
+        "filters": {
+            "jsonpath_matchers": [
+                {"path": "$.raw_event.event_type", "operator": "equals", "value": "approved"}
+            ]
+        },
+        "window": {"mode": "since_cursor"},
+        "ordering": "oldest_first",
+    }
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type="webhook",
+        instance_id=401,
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(payload={"raw_event": {"event_type": "rejected"}})
+    )
+
+    assert result.status == "filtered"
+    assert result.reason == "criteria_no_match:jsonpath_matcher_0_failed"
+    assert db_session.query(WakeEvent).count() == 0
+    assert db_session.query(ContinuousRun).count() == 0
+    assert db_session.query(ChannelEventDedupe).one().outcome == "filtered_out"
+
+
+def test_dispatch_accepts_webhook_payload_when_trigger_criteria_matches(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    webhook = db_session.query(WebhookIntegration).filter(WebhookIntegration.id == 401).one()
+    webhook.trigger_criteria = {
+        "criteria_version": 1,
+        "filters": {
+            "jsonpath_matchers": [
+                {"path": "$.raw_event.event_type", "operator": "equals", "value": "approved"}
+            ]
+        },
+        "window": {"mode": "since_cursor"},
+        "ordering": "oldest_first",
+    }
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type="webhook",
+        instance_id=401,
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(payload={"raw_event": {"event_type": "approved"}})
+    )
+
+    assert result.status == "dispatched"
+    assert db_session.query(WakeEvent).count() == 1
+    assert db_session.query(ContinuousRun).count() == 1
 
 
 def test_trigger_dispatch_status_names_are_stable():

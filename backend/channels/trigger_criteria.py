@@ -7,6 +7,7 @@ module enforces the shared shape so bad rows do not enter the control plane.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -64,3 +65,123 @@ class TriggerCriteria:
 
 def validate_criteria(data: dict[str, Any]) -> dict[str, Any]:
     return TriggerCriteria.validate(data)
+
+
+def evaluate_payload_criteria(payload: dict[str, Any], criteria: dict[str, Any] | None) -> tuple[bool, str | None]:
+    """Return whether payload satisfies trigger criteria.
+
+    v0.7.0 criteria are intentionally AND-only. If no JSONPath matchers are
+    configured, the payload passes after the shared envelope is valid.
+    """
+    if not criteria:
+        return True, None
+
+    criteria = validate_criteria(criteria)
+    filters = criteria.get("filters") or {}
+    matchers = (
+        filters.get("jsonpath_matchers")
+        or filters.get("jsonpath")
+        or filters.get("matchers")
+        or []
+    )
+    if not matchers:
+        return True, None
+    if not isinstance(matchers, list):
+        raise ValueError("filters.jsonpath_matchers must be a list")
+
+    for index, matcher in enumerate(matchers):
+        if not isinstance(matcher, dict):
+            raise ValueError("JSONPath matcher must be an object")
+        path = str(matcher.get("path") or matcher.get("jsonpath") or "").strip()
+        if not path:
+            raise ValueError("JSONPath matcher path is required")
+        operator = str(matcher.get("operator") or "exists").strip().lower()
+        expected = matcher.get("value", matcher.get("expected"))
+        values = _jsonpath_values(payload, path)
+        if not _match_values(values, operator, expected):
+            return False, f"jsonpath_matcher_{index}_failed"
+
+    return True, None
+
+
+def _jsonpath_values(payload: dict[str, Any], path: str) -> list[Any]:
+    try:
+        from jsonpath_ng import parse
+
+        expression = parse(path)
+        return [match.value for match in expression.find(payload)]
+    except ImportError:
+        return _simple_jsonpath_values(payload, path)
+
+
+def _simple_jsonpath_values(payload: dict[str, Any], path: str) -> list[Any]:
+    """Small fallback for tests/dev if jsonpath-ng is not installed yet."""
+    if path == "$":
+        return [payload]
+    if not path.startswith("$."):
+        raise ValueError("JSONPath must start with '$.'")
+
+    current: list[Any] = [payload]
+    for raw_part in path[2:].split("."):
+        if not raw_part:
+            return []
+        part = raw_part
+        explode = False
+        index: int | None = None
+        if part.endswith("[*]"):
+            explode = True
+            part = part[:-3]
+        else:
+            index_match = re.match(r"^(.+)\[(\d+)\]$", part)
+            if index_match:
+                part = index_match.group(1)
+                index = int(index_match.group(2))
+
+        next_values: list[Any] = []
+        for item in current:
+            if not isinstance(item, dict) or part not in item:
+                continue
+            value = item[part]
+            if explode:
+                if isinstance(value, list):
+                    next_values.extend(value)
+            elif index is not None:
+                if isinstance(value, list) and index < len(value):
+                    next_values.append(value[index])
+            else:
+                next_values.append(value)
+        current = next_values
+    return current
+
+
+def _match_values(values: list[Any], operator: str, expected: Any) -> bool:
+    if operator == "exists":
+        return bool(values)
+    if operator == "not_exists":
+        return not values
+    if operator == "equals":
+        return any(value == expected for value in values)
+    if operator == "not_equals":
+        return bool(values) and all(value != expected for value in values)
+    if operator == "contains":
+        return any(_contains(value, expected) for value in values)
+    if operator == "in":
+        if not isinstance(expected, list):
+            raise ValueError("operator 'in' expects a list value")
+        return any(value in expected for value in values)
+    if operator == "regex":
+        if not isinstance(expected, str):
+            raise ValueError("operator 'regex' expects a string value")
+        pattern = re.compile(expected)
+        return any(isinstance(value, str) and pattern.search(value) for value in values)
+    raise ValueError(f"unsupported JSONPath matcher operator: {operator}")
+
+
+def _contains(value: Any, expected: Any) -> bool:
+    if isinstance(value, str):
+        return str(expected) in value
+    if isinstance(value, list):
+        return expected in value
+    if isinstance(value, dict):
+        return expected in value.values() or expected in value.keys()
+    return False
