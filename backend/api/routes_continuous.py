@@ -7,8 +7,10 @@ later trigger/wizard tracks once the contracts are stable.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional, Type
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -36,6 +38,9 @@ from models import (
 
 router = APIRouter(tags=["Continuous Agents"])
 security = HTTPBearer(auto_error=False)
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+WAKE_EVENT_PAYLOAD_ROOT = (BACKEND_ROOT / "data" / "wake_events").resolve()
+WAKE_EVENT_PAYLOAD_REF_PREFIX = Path("backend") / "data" / "wake_events"
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,12 @@ class WakeEventPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class WakeEventPayloadRead(BaseModel):
+    wake_event_id: int
+    payload_ref: str
+    payload: Any
 
 
 def _caller_from_api(api_caller: ApiCaller, permission: str) -> ContinuousCaller:
@@ -263,6 +274,36 @@ def _load_owned_or_forbidden(
     return row
 
 
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _wake_payload_path(payload_ref: str) -> Path:
+    root = WAKE_EVENT_PAYLOAD_ROOT.resolve()
+    ref_path = Path(payload_ref)
+
+    if ref_path.is_absolute():
+        candidate = ref_path.resolve()
+    else:
+        normalized = Path(*[part for part in ref_path.parts if part not in ("", ".")])
+        if _path_is_relative_to(normalized, WAKE_EVENT_PAYLOAD_REF_PREFIX):
+            candidate = (root / normalized.relative_to(WAKE_EVENT_PAYLOAD_REF_PREFIX)).resolve()
+        elif len(normalized.parts) == 1:
+            candidate = (root / normalized).resolve()
+        else:
+            raise HTTPException(status_code=404, detail="Wake event payload not found")
+
+    if not _path_is_relative_to(candidate, root):
+        raise HTTPException(status_code=404, detail="Wake event payload not found")
+    if candidate.suffix.lower() != ".json" or not candidate.is_file():
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Wake event payload unavailable")
+    return candidate
+
+
 @router.get("/api/continuous-agents", response_model=ContinuousAgentPage)
 def list_continuous_agents(
     limit: int = Query(default=50, ge=1, le=100),
@@ -358,6 +399,8 @@ def list_wake_events(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     channel_type: Optional[str] = Query(default=None),
     channel_instance_id: Optional[int] = Query(default=None, ge=1),
+    occurred_after: Optional[datetime] = Query(default=None),
+    occurred_before: Optional[datetime] = Query(default=None),
     caller: ContinuousCaller = Depends(read_watcher_caller),
     db: Session = Depends(get_db),
 ) -> WakeEventPage:
@@ -368,6 +411,10 @@ def list_wake_events(
         query = query.filter(WakeEvent.channel_type == channel_type)
     if channel_instance_id is not None:
         query = query.filter(WakeEvent.channel_instance_id == channel_instance_id)
+    if occurred_after is not None:
+        query = query.filter(WakeEvent.occurred_at >= occurred_after)
+    if occurred_before is not None:
+        query = query.filter(WakeEvent.occurred_at <= occurred_before)
     query = query.order_by(WakeEvent.occurred_at.desc(), WakeEvent.id.desc())
     rows, total = _page(query, limit=limit, offset=offset)
     return WakeEventPage(
@@ -375,6 +422,35 @@ def list_wake_events(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/api/wake-events/{wake_event_id}/payload", response_model=WakeEventPayloadRead)
+def get_wake_event_payload(
+    wake_event_id: int,
+    caller: ContinuousCaller = Depends(read_watcher_caller),
+    db: Session = Depends(get_db),
+) -> WakeEventPayloadRead:
+    row = _load_owned_or_forbidden(
+        db,
+        WakeEvent,
+        wake_event_id,
+        caller.tenant_id,
+        "Wake event not found",
+    )
+    if not row.payload_ref:
+        raise HTTPException(status_code=404, detail="Wake event payload not found")
+
+    payload_path = _wake_payload_path(row.payload_ref)
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Wake event payload unavailable")
+
+    return WakeEventPayloadRead(
+        wake_event_id=row.id,
+        payload_ref=row.payload_ref,
+        payload=payload,
     )
 
 
