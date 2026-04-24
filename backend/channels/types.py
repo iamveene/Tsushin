@@ -64,6 +64,7 @@ class TriggerEvent:
     """Normalized event emitted by a Trigger entry point."""
 
     trigger_type: str
+    event_type: str
     instance_id: int
     tenant_id: str
     dedupe_key: str

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Track B — Trigger Dispatch Foundation (2026-04-24)
+
+**Added:**
+- Shared trigger dispatch foundation for future Jira, Schedule, GitHub, Webhook, and Email trigger adapters. The foundation normalizes trigger events, resolves tenant-owned trigger instances from persisted rows, deduplicates events, stores redacted payload references, and creates wake/run evidence for active continuous subscriptions.
+- Focused backend regression coverage for trigger dedupe, tenant ownership, payload-ref creation, subscription matching, and webhook dual-write behavior.
+- Public QA summary for the foundation-only Track B slice at `docs/qa/v0.7.0/track-b-dispatch-foundation-summary.md`.
+
+**Changed:**
+- Webhook inbound handling preserves the existing signed `202 {status, queue_id, poll_url}` direct queue contract while also writing continuous-agent wake evidence when matching subscriptions exist.
+- `TriggerEvent` now carries an explicit `event_type` while keeping `trigger_type` for backward compatibility with the existing trigger base contract.
+- `docs/internal/v0.7.0-migration-slots.md` now records the actual `0059` ASR default migration and states that later Track B adapter migrations chain from current head as `0052 -> 0053 -> 0054`.
+
+**Contract notes:**
+- This slice intentionally creates no Track B adapter migrations. Jira, Schedule, and GitHub instance tables remain deferred.
+- `ChannelEventRule` remains conversational-channel-only; trigger criteria storage and UI builders remain deferred.
+- `continuous_task` queue dispatch remains reserved and is not enqueued by this foundation.
+
 ### Wave 3A — Track C UI readiness + Track F agentic-loop core (2026-04-23)
 
 **Added:**
