@@ -3120,6 +3120,7 @@ class EmailChannelInstance(Base):
     provider = Column(String(32), default="gmail", nullable=False)
     gmail_integration_id = Column(Integer, ForeignKey("gmail_integration.id", ondelete="CASCADE"), nullable=True, index=True)
     search_query = Column(String(500), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
     poll_interval_seconds = Column(Integer, default=60, nullable=False)
     default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -3354,6 +3355,7 @@ class ContinuousSubscription(Base):
     channel_instance_id = Column(Integer, nullable=False)
     event_type = Column(String(64), nullable=True)
     delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    action_config = Column(JSON, nullable=True)
     status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
     is_system_owned = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

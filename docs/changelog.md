@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Email trigger criteria/notifier parity (2026-04-24)
+
+**Added:**
+- Added `EmailChannelInstance.trigger_criteria` with Alembic `0061` so Email triggers persist the same shared criteria/query/definition envelope used by Jira, Webhook, Schedule, and GitHub triggers.
+- Added Email trigger test-query, poll-now, and managed WhatsApp notification APIs: `POST /api/triggers/email/{id}/test-query`, `POST /api/triggers/email/{id}/poll-now`, and `POST /api/triggers/email/{id}/notification-subscription`.
+- Added a managed Email WhatsApp notifier that stores its outbound action in `continuous_subscription.action_config`, sends deterministic message summaries through the selected/default Email agent, and marks continuous runs plus wake events processed or failed.
+
+**Changed:**
+- Email polling now processes system-owned managed actions by `action_config`, preserving existing Gmail draft triage while adding WhatsApp notification delivery for matched messages such as keyword-based Gmail queries.
+- Email notifier setup now requires an explicit operator-provided WhatsApp recipient instead of falling back to a production hard-coded number; missing recipients fail closed before subscription creation.
+- Hub Email trigger detail now loads/saves persisted criteria JSON, keeps helper fields synchronized with raw criteria JSON, tests saved Gmail queries with sample message previews, enables the WhatsApp notifier from a recipient input, runs manual poll-now checks, and still exposes managed draft triage separately.
+- Email trigger reads now avoid leaking foreign Gmail integration details if legacy/corrupt rows point across tenants, criteria-only search definitions can drive Gmail search, and unpadded Gmail base64 bodies decode for preview/body matching.
+
+**Validated:**
+- `python -m pytest -q -o addopts='' backend/tests/test_routes_jira_triggers.py backend/tests/test_routes_email_triggers.py backend/tests/test_email_trigger_runtime.py backend/tests/test_trigger_dispatch_service.py` -> `52 passed`.
+- `docker-compose exec -T backend python -m pytest -q -o addopts='' tests/test_routes_jira_triggers.py tests/test_routes_email_triggers.py tests/test_email_trigger_runtime.py tests/test_trigger_dispatch_service.py` -> `52 passed, 2 warnings` in the rebuilt backend container.
+- `cd frontend && ./node_modules/.bin/eslint 'app/hub/triggers/email/[id]/page.tsx' components/triggers/CriteriaBuilder.tsx components/triggers/EmailTriggerWizard.tsx components/triggers/TriggerBreadthCards.tsx components/triggers/TriggerDetailShell.tsx components/triggers/TriggerSetupModal.tsx components/triggers/TriggerWizard.tsx components/triggers/JiraIssuePreviewList.tsx --max-warnings 0` -> clean.
+- `docker-compose build --no-cache backend frontend && docker-compose up -d backend frontend` -> backend/frontend healthy; direct and proxy `/api/health` returned healthy; Alembic `current` and `heads` both reported `0061 (head)`.
+- `PLAYWRIGHT_BASE_URL=https://localhost npm run test:visual` -> `6 passed`.
+- Direct browser smoke covered Hub Communication, Jira/Email detail notifier inputs, manual poll controls, criteria/test-query controls, and Jira/Email wake-event filters. No console warnings/errors or API/page HTTP failures were observed.
+- Browser validation on `/hub/triggers/email/15` covered persisted Email criteria helpers/JSON, saved test-query sample rendering, enabled WhatsApp notifier status, and recent processed wake-event display. Network requests were 200; no console errors were observed.
+- Live Email keyword smoke used a disposable keyword-shaped message containing `XYZ...`; Gmail test-query found one sample, the scheduler created one processed wake event and one succeeded `email_whatsapp_notification` continuous run, and repeated poll-now calls did not send a duplicate.
+- `cd frontend && npm run typecheck` is still blocked by pre-existing repo-wide TypeScript debt outside the Email trigger files; the first failures remain in older contacts/projects/flows/playground/watcher/client surfaces.
+
+### Release 0.7.0 — Jira trigger finalization (2026-04-24)
+
+**Added:**
+- Added live Jira trigger polling beside the existing Email/Schedule scheduler work, with matching JQL issues dispatched through the shared trigger dispatch path.
+- Added Jira managed WhatsApp notification support through `continuous_subscription.action_config`, creating/reusing a system-owned continuous agent/subscription and sending deterministic issue summaries through the selected Jira default agent.
+- Added operator endpoints and UI detail actions for Jira managed notification setup and manual poll-now validation, plus enriched test-query issue previews with links, issue type, status, title, and description preview.
+- Added a sanitized Jira finalization QA summary with live evidence at `docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md`.
+
+**Changed:**
+- Jira Cloud search now calls the current enhanced JQL endpoint `/rest/api/3/search/jql`; live validation showed the older `/rest/api/3/search` endpoint returning HTTP 410.
+- Jira base URLs are normalized by stripping trailing `/jira`, so UI input such as `https://<site>.atlassian.net/jira` is stored and used internally as `https://<site>.atlassian.net`.
+- Jira dispatch dedupe now uses once-per-issue keys such as `jira_issue:JSM-193570`, so later updates or repeated polls for the same issue do not double-fire.
+- Jira notifier setup now requires an explicit operator-provided WhatsApp recipient and accepts the compatibility alias `recipient`; omitted recipients fail closed before subscription creation.
+- Clarified stale Track B wording that previously made Jira look runtime-complete when only CRUD, JQL test-query, persisted encrypted credentials, UI/detail pages, and normalization coverage had been validated.
+- Documented that Jira API tokens are collected through the Hub UI, stored encrypted, and surfaced back only as masked previews; release docs and QA notes must not include plaintext credentials.
+- Reaffirmed that Jira triggers live under Hub → Communication → Triggers, separate from conversational WhatsApp/Telegram/Slack/Discord channels.
+
+**Validated:**
+- `python -m pytest -q -o addopts='' backend/tests/test_routes_jira_triggers.py backend/tests/test_routes_email_triggers.py backend/tests/test_email_trigger_runtime.py backend/tests/test_trigger_dispatch_service.py` -> `52 passed`.
+- `docker-compose exec -T backend python -m pytest -q -o addopts='' tests/test_routes_jira_triggers.py tests/test_routes_email_triggers.py tests/test_email_trigger_runtime.py tests/test_trigger_dispatch_service.py` -> `52 passed, 2 warnings`.
+- `docker-compose build --no-cache backend frontend && docker-compose up -d backend frontend` -> backend/frontend rebuilt from the repository root; backend, frontend, postgres, and proxy were healthy.
+- Direct/proxy `/api/health` returned healthy; Alembic `current` and `heads` both reported `0061 (head)`.
+- `PLAYWRIGHT_BASE_URL=https://localhost npm run test:visual` -> `6 passed`.
+- Direct browser smoke covered Hub Communication, Jira detail notifier input, manual Poll Now controls, criteria/test-query controls, Email detail controls, and Jira/Email wake-event filters without console warnings/errors or API/page HTTP failures.
+- Live Jira test-query for `project = JSM AND statusCategory != Done AND type = "Pen Test"` returned `JSM-193570` and `JSM-189100`, with `JSM-193570` present as the expected sample.
+- Live scheduler processing created processed Jira wake events `#12` / `#11` and succeeded continuous runs `#10` / `#9`; both notification outcomes recorded `jira_whatsapp_notification.success=true`.
+- Repeated Jira poll-now calls returned duplicate statuses for the same two issue keys and emitted no additional wake events, continuous runs, or WhatsApp sends.
+- Browser validation on `/hub/triggers/jira/4` covered normalized URL display, exact JQL criteria, Jira Agent default, masked WhatsApp recipient, active notification subscription, test-query samples, processed wake-event table, and poll-now duplicate suppression. Network requests were 200; no console errors were observed.
+
 ### Phase 8 — UI polish and control-plane UX (2026-04-24)
 
 **Added:**

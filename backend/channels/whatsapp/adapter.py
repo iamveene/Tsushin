@@ -150,6 +150,7 @@ class WhatsAppChannelAdapter(Channel):
             if agent.whatsapp_integration_id:
                 instance = self.db.query(WhatsAppMCPInstance).filter(
                     WhatsAppMCPInstance.id == agent.whatsapp_integration_id,
+                    WhatsAppMCPInstance.tenant_id == agent.tenant_id,
                     WhatsAppMCPInstance.status.in_(["running", "starting"])
                 ).first()
                 if instance:

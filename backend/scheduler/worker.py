@@ -177,6 +177,17 @@ class SchedulerWorker:
                 except Exception as e:
                     logger.error(f"Failed to poll email triggers: {e}", exc_info=True)
 
+                try:
+                    from channels.jira.trigger import JiraTrigger
+
+                    jira_results = asyncio.run(JiraTrigger.poll_active(db))
+                    logger.info(
+                        "Jira trigger poll completed with %s active trigger(s)",
+                        len(jira_results),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to poll Jira triggers: {e}", exc_info=True)
+
         except Exception as e:
             logger.error(f"Error in poll_and_execute: {e}", exc_info=True)
 

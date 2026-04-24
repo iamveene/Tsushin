@@ -613,6 +613,89 @@ def test_dispatch_accepts_webhook_payload_when_trigger_criteria_matches(db_sessi
     assert db_session.query(ContinuousRun).count() == 1
 
 
+def test_dispatch_filters_email_payload_when_keyword_criteria_misses(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_email(db_session, instance_id=601, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    email = db_session.query(EmailChannelInstance).filter(EmailChannelInstance.id == 601).one()
+    email.trigger_criteria = {
+        "criteria_version": 1,
+        "filters": {
+            "email": {"search_query": "XYZ"},
+            "jsonpath_matchers": [
+                {"path": "$.message.body_text", "operator": "contains", "value": "XYZ"}
+            ],
+        },
+        "window": {"mode": "since_cursor"},
+        "ordering": "oldest_first",
+    }
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type="email",
+        instance_id=601,
+        event_type="email.message.received",
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type="email",
+            instance_id=601,
+            event_type="email.message.received",
+            payload={"message": {"subject": "Hello", "body_text": "No matching keyword"}},
+        )
+    )
+
+    assert result.status == "filtered"
+    assert result.reason == "criteria_no_match:jsonpath_matcher_0_failed"
+    assert db_session.query(WakeEvent).count() == 0
+    assert db_session.query(ContinuousRun).count() == 0
+
+
+def test_dispatch_accepts_email_payload_when_keyword_criteria_matches(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_email(db_session, instance_id=601, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    email = db_session.query(EmailChannelInstance).filter(EmailChannelInstance.id == 601).one()
+    email.trigger_criteria = {
+        "criteria_version": 1,
+        "filters": {
+            "email": {"search_query": "XYZ"},
+            "jsonpath_matchers": [
+                {"path": "$.message.body_text", "operator": "contains", "value": "XYZ"}
+            ],
+        },
+        "window": {"mode": "since_cursor"},
+        "ordering": "oldest_first",
+    }
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type="email",
+        instance_id=601,
+        event_type="email.message.received",
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type="email",
+            instance_id=601,
+            event_type="email.message.received",
+            payload={"message": {"subject": "Hello", "body_text": "Keyword XYZ"}},
+        )
+    )
+
+    assert result.status == "dispatched"
+    assert db_session.query(WakeEvent).count() == 1
+    assert db_session.query(ContinuousRun).count() == 1
+
+
 def test_trigger_dispatch_status_names_are_stable():
     assert [status.value for status in TriggerDispatchStatus] == [
         "dispatched",

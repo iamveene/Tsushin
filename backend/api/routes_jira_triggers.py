@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,11 +12,17 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from channels.jira.trigger import JiraPollResult, JiraTrigger
+from channels.jira.utils import jira_description_to_text, jira_issue_link, normalize_jira_site_url
 from channels.trigger_criteria import validate_criteria
 from db import get_db
 from hub.security import TokenEncryption
 from models import Agent, Contact, JiraChannelInstance
 from services.encryption_key_service import get_webhook_encryption_key
+from services.jira_notification_service import (
+    ensure_jira_notification_subscription,
+    jira_notification_status,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +133,15 @@ class JiraTriggerUpdate(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
+class JiraManagedNotificationStatus(BaseModel):
+    status: str
+    recipient_preview: Optional[str] = None
+    agent_id: Optional[int] = None
+    agent_name: Optional[str] = None
+    continuous_agent_id: Optional[int] = None
+    continuous_subscription_id: Optional[int] = None
+
+
 class JiraTriggerRead(BaseModel):
     id: int
     tenant_id: str
@@ -148,6 +162,15 @@ class JiraTriggerRead(BaseModel):
     last_health_check: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     last_cursor: Optional[str] = None
+    managed_notification_enabled: bool = False
+    managed_notification_status: Optional[JiraManagedNotificationStatus] = None
+    notification_subscription_status: Optional[str] = None
+    notification_recipient_preview: Optional[str] = None
+    managed_notification_agent_id: Optional[int] = None
+    managed_notification_agent_name: Optional[str] = None
+    managed_notification_recipient_preview: Optional[str] = None
+    managed_notification_continuous_agent_id: Optional[int] = None
+    managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -182,6 +205,9 @@ class JiraIssueSample(BaseModel):
     key: Optional[str] = None
     summary: Optional[str] = None
     status: Optional[str] = None
+    issue_type: Optional[str] = None
+    link: Optional[str] = None
+    description_preview: Optional[str] = None
     updated: Optional[str] = None
 
 
@@ -196,6 +222,53 @@ class JiraTestQueryResponse(BaseModel):
     error: Optional[str] = None
 
 
+class JiraNotificationSubscriptionRead(BaseModel):
+    jira_trigger_id: int
+    continuous_agent_id: int
+    continuous_subscription_id: int
+    agent_id: int
+    recipient_preview: str
+    created_agent: bool
+    created_subscription: bool
+
+
+class JiraNotificationSubscriptionRequest(BaseModel):
+    recipient_phone: Optional[str] = Field(default=None, min_length=5, max_length=64)
+    recipient: Optional[str] = Field(default=None, min_length=5, max_length=64)
+    agent_id: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("recipient_phone", "recipient")
+    @classmethod
+    def _normalize_recipient(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_optional(value)
+
+    def resolved_recipient(self) -> Optional[str]:
+        return self.recipient_phone or self.recipient
+
+
+class JiraPollNowResponse(BaseModel):
+    success: bool
+    instance_id: int
+    tenant_id: str
+    status: str
+    message: Optional[str] = None
+    error: Optional[str] = None
+    fetched_count: int
+    issue_count: int
+    emitted_count: int
+    wake_event_count: int
+    dispatched_count: int
+    duplicate_count: int
+    skipped_count: int
+    processed_count: int
+    failed_count: int
+    cursor: Optional[str] = None
+    reason: Optional[str] = None
+    dispatch_statuses: list[str]
+    started_at: datetime
+    completed_at: datetime
+
+
 def _normalize_optional(value: Optional[str], *, upper: bool = False) -> Optional[str]:
     if value is None:
         return None
@@ -206,11 +279,7 @@ def _normalize_optional(value: Optional[str], *, upper: bool = False) -> Optiona
 
 
 def _normalize_site_url(value: str) -> str:
-    normalized = value.strip().rstrip("/")
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("site_url must be an http(s) URL")
-    return normalized
+    return normalize_jira_site_url(value)
 
 
 def _token_preview(token: str) -> str:
@@ -272,6 +341,21 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
 
 
 def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
+    notification = jira_notification_status(db, tenant_id=instance.tenant_id, jira_trigger_id=instance.id)
+    notification_status_value = None
+    if notification["continuous_subscription_id"] is not None:
+        notification_status_value = "active" if notification["enabled"] else "inactive"
+    notification_agent_name = _agent_name(db, instance.tenant_id, notification["agent_id"])
+    managed_notification_status = None
+    if notification_status_value is not None:
+        managed_notification_status = JiraManagedNotificationStatus(
+            status=notification_status_value,
+            recipient_preview=notification["recipient_preview"],
+            agent_id=notification["agent_id"],
+            agent_name=notification_agent_name,
+            continuous_agent_id=notification["continuous_agent_id"],
+            continuous_subscription_id=notification["continuous_subscription_id"],
+        )
     return JiraTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -292,6 +376,15 @@ def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
         last_health_check=instance.last_health_check,
         last_activity_at=instance.last_activity_at,
         last_cursor=instance.last_cursor,
+        managed_notification_enabled=bool(notification["enabled"]),
+        managed_notification_status=managed_notification_status,
+        notification_subscription_status=notification_status_value,
+        notification_recipient_preview=notification["recipient_preview"],
+        managed_notification_agent_id=notification["agent_id"],
+        managed_notification_agent_name=notification_agent_name,
+        managed_notification_recipient_preview=notification["recipient_preview"],
+        managed_notification_continuous_agent_id=notification["continuous_agent_id"],
+        managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
     )
@@ -314,12 +407,23 @@ async def _execute_jira_search(
             )
         auth = (auth_email, api_token)
 
-    url = f"{site_url}/rest/api/3/search"
+    url = f"{normalize_jira_site_url(site_url)}/rest/api/3/search/jql"
     payload = {
         "jql": jql,
-        "startAt": 0,
         "maxResults": max_results,
-        "fields": ["summary", "status", "updated"],
+        "fields": [
+            "summary",
+            "description",
+            "status",
+            "issuetype",
+            "project",
+            "priority",
+            "reporter",
+            "assignee",
+            "created",
+            "updated",
+            "labels",
+        ],
     }
     try:
         async with httpx.AsyncClient(timeout=_JIRA_SEARCH_TIMEOUT_SECONDS) as client:
@@ -346,7 +450,7 @@ async def _execute_jira_search(
         raise HTTPException(status_code=502, detail="Jira returned invalid JSON") from exc
 
 
-def _sample_response(data: dict[str, Any]) -> JiraTestQueryResponse:
+def _sample_response(data: dict[str, Any], *, site_url: str) -> JiraTestQueryResponse:
     raw_issues = data.get("issues")
     issues = raw_issues if isinstance(raw_issues, list) else []
     samples: list[JiraIssueSample] = []
@@ -356,12 +460,18 @@ def _sample_response(data: dict[str, Any]) -> JiraTestQueryResponse:
         fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
         status_value = fields.get("status")
         status_name = status_value.get("name") if isinstance(status_value, dict) else None
+        issue_type = fields.get("issuetype")
+        issue_type_name = issue_type.get("name") if isinstance(issue_type, dict) else None
+        key = str(issue.get("key")) if issue.get("key") is not None else None
         samples.append(
             JiraIssueSample(
                 id=str(issue.get("id")) if issue.get("id") is not None else None,
-                key=str(issue.get("key")) if issue.get("key") is not None else None,
+                key=key,
                 summary=fields.get("summary") if isinstance(fields.get("summary"), str) else None,
                 status=status_name if isinstance(status_name, str) else None,
+                issue_type=issue_type_name if isinstance(issue_type_name, str) else None,
+                link=jira_issue_link(site_url, key),
+                description_preview=jira_description_to_text(fields.get("description"), max_chars=180),
                 updated=fields.get("updated") if isinstance(fields.get("updated"), str) else None,
             )
         )
@@ -393,7 +503,39 @@ async def _run_test_query(
         api_token=api_token,
         max_results=max_results,
     )
-    return _sample_response(data)
+    return _sample_response(data, site_url=site_url)
+
+
+def _poll_response(result: JiraPollResult) -> JiraPollNowResponse:
+    completed_at = datetime.utcnow()
+    success = result.status == "ok"
+    message = (
+        f"Processed {result.fetched_count} issue(s), emitted {result.dispatched_count} wake event(s)."
+        if success
+        else result.reason or "Jira poll did not complete."
+    )
+    return JiraPollNowResponse(
+        success=success,
+        instance_id=result.instance_id,
+        tenant_id=result.tenant_id,
+        status=result.status,
+        message=message,
+        error=None if success else result.reason,
+        fetched_count=result.fetched_count,
+        issue_count=result.fetched_count,
+        emitted_count=result.dispatched_count,
+        wake_event_count=result.dispatched_count,
+        dispatched_count=result.dispatched_count,
+        duplicate_count=result.duplicate_count,
+        skipped_count=result.skipped_count,
+        processed_count=result.processed_count,
+        failed_count=result.failed_count,
+        cursor=result.cursor,
+        reason=result.reason,
+        dispatch_statuses=result.dispatch_statuses,
+        started_at=getattr(result, "started_at", None) or completed_at,
+        completed_at=getattr(result, "completed_at", None) or completed_at,
+    )
 
 
 @router.get("", response_model=list[JiraTriggerRead])
@@ -491,6 +633,75 @@ async def run_saved_jira_test_query(
         api_token=api_token,
         max_results=payload.max_results,
     )
+
+
+@router.post("/{trigger_id}/notification-subscription", response_model=JiraNotificationSubscriptionRead)
+def create_jira_notification_subscription(
+    trigger_id: int,
+    payload: JiraNotificationSubscriptionRequest = JiraNotificationSubscriptionRequest(),
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> JiraNotificationSubscriptionRead:
+    recipient = payload.resolved_recipient()
+    if recipient is None:
+        raise HTTPException(status_code=400, detail="WhatsApp recipient is required")
+    if payload.agent_id is not None:
+        instance = _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+        _load_active_agent(db, ctx.tenant_id, payload.agent_id)
+        instance.default_agent_id = payload.agent_id
+        db.add(instance)
+        db.flush()
+    try:
+        result = ensure_jira_notification_subscription(
+            db,
+            tenant_id=ctx.tenant_id,
+            jira_trigger_id=trigger_id,
+            created_by=getattr(current_user, "id", None),
+            recipient_phone=recipient,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "jira_trigger_not_found":
+            raise HTTPException(status_code=404, detail="Jira trigger not found") from exc
+        if reason in {"invalid_whatsapp_recipient"}:
+            raise HTTPException(status_code=400, detail="Invalid WhatsApp recipient") from exc
+        if reason in {"agent_limit_reached"}:
+            raise HTTPException(status_code=409, detail="Agent limit reached for this tenant") from exc
+        if reason in {"default_agent_not_found"}:
+            raise HTTPException(status_code=400, detail="Jira trigger default agent is not active") from exc
+        if reason in {
+            "whatsapp_channel_disabled",
+            "whatsapp_integration_unavailable",
+            "whatsapp_integration_ambiguous",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Jira notifications require a single active tenant-owned WhatsApp agent instance.",
+            ) from exc
+        raise HTTPException(status_code=400, detail=reason) from exc
+
+    return JiraNotificationSubscriptionRead(
+        jira_trigger_id=result.jira_trigger_id,
+        continuous_agent_id=result.continuous_agent_id,
+        continuous_subscription_id=result.continuous_subscription_id,
+        agent_id=result.agent_id,
+        recipient_preview=result.recipient_preview,
+        created_agent=result.created_agent,
+        created_subscription=result.created_subscription,
+    )
+
+
+@router.post("/{trigger_id}/poll-now", response_model=JiraPollNowResponse)
+async def poll_jira_trigger_now(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> JiraPollNowResponse:
+    instance = _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    result = await JiraTrigger.poll_instance(db, instance, force=True)
+    return _poll_response(result)
 
 
 @router.get("/{trigger_id}", response_model=JiraTriggerRead)
