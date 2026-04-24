@@ -16,10 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Email trigger detail/setup parity in Hub with source matching, recent wake events, danger-zone controls, managed triage setup, and explicit `gmail.compose` draft-scope messaging.
 
 **Changed:**
+- Hardened the managed triage enablement path so direct API calls fail closed unless the Email trigger uses an active tenant-owned Gmail integration with draft-compatible OAuth scope (`gmail.compose`, `gmail.modify`, or `mail.google.com/`).
 - Corrected the v0.7.0 implementation plan so Track B breadth is marked complete with its Phase 4 QA evidence instead of stale "foundation only / adapters deferred" language.
 
 **Validation:**
-- Local targeted backend checks passed for Email polling/cursor/tenant-safety/triage, Email trigger routes, trigger dispatch/MemGuard, and Gmail send/draft checkpoint coverage. Root no-cache rebuild, health checks, Alembic current/head checks, and browser smoke also passed. The Phase 3 live draft gate remains blocked until the Gmail fixture is reauthorized with `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
+- Local targeted backend checks passed for Email polling/cursor/tenant-safety/triage, Email trigger routes, trigger dispatch/MemGuard, and Gmail send/draft checkpoint coverage. Follow-up route coverage verifies triage subscription creation rejects cross-tenant, disconnected, and send-only Gmail integrations before creating system-owned routing. Added an opt-in root-only `backend/tests/test_email_trigger_phase3_live_gate.py` scaffold for live poll/dedupe/triage-draft/MemGuard proof after Gmail compose reauthorization. Root no-cache rebuild, health checks, Alembic current/head checks, and browser smoke also passed. The Phase 3 live draft gate remains blocked until the Gmail fixture is reauthorized with `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
 
 ### Track B — Trigger Breadth (2026-04-24)
 
