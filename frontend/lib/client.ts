@@ -1395,6 +1395,7 @@ export interface EmailTrigger {
   default_agent_id?: number | null
   default_agent_name?: string | null
   search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds: number
   is_active: boolean
   status: string
@@ -1402,6 +1403,16 @@ export interface EmailTrigger {
   health_status_reason?: string | null
   last_health_check?: string | null
   last_activity_at?: string | null
+  last_cursor?: string | null
+  managed_notification_enabled?: boolean
+  managed_notification_status?: JiraManagedNotificationStatus | null
+  notification_subscription_status?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_agent_id?: number | null
+  managed_notification_agent_name?: string | null
+  managed_notification_recipient_preview?: string | null
+  managed_notification_continuous_agent_id?: number | null
+  managed_notification_subscription_id?: number | null
   created_at: string
   updated_at?: string | null
 }
@@ -1411,6 +1422,7 @@ export interface EmailTriggerCreateRequest {
   gmail_integration_id: number
   default_agent_id?: number | null
   search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   is_active?: boolean
 }
@@ -1420,6 +1432,7 @@ export interface EmailTriggerUpdateRequest {
   gmail_integration_id?: number
   default_agent_id?: number | null
   search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   is_active?: boolean
 }
@@ -1434,6 +1447,74 @@ export interface EmailTriageSubscription {
   status: string
 }
 
+export interface EmailNotificationSubscriptionRequest {
+  recipient_phone?: string
+  recipient?: string
+  agent_id?: number | null
+}
+
+export interface EmailNotificationSubscriptionResponse {
+  email_trigger_id: number
+  continuous_agent_id: number
+  continuous_subscription_id: number
+  agent_id: number
+  recipient_preview: string
+  created_agent: boolean
+  created_subscription: boolean
+}
+
+export interface EmailTestQueryRequest {
+  gmail_integration_id?: number | null
+  search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  max_results?: number
+}
+
+export interface EmailMessagePreview {
+  id: string
+  thread_id?: string | null
+  subject: string
+  from_address?: string | null
+  date?: string | null
+  snippet?: string | null
+  description_preview?: string | null
+  link?: string | null
+}
+
+export interface EmailTestQueryResponse {
+  success: boolean
+  total?: number | null
+  sample_count?: number | null
+  message_count?: number | null
+  messages?: EmailMessagePreview[]
+  sample_messages?: EmailMessagePreview[]
+  message?: string | null
+  error?: string | null
+}
+
+export interface EmailPollNowResponse {
+  success?: boolean
+  instance_id?: number
+  tenant_id?: string
+  status?: string | null
+  message?: string | null
+  error?: string | null
+  fetched_count?: number | null
+  message_count?: number | null
+  emitted_count?: number | null
+  wake_event_count?: number | null
+  dispatched_count?: number | null
+  duplicate_count?: number | null
+  skipped_count?: number | null
+  processed_count?: number | null
+  failed_count?: number | null
+  cursor?: string | null
+  reason?: string | null
+  dispatch_statuses?: string[]
+  started_at?: string | null
+  completed_at?: string | null
+}
+
 export interface JiraTrigger extends TriggerInstanceBase {
   site_url: string
   project_key?: string | null
@@ -1441,6 +1522,15 @@ export interface JiraTrigger extends TriggerInstanceBase {
   auth_email?: string | null
   api_token_preview?: string | null
   poll_interval_seconds: number
+  managed_notification_enabled?: boolean
+  managed_notification_status?: JiraManagedNotificationStatus | null
+  notification_subscription_status?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_recipient_preview?: string | null
+  managed_notification_agent_id?: number | null
+  managed_notification_agent_name?: string | null
+  managed_notification_continuous_agent_id?: number | null
+  managed_notification_subscription_id?: number | null
 }
 
 export interface JiraTriggerCreateRequest {
@@ -1459,18 +1549,96 @@ export interface JiraTriggerCreateRequest {
 export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
 
 export interface JiraTriggerTestQueryRequest {
-  site_url: string
-  jql: string
+  site_url?: string | null
+  jql?: string | null
   auth_email?: string | null
   api_token?: string | null
+  max_results?: number
+}
+
+export interface JiraIssuePreview {
+  id?: string | null
+  key?: string | null
+  summary?: string | null
+  status?: string | null
+  updated?: string | null
+  issue_type?: string | null
+  issue_type_name?: string | null
+  type?: string | null
+  description?: string | null
+  description_preview?: string | null
+  url?: string | null
+  link?: string | null
+  issue_url?: string | null
 }
 
 export interface JiraTriggerTestQueryResponse {
   success: boolean
+  total?: number | null
+  sample_count?: number | null
   issue_count?: number | null
-  sample_issues?: Array<Record<string, unknown>>
+  issues?: JiraIssuePreview[]
+  sample_issues?: JiraIssuePreview[]
+  recipient_preview?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_status?: JiraManagedNotificationStatus | null
   error?: string | null
   message?: string | null
+}
+
+export interface JiraNotificationSubscriptionRequest {
+  recipient_phone?: string
+  recipient?: string
+  agent_id?: number | null
+}
+
+export interface JiraManagedNotificationStatus {
+  status?: string | null
+  recipient_preview?: string | null
+  agent_id?: number | null
+  agent_name?: string | null
+  continuous_agent_id?: number | null
+  continuous_subscription_id?: number | null
+  created_agent?: boolean
+  created_subscription?: boolean
+  message?: string | null
+}
+
+export interface JiraNotificationSubscriptionResponse extends JiraManagedNotificationStatus {
+  jira_trigger_id?: number
+  agent_id?: number
+  recipient_preview?: string
+  continuous_agent_id?: number
+  continuous_subscription_id?: number
+  created_agent?: boolean
+  created_subscription?: boolean
+}
+
+export interface JiraPollNowResponse {
+  success?: boolean
+  instance_id?: number
+  tenant_id?: string
+  status?: string | null
+  message?: string | null
+  error?: string | null
+  fetched_count?: number | null
+  issue_count?: number | null
+  processed_count?: number | null
+  dispatched_count?: number | null
+  emitted_count?: number | null
+  matched_count?: number | null
+  duplicate_count?: number | null
+  skipped_count?: number | null
+  failed_count?: number | null
+  wake_event_count?: number | null
+  cursor?: string | null
+  reason?: string | null
+  dispatch_statuses?: string[]
+  started_at?: string | null
+  completed_at?: string | null
+  issues?: JiraIssuePreview[]
+  sample_issues?: JiraIssuePreview[]
+  details?: Record<string, unknown> | null
 }
 
 export interface ScheduleTrigger extends TriggerInstanceBase {
@@ -5529,6 +5697,44 @@ export const api = {
     return res.json()
   },
 
+  async testEmailTriggerQuery(data: EmailTestQueryRequest): Promise<EmailTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test email query')
+    return res.json()
+  },
+
+  async testSavedEmailTriggerQuery(id: number, data: EmailTestQueryRequest = {}): Promise<EmailTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test email query')
+    return res.json()
+  },
+
+  async createEmailNotificationSubscription(id: number, data: EmailNotificationSubscriptionRequest): Promise<EmailNotificationSubscriptionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/notification-subscription`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable email notification subscription')
+    return res.json()
+  },
+
+  async pollEmailTriggerNow(id: number): Promise<EmailPollNowResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/poll-now`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to poll email trigger')
+    return res.json()
+  },
+
   async listJiraTriggers(): Promise<JiraTrigger[]> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/jira`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch Jira triggers')
@@ -5575,6 +5781,34 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async testSavedJiraTriggerQuery(id: number, data: JiraTriggerTestQueryRequest = {}): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async createJiraNotificationSubscription(id: number, data: JiraNotificationSubscriptionRequest): Promise<JiraNotificationSubscriptionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/notification-subscription`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable Jira notification subscription')
+    return res.json()
+  },
+
+  async pollJiraTriggerNow(id: number): Promise<JiraPollNowResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/poll-now`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to poll Jira trigger')
     return res.json()
   },
 

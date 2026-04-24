@@ -84,7 +84,7 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
     EntryPointInfo(
         id="jira",
         display_name="Jira",
-        description="Watch Jira issues with JQL and wake agents from matching updates.",
+        description="Watch Jira issues with JQL and wake agents from matching issues.",
         requires_setup=True,
         setup_hint="Create a Jira trigger under Hub -> Communication -> Triggers.",
         icon_hint="jira",

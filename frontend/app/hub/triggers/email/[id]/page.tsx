@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { api, authenticatedFetch, type EmailTrigger, type PageResponse, type WakeEvent } from '@/lib/client'
+import { api, authenticatedFetch, type EmailMessagePreview, type EmailPollNowResponse, type EmailTestQueryResponse, type EmailTrigger, type PageResponse, type WakeEvent } from '@/lib/client'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, ClockIcon, EnvelopeIcon, RefreshIcon, SparklesIcon, TrashIcon } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, ClockIcon, EnvelopeIcon, PlayIcon, RefreshIcon, SparklesIcon, TrashIcon, WhatsAppIcon } from '@/components/ui/icons'
 import CriteriaBuilder, {
   buildEmailSearchQuery,
   buildCriteriaTemplate,
@@ -114,6 +114,39 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
+function emailCriteriaSource(trigger: EmailTrigger): CriteriaSourceValues {
+  const source = emailSourceFromSearchQuery(trigger.search_query)
+  const criteria = trigger.trigger_criteria
+  const filters = criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+    ? (criteria.filters as Record<string, unknown> | undefined)
+    : undefined
+  const email = filters && typeof filters.email === 'object' && !Array.isArray(filters.email)
+    ? filters.email as Record<string, unknown>
+    : undefined
+  const bodyKeyword = typeof email?.body_contains === 'string' ? email.body_contains : ''
+  return {
+    ...source,
+    emailBodyKeyword: bodyKeyword,
+  }
+}
+
+function emailCriteriaText(trigger: EmailTrigger, source: CriteriaSourceValues): string {
+  return formatCriteriaText(trigger.trigger_criteria || buildCriteriaTemplate('email', source))
+}
+
+function pollSummary(result: EmailPollNowResponse): string {
+  const fetched = result.fetched_count ?? 0
+  const dispatched = result.dispatched_count ?? 0
+  const processed = result.processed_count ?? 0
+  const duplicates = result.duplicate_count ?? 0
+  const failed = result.failed_count ?? 0
+  return `Poll ${result.status || 'finished'}: ${fetched} fetched, ${dispatched} dispatched, ${processed} processed, ${duplicates} duplicate, ${failed} failed.`
+}
+
+function emailSamples(result?: EmailTestQueryResponse | null): EmailMessagePreview[] {
+  return result?.sample_messages || result?.messages || []
+}
+
 export default function EmailTriggerDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -128,10 +161,15 @@ export default function EmailTriggerDetailPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [triageLoading, setTriageLoading] = useState(false)
+  const [notificationLoading, setNotificationLoading] = useState(false)
+  const [pollLoading, setPollLoading] = useState(false)
+  const [queryTesting, setQueryTesting] = useState(false)
+  const [queryResult, setQueryResult] = useState<EmailTestQueryResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [criteriaText, setCriteriaText] = useState('')
   const [criteriaSource, setCriteriaSource] = useState<CriteriaSourceValues>({})
+  const [notificationRecipient, setNotificationRecipient] = useState('')
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -143,12 +181,12 @@ export default function EmailTriggerDetailPage() {
         api.getWakeEvents({ limit: 50, channel_type: 'email', channel_instance_id: triggerId }).catch(() => null),
         fetchGmailIntegrations().catch(() => []),
       ])
-      const source = emailSourceFromSearchQuery(triggerData.search_query)
+      const source = emailCriteriaSource(triggerData)
       setTrigger(triggerData)
       setEventsPage(wakeEvents)
       setGmailIntegrations(integrations)
       setCriteriaSource(source)
-      setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', source)))
+      setCriteriaText(emailCriteriaText(triggerData, source))
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to load email trigger'))
     } finally {
@@ -221,18 +259,83 @@ export default function EmailTriggerDetailPage() {
     }
   }
 
+  const enableNotification = async () => {
+    if (!trigger) return
+    const recipient = notificationRecipient.trim()
+    if (!recipient) {
+      setError('WhatsApp recipient is required to enable email notifications')
+      return
+    }
+    setNotificationLoading(true)
+    setError(null)
+    try {
+      const result = await api.createEmailNotificationSubscription(trigger.id, { recipient_phone: recipient })
+      setSuccess(result.created_subscription ? 'Email WhatsApp notification enabled' : 'Email WhatsApp notification is already active')
+      setNotificationRecipient('')
+      const refreshed = await api.getEmailTrigger(trigger.id)
+      setTrigger(refreshed)
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to enable email WhatsApp notification'))
+    } finally {
+      setNotificationLoading(false)
+    }
+  }
+
+  const pollNow = async () => {
+    if (!trigger) return
+    setPollLoading(true)
+    setError(null)
+    try {
+      const result = await api.pollEmailTriggerNow(trigger.id)
+      setSuccess(pollSummary(result))
+      await loadData()
+      setTimeout(() => setSuccess(null), 5000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to poll email trigger'))
+    } finally {
+      setPollLoading(false)
+    }
+  }
+
+  const testQuery = async () => {
+    if (!trigger) return
+    setQueryTesting(true)
+    setError(null)
+    try {
+      const searchQuery = buildEmailSearchQuery(criteriaSource) || trigger.search_query || null
+      const triggerCriteria = parseCriteriaText(criteriaText) || buildCriteriaTemplate('email', criteriaSource)
+      const result = await api.testSavedEmailTriggerQuery(trigger.id, {
+        search_query: searchQuery,
+        trigger_criteria: triggerCriteria,
+        max_results: 3,
+      })
+      setQueryResult(result)
+      setSuccess(result.message || `Query returned ${result.message_count ?? 0} message(s)`)
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setQueryResult(null)
+      setError(getErrorMessage(err, 'Failed to test email query'))
+    } finally {
+      setQueryTesting(false)
+    }
+  }
+
   const saveCriteria = async () => {
     if (!trigger) return
     setSaving(true)
     setError(null)
     try {
-      parseCriteriaText(criteriaText)
+      const nextCriteria = parseCriteriaText(criteriaText)
       const nextSearchQuery = buildEmailSearchQuery(criteriaSource) || null
-      const updated = await api.updateEmailTrigger(trigger.id, { search_query: nextSearchQuery })
-      const source = emailSourceFromSearchQuery(updated.search_query)
+      const updated = await api.updateEmailTrigger(trigger.id, {
+        search_query: nextSearchQuery,
+        trigger_criteria: nextCriteria,
+      })
+      const source = emailCriteriaSource(updated)
       setTrigger(updated)
       setCriteriaSource(source)
-      setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', source)))
+      setCriteriaText(emailCriteriaText(updated, source))
       setSuccess('Criteria saved')
       setTimeout(() => setSuccess(null), 3000)
     } catch (err: unknown) {
@@ -240,6 +343,14 @@ export default function EmailTriggerDetailPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const updateCriteriaSource = (patch: Partial<CriteriaSourceValues>) => {
+    setCriteriaSource((current) => {
+      const next = { ...current, ...patch }
+      setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', next)))
+      return next
+    })
   }
 
   const renderEventsTab = () => (
@@ -471,6 +582,62 @@ export default function EmailTriggerDetailPage() {
 
               <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5 lg:col-span-2">
                 <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                  <WhatsAppIcon size={18} /> Managed WhatsApp Notification
+                </h2>
+                <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
+                  <div className="space-y-2 text-sm text-tsushin-slate">
+                    <p>
+                      Sends a deterministic WhatsApp summary when a matching Gmail message creates a new wake event.
+                    </p>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className={`rounded-full border px-2.5 py-1 ${
+                        trigger.managed_notification_enabled
+                          ? 'border-green-500/30 bg-green-500/10 text-green-300'
+                          : 'border-tsushin-border bg-black/20 text-tsushin-slate'
+                      }`}>
+                        {trigger.managed_notification_enabled ? 'enabled' : 'not enabled'}
+                      </span>
+                      {trigger.managed_notification_recipient_preview && (
+                        <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-cyan-200">
+                          {trigger.managed_notification_recipient_preview}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {canWriteHub && (
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <input
+                        type="tel"
+                        value={notificationRecipient}
+                        onChange={(event) => setNotificationRecipient(event.target.value)}
+                        placeholder="+15551234567"
+                        className="w-full rounded-lg border border-tsushin-border bg-black/25 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={enableNotification}
+                        disabled={notificationLoading || !notificationRecipient.trim()}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-green-400/40 bg-green-500/10 px-4 py-2 text-sm text-green-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <WhatsAppIcon size={16} />
+                        {notificationLoading ? 'Enabling...' : trigger.managed_notification_enabled ? 'Update Notifier' : 'Enable Notifier'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={pollNow}
+                        disabled={pollLoading}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <PlayIcon size={16} />
+                        {pollLoading ? 'Polling...' : 'Poll Now'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5 lg:col-span-2">
+                <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
                   <SparklesIcon size={18} /> Managed Email Triage
                 </h2>
                 <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
@@ -511,18 +678,62 @@ export default function EmailTriggerDetailPage() {
                 onChange={setCriteriaText}
                 disabled={!canWriteHub || saving}
                 source={criteriaSource}
-                onSourceChange={(patch) => setCriteriaSource((current) => ({ ...current, ...patch }))}
+                onSourceChange={updateCriteriaSource}
                 readOnlyReason={!canWriteHub ? 'Read-only view. Your role can view criteria but cannot change it.' : null}
               />
               {canWriteHub && (
-                <button
-                  type="button"
-                  onClick={saveCriteria}
-                  disabled={saving}
-                  className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
-                >
-                  {saving ? 'Saving...' : 'Save Criteria'}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={saveCriteria}
+                    disabled={saving}
+                    className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
+                  >
+                    {saving ? 'Saving...' : 'Save Criteria'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={testQuery}
+                    disabled={queryTesting}
+                    className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+                  >
+                    <PlayIcon size={16} />
+                    {queryTesting ? 'Testing...' : 'Test Query'}
+                  </button>
+                </div>
+              )}
+              {queryResult && (
+                <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+                  <div className="mb-3 text-sm font-semibold text-white">
+                    Sample messages ({queryResult.message_count ?? emailSamples(queryResult).length})
+                  </div>
+                  {emailSamples(queryResult).length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-tsushin-border p-5 text-center text-sm text-tsushin-slate">
+                      No sample messages matched this query.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {emailSamples(queryResult).map((message) => (
+                        <div key={message.id} className="rounded-lg border border-tsushin-border/70 bg-black/20 p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="break-words text-sm font-medium text-white">{message.subject}</div>
+                              <div className="mt-1 text-xs text-tsushin-slate">{message.from_address || 'Unknown sender'}</div>
+                            </div>
+                            {message.link && (
+                              <a href={message.link} target="_blank" rel="noreferrer" className="text-xs text-cyan-200 hover:text-white">
+                                Open
+                              </a>
+                            )}
+                          </div>
+                          {message.description_preview && (
+                            <p className="mt-2 line-clamp-3 text-xs text-tsushin-slate">{message.description_preview}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

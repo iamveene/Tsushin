@@ -155,6 +155,7 @@ backend/data/knowledge/
 backend/data/mcp/
 backend/data/workspace/
 backend/data/projects/
+backend/data/wake_events/
 backend/data/*.db*
 backend/data/*_report.json
 backend/data/*.py

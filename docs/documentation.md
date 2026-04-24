@@ -168,7 +168,7 @@ The first Gmail-send slice is also merged on `release/0.7.0`, but it is still a 
 
 Track A Phase 1 now has the routing-control surfaces needed before continuous-agent work can stack on top.
 
-* **Persisted email trigger rows** — Alembic `0051` adds `EmailChannelInstance`, and `backend/api/routes_email_triggers.py` exposes `GET/POST /api/triggers/email` plus `GET/PATCH /api/triggers/email/{id}` for Gmail-backed trigger rows with a trigger name, Gmail integration, per-trigger `default_agent_id`, optional Gmail search query, poll interval, and active/paused status.
+* **Persisted email trigger rows** — Alembic `0051` adds `EmailChannelInstance`, and Alembic `0061` adds `trigger_criteria` so Gmail-backed trigger rows persist the same criteria/query/definition envelope used by Jira and the other trigger types. `backend/api/routes_email_triggers.py` exposes CRUD, test-query, poll-now, triage, and managed notification endpoints for rows with a trigger name, Gmail integration, per-trigger `default_agent_id`, optional Gmail search query, poll interval, and active/paused status.
 * **Default-agent control plane** — `backend/api/routes_default_agents.py` plus `/settings/default-agents` expose tenant defaults, per-instance channel defaults, per-instance trigger defaults, and per-user channel overrides while keeping resolution centralized in `backend/services/default_agent_service.py`.
 * **Hub trigger launcher** — `frontend/components/ui/Wizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`, and `frontend/components/triggers/EmailTriggerWizard.tsx` add a real Trigger setup path under Hub → Communication. Email is now trigger-only; Gmail account resources continue to live under Hub → Productivity.
 * **Agent Studio cleanup** — `/agents` no longer edits the tenant default inline. It shows the current default agent as a read-only indicator and links to `/settings/default-agents`.
@@ -212,24 +212,34 @@ Track B starts with a no-migration dispatch foundation before Jira, Schedule, an
 
 ### 2.11 v0.7.0 Track B Trigger Breadth
 
-Track B breadth turns the dispatch foundation into user-facing trigger adapters and Hub UI.
+Track B breadth turns the dispatch foundation into user-facing trigger adapter rows and Hub UI. It establishes the Jira/Schedule/GitHub CRUD contracts, criteria surfaces, and normalization tests; live Jira polling plus the managed WhatsApp notifier are finalized in the release sign-off slice described below.
 
 * **Migrations** — `0052_add_jira_trigger_and_webhook_criteria.py` revises `0058`, `0053_add_schedule_trigger_instance.py` revises `0052`, and `0054_add_github_trigger_instance.py` revises `0053`.
 * **Trigger rows** — `JiraChannelInstance`, `ScheduleChannelInstance`, and `GitHubChannelInstance` store tenant-scoped source config, encrypted credentials/secrets where applicable, default-agent references, health snapshots, cursors, and active/paused state.
 * **Webhook criteria** — Webhook trigger rows now carry optional `trigger_criteria`. JSONPath matchers are evaluated before subscription matching; failed criteria write `filtered_out` dedupe evidence and do not create wake/run rows.
-* **Runtime adapters** — Jira normalizes JQL issue payloads, Schedule polls due cron rows without creating legacy `ScheduledEvent` duplicates, and GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`.
+* **Runtime adapters** — Jira has the persisted trigger row, JQL test-query, encrypted credential handling, and issue normalization contract; Schedule polls due cron rows without creating legacy `ScheduledEvent` duplicates; GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`.
 * **Hub UI** — Hub → Communication now supports Email, Webhook, Jira, Schedule, and GitHub trigger setup. Jira/Schedule/GitHub have compact creation flows, cards, `/hub/triggers/{type}/{id}` detail pages, criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
+
+### 2.11.1 v0.7.0 Jira Trigger Finalization
+
+The final Jira release contract completes the gap left by Track B breadth: Jira triggers are not just saved and tested in the UI; active rows are polled against Jira Cloud JQL on their configured interval, matching issues are dispatched through `TriggerDispatchService`, and duplicates are suppressed so the same issue creates at most one wake/run.
+
+* **Placement** — Jira setup and detail remain under Hub → Communication → Triggers. Jira is an event trigger, not a conversational channel; WhatsApp remains the outbound communication channel used by the managed notifier.
+* **Credentials** — Jira site URL, auth email, and API token are captured through the Hub setup/edit/test-query flow. Tokens are stored encrypted and API reads return only a masked preview. Documentation, QA artifacts, browser traces, and logs must not include plaintext Jira tokens.
+* **Polling and dedupe** — the poll loop fetches matching JQL results, normalizes issue payloads, dispatches wake evidence, updates cursor/activity state, and records a deterministic dedupe key per issue so repeated polls and later ticket updates do not double-fire.
+* **Managed WhatsApp notifier** — the release includes a managed notifier path for Jira issue events. It sends one WhatsApp notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient, and fails closed when the recipient is omitted or the selected channel is missing, paused, or not owned by the tenant.
+* **Validation evidence** — release QA includes targeted backend coverage for live Jira polling and once-per-issue dedupe, tenant/credential safety checks, notifier success and failure paths, browser coverage for Hub Jira setup/detail plus wake-event evidence, and a live poll-now duplicate-suppression smoke.
 
 ### 2.12 v0.7.0 Phase 3 Email Trigger/Triage Checkpoint
 
 Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release branch. Live Gmail evidence is scoped to the allowed fixture accounts `mv@archsec.io` and `movl2007@gmail.com`; the current committed fixture uses `mv@archsec.io`.
 
 * **Gmail outbound** — `GmailService`, `EmailCommandService`, and `gmail_skill` support send/reply/draft operations with fail-closed scope checks. Send/reply accept Gmail send-compatible scopes; draft creation requires `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
-* **Email trigger control plane** — `EmailChannelInstance` and `/api/triggers/email` CRUD persist Gmail-backed trigger rows with search query, poll interval, active/paused state, and default-agent routing.
+* **Email trigger control plane** — `EmailChannelInstance` and `/api/triggers/email` CRUD persist Gmail-backed trigger rows with search query, shared trigger criteria, poll interval, active/paused state, and default-agent routing.
 * **Runtime polling** — `backend/channels/email/trigger.py` polls active Gmail-backed Email triggers, fetches message deltas through Gmail list/search APIs, normalizes payloads, advances a stable cursor, rejects missing/foreign/inactive Gmail integrations, and dispatches wake events through `TriggerDispatchService`.
-* **Managed triage** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for `email.message.received`. The endpoint fails closed unless the trigger uses an active tenant-owned Gmail integration with a draft-compatible scope (`gmail.compose`, `gmail.modify`, or `mail.google.com/`). When a dispatched Email wake matches that subscription, the runtime creates a Gmail draft through `GmailSkill` with continuous-agent Sentinel approval context.
+* **Managed triage and notification actions** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for draft-based triage. `POST /api/triggers/email/{id}/notification-subscription` creates/reuses a system-owned Email WhatsApp notifier with an explicit operator-provided recipient in `continuous_subscription.action_config = { action_type: "whatsapp_notification", channel: "whatsapp", recipient_phone }`; omitted recipients fail closed before subscription creation. Both actions consume the same `email.message.received` wake evidence; triage creates Gmail drafts through `GmailSkill`, while the notifier sends deterministic WhatsApp summaries and marks the `ContinuousRun` plus `WakeEvent` succeeded/failed.
 * **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
-* **Hub UI** — the Email trigger setup/detail flow includes source matching, recent wake events, danger-zone actions, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
+* **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, managed WhatsApp notification setup, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
 * **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
 
 ### 2.13 v0.7.0 Phase 8 UI polish and control-plane UX
@@ -1953,14 +1963,20 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 - `gmail_integration_id`
 - `default_agent_id`
 - optional Gmail search query (`search_query`)
+- optional shared trigger criteria envelope (`trigger_criteria`) with Gmail query helpers and JSONPath matchers for payload fields such as `$.message.body_text`
 - poll interval (`30-3600` seconds)
 - `is_active`, `status`, and health snapshot fields
 
 **API surface:**
 - `GET /api/triggers/email` — list the tenant's persisted email trigger rows
 - `POST /api/triggers/email` — create a trigger row bound to an existing Gmail integration
+- `POST /api/triggers/email/test-query` — test a Gmail integration and query before saving
 - `GET /api/triggers/email/{id}` — fetch one trigger
 - `PATCH /api/triggers/email/{id}` — rename, rebind the Gmail integration, change the default agent, search query, poll interval, or active state
+- `POST /api/triggers/email/{id}/test-query` — test the saved trigger query and return sample message previews
+- `POST /api/triggers/email/{id}/notification-subscription` — enable/reuse the managed WhatsApp notification action for matching Email wakes
+- `POST /api/triggers/email/{id}/poll-now` — force one immediate Gmail poll for validation or operator checks
+- `POST /api/triggers/email/{id}/triage-subscription` — enable/reuse managed Gmail draft triage
 - `DELETE /api/triggers/email/{id}` — delete one trigger row
 
 **Hub flow:** Hub → Communication → **Triggers** → **+ New Trigger** → **Email**
@@ -1970,8 +1986,11 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 - Saves a persisted trigger row without treating Gmail as a conversational channel
 
 **Runtime notes:**
-- Gmail-backed Email triggers are polled by the scheduler worker through `EmailTrigger.poll_active()`. The poller supports Gmail search queries, cursor/dedupe advancement, wake-event dispatch, and system-owned managed triage subscriptions.
+- Gmail-backed Email triggers are polled by the scheduler worker through `EmailTrigger.poll_active()`. The poller supports Gmail search queries, persisted criteria evaluation through `TriggerDispatchService`, cursor/dedupe advancement, wake-event dispatch, and system-owned managed triage or WhatsApp notification subscriptions.
+- A keyword flow such as Gmail search query `XYZ` can be saved in `search_query` and mirrored into `trigger_criteria.filters.email.search_query`; optional JSONPath matchers can further require body text such as `$.message.body_text contains "XYZ"` before a wake/run is emitted.
+- Email dedupe remains once per Gmail message id (`gmail:{message_id}`) plus cursor advancement, so polling the same matching message again does not send a second WhatsApp notification or create a second run.
 - Managed triage creates Gmail drafts only when the linked Gmail integration has a draft-compatible scope. Without `gmail.compose`, `gmail.modify`, or `mail.google.com/`, triage runs fail closed with a missing-scope result rather than sending mail.
+- Managed WhatsApp notification requires an active tenant-owned WhatsApp agent instance. Notification messages include subject, sender, Gmail account, optional date, Gmail message id, and a short plain-text preview; email body text is treated as untrusted context.
 - Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
 - If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
 
@@ -1979,15 +1998,24 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 
 **Source:** `backend/api/routes_jira_triggers.py`, `backend/channels/jira/trigger.py`, `frontend/components/triggers/TriggerSetupModal.tsx`
 
-Jira triggers poll a Jira Cloud REST JQL query and normalize matching issue payloads into `TriggerDispatchInput`.
+Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue payloads into `TriggerDispatchInput`. Track B introduced the persisted trigger row, JQL test-query, credential encryption, detail UI, and issue-normalization contract; v0.7.0 finalization adds the live poll loop and managed WhatsApp notifier proof.
 
 **API surface:**
 - `GET/POST /api/triggers/jira`
 - `GET/PATCH/DELETE /api/triggers/jira/{id}`
 - `POST /api/triggers/jira/test-query`
 - `POST /api/triggers/jira/{id}/test-query`
+- `POST /api/triggers/jira/{id}/notification-subscription`
+- `POST /api/triggers/jira/{id}/poll-now`
 
 **Stored config:** site URL, project key, JQL, optional auth email + encrypted API token preview, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps.
+
+**Runtime and notifier contract:**
+- Active Jira triggers poll on their configured interval using Jira Cloud's enhanced JQL search endpoint (`/rest/api/3/search/jql`), dispatch matching issues through the shared trigger dispatch path, and persist dedupe evidence so the same issue is processed once.
+- Jira credentials are UI-managed and encrypted at rest; API responses expose only `api_token_preview`.
+- The managed WhatsApp notifier is an outbound action for Jira trigger results, not a Jira channel. It requires an operator-provided recipient, must use a tenant-owned WhatsApp instance, and should produce one notification per deduped Jira issue.
+- Jira base URLs are normalized by stripping a trailing `/jira`; issue links and REST calls use the canonical site root.
+- Browser QA covers setup/edit/test-query, detail state, wake-event evidence, and the poll-now manual proof action. Backend QA covers successful polling, duplicate suppression, missing/paused channel failures, and cross-tenant ownership rejection.
 
 #### Schedule triggers
 

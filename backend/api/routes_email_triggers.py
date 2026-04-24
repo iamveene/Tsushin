@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from channels.email.trigger import DEFAULT_MAX_RESULTS, EmailPollResult, EmailTrigger, normalize_gmail_message
+from channels.trigger_criteria import validate_criteria
 from db import get_db
+from hub.google.gmail_service import GmailService
 from models import Agent, Contact, EmailChannelInstance, GmailIntegration
+from services.email_notification_service import (
+    email_notification_status,
+    ensure_email_notification_subscription,
+)
 from services.email_triage_service import ensure_email_triage_subscription
 
 logger = logging.getLogger(__name__)
@@ -29,6 +36,7 @@ class EmailTriggerCreate(BaseModel):
     gmail_integration_id: int = Field(..., ge=1)
     default_agent_id: Optional[int] = Field(default=None, ge=1)
     search_query: Optional[str] = Field(default=None, max_length=500)
+    trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int = Field(default=60, ge=30, le=3600)
     is_active: bool = True
 
@@ -48,12 +56,23 @@ class EmailTriggerCreate(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, value):
+        if value is None:
+            return value
+        try:
+            return validate_criteria(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class EmailTriggerUpdate(BaseModel):
     integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     gmail_integration_id: Optional[int] = Field(default=None, ge=1)
     default_agent_id: Optional[int] = Field(default=None, ge=1)
     search_query: Optional[str] = Field(default=None, max_length=500)
+    trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
     is_active: Optional[bool] = None
 
@@ -75,6 +94,25 @@ class EmailTriggerUpdate(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, value):
+        if value is None:
+            return value
+        try:
+            return validate_criteria(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class EmailManagedNotificationStatus(BaseModel):
+    status: str
+    recipient_preview: Optional[str] = None
+    agent_id: Optional[int] = None
+    agent_name: Optional[str] = None
+    continuous_agent_id: Optional[int] = None
+    continuous_subscription_id: Optional[int] = None
+
 
 class EmailTriggerRead(BaseModel):
     id: int
@@ -87,6 +125,7 @@ class EmailTriggerRead(BaseModel):
     default_agent_id: Optional[int] = None
     default_agent_name: Optional[str] = None
     search_query: Optional[str] = None
+    trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int
     is_active: bool
     status: str
@@ -94,6 +133,16 @@ class EmailTriggerRead(BaseModel):
     health_status_reason: Optional[str] = None
     last_health_check: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
+    last_cursor: Optional[str] = None
+    managed_notification_enabled: bool = False
+    managed_notification_status: Optional[EmailManagedNotificationStatus] = None
+    notification_subscription_status: Optional[str] = None
+    notification_recipient_preview: Optional[str] = None
+    managed_notification_agent_id: Optional[int] = None
+    managed_notification_agent_name: Optional[str] = None
+    managed_notification_recipient_preview: Optional[str] = None
+    managed_notification_continuous_agent_id: Optional[int] = None
+    managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -106,6 +155,103 @@ class EmailTriageSubscriptionRead(BaseModel):
     created_agent: bool
     created_subscription: bool
     status: str = "active"
+
+
+class EmailNotificationSubscriptionRead(BaseModel):
+    email_trigger_id: int
+    continuous_agent_id: int
+    continuous_subscription_id: int
+    agent_id: int
+    recipient_preview: str
+    created_agent: bool
+    created_subscription: bool
+
+
+class EmailNotificationSubscriptionRequest(BaseModel):
+    recipient_phone: Optional[str] = Field(default=None, min_length=5, max_length=64)
+    recipient: Optional[str] = Field(default=None, min_length=5, max_length=64)
+    agent_id: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("recipient_phone", "recipient")
+    @classmethod
+    def _normalize_recipient(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def resolved_recipient(self) -> Optional[str]:
+        return self.recipient_phone or self.recipient
+
+
+class EmailTestQueryRequest(BaseModel):
+    gmail_integration_id: Optional[int] = Field(default=None, ge=1)
+    search_query: Optional[str] = Field(default=None, max_length=500)
+    trigger_criteria: Optional[dict[str, Any]] = None
+    max_results: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("search_query")
+    @classmethod
+    def _normalize_query(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, value):
+        if value is None:
+            return value
+        try:
+            return validate_criteria(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class EmailMessageSample(BaseModel):
+    id: str
+    thread_id: Optional[str] = None
+    subject: str
+    from_address: Optional[str] = None
+    date: Optional[str] = None
+    snippet: Optional[str] = None
+    description_preview: Optional[str] = None
+    link: Optional[str] = None
+
+
+class EmailTestQueryResponse(BaseModel):
+    success: bool = True
+    total: int
+    sample_count: int
+    messages: list[EmailMessageSample]
+    message_count: int
+    sample_messages: list[EmailMessageSample]
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+class EmailPollNowResponse(BaseModel):
+    success: bool
+    instance_id: int
+    tenant_id: str
+    status: str
+    message: Optional[str] = None
+    error: Optional[str] = None
+    fetched_count: int
+    message_count: int
+    emitted_count: int
+    wake_event_count: int
+    dispatched_count: int
+    duplicate_count: int
+    skipped_count: int
+    processed_count: int
+    failed_count: int
+    cursor: Optional[str] = None
+    reason: Optional[str] = None
+    dispatch_statuses: list[str]
+    started_at: datetime
+    completed_at: datetime
 
 
 def _load_gmail_integration(db: Session, tenant_id: str, integration_id: int) -> GmailIntegration:
@@ -154,15 +300,47 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
     return row.friendly_name if row else None
 
 
+def _criteria_email_search_query(criteria: Optional[dict[str, Any]]) -> Optional[str]:
+    if not isinstance(criteria, dict):
+        return None
+    filters = criteria.get("filters")
+    if not isinstance(filters, dict):
+        return None
+    email_filters = filters.get("email")
+    if not isinstance(email_filters, dict):
+        return None
+    value = email_filters.get("search_query")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
+    notification = email_notification_status(db, tenant_id=instance.tenant_id, email_trigger_id=instance.id)
     gmail_integration = None
     if instance.gmail_integration_id:
         gmail_integration = db.query(GmailIntegration).filter(
             GmailIntegration.id == instance.gmail_integration_id,
+            GmailIntegration.tenant_id == instance.tenant_id,
         ).first()
     gmail_integration_name = None
     if gmail_integration is not None:
         gmail_integration_name = gmail_integration.display_name or gmail_integration.name
+    notification_status_value = None
+    if notification["continuous_subscription_id"] is not None:
+        notification_status_value = "active" if notification["enabled"] else "inactive"
+    notification_agent_name = _agent_name(db, instance.tenant_id, notification["agent_id"])
+    managed_notification_status = None
+    if notification_status_value is not None:
+        managed_notification_status = EmailManagedNotificationStatus(
+            status=notification_status_value,
+            recipient_preview=notification["recipient_preview"],
+            agent_id=notification["agent_id"],
+            agent_name=notification_agent_name,
+            continuous_agent_id=notification["continuous_agent_id"],
+            continuous_subscription_id=notification["continuous_subscription_id"],
+        )
     return EmailTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -174,6 +352,7 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
         default_agent_id=instance.default_agent_id,
         default_agent_name=_agent_name(db, instance.tenant_id, instance.default_agent_id),
         search_query=instance.search_query,
+        trigger_criteria=instance.trigger_criteria,
         poll_interval_seconds=instance.poll_interval_seconds,
         is_active=bool(instance.is_active),
         status=instance.status or "active",
@@ -181,8 +360,112 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
         health_status_reason=instance.health_status_reason,
         last_health_check=instance.last_health_check,
         last_activity_at=instance.last_activity_at,
+        last_cursor=instance.last_cursor,
+        managed_notification_enabled=bool(notification["enabled"]),
+        managed_notification_status=managed_notification_status,
+        notification_subscription_status=notification_status_value,
+        notification_recipient_preview=notification["recipient_preview"],
+        managed_notification_agent_id=notification["agent_id"],
+        managed_notification_agent_name=notification_agent_name,
+        managed_notification_recipient_preview=notification["recipient_preview"],
+        managed_notification_continuous_agent_id=notification["continuous_agent_id"],
+        managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
+    )
+
+
+async def _execute_email_query(
+    *,
+    db: Session,
+    instance: EmailChannelInstance,
+    integration: GmailIntegration,
+    search_query: Optional[str],
+    trigger_criteria: Optional[dict[str, Any]] = None,
+    max_results: int,
+) -> EmailTestQueryResponse:
+    gmail = GmailService(db, integration.id)
+    if search_query:
+        message_refs = await gmail.search_messages(search_query, max_results=max_results)
+    else:
+        message_refs = await gmail.list_messages(max_results=max_results)
+
+    samples: list[EmailMessageSample] = []
+    seen_ids: set[str] = set()
+    matched_count = 0
+    for message_ref in message_refs:
+        message_id = str((message_ref or {}).get("id") or "").strip()
+        if not message_id or message_id in seen_ids:
+            continue
+        seen_ids.add(message_id)
+        message = await gmail.get_message(message_id, format="full")
+        normalized = normalize_gmail_message(instance=instance, integration=integration, message=message)
+        effective_criteria = trigger_criteria if trigger_criteria is not None else instance.trigger_criteria
+        if effective_criteria:
+            from channels.trigger_criteria import evaluate_payload_criteria
+
+            matched, _reason = evaluate_payload_criteria(normalized.payload, effective_criteria)
+            if not matched:
+                continue
+        matched_count += 1
+        body = normalized.payload.get("message") if isinstance(normalized.payload.get("message"), dict) else {}
+        description = str(body.get("body_text") or body.get("snippet") or "").strip()
+        description = " ".join(description.split())
+        if len(description) > 180:
+            description = description[:180] + "..."
+        samples.append(
+            EmailMessageSample(
+                id=normalized.message_id,
+                thread_id=body.get("threadId") if isinstance(body.get("threadId"), str) else None,
+                subject=str(body.get("subject") or "(No Subject)"),
+                from_address=str(body.get("from") or "") or None,
+                date=str(body.get("date") or "") or None,
+                snippet=str(body.get("snippet") or "") or None,
+                description_preview=description or None,
+                link=f"https://mail.google.com/mail/u/0/#inbox/{normalized.message_id}",
+            )
+        )
+
+    return EmailTestQueryResponse(
+        success=True,
+        total=matched_count,
+        sample_count=len(samples),
+        messages=samples,
+        message_count=matched_count,
+        sample_messages=samples,
+        message=f"Query returned {matched_count} message(s).",
+    )
+
+
+def _poll_response(result: EmailPollResult) -> EmailPollNowResponse:
+    completed_at = datetime.utcnow()
+    success = result.status == "ok"
+    message = (
+        f"Processed {result.fetched_count} message(s), emitted {result.dispatched_count} wake event(s)."
+        if success
+        else result.reason or "Email poll did not complete."
+    )
+    return EmailPollNowResponse(
+        success=success,
+        instance_id=result.instance_id,
+        tenant_id=result.tenant_id or "",
+        status=result.status,
+        message=message,
+        error=None if success else result.reason,
+        fetched_count=result.fetched_count,
+        message_count=result.fetched_count,
+        emitted_count=result.dispatched_count,
+        wake_event_count=result.dispatched_count,
+        dispatched_count=result.dispatched_count,
+        duplicate_count=result.duplicate_count,
+        skipped_count=result.skipped_count,
+        processed_count=result.processed_count,
+        failed_count=result.failed_count,
+        cursor=result.cursor,
+        reason=result.reason,
+        dispatch_statuses=result.dispatch_statuses,
+        started_at=getattr(result, "started_at", None) or completed_at,
+        completed_at=getattr(result, "completed_at", None) or completed_at,
     )
 
 
@@ -218,7 +501,8 @@ def create_email_trigger(
         provider="gmail",
         gmail_integration_id=payload.gmail_integration_id,
         default_agent_id=payload.default_agent_id,
-        search_query=payload.search_query,
+        search_query=payload.search_query or _criteria_email_search_query(payload.trigger_criteria),
+        trigger_criteria=payload.trigger_criteria,
         poll_interval_seconds=payload.poll_interval_seconds,
         is_active=payload.is_active,
         status="active" if payload.is_active else "paused",
@@ -229,6 +513,159 @@ def create_email_trigger(
     db.commit()
     db.refresh(instance)
     return _to_read(db, instance)
+
+
+@router.post("/test-query", response_model=EmailTestQueryResponse)
+async def run_email_test_query(
+    payload: EmailTestQueryRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> EmailTestQueryResponse:
+    if payload.gmail_integration_id is None:
+        raise HTTPException(status_code=400, detail="gmail_integration_id is required")
+    integration = _load_gmail_integration(db, ctx.tenant_id, payload.gmail_integration_id)
+    preview_instance = EmailChannelInstance(
+        id=0,
+        tenant_id=ctx.tenant_id,
+        integration_name="Email query preview",
+        provider="gmail",
+        gmail_integration_id=integration.id,
+        search_query=payload.search_query or _criteria_email_search_query(payload.trigger_criteria),
+        trigger_criteria=payload.trigger_criteria,
+        created_by=getattr(_user, "id", 0) or 0,
+    )
+    try:
+        return await _execute_email_query(
+            db=db,
+            instance=preview_instance,
+            integration=integration,
+            search_query=preview_instance.search_query,
+            trigger_criteria=payload.trigger_criteria,
+            max_results=payload.max_results,
+        )
+    except Exception as exc:
+        logger.warning("Email test query failed for Gmail integration %s: %s", integration.id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail=f"Email query failed: {type(exc).__name__}") from exc
+
+
+@router.post("/{trigger_id}/test-query", response_model=EmailTestQueryResponse)
+async def run_saved_email_test_query(
+    trigger_id: int,
+    payload: EmailTestQueryRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> EmailTestQueryResponse:
+    instance = _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    if not instance.gmail_integration_id and payload.gmail_integration_id is None:
+        raise HTTPException(status_code=400, detail="Email trigger is missing Gmail integration")
+    integration = _load_gmail_integration(db, ctx.tenant_id, payload.gmail_integration_id or instance.gmail_integration_id)
+    effective_criteria = payload.trigger_criteria if payload.trigger_criteria is not None else instance.trigger_criteria
+    search_query = (
+        payload.search_query
+        if payload.search_query is not None
+        else instance.search_query or _criteria_email_search_query(effective_criteria)
+    )
+    try:
+        return await _execute_email_query(
+            db=db,
+            instance=instance,
+            integration=integration,
+            search_query=search_query,
+            trigger_criteria=effective_criteria,
+            max_results=payload.max_results,
+        )
+    except Exception as exc:
+        logger.warning("Saved email test query failed for trigger %s: %s", trigger_id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail=f"Email query failed: {type(exc).__name__}") from exc
+
+
+@router.post("/{trigger_id}/notification-subscription", response_model=EmailNotificationSubscriptionRead)
+def create_email_notification_subscription(
+    trigger_id: int,
+    payload: EmailNotificationSubscriptionRequest = EmailNotificationSubscriptionRequest(),
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> EmailNotificationSubscriptionRead:
+    recipient = payload.resolved_recipient()
+    if recipient is None:
+        raise HTTPException(status_code=400, detail="WhatsApp recipient is required")
+    if payload.agent_id is not None:
+        instance = _load_email_trigger(db, ctx.tenant_id, trigger_id)
+        _load_active_agent(db, ctx.tenant_id, payload.agent_id)
+        instance.default_agent_id = payload.agent_id
+        db.add(instance)
+        db.flush()
+    try:
+        result = ensure_email_notification_subscription(
+            db,
+            tenant_id=ctx.tenant_id,
+            email_trigger_id=trigger_id,
+            created_by=getattr(current_user, "id", None),
+            recipient_phone=recipient,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "email_trigger_not_found":
+            raise HTTPException(status_code=404, detail="Email trigger not found") from exc
+        if reason in {"invalid_whatsapp_recipient"}:
+            raise HTTPException(status_code=400, detail="Invalid WhatsApp recipient") from exc
+        if reason in {"agent_limit_reached"}:
+            raise HTTPException(status_code=409, detail="Agent limit reached for this tenant") from exc
+        if reason in {"default_agent_not_found"}:
+            raise HTTPException(status_code=400, detail="Email trigger default agent is not active") from exc
+        if reason in {
+            "unsupported_email_provider",
+            "missing_gmail_integration",
+            "gmail_integration_not_found",
+            "gmail_integration_tenant_mismatch",
+            "gmail_integration_type_mismatch",
+            "gmail_integration_inactive",
+            "gmail_integration_missing_token",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Email notifications require an active tenant-owned Gmail integration.",
+            ) from exc
+        if reason in {
+            "whatsapp_channel_disabled",
+            "whatsapp_integration_unavailable",
+            "whatsapp_integration_ambiguous",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Email notifications require a single active tenant-owned WhatsApp agent instance.",
+            ) from exc
+        raise HTTPException(status_code=400, detail=reason) from exc
+
+    return EmailNotificationSubscriptionRead(
+        email_trigger_id=result.email_trigger_id,
+        continuous_agent_id=result.continuous_agent_id,
+        continuous_subscription_id=result.continuous_subscription_id,
+        agent_id=result.agent_id,
+        recipient_preview=result.recipient_preview,
+        created_agent=result.created_agent,
+        created_subscription=result.created_subscription,
+    )
+
+
+@router.post("/{trigger_id}/poll-now", response_model=EmailPollNowResponse)
+async def poll_email_trigger_now(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> EmailPollNowResponse:
+    instance = _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    result = await EmailTrigger.poll_instance(
+        db,
+        instance,
+        max_results=DEFAULT_MAX_RESULTS,
+        force=True,
+    )
+    return _poll_response(result)
 
 
 @router.get("/{trigger_id}", response_model=EmailTriggerRead)
@@ -264,12 +701,17 @@ def update_email_trigger(
         instance.integration_name = data["integration_name"]
     if "search_query" in data:
         instance.search_query = data["search_query"]
+    if "trigger_criteria" in data:
+        instance.trigger_criteria = data["trigger_criteria"]
+        if "search_query" not in data and not instance.search_query:
+            instance.search_query = _criteria_email_search_query(data["trigger_criteria"])
     if "poll_interval_seconds" in data and data["poll_interval_seconds"] is not None:
         instance.poll_interval_seconds = data["poll_interval_seconds"]
     if "is_active" in data and data["is_active"] is not None:
         instance.is_active = data["is_active"]
         instance.status = "active" if data["is_active"] else "paused"
 
+    instance.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(instance)
     return _to_read(db, instance)

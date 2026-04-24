@@ -82,9 +82,9 @@ export default function TriggerBreadthCards({
     {
       kind: 'jira',
       title: 'Jira Triggers',
-      description: 'JQL polling for issue updates and service desk handoffs.',
+      description: 'JQL polling for matching issues and service desk handoffs.',
       emptyTitle: 'No Jira triggers',
-      emptyBody: 'Watch issues by JQL and route matching updates to an agent.',
+      emptyBody: 'Watch issues by JQL and route matching issues to an agent.',
       createLabel: 'Create Jira Trigger',
       Icon: CodeIcon,
       iconClass: 'text-blue-300',
@@ -152,6 +152,9 @@ export default function TriggerBreadthCards({
           <DetailLine label="Site">{jira.site_url}</DetailLine>
           <DetailLine label="JQL">{jira.jql}</DetailLine>
           <DetailLine label="Poll">{jira.poll_interval_seconds}s</DetailLine>
+          <DetailLine label="WhatsApp notification">
+            {jira.managed_notification_status?.status || jira.notification_subscription_status || (jira.managed_notification_enabled ? 'active' : 'Not enabled')}
+          </DetailLine>
         </>
       )
     }

@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import GoogleAppCredentialsStep from '@/components/integrations/GoogleAppCredentialsStep'
 import Wizard, { type WizardStep } from '@/components/ui/Wizard'
 import { api, authenticatedFetch, type Agent, type EmailTrigger } from '@/lib/client'
+import { buildCriteriaTemplate, emailSourceFromSearchQuery } from '@/components/triggers/CriteriaBuilder'
 
 interface Props {
   isOpen: boolean
@@ -330,6 +331,7 @@ export default function EmailTriggerWizard({
         gmail_integration_id: selectedIntegrationId,
         default_agent_id: defaultAgentId,
         search_query: searchQuery.trim() || null,
+        trigger_criteria: buildCriteriaTemplate('email', emailSourceFromSearchQuery(searchQuery)),
         poll_interval_seconds: pollValue,
         is_active: isActive,
       }

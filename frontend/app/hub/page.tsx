@@ -5,7 +5,7 @@
  *
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
- * - Communication: WhatsApp, Telegram, Discord, Slack, Email Triggers, Webhooks
+ * - Communication: WhatsApp, Telegram, Discord, Slack, Email, Webhook, Jira, Schedule, and GitHub Triggers
  * - Productivity: Asana, Google Calendar
  * - Developer Tools: Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus

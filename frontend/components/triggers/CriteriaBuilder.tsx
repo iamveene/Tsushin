@@ -23,6 +23,7 @@ export interface CriteriaSourceValues {
   emailSearchQuery?: string | null
   emailSender?: string | null
   emailSubject?: string | null
+  emailBodyKeyword?: string | null
   jiraJql?: string | null
   jiraProjectKey?: string | null
   cronExpression?: string | null
@@ -117,6 +118,7 @@ export function emailSourceFromSearchQuery(searchQuery?: string | null): Criteri
     emailSearchQuery: query,
     emailSender: sender,
     emailSubject: subject,
+    emailBodyKeyword: '',
   }
 }
 
@@ -136,12 +138,25 @@ export function buildEmailSearchQuery(source?: CriteriaSourceValues): string {
 
 export function buildCriteriaTemplate(kind: TriggerKind = 'webhook', source: CriteriaSourceValues = {}): TriggerCriteria {
   if (kind === 'email') {
+    const bodyKeyword = nullableTrim(source.emailBodyKeyword)
     return baseCriteria({
       email: {
         search_query: buildEmailSearchQuery(source) || null,
         sender: nullableTrim(source.emailSender),
         subject_contains: nullableTrim(source.emailSubject),
+        body_contains: bodyKeyword,
       },
+      ...(bodyKeyword
+        ? {
+            jsonpath_matchers: [
+              {
+                path: '$.message.body_text',
+                operator: 'contains',
+                value: bodyKeyword,
+              },
+            ],
+          }
+        : {}),
     })
   }
 
@@ -344,6 +359,16 @@ export default function CriteriaBuilder({
               onChange={(event) => updateSource({ emailSubject: event.target.value })}
               disabled={!canEditSource}
               placeholder="incident"
+              className={inputClass(!canEditSource)}
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <FieldLabel>Body keyword</FieldLabel>
+            <input
+              value={source.emailBodyKeyword || ''}
+              onChange={(event) => updateSource({ emailBodyKeyword: event.target.value })}
+              disabled={!canEditSource}
+              placeholder="XYZ"
               className={inputClass(!canEditSource)}
             />
           </div>

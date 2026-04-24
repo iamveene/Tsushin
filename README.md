@@ -19,7 +19,7 @@
 ## Feature Highlights
 
 - **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
-- **6 channels** — WhatsApp (WAHA), Telegram, Slack, Discord, HTTP Webhook (HMAC-signed), and a built-in Playground web chat.
+- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground; event triggers cover Email, Webhook, Jira, Schedule, and GitHub under Hub → Communication.
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
 - **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph).
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas.
@@ -83,6 +83,16 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 - **Graph View** — WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, target-node pulse during A2A, stale A2A-edge auto-cleanup.
 
 **Full change log**: [docs/changelog.md](docs/changelog.md) contains ~50 detailed entries for every fix, migration, wizard step, and regression-test suite that shipped in this release.
+
+---
+
+## Release 0.7.0 Preview
+
+v0.7.0 separates conversational **Channels** from event **Triggers**. Hub → Communication now hosts Email, Webhook, Jira, Schedule, and GitHub triggers alongside WhatsApp/Telegram/Slack/Discord channel setup, with wake-event evidence and continuous-agent read surfaces.
+
+The final Jira trigger slice adds live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted UI-managed Jira credentials, and a managed WhatsApp notifier that sends one notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient. See [docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md](docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md) for the sanitized validation evidence.
+
+Email triggers now use the same criteria/query definition shape: saved Gmail queries are mirrored into `trigger_criteria`, operators can test sample messages, force a poll-now run, and enable a managed WhatsApp notifier with an explicit recipient for flows such as an email containing keyword `XYZ` waking the selected Email agent and sending one deduped WhatsApp summary.
 
 ---
 
@@ -205,7 +215,7 @@ The committed baselines live under `frontend/tests/visual/`; private reports, tr
 | Memory, knowledge, vector stores | [§10](docs/documentation.md#10-memory--knowledge), [§11](docs/documentation.md#11-vector-stores) |
 | Sentinel security | [§12](docs/documentation.md#12-security--sentinel) |
 | Flows & scheduler | [§13](docs/documentation.md#13-flows), [§14](docs/documentation.md#14-scheduler--triggers) |
-| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](docs/documentation.md#15-channels) |
+| Channels and triggers (WhatsApp / Telegram / Slack / Discord / Playground; Email / Webhook / Jira / Schedule / GitHub) | [§14](docs/documentation.md#14-scheduler--triggers), [§15](docs/documentation.md#15-channels) |
 | Contacts, projects, playground | [§16](docs/documentation.md#16-contacts--channel-mapping), [§17](docs/documentation.md#17-projects-studio), [§18](docs/documentation.md#18-playground) |
 | LLM providers & hub integrations | [§19](docs/documentation.md#19-llm-providers), [§20](docs/documentation.md#20-hub-integrations) |
 | Settings UI (every subpage) & system admin | [§21](docs/documentation.md#21-settings--ui-taxonomy), [§22](docs/documentation.md#22-system-admin-global-admin-only) |

@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from channels.trigger import Trigger
 from channels.types import HealthResult, TriggerEvent
 from hub.google.gmail_service import GmailService
-from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, EmailChannelInstance, GmailIntegration
+from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, EmailChannelInstance, GmailIntegration, WakeEvent
+from services.email_notification_service import EMAIL_NOTIFICATION_ACTION_TYPE, send_email_whatsapp_notification
 from services.email_triage_service import create_triage_draft
 from services.trigger_dispatch_service import (
     TriggerDispatchInput,
@@ -56,8 +57,12 @@ class EmailPollResult:
     dispatched_count: int = 0
     skipped_count: int = 0
     duplicate_count: int = 0
+    processed_count: int = 0
+    failed_count: int = 0
     cursor: Optional[str] = None
     reason: Optional[str] = None
+    started_at: datetime = field(default_factory=datetime.utcnow)
+    completed_at: datetime = field(default_factory=datetime.utcnow)
     dispatch_statuses: list[str] = field(default_factory=list)
 
 
@@ -172,7 +177,8 @@ def _decode_body_data(value: Any) -> str:
     if not isinstance(value, str) or not value:
         return ""
     try:
-        return base64.urlsafe_b64decode(value.encode("utf-8")).decode("utf-8", errors="replace")
+        padded = value + ("=" * (-len(value) % 4))
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
     except Exception:
         return ""
 
@@ -298,6 +304,22 @@ def normalize_gmail_message(
         payload=payload,
         sender_key=_sender_key(headers.get("from") or "", message_id),
     )
+
+
+def _criteria_email_search_query(criteria: Any) -> Optional[str]:
+    if not isinstance(criteria, dict):
+        return None
+    filters = criteria.get("filters")
+    if not isinstance(filters, dict):
+        return None
+    email_filters = filters.get("email")
+    if not isinstance(email_filters, dict):
+        return None
+    value = email_filters.get("search_query")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 class EmailTrigger(Trigger):
@@ -508,9 +530,10 @@ class EmailTrigger(Trigger):
 
         try:
             gmail = gmail_service_factory(db, integration.id)
-            if instance.search_query:
+            effective_search_query = instance.search_query or _criteria_email_search_query(instance.trigger_criteria)
+            if effective_search_query:
                 message_refs = await gmail.search_messages(
-                    instance.search_query,
+                    effective_search_query,
                     max_results=max(1, max_results),
                 )
             else:
@@ -532,6 +555,8 @@ class EmailTrigger(Trigger):
 
             dispatcher = dispatcher_factory(db)
             dispatch_results: list[TriggerDispatchResult] = []
+            processed_count = 0
+            failed_count = 0
             for message in new_messages:
                 dispatch_result = dispatcher.dispatch(
                     TriggerDispatchInput(
@@ -547,13 +572,15 @@ class EmailTrigger(Trigger):
                     )
                 )
                 dispatch_results.append(dispatch_result)
-                await cls._process_managed_triage(
+                outcomes = await cls._process_managed_actions(
                     db=db,
                     instance=instance,
                     dispatch_result=dispatch_result,
                     email_payload=message.payload,
                     sender_key=message.sender_key,
                 )
+                processed_count += sum(1 for outcome in outcomes if outcome.get("success"))
+                failed_count += sum(1 for outcome in outcomes if not outcome.get("success"))
 
             newest_cursor = instance.last_cursor
             if normalized_messages:
@@ -581,6 +608,8 @@ class EmailTrigger(Trigger):
                 dispatched_count=sum(1 for status in statuses if status == "dispatched"),
                 skipped_count=max(0, len(normalized_messages) - len(new_messages)),
                 duplicate_count=sum(1 for status in statuses if status == "duplicate"),
+                processed_count=processed_count,
+                failed_count=failed_count,
                 cursor=instance.last_cursor,
                 dispatch_statuses=statuses,
             )
@@ -650,7 +679,31 @@ class EmailTrigger(Trigger):
         )
 
     @classmethod
-    async def _process_managed_triage(
+    async def poll_instance(
+        cls,
+        db: Session,
+        instance: EmailChannelInstance,
+        *,
+        logger: Optional[logging.Logger] = None,
+        gmail_service_factory: GmailServiceFactory = _default_gmail_service_factory,
+        dispatcher_factory: DispatcherFactory = _default_dispatcher_factory,
+        max_results: int = DEFAULT_MAX_RESULTS,
+        force: bool = False,
+    ) -> EmailPollResult:
+        """Poll one Email trigger row and dispatch matching Gmail messages."""
+
+        return await cls._poll_instance(
+            db=db,
+            instance=instance,
+            logger=logger or logging.getLogger(__name__),
+            gmail_service_factory=gmail_service_factory,
+            dispatcher_factory=dispatcher_factory,
+            max_results=max_results,
+            force=force,
+        )
+
+    @classmethod
+    async def _process_managed_actions(
         cls,
         *,
         db: Session,
@@ -658,14 +711,15 @@ class EmailTrigger(Trigger):
         dispatch_result: TriggerDispatchResult,
         email_payload: dict[str, Any],
         sender_key: str,
-    ) -> None:
-        """Create drafts for system-owned Email triage subscriptions."""
+    ) -> list[dict[str, Any]]:
+        """Run system-owned Email actions for dispatched wake events."""
 
         if dispatch_result.status != "dispatched":
-            return
+            return []
         if not dispatch_result.continuous_subscription_ids or not dispatch_result.continuous_run_ids:
-            return
+            return []
 
+        outcomes: list[dict[str, Any]] = []
         for subscription_id, run_id in zip(
             dispatch_result.continuous_subscription_ids,
             dispatch_result.continuous_run_ids,
@@ -684,6 +738,8 @@ class EmailTrigger(Trigger):
             )
             if subscription is None:
                 continue
+            action_config = subscription.action_config if isinstance(subscription.action_config, dict) else {}
+            action_type = action_config.get("action_type") or "email_triage_draft"
 
             continuous_agent = (
                 db.query(ContinuousAgent)
@@ -702,34 +758,89 @@ class EmailTrigger(Trigger):
                 )
                 .first()
             )
+            wake_events = cls._run_wake_events(
+                db,
+                tenant_id=instance.tenant_id,
+                wake_event_ids=getattr(run, "wake_event_ids", None) if run is not None else None,
+                fallback_wake_event_id=getattr(dispatch_result, "wake_event_id", None),
+            )
             if continuous_agent is None or run is None:
                 continue
 
             run.status = "running"
             run.started_at = run.started_at or _now_utc_naive()
+            for wake_event in wake_events:
+                wake_event.status = "claimed"
+                db.add(wake_event)
             db.add(run)
             db.commit()
 
             try:
-                draft_result = await create_triage_draft(
-                    db,
-                    trigger=instance,
-                    continuous_agent=continuous_agent,
-                    email_payload=email_payload,
-                    sender_key=sender_key,
-                )
-                run.status = "succeeded" if draft_result.get("success") else "failed"
-                run.outcome_state = {"triage_draft": draft_result}
+                if action_type == EMAIL_NOTIFICATION_ACTION_TYPE:
+                    action_result = await send_email_whatsapp_notification(
+                        db,
+                        trigger=instance,
+                        continuous_agent=continuous_agent,
+                        email_payload=email_payload,
+                        recipient_phone=str(action_config.get("recipient_phone") or ""),
+                    )
+                    outcome_key = "email_whatsapp_notification"
+                else:
+                    action_result = await create_triage_draft(
+                        db,
+                        trigger=instance,
+                        continuous_agent=continuous_agent,
+                        email_payload=email_payload,
+                        sender_key=sender_key,
+                    )
+                    outcome_key = "triage_draft"
+                success = bool(action_result.get("success"))
+                run.status = "succeeded" if success else "failed"
+                run.outcome_state = {outcome_key: action_result}
+                for wake_event in wake_events:
+                    wake_event.status = "processed" if success else "failed"
+                    db.add(wake_event)
+                outcomes.append(action_result)
             except Exception as exc:
-                run.status = "failed"
-                run.outcome_state = {
-                    "triage_draft": {
-                        "success": False,
-                        "error": str(exc),
-                        "error_type": type(exc).__name__,
-                    }
+                outcome_key = "email_whatsapp_notification" if action_type == EMAIL_NOTIFICATION_ACTION_TYPE else "triage_draft"
+                failure = {
+                    "success": False,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "action": action_type,
                 }
+                run.status = "failed"
+                run.outcome_state = {outcome_key: failure}
+                for wake_event in wake_events:
+                    wake_event.status = "failed"
+                    db.add(wake_event)
+                outcomes.append(failure)
             finally:
                 run.finished_at = _now_utc_naive()
                 db.add(run)
                 db.commit()
+        return outcomes
+
+    @staticmethod
+    def _run_wake_events(
+        db: Session,
+        *,
+        tenant_id: str,
+        wake_event_ids: Any,
+        fallback_wake_event_id: Any,
+    ) -> list[WakeEvent]:
+        ids: list[int] = []
+        if isinstance(wake_event_ids, list):
+            ids.extend(int(value) for value in wake_event_ids if isinstance(value, int))
+        if not ids and isinstance(fallback_wake_event_id, int):
+            ids.append(fallback_wake_event_id)
+        if not ids:
+            return []
+        return (
+            db.query(WakeEvent)
+            .filter(
+                WakeEvent.id.in_(ids),
+                WakeEvent.tenant_id == tenant_id,
+            )
+            .all()
+        )

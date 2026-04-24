@@ -17,7 +17,7 @@ docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=E
 docker_stub.DockerClient = object
 sys.modules.setdefault("docker", docker_stub)
 
-from channels.email.trigger import EMAIL_EVENT_TYPE, EmailTrigger  # noqa: E402
+from channels.email.trigger import EMAIL_EVENT_TYPE, EmailTrigger, normalize_gmail_message  # noqa: E402
 from models import (  # noqa: E402
     Agent,
     Base,
@@ -31,6 +31,7 @@ from models import (  # noqa: E402
     GmailIntegration,
     HubIntegration,
     SentinelProfile,
+    WakeEvent,
 )
 from models_rbac import Tenant, User  # noqa: E402
 from services.trigger_dispatch_service import TriggerDispatchResult  # noqa: E402
@@ -150,6 +151,7 @@ def _db():
             SentinelProfile.__table__,
             ContinuousAgent.__table__,
             ContinuousSubscription.__table__,
+            WakeEvent.__table__,
             ContinuousRun.__table__,
             HubIntegration.__table__,
             GmailIntegration.__table__,
@@ -429,5 +431,169 @@ def test_email_trigger_processes_system_owned_triage_subscription(monkeypatch):
         assert draft_calls[0]["email_payload"]["message"]["id"] == "msg-new"
         assert run.status == "succeeded"
         assert run.outcome_state["triage_draft"]["metadata"]["draft_id"] == "draft-1"
+    finally:
+        db.close()
+
+
+def test_email_trigger_processes_system_owned_whatsapp_notification(monkeypatch):
+    db = _db()
+    try:
+        _seed(db)
+        db.add(
+            ContinuousAgent(
+                id=502,
+                tenant_id="tenant-a",
+                agent_id=201,
+                name="Email WhatsApp Notifier: Inbox Watcher",
+                execution_mode="notify_only",
+                status="active",
+                is_system_owned=True,
+            )
+        )
+        db.add(
+            ContinuousSubscription(
+                id=602,
+                tenant_id="tenant-a",
+                continuous_agent_id=502,
+                channel_type="email",
+                channel_instance_id=401,
+                event_type=EMAIL_EVENT_TYPE,
+                status="active",
+                is_system_owned=True,
+                action_config={
+                    "action_type": "whatsapp_notification",
+                    "channel": "whatsapp",
+                    "recipient_phone": "+5527999616279",
+                },
+            )
+        )
+        db.add(
+            WakeEvent(
+                id=802,
+                tenant_id="tenant-a",
+                continuous_agent_id=502,
+                continuous_subscription_id=602,
+                channel_type="email",
+                channel_instance_id=401,
+                event_type=EMAIL_EVENT_TYPE,
+                occurred_at=datetime.utcnow(),
+                dedupe_key="gmail:msg-new",
+                status="pending",
+            )
+        )
+        db.add(
+            ContinuousRun(
+                id=702,
+                tenant_id="tenant-a",
+                continuous_agent_id=502,
+                wake_event_ids=[802],
+                execution_mode="notify_only",
+                status="queued",
+            )
+        )
+        db.commit()
+        fake_gmail = FakeGmail(
+            [_message("msg-new", 2000, subject="Keyword XYZ", sender="New <new@example.com>")]
+        )
+        notification_calls = []
+
+        class NotificationDispatcher:
+            def dispatch(self, event):
+                return TriggerDispatchResult(
+                    status="dispatched",
+                    tenant_id="tenant-a",
+                    matched_agent_id=201,
+                    wake_event_id=802,
+                    continuous_run_ids=[702],
+                    continuous_subscription_ids=[602],
+                )
+
+        async def fake_send_email_notification(_db, **kwargs):
+            notification_calls.append(kwargs)
+            return {
+                "success": True,
+                "recipient_preview": "+5527...6279",
+                "message_id_source": "msg-new",
+                "action": "whatsapp_notification",
+            }
+
+        monkeypatch.setattr(
+            "channels.email.trigger.send_email_whatsapp_notification",
+            fake_send_email_notification,
+        )
+
+        result = asyncio.run(
+            EmailTrigger.poll_active(
+                db,
+                gmail_service_factory=lambda _db, _integration_id: fake_gmail,
+                dispatcher_factory=lambda _db: NotificationDispatcher(),
+            )
+        )[0]
+
+        run = db.query(ContinuousRun).filter(ContinuousRun.id == 702).one()
+        wake = db.query(WakeEvent).filter(WakeEvent.id == 802).one()
+        assert result.status == "ok"
+        assert result.dispatched_count == 1
+        assert result.processed_count == 1
+        assert result.failed_count == 0
+        assert len(notification_calls) == 1
+        assert notification_calls[0]["email_payload"]["message"]["subject"] == "Keyword XYZ"
+        assert notification_calls[0]["recipient_phone"] == "+5527999616279"
+        assert run.status == "succeeded"
+        assert run.outcome_state["email_whatsapp_notification"]["message_id_source"] == "msg-new"
+        assert wake.status == "processed"
+    finally:
+        db.close()
+
+
+def test_email_trigger_uses_criteria_only_search_query():
+    db = _db()
+    try:
+        trigger = _seed(db)
+        trigger.trigger_criteria = {
+            "criteria_version": 1,
+            "filters": {
+                "email": {
+                    "search_query": "XYZ",
+                },
+            },
+            "window": {"mode": "since_cursor"},
+            "ordering": "oldest_first",
+            "dedupe_scope": "instance",
+        }
+        db.add(trigger)
+        db.commit()
+        fake_gmail = FakeGmail([
+            _message("msg-criteria", 2000, subject="Keyword XYZ", sender="New <new@example.com>"),
+        ])
+        dispatched = []
+
+        result = asyncio.run(
+            EmailTrigger.poll_active(
+                db,
+                gmail_service_factory=lambda _db, _integration_id: fake_gmail,
+                dispatcher_factory=lambda _db: RecordingDispatcher(dispatched),
+            )
+        )[0]
+
+        assert result.status == "ok"
+        assert fake_gmail.search_queries == ["XYZ"]
+        assert fake_gmail.list_calls == 0
+        assert len(dispatched) == 1
+    finally:
+        db.close()
+
+
+def test_normalize_gmail_message_decodes_unpadded_base64_body():
+    db = _db()
+    try:
+        trigger = _seed(db)
+        integration = db.query(GmailIntegration).filter(GmailIntegration.id == 301).one()
+        message = _message("msg-unpadded", 2000, subject="Keyword XYZ", sender="New <new@example.com>")
+        message["payload"]["body"]["data"] = message["payload"]["body"]["data"].rstrip("=")
+
+        normalized = normalize_gmail_message(instance=trigger, integration=integration, message=message)
+
+        assert normalized.payload["message"]["body_text"] == "Body for Keyword XYZ"
     finally:
         db.close()

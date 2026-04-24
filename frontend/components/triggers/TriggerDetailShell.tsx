@@ -5,10 +5,11 @@ import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
-import { api, type GitHubTrigger, type JiraTrigger, type PageResponse, type ScheduleTrigger, type TriggerKind, type WakeEvent } from '@/lib/client'
+import { api, type GitHubTrigger, type JiraIssuePreview, type JiraManagedNotificationStatus, type JiraNotificationSubscriptionResponse, type JiraPollNowResponse, type JiraTrigger, type PageResponse, type ScheduleTrigger, type TriggerKind, type WakeEvent } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, RefreshIcon, TrashIcon, type IconProps } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, RefreshIcon, SparklesIcon, TrashIcon, WhatsAppIcon, type IconProps } from '@/components/ui/icons'
 import CriteriaBuilder, { formatCriteriaText, parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
+import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -27,7 +28,7 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
 }> = {
   jira: {
     label: 'Jira Trigger',
-    description: 'JQL-polled wake source for issue updates.',
+    description: 'JQL-polled wake source for matching issues.',
     Icon: CodeIcon,
     iconClass: 'text-blue-300',
     accentClass: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
@@ -126,6 +127,40 @@ function splitList(text?: string | null): string[] | null {
   return values.length > 0 ? values : null
 }
 
+function jiraManagedNotificationFromTrigger(trigger: JiraTrigger): JiraManagedNotificationStatus | null {
+  if (trigger.managed_notification_status) return trigger.managed_notification_status
+  if (!trigger.managed_notification_enabled && !trigger.notification_subscription_status && !trigger.managed_notification_recipient_preview && !trigger.notification_recipient_preview) {
+    return null
+  }
+  return {
+    status: trigger.notification_subscription_status || (trigger.managed_notification_enabled ? 'active' : 'inactive'),
+    recipient_preview: trigger.managed_notification_recipient_preview || trigger.notification_recipient_preview,
+    agent_id: trigger.managed_notification_agent_id || trigger.default_agent_id,
+    agent_name: trigger.managed_notification_agent_name,
+    continuous_agent_id: trigger.managed_notification_continuous_agent_id,
+    continuous_subscription_id: trigger.managed_notification_subscription_id,
+  }
+}
+
+function notificationStatusLabel(status?: JiraManagedNotificationStatus | null): string {
+  return status?.status || 'Not enabled'
+}
+
+function notificationRecipientPreview(status?: JiraManagedNotificationStatus | null): string {
+  return status?.recipient_preview || 'Not configured'
+}
+
+function pollResultSummary(result: JiraPollNowResponse): string {
+  if (result.success === false) return result.error || result.message || result.reason || 'Poll failed'
+  const emitted = result.emitted_count ?? result.wake_event_count ?? result.dispatched_count ?? result.matched_count
+  const processed = result.processed_count ?? result.issue_count ?? result.fetched_count
+  if (processed !== undefined && emitted !== undefined) {
+    return `Processed ${processed} issue(s), emitted ${emitted} wake event(s).`
+  }
+  if (processed !== undefined) return `Processed ${processed} issue(s).`
+  return result.message || result.reason || 'Poll completed.'
+}
+
 function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): CriteriaSourceValues {
   if (kind === 'jira') {
     const jira = trigger as JiraTrigger
@@ -170,6 +205,14 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [success, setSuccess] = useState<string | null>(null)
   const [criteriaText, setCriteriaText] = useState('')
   const [sourceDraft, setSourceDraft] = useState<CriteriaSourceValues>({})
+  const [jiraTesting, setJiraTesting] = useState(false)
+  const [jiraTestMessage, setJiraTestMessage] = useState<string | null>(null)
+  const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
+  const [jiraPolling, setJiraPolling] = useState(false)
+  const [jiraPollResult, setJiraPollResult] = useState<JiraPollNowResponse | null>(null)
+  const [jiraNotificationLoading, setJiraNotificationLoading] = useState(false)
+  const [jiraNotificationStatus, setJiraNotificationStatus] = useState<JiraManagedNotificationStatus | null>(null)
+  const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -182,6 +225,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       ])
       const nextTrigger = triggerData as BreadthTrigger
       setTrigger(nextTrigger)
+      setJiraNotificationStatus(kind === 'jira' ? jiraManagedNotificationFromTrigger(nextTrigger as JiraTrigger) : null)
       setCriteriaText(formatCriteriaText(nextTrigger.trigger_criteria))
       setSourceDraft(sourceFromTrigger(kind, nextTrigger))
       setEventsPage(wakeEvents)
@@ -223,6 +267,83 @@ export default function TriggerDetailShell({ kind }: Props) {
       setError(getErrorMessage(err, 'Failed to update trigger'))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const enableJiraNotification = async (target: JiraTrigger): Promise<JiraNotificationSubscriptionResponse | null> => {
+    const recipient = jiraNotificationRecipient.trim()
+    if (!recipient) {
+      setError('WhatsApp recipient is required to enable Jira notifications')
+      return null
+    }
+    const result = await api.createJiraNotificationSubscription(target.id, {
+      recipient_phone: recipient,
+    })
+    setJiraNotificationStatus({
+      ...result,
+      status: 'active',
+    })
+    setJiraNotificationRecipient('')
+    return result
+  }
+
+  const handleEnableJiraNotification = async () => {
+    if (!trigger || kind !== 'jira') return
+    setJiraNotificationLoading(true)
+    setError(null)
+    try {
+      const result = await enableJiraNotification(trigger as JiraTrigger)
+      if (!result) return
+      setSuccess(result?.created_subscription ? 'Jira WhatsApp notification enabled' : 'Jira WhatsApp notification is active')
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to enable Jira WhatsApp notification'))
+    } finally {
+      setJiraNotificationLoading(false)
+    }
+  }
+
+  const handleJiraPollNow = async () => {
+    if (!trigger || kind !== 'jira') return
+    setJiraPolling(true)
+    setError(null)
+    try {
+      const result = await api.pollJiraTriggerNow(trigger.id)
+      setJiraPollResult(result)
+      if (result.success === false) {
+        setError(result.error || result.message || 'Jira poll failed')
+      } else {
+        setSuccess(pollResultSummary(result))
+        setTimeout(() => setSuccess(null), 3000)
+      }
+      await loadData()
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to poll Jira trigger'))
+    } finally {
+      setJiraPolling(false)
+    }
+  }
+
+  const handleJiraTestQuery = async () => {
+    if (!trigger || kind !== 'jira') return
+    setJiraTesting(true)
+    setJiraTestMessage(null)
+    setJiraSampleIssues([])
+    setError(null)
+    try {
+      const jira = trigger as JiraTrigger
+      const result = await api.testSavedJiraTriggerQuery(jira.id, {
+        jql: sourceDraft.jiraJql?.trim() || jira.jql,
+        max_results: 5,
+      })
+      setJiraSampleIssues(result.sample_issues || result.issues || [])
+      setJiraTestMessage(result.success
+        ? `Query returned ${result.issue_count ?? result.total ?? 0} issue(s).`
+        : result.error || result.message || 'Jira query test failed')
+    } catch (err: unknown) {
+      setJiraTestMessage(getErrorMessage(err, 'Failed to test Jira query'))
+    } finally {
+      setJiraTesting(false)
     }
   }
 
@@ -288,12 +409,85 @@ export default function TriggerDetailShell({ kind }: Props) {
     if (!trigger) return null
     if (kind === 'jira') {
       const jira = trigger as JiraTrigger
+      const status = jiraNotificationStatus || jiraManagedNotificationFromTrigger(jira)
       return (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="Site" value={jira.site_url} />
-          <Field label="Project" value={jira.project_key || 'Any project in JQL'} />
-          <Field label="Poll interval" value={`${jira.poll_interval_seconds}s`} />
-          <Field label="Auth email" value={jira.auth_email || 'Not reported'} />
+        <div className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Field label="Site" value={jira.site_url} />
+            <Field label="Project" value={jira.project_key || 'Any project in JQL'} />
+            <Field label="Poll interval" value={`${jira.poll_interval_seconds}s`} />
+            <Field label="Auth email" value={jira.auth_email || 'Not reported'} />
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                <WhatsAppIcon size={18} /> Managed WhatsApp Notification
+              </h2>
+              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <DetailRow label="Status">{notificationStatusLabel(status)}</DetailRow>
+                <DetailRow label="Recipient">{notificationRecipientPreview(status)}</DetailRow>
+                <DetailRow label="Agent">{status?.agent_name || jira.default_agent_name || (jira.default_agent_id ? `Agent #${jira.default_agent_id}` : 'No default agent')}</DetailRow>
+                <DetailRow label="Subscription">{status?.continuous_subscription_id ? `#${status.continuous_subscription_id}` : 'Not reported'}</DetailRow>
+              </div>
+              {!jira.default_agent_id && (
+                <p className="mt-4 text-sm text-yellow-200">No default agent is selected; enabling creates or reuses the managed Jira agent.</p>
+              )}
+              {canWriteHub && (
+                <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <input
+                    type="tel"
+                    value={jiraNotificationRecipient}
+                    onChange={(event) => setJiraNotificationRecipient(event.target.value)}
+                    placeholder="+15551234567"
+                    className="w-full rounded-lg border border-tsushin-border bg-black/25 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleEnableJiraNotification}
+                    disabled={jiraNotificationLoading || !jiraNotificationRecipient.trim()}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <SparklesIcon size={16} />
+                    {jiraNotificationLoading ? 'Enabling...' : status?.status ? 'Update Notification' : 'Enable Notification'}
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                <RefreshIcon size={18} /> Manual Poll
+              </h2>
+              <p className="mt-2 text-sm text-tsushin-slate">
+                Run the saved JQL now and dispatch matching wake events through the managed route.
+              </p>
+              {canWriteHub && (
+                <button
+                  type="button"
+                  onClick={handleJiraPollNow}
+                  disabled={jiraPolling || !jira.is_active}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg border border-blue-400/40 bg-blue-500/10 px-4 py-2 text-sm text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <PlayIcon size={16} />
+                  {jiraPolling ? 'Polling...' : 'Poll Now'}
+                </button>
+              )}
+              {jiraPollResult && (
+                <div className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
+                  jiraPollResult.success !== false
+                    ? 'border-green-500/30 bg-green-500/10 text-green-200'
+                    : 'border-red-500/30 bg-red-500/10 text-red-200'
+                }`}>
+                  {pollResultSummary(jiraPollResult)}
+                  {(jiraPollResult.completed_at || jiraPollResult.status) && (
+                    <div className="mt-1 text-xs opacity-80">
+                      {jiraPollResult.status ? `Status: ${jiraPollResult.status}` : ''}
+                      {jiraPollResult.completed_at ? ` Completed: ${formatDateTime(jiraPollResult.completed_at)}` : ''}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )
     }
@@ -351,6 +545,25 @@ export default function TriggerDetailShell({ kind }: Props) {
               <>
                 <DetailRow label="JQL">{(trigger as JiraTrigger).jql}</DetailRow>
                 <DetailRow label="Project key">{(trigger as JiraTrigger).project_key || 'JQL controls scope'}</DetailRow>
+                <button
+                  type="button"
+                  onClick={handleJiraTestQuery}
+                  disabled={jiraTesting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:text-white disabled:opacity-50"
+                >
+                  <PlayIcon size={14} />
+                  {jiraTesting ? 'Testing...' : 'Test Query'}
+                </button>
+                {jiraTestMessage && (
+                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+                    {jiraTestMessage}
+                  </div>
+                )}
+                <JiraIssuePreviewList
+                  issues={jiraSampleIssues}
+                  siteUrl={(trigger as JiraTrigger).site_url}
+                  emptyLabel="Run the saved JQL to preview matching issues."
+                />
               </>
             )}
             {kind === 'schedule' && (

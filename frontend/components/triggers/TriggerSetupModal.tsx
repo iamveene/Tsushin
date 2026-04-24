@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ComponentType } from 'react'
 import Modal from '@/components/ui/Modal'
-import { api, type Agent, type GitHubTrigger, type GitHubTriggerAuthMethod, type JiraTrigger, type ScheduleTrigger, type TriggerCriteria, type TriggerKind } from '@/lib/client'
+import { api, type Agent, type GitHubTrigger, type GitHubTriggerAuthMethod, type JiraIssuePreview, type JiraTrigger, type ScheduleTrigger, type TriggerCriteria, type TriggerKind } from '@/lib/client'
 import { CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, type IconProps } from '@/components/ui/icons'
 import CriteriaBuilder, { parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
+import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type SavedTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -80,6 +81,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null)
+  const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
 
   const [integrationName, setIntegrationName] = useState('')
   const [defaultAgentId, setDefaultAgentId] = useState<number | null>(null)
@@ -92,6 +94,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   const [jiraAuthEmail, setJiraAuthEmail] = useState('')
   const [jiraApiToken, setJiraApiToken] = useState('')
   const [jiraPollInterval, setJiraPollInterval] = useState('300')
+  const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
   const [cronExpression, setCronExpression] = useState('0 * * * *')
   const [timezone, setTimezone] = useState('UTC')
@@ -112,6 +115,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     if (!isOpen) return
     setError(null)
     setTestResult(null)
+    setJiraSampleIssues([])
     setSaving(false)
     setTesting(false)
     setIntegrationName(triggerType === 'schedule' ? 'Hourly schedule' : triggerType === 'jira' ? 'Jira issue watcher' : 'GitHub repository events')
@@ -124,6 +128,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     setJiraAuthEmail('')
     setJiraApiToken('')
     setJiraPollInterval('300')
+    setJiraNotificationRecipient('')
     setCronExpression('0 * * * *')
     setTimezone('UTC')
     setPayloadTemplateText('{\n  "source": "schedule"\n}')
@@ -184,6 +189,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   const handleTest = async () => {
     setError(null)
     setTestResult(null)
+    setJiraSampleIssues([])
     setTesting(true)
     try {
       if (triggerType === 'jira') {
@@ -192,11 +198,13 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
           jql: jiraJql.trim(),
           auth_email: jiraAuthEmail.trim() || null,
           api_token: jiraApiToken.trim() || null,
+          max_results: 5,
         })
+        setJiraSampleIssues(result.sample_issues || result.issues || [])
         setTestResult({
           tone: result.success ? 'success' : 'error',
           message: result.success
-            ? `Query returned ${result.issue_count ?? 0} issue(s).`
+            ? `Query returned ${result.issue_count ?? result.total ?? 0} issue(s).`
             : result.error || result.message || 'Jira query test failed',
         })
       } else if (triggerType === 'schedule') {
@@ -254,6 +262,15 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
           default_agent_id: defaultAgentId,
           is_active: isActive,
         })
+        if (jiraNotificationRecipient.trim()) {
+          try {
+            await api.createJiraNotificationSubscription(saved.id, {
+              recipient_phone: jiraNotificationRecipient.trim(),
+            })
+          } catch {
+            // The trigger is usable even if the optional notifier needs setup on the detail page.
+          }
+        }
       } else if (triggerType === 'schedule') {
         saved = await api.createScheduleTrigger({
           integration_name: integrationName.trim(),
@@ -375,6 +392,12 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
             {testResult.message}
           </div>
         )}
+        {triggerType === 'jira' && jiraSampleIssues.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-white">Sample issues</div>
+            <JiraIssuePreviewList issues={jiraSampleIssues} siteUrl={jiraSiteUrl} />
+          </div>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
@@ -468,6 +491,17 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
                 onChange={(event) => setJiraPollInterval(event.target.value)}
                 className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
               />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white">WhatsApp Notification Recipient</label>
+              <input
+                type="tel"
+                value={jiraNotificationRecipient}
+                onChange={(event) => setJiraNotificationRecipient(event.target.value)}
+                placeholder="+15551234567"
+                className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              />
+              <p className="text-xs text-tsushin-slate">Leave blank to configure the managed WhatsApp notifier from the trigger detail page.</p>
             </div>
           </div>
         )}
