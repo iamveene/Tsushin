@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Phase 8 — Onboarding/deprecation/docs sync (2026-04-24)
+
+**Changed:**
+- Kept the onboarding tour at `TOTAL_STEPS = 16` and tightened the v0.7.0 Triggers & Continuous Agents copy so conversational channels stay separate from Email/Webhook/Jira/Schedule/GitHub triggers. The CTA still targets Hub Communication, where the Triggers section is marked by `data-testid="hub-triggers-section"`.
+- Updated Hub Kokoro legacy hygiene copy to point older `/api/services/kokoro/*` clients at the per-tenant `/api/tts-instances` successor instead of the removed stack-level compose service.
+- Reconciled Phase 3.1 docs so Gmail send/reply/draft and the Email poll/triage/MemGuard live gates are recorded as passed, while optional API-agent proof and the Ubuntu fresh-install sudo handoff remain open.
+- Refreshed the documentation onboarding notes from the stale 12-step/Webhook-channel wording to the current 16-step channel-vs-trigger flow.
+
+**Validation note:**
+- This entry documents the Phase 8 polish scope only; it does not claim Docker, browser, or fresh-install validation beyond the checks reported by this branch.
+
 ### Phase 3 — Email Trigger/Triage runtime checkpoint (2026-04-24)
 
 **Added:**

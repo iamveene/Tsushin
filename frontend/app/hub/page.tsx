@@ -3673,7 +3673,7 @@ export default function HubPage() {
                       )
                     })()}
 
-                    {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + legacy) */}
+                    {/* Kokoro TTS Card (v0.7.0 consolidated — per-tenant instances + removed legacy controls) */}
                     {kokoroInstances.length > 0 && (
                     <div className="card p-5 hover-glow group border-green-700/30">
                       <div className="flex items-center justify-between mb-3">
@@ -3817,7 +3817,7 @@ export default function HubPage() {
                         )}
                       </div>
 
-                      {/* Legacy global compose Kokoro (demoted, collapsed by default) */}
+                      {/* Removed global Kokoro controls (demoted, collapsed by default) */}
                       <div className="mt-4 pt-3 border-t border-white/5">
                         <button
                           onClick={() => setKokoroLegacyExpanded(v => !v)}
@@ -3827,12 +3827,12 @@ export default function HubPage() {
                           <svg className={`w-3 h-3 transition-transform ${kokoroLegacyExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           </svg>
-                          Legacy (global compose Kokoro)
+                          Removed global Kokoro controls
                         </button>
                         {kokoroLegacyExpanded && (
                           <div className="mt-3 p-3 bg-tsushin-ink/30 border border-white/5 rounded-lg space-y-2">
                             <p className="text-[11px] text-tsushin-muted">
-                              The original single shared Kokoro service defined in docker-compose. Removed as a managed control surface in v0.7.0 — prefer per-tenant instances above. This panel only shows whether a legacy endpoint is still reachable for installs that continue to run the <code className="text-tsushin-accent font-mono">tts</code> compose profile out-of-band.
+                              The old shared Kokoro service controls were removed in v0.7.0. Older <code className="text-tsushin-accent font-mono">/api/services/kokoro/*</code> clients receive HTTP 410 with a successor link to <code className="text-tsushin-accent font-mono">/api/tts-instances</code>. Use the per-tenant instances above for all Kokoro setup and lifecycle actions.
                             </p>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-1.5">
@@ -3850,7 +3850,7 @@ export default function HubPage() {
                               <p className="text-[11px] font-mono text-tsushin-accent">{kokoroHealth.details?.service_url || 'http://localhost:8880'}</p>
                             )}
                             {!kokoroHealth?.available && (
-                              <p className="text-[11px] text-tsushin-slate">No reachable legacy Kokoro endpoint. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision a per-tenant instance.</p>
+                              <p className="text-[11px] text-tsushin-slate">No active Kokoro provider endpoint. Click <span className="font-semibold text-tsushin-accent">Setup with Wizard</span> above to auto-provision a per-tenant instance.</p>
                             )}
                             <button
                               onClick={async () => {
