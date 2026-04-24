@@ -35,7 +35,6 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [originalSlug, setOriginalSlug] = useState('')
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isOpen || !integration) return
     setIntegrationName(integration.integration_name || '')
@@ -49,9 +48,7 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
     setSlugStatus({ state: 'idle' })
     setError(null)
   }, [isOpen, integration])
-  /* eslint-enable react-hooks/set-state-in-effect */
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isOpen || !integration) return
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -78,7 +75,6 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [slug, isOpen, integration, originalSlug])
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const canSave = (() => {
     if (!integration || saving) return false
