@@ -19,7 +19,7 @@
  *           and a Triggers & Continuous Agents step before the finale.
  */
 
-import React, { useEffect, useCallback, useState } from 'react'
+import React, { useEffect, useCallback, useMemo, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
@@ -223,16 +223,18 @@ export default function OnboardingWizard() {
   // live /api/tts-providers catalog so a new backend provider auto-appears in
   // the tour without manual edits. Falls back to a single generic line if the
   // fetch failed.
-  const voiceProviderBullets: string[] = ttsProviderSummaries.length > 0
-    ? ttsProviderSummaries.map(p => {
-        const label = p.name
-        const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
-        const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
-        return `${label}${voiceCount}${cost}`
-      })
-    : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
+  const voiceProviderBullets: string[] = useMemo(() => (
+    ttsProviderSummaries.length > 0
+      ? ttsProviderSummaries.map(p => {
+          const label = p.name
+          const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
+          const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
+          return `${label}${voiceCount}${cost}`
+        })
+      : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
+  ), [ttsProviderSummaries])
 
-  const tourSteps: TourStep[] = [
+  const tourSteps: TourStep[] = useMemo(() => [
     {
       // Step 1
       title: 'Welcome to Tsushin!',
@@ -472,7 +474,7 @@ export default function OnboardingWizard() {
         'Detect-only or warn-only modes for dev work',
         'Full audit log of every decision',
       ],
-      customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
+      customBody: <SentinelTourPanel onAdvanced={minimize} />,
     },
     {
       // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
@@ -510,7 +512,16 @@ export default function OnboardingWizard() {
         }
       }
     }
-  ]
+  ], [
+    completeTour,
+    isUserGuideOpen,
+    minimize,
+    openChannelsWizard,
+    openUserGuide,
+    openVoiceWizard,
+    router,
+    voiceProviderBullets,
+  ])
 
   const currentStepData = tourSteps[state.currentStep - 1]
 
@@ -550,7 +561,7 @@ export default function OnboardingWizard() {
     return () => {
       document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'))
     }
-  }, [state.currentStep])
+  }, [state.currentStep, tourSteps])
 
   // BUG-122: Don't render tour on unauthenticated pages (placed after all hooks)
   if (isAuthPage) {

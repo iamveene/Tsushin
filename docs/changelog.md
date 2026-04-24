@@ -7,16 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Phase 8 — Onboarding/deprecation/docs sync (2026-04-24)
+### Phase 8 — UI polish and control-plane UX (2026-04-24)
+
+**Added:**
+- Added a trigger-aware criteria registry across Email, Webhook, Jira, Schedule, and GitHub detail/setup surfaces. Webhook keeps its JSONPath tester, while every trigger keeps the raw JSON escape hatch.
+- Added `GET /api/wake-events/{id}/payload` for tenant-owned, safe-path access to already-redacted payload files, and extended `GET /api/wake-events` with `occurred_after` / `occurred_before` filters.
+- Added `POST /api/channels/{channel_type}/{instance_id}/routing-rules/reorder` with tenant/channel/instance ownership validation over the complete rule set.
+- Added Phase 8 Hub UI polish for channel routing rules: modal create/edit/delete, reorder controls, inline criteria preview, and conversational-channel-only scoping.
+- Added `/hub/wake-events` polish with date filters, row selection, payload/cause panel, subscription badges, and failure-state color treatment in related continuous-run surfaces.
 
 **Changed:**
+- Retrofitted Slack, Discord, WhatsApp, and MCP setup flows onto the shared `<Wizard>` primitive while preserving their backend contracts.
 - Kept the onboarding tour at `TOTAL_STEPS = 16` and tightened the v0.7.0 Triggers & Continuous Agents copy so conversational channels stay separate from Email/Webhook/Jira/Schedule/GitHub triggers. The CTA still targets Hub Communication, where the Triggers section is marked by `data-testid="hub-triggers-section"`.
 - Updated Hub Kokoro legacy hygiene copy to point older `/api/services/kokoro/*` clients at the per-tenant `/api/tts-instances` successor instead of the removed stack-level compose service.
 - Reconciled Phase 3.1 docs so Gmail send/reply/draft and the Email poll/triage/MemGuard live gates are recorded as passed, while optional API-agent proof and the Ubuntu fresh-install sudo handoff remain open.
 - Refreshed the documentation onboarding notes from the stale 12-step/Webhook-channel wording to the current 16-step channel-vs-trigger flow.
 
-**Validation note:**
-- This entry documents the Phase 8 polish scope only; it does not claim Docker, browser, or fresh-install validation beyond the checks reported by this branch.
+**Validated:**
+- Focused backend routing/wake-event tests passed locally and in the backend container: `9 passed`.
+- Targeted frontend ESLint passed for all touched trigger, routing-rule, wake-event, watcher, wizard, onboarding, and visual-test files.
+- Root backend/frontend rebuild passed using `docker-compose build --no-cache backend frontend && docker-compose up -d backend frontend`; backend, frontend, postgres, and proxy were healthy. Direct and HTTPS-proxy `/api/health` returned healthy, and Alembic `current` / `heads` both reported `0055 (head)`.
+- `npm run test:visual` passed over HTTPS (`6 passed`). Browser evidence is under `.private/qa/v0.7.0/phase-8/browser-smoke/` and covers Hub Communication, Slack/Discord/WhatsApp/MCP wizards, routing-rule create/edit/delete/reorder, Wake Events, Continuous Agents, Webhook criteria test, and onboarding steps 15/16.
+- Full frontend typecheck is still blocked by pre-existing repo-wide TypeScript debt outside this Phase 8 slice; the first failures remain in older contacts/project/flows/watcher/client surfaces and are tracked as Phase 9 cleanup risk.
 
 ### Phase 3 — Email Trigger/Triage runtime checkpoint (2026-04-24)
 

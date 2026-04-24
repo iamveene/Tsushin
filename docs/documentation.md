@@ -232,14 +232,20 @@ Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release
 * **Hub UI** — the Email trigger setup/detail flow includes source matching, recent wake events, danger-zone actions, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
 * **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
 
-### 2.13 v0.7.0 Phase 8 onboarding/deprecation/docs sync
+### 2.13 v0.7.0 Phase 8 UI polish and control-plane UX
 
-Phase 8's polish slice keeps user guidance aligned with the v0.7.0 trigger/control-plane split without claiming a new runtime validation pass.
+Phase 8 finishes the v0.7.0 trigger/control-plane UX pass and keeps user guidance aligned with the channel-vs-trigger split.
 
+* **Trigger criteria registry** — Email, Webhook, Jira, Schedule, and GitHub trigger setup/detail surfaces use trigger-aware helper controls while preserving raw JSON editing. Webhook keeps the JSONPath payload tester on the detail page.
+* **Wake-event API/UI** — `GET /api/wake-events` accepts `occurred_after` and `occurred_before` alongside existing `status`, `channel_type`, and `channel_instance_id` filters. `GET /api/wake-events/{id}/payload` returns only the already-redacted payload behind `payload_ref`, with tenant ownership and safe-path validation. `/hub/wake-events` adds date filters, selectable rows, and a payload/cause drawer.
+* **Routing-rule reorder** — `POST /api/channels/{channel_type}/{instance_id}/routing-rules/reorder` accepts `{ "rule_ids": [...] }`, validates every rule belongs to the current tenant/channel/instance, and returns the refreshed rule page. Hub Communication exposes modal create/edit/delete plus reorder controls for conversational channels only.
+* **Watcher wake polish** — continuous-agent detail/read-only watcher views show wake-event causes, subscription badges, and failure colors for trigger-origin runs.
+* **Wizard retrofit** — Slack, Discord, WhatsApp, and MCP setup flows now share the common `<Wizard>` shell without changing their backend create/test contracts.
 * **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` remains at `TOTAL_STEPS = 16`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and sends the Triggers & Continuous Agents CTA to `/hub?tab=communication`, where the Hub Triggers section is marked with `data-testid="hub-triggers-section"`.
 * **Webhook deprecation** — v0.7.0 intentionally has no Webhook deprecation banner/header path; Webhook moved directly to the Trigger catalog and Hub Triggers UI.
 * **Kokoro successor path** — legacy `/api/services/kokoro/{start,stop,status}` callers receive HTTP 410 and a `Link: </api/tts-instances>; rel="successor-version"` successor header. Hub copy points users to per-tenant Kokoro instances rather than the removed stack-level compose service.
 * **Phase 3 docs reconciliation** — Phase 3.1 docs now distinguish the completed Gmail send/reply/draft and Email poll/triage/MemGuard live gates from the remaining optional API-agent proof and Ubuntu fresh-install sudo handoff.
+* **Evidence** — see `docs/qa/v0.7.0/phase-8-ui-polish-summary.md`. Fresh-install Ubuntu VM validation remains a Phase 9 blocker until sudo access is available.
 
 ---
 
