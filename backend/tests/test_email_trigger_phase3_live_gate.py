@@ -44,8 +44,12 @@ from models import (  # noqa: E402
     SentinelConfig,
     WakeEvent,
 )
+from models_rbac import User  # noqa: E402
 from services.email_triage_service import ensure_email_triage_subscription  # noqa: E402
 from services.trigger_dispatch_service import TriggerDispatchInput, TriggerDispatchService  # noqa: E402
+
+
+LIVE_GATE_ALLOWED_CREATOR_EMAILS = ("mv@archsec.io", "movl2007@gmail.com")
 
 
 def _run(coro):
@@ -83,6 +87,20 @@ def live_db_session():
 def live_email_trigger(live_db_session, gmail_oauth_fixture):
     suffix = uuid4().hex[:10]
     tenant_id = gmail_oauth_fixture["tenant_id"]
+    creator = (
+        live_db_session.query(User)
+        .filter(
+            User.tenant_id == tenant_id,
+            User.email.in_(LIVE_GATE_ALLOWED_CREATOR_EMAILS),
+        )
+        .order_by(User.id.asc())
+        .first()
+    )
+    assert creator is not None, (
+        "Phase 3 Email live gate requires a creator user in the fixture tenant "
+        "scoped to mv@archsec.io or movl2007@gmail.com."
+    )
+
     contact = Contact(
         friendly_name=f"phase3-email-live-{suffix}",
         role="agent",
@@ -111,11 +129,11 @@ def live_email_trigger(live_db_session, gmail_oauth_fixture):
         provider="gmail",
         gmail_integration_id=gmail_oauth_fixture["integration_id"],
         default_agent_id=agent.id,
-        search_query=f'subject:"tsushin-phase3-email-live-{suffix}"',
-        poll_interval_seconds=30,
+        search_query=f'in:inbox subject:"tsushin-phase3-email-live-{suffix}"',
+        poll_interval_seconds=3600,
         is_active=True,
         status="active",
-        created_by=None,
+        created_by=creator.id,
     )
     live_db_session.add(trigger)
     live_db_session.commit()
@@ -224,9 +242,9 @@ def test_email_trigger_live_poll_triage_duplicate_and_memguard(
     )
 
     subject = f"tsushin-phase3-email-live-{uuid4().hex[:10]}"
-    trigger.search_query = f'subject:"{subject}"'
+    trigger.search_query = f'in:inbox subject:"{subject}"'
     trigger.last_cursor = None
-    trigger.last_health_check = None
+    trigger.last_health_check = datetime.utcnow()
     live_db_session.add(trigger)
     live_db_session.commit()
 

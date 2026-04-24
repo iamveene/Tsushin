@@ -2397,7 +2397,7 @@ class SentinelAnalysisLog(Base):
 
     # Analysis classification
     analysis_type = Column(String(30), nullable=False)  # 'prompt', 'tool', 'shell'
-    detection_type = Column(String(30), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
+    detection_type = Column(String(64), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
 
     # Input data (truncated for storage)
     input_content = Column(Text, nullable=False)  # First 500 chars of input
@@ -2450,7 +2450,7 @@ class SentinelAnalysisCache(Base):
     # Cache key components
     input_hash = Column(String(64), nullable=False)  # SHA-256 of input
     analysis_type = Column(String(30), nullable=False)
-    detection_type = Column(String(30), nullable=False)
+    detection_type = Column(String(64), nullable=False)
     aggressiveness_level = Column(Integer, nullable=False)
 
     # Cached results
