@@ -199,6 +199,17 @@ Wave 3A connects the stable A2 read contracts to UI surfaces and lands the first
 * **Hub routing rules** — Hub Communication exposes routing-rule management only for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). Email and webhook remain trigger-detail surfaces, not channel routing-rule surfaces.
 * **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and onboarding step 16 introduces "Triggers & Continuous Agents" with a CTA into Hub Communication.
 
+### 2.10 v0.7.0 Track B Trigger Dispatch Foundation
+
+Track B starts with a no-migration dispatch foundation before Jira, Schedule, and GitHub adapter tables are introduced.
+
+* **Shared dispatch contract** — trigger adapters normalize events into a common dispatch input with `trigger_type`, `instance_id`, `event_type`, `dedupe_key`, `occurred_at`, payload, importance, and optional sender/source metadata. `TriggerEvent.event_type` is explicit while `trigger_type` remains available for existing trigger contracts.
+* **Tenant authority** — dispatch always resolves the tenant from persisted trigger instance rows such as `webhook_integration` or `email_channel_instance`. External payloads never provide tenant authority, and cross-tenant instance or agent references fail closed.
+* **Dedupe ledger** — dispatch records accepted outcomes in `channel_event_dedupe`. A duplicate unique key returns deterministic duplicate behavior without creating a second wake event.
+* **Wake evidence** — matching active `continuous_subscription` rows produce `wake_event` rows and queued `continuous_run` rows. Wake payload content stays out of row; dispatch stores a redacted JSON payload under `backend/data/wake_events/` and exposes only `payload_ref`.
+* **Webhook compatibility** — signed webhook inbound requests keep returning `202` with `{status, queue_id, poll_url}` for the existing direct queue-to-agent path. The dispatch foundation can dual-write wake/run evidence for continuous-agent subscribers without replacing the direct queue behavior.
+* **Deferred breadth** — Jira, Schedule, and GitHub trigger instance migrations remain deferred. Later Track B migrations must chain from current head as `0052 -> 0053 -> 0054`, with `0052.down_revision = "0058"`. `continuous_task` queue dispatch remains reserved until intentionally implemented.
+
 ---
 
 ## 3. Quick Start
