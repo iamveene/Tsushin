@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Track B — Trigger Breadth (2026-04-24)
+
+**Added:**
+- Jira, Schedule, and GitHub trigger instance models, migrations, CRUD APIs, default-agent bindings, trigger catalog entries, and shared dispatch registration. Track B adapter migrations now chain `0058 -> 0052 -> 0053 -> 0054`.
+- Webhook trigger criteria on `WebhookIntegration`, with JSONPath-style payload matchers evaluated before dispatch. Non-matching signed webhook payloads can return `204 No Content` and write a `filtered_out` dedupe outcome without creating wake/run rows.
+- Jira JQL test-query support, Schedule cron preview and due-trigger polling, and GitHub signed inbound webhook support using `X-Hub-Signature-256` plus delivery-id dedupe.
+- Hub Communication UI for Jira/Schedule/GitHub trigger cards, setup modal flows, trigger detail pages, Webhook criteria editing/testing, and wake-event filters.
+- Shared trigger criteria builder for setup/detail pages, including inline JSONPath payload testing for Webhook criteria.
+- Focused backend regression coverage for Track B dispatch registration, route CRUD, tenant isolation, criteria filtering, schedule poll/no double-fire behavior, Jira normalization, and GitHub signature/filter handling.
+
+**Changed:**
+- SchedulerWorker now polls trigger-backed schedules through `ScheduleTrigger` after legacy scheduled-event polling, keeping `ScheduleChannelInstance` as the trigger source of truth and avoiding duplicate `ScheduledEvent` execution.
+- Default-agent settings now include Jira, Schedule, and GitHub trigger instances alongside Email/Webhook trigger defaults.
+- Webhook trigger CRUD now exposes `default_agent_id` and `trigger_criteria`, while preserving the existing signed inbound queue contract.
+
+**Validated:**
+- `python -m py_compile` passed for all touched backend app/model/route/channel/migration modules.
+- Targeted backend bundle passed: `32 passed` for dispatch, Jira, Schedule, GitHub, and trigger-wizard drift tests.
+- Static Alembic graph check reports single head `0054` over the reserved `0058 -> 0052 -> 0053 -> 0054` chain.
+- Targeted frontend ESLint passed for the new trigger components, Webhook setup/edit/detail surfaces, and Jira/Schedule/GitHub detail pages.
+- `git diff --check` passed.
+
 ### Track B — Trigger Dispatch Foundation (2026-04-24)
 
 **Added:**

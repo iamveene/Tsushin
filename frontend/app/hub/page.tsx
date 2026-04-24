@@ -43,10 +43,14 @@ const EmailTriggerWizard = dynamic(
   () => import('@/components/triggers/EmailTriggerWizard'),
   { ssr: false },
 )
+const TriggerSetupModal = dynamic(
+  () => import('@/components/triggers/TriggerSetupModal'),
+  { ssr: false },
+)
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, ScheduleTrigger, GitHubTrigger } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -62,6 +66,7 @@ import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
 import WebhookSetupModal from '@/components/WebhookSetupModal'
 import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
 import WebhookEditModal from '@/components/WebhookEditModal'
+import TriggerBreadthCards from '@/components/triggers/TriggerBreadthCards'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ChannelRoutingRulesPanel from '@/components/hub/ChannelRoutingRulesPanel'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
@@ -120,6 +125,7 @@ import {
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
 // now encapsulated inside ManagedContainerPanel.
 
+type BreadthTriggerId = Extract<TriggerId, 'jira' | 'schedule' | 'github'>
 type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
 // SVG Icons for Hub Tabs
@@ -422,6 +428,9 @@ export default function HubPage() {
   // v0.6.0: Webhook-as-a-Channel
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [emailTriggers, setEmailTriggers] = useState<EmailTrigger[]>([])
+  const [jiraTriggers, setJiraTriggers] = useState<JiraTrigger[]>([])
+  const [scheduleTriggers, setScheduleTriggers] = useState<ScheduleTrigger[]>([])
+  const [githubTriggers, setGithubTriggers] = useState<GitHubTrigger[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
 
   // v0.7.0: Guided wizards for the Productivity + Communication tabs. These
@@ -436,6 +445,7 @@ export default function HubPage() {
   const [showTriggerWizard, setShowTriggerWizard] = useState(false)
   const [triggerWizardSession, setTriggerWizardSession] = useState(0)
   const [showEmailTriggerWizard, setShowEmailTriggerWizard] = useState(false)
+  const [triggerSetupTarget, setTriggerSetupTarget] = useState<BreadthTriggerId | null>(null)
   const [editingEmailTrigger, setEditingEmailTrigger] = useState<EmailTrigger | null>(null)
   const [webhookRotateModal, setWebhookRotateModal] = useState<
     { open: boolean; secret: string; inboundUrl: string } | null
@@ -643,6 +653,41 @@ export default function HubPage() {
     }
   }, [])
 
+  async function loadJiraTriggers() {
+    try {
+      const data = await api.listJiraTriggers()
+      setJiraTriggers(data)
+    } catch (err) {
+      console.error('Failed to load Jira triggers:', err)
+    }
+  }
+
+  async function loadScheduleTriggers() {
+    try {
+      const data = await api.listScheduleTriggers()
+      setScheduleTriggers(data)
+    } catch (err) {
+      console.error('Failed to load schedule triggers:', err)
+    }
+  }
+
+  async function loadGitHubTriggers() {
+    try {
+      const data = await api.listGitHubTriggers()
+      setGithubTriggers(data)
+    } catch (err) {
+      console.error('Failed to load GitHub triggers:', err)
+    }
+  }
+
+  async function loadBreadthTriggers() {
+    await Promise.all([
+      loadJiraTriggers(),
+      loadScheduleTriggers(),
+      loadGitHubTriggers(),
+    ])
+  }
+
   useEffect(() => {
     loadAllData()
     const interval = setInterval(() => {
@@ -656,6 +701,7 @@ export default function HubPage() {
         loadDiscordIntegrations()  // v0.6.0
         loadEmailTriggers()
         loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
+        loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
         loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
       }
       if (activeTab === 'mcp-servers') {
@@ -833,6 +879,7 @@ export default function HubPage() {
         loadDiscordIntegrations(),  // v0.6.0
         loadEmailTriggers(),
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
+        loadBreadthTriggers(),  // v0.7.0: Jira, Schedule, GitHub triggers
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
         loadGoogleCredentials(),
@@ -2631,6 +2678,11 @@ export default function HubPage() {
       case 'webhook':
         setShowWebhookSetupModal(true)
         break
+      case 'jira':
+      case 'schedule':
+      case 'github':
+        setTriggerSetupTarget(triggerId)
+        break
       default:
         toast.error('Not yet supported', `No connect handler for '${triggerId}' yet`)
     }
@@ -2643,6 +2695,14 @@ export default function HubPage() {
     setShowEmailTriggerWizard(false)
     setEditingEmailTrigger(null)
     setSuccessMessage(wasEditing ? `Email trigger updated: ${trigger.integration_name}` : `Email trigger created: ${trigger.integration_name}`)
+    setTimeout(() => setSuccessMessage(null), 3000)
+  }
+
+  const handleBreadthTriggerComplete = async (trigger: JiraTrigger | ScheduleTrigger | GitHubTrigger) => {
+    await loadBreadthTriggers()
+    await loadHubIntegrations()
+    setTriggerSetupTarget(null)
+    setSuccessMessage(`Trigger created: ${trigger.integration_name}`)
     setTimeout(() => setSuccessMessage(null), 3000)
   }
 
@@ -4488,11 +4548,11 @@ export default function HubPage() {
                     </div>
                   </div>
 
-                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && (
+                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && scheduleTriggers.length === 0 && githubTriggers.length === 0 && (
                     <div className="card p-6 border-dashed border-tsushin-border/60">
                       <h4 className="text-white font-semibold mb-1">No triggers configured yet</h4>
                       <p className="text-sm text-tsushin-slate mb-4">
-                        Create an Email or Webhook trigger to wake agents from inbox activity or external events.
+                        Create an Email, Webhook, Jira, Schedule, or GitHub trigger to wake agents from external events.
                       </p>
                       {canWriteHub && (
                         <button onClick={openTriggerWizard} className="btn-primary px-4 py-2 text-sm">
@@ -4733,6 +4793,20 @@ export default function HubPage() {
                     </div>
                   )}
                 </div>
+
+                <TriggerBreadthCards
+                  jiraTriggers={jiraTriggers}
+                  scheduleTriggers={scheduleTriggers}
+                  githubTriggers={githubTriggers}
+                  canWrite={canWriteHub}
+                  onCreate={(kind) => setTriggerSetupTarget(kind)}
+                  onChanged={loadBreadthTriggers}
+                  onSuccess={(message) => {
+                    setSuccessMessage(message)
+                    setTimeout(() => setSuccessMessage(null), 3000)
+                  }}
+                  onError={(message) => setError(message)}
+                />
 
                 {/* More Channels and Push Notifications sections removed — all channels now have full integrations */}
               </div>
@@ -6569,6 +6643,14 @@ export default function HubPage() {
         onComplete={handleEmailTriggerComplete}
         triggerId={editingEmailTrigger?.id ?? null}
       />
+      {triggerSetupTarget && (
+        <TriggerSetupModal
+          isOpen={triggerSetupTarget !== null}
+          triggerType={triggerSetupTarget}
+          onClose={() => setTriggerSetupTarget(null)}
+          onSaved={handleBreadthTriggerComplete}
+        />
+      )}
     </div>
   )
 }

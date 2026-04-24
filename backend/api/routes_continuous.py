@@ -357,6 +357,7 @@ def list_wake_events(
     offset: int = Query(default=0, ge=0),
     status_filter: Optional[str] = Query(default=None, alias="status"),
     channel_type: Optional[str] = Query(default=None),
+    channel_instance_id: Optional[int] = Query(default=None, ge=1),
     caller: ContinuousCaller = Depends(read_watcher_caller),
     db: Session = Depends(get_db),
 ) -> WakeEventPage:
@@ -365,6 +366,8 @@ def list_wake_events(
         query = query.filter(WakeEvent.status == status_filter)
     if channel_type:
         query = query.filter(WakeEvent.channel_type == channel_type)
+    if channel_instance_id is not None:
+        query = query.filter(WakeEvent.channel_instance_id == channel_instance_id)
     query = query.order_by(WakeEvent.occurred_at.desc(), WakeEvent.id.desc())
     rows, total = _page(query, limit=limit, offset=offset)
     return WakeEventPage(

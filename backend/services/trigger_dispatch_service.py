@@ -19,6 +19,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from channels.trigger_criteria import evaluate_payload_criteria
 from models import (
     Agent,
     ChannelEventDedupe,
@@ -26,6 +27,9 @@ from models import (
     ContinuousRun,
     ContinuousSubscription,
     EmailChannelInstance,
+    GitHubChannelInstance,
+    JiraChannelInstance,
+    ScheduleChannelInstance,
     WakeEvent,
     WebhookIntegration,
 )
@@ -86,11 +90,15 @@ class TriggerDispatchService:
     _INSTANCE_MODELS = {
         "webhook": WebhookIntegration,
         "email": EmailChannelInstance,
+        "jira": JiraChannelInstance,
+        "schedule": ScheduleChannelInstance,
+        "github": GitHubChannelInstance,
     }
     _ACTIVE_STATUS = "active"
     _WAKE_PENDING = "pending"
     _RUN_QUEUED = "queued"
     _OUTCOME_DISPATCHED = "wake_emitted"
+    _OUTCOME_FILTERED_OUT = "filtered_out"
 
     _SENSITIVE_KEY_PARTS = (
         "api_key",
@@ -132,6 +140,17 @@ class TriggerDispatchService:
                 status=TriggerDispatchStatus.INACTIVE_INSTANCE,
                 outcome=TriggerDispatchStatus.INACTIVE_INSTANCE.value,
                 reason="inactive_instance",
+            )
+
+        criteria_reason = self._criteria_filter_reason(instance, event)
+        if criteria_reason:
+            return self._record_terminal_outcome(
+                event=event,
+                tenant_id=tenant_id,
+                trigger_type=trigger_type,
+                status=TriggerDispatchStatus.FILTERED,
+                outcome=self._OUTCOME_FILTERED_OUT,
+                reason=criteria_reason,
             )
 
         block_reason = self._security_block_reason(event)
@@ -263,6 +282,18 @@ class TriggerDispatchService:
     def _security_block_reason(self, event: TriggerDispatchInput) -> Optional[str]:
         """Policy hook for later MemGuard/Sentinel integration."""
         return None
+
+    def _criteria_filter_reason(self, instance: Any, event: TriggerDispatchInput) -> Optional[str]:
+        criteria = getattr(instance, "trigger_criteria", None)
+        if not criteria:
+            return None
+        try:
+            matched, reason = evaluate_payload_criteria(event.payload, criteria)
+        except ValueError as exc:
+            return f"invalid_trigger_criteria:{exc}"
+        if matched:
+            return None
+        return f"criteria_no_match:{reason or 'payload'}"
 
     def _resolve_agent_id(
         self,

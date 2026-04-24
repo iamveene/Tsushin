@@ -16,6 +16,9 @@ from models import (
     Contact,
     DiscordIntegration,
     EmailChannelInstance,
+    GitHubChannelInstance,
+    JiraChannelInstance,
+    ScheduleChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
     UserChannelDefaultAgent,
@@ -121,6 +124,21 @@ INSTANCE_CONFIG: dict[str, dict[str, object]] = {
         "kind": "trigger",
         "model": EmailChannelInstance,
         "display_name": lambda row: row.integration_name or f"Email Trigger #{row.id}",
+    },
+    "jira": {
+        "kind": "trigger",
+        "model": JiraChannelInstance,
+        "display_name": lambda row: row.integration_name or row.project_key or f"Jira Trigger #{row.id}",
+    },
+    "schedule": {
+        "kind": "trigger",
+        "model": ScheduleChannelInstance,
+        "display_name": lambda row: row.integration_name or row.cron_expression or f"Schedule Trigger #{row.id}",
+    },
+    "github": {
+        "kind": "trigger",
+        "model": GitHubChannelInstance,
+        "display_name": lambda row: row.integration_name or f"{row.repo_owner}/{row.repo_name}",
     },
 }
 

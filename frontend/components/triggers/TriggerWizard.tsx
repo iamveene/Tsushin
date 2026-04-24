@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { ComponentType } from 'react'
 import Wizard, { type WizardStep } from '@/components/ui/Wizard'
 import { api, type TriggerCatalogEntry } from '@/lib/client'
+import { CalendarDaysIcon, CodeIcon, EnvelopeIcon, GitHubIcon, WebhookIcon, type IconProps } from '@/components/ui/icons'
 
-export type TriggerId = 'email' | 'webhook'
+export type TriggerId = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
 
 interface Props {
   isOpen: boolean
@@ -48,11 +50,44 @@ const FALLBACK_TRIGGERS: Array<TriggerCatalogEntry & { trigger_id: TriggerId }> 
     icon_hint: 'webhook',
     tenant_has_configured: false,
   },
+  {
+    trigger_id: 'jira',
+    id: 'jira',
+    display_name: 'Jira',
+    description: 'Watch Jira issues with JQL and wake agents from matching updates.',
+    requires_setup: true,
+    setup_hint: 'Create a Jira trigger under Hub -> Communication -> Triggers.',
+    icon_hint: 'jira',
+    tenant_has_configured: false,
+  },
+  {
+    trigger_id: 'schedule',
+    id: 'schedule',
+    display_name: 'Schedule',
+    description: 'Wake agents on cron schedules with structured payloads.',
+    requires_setup: true,
+    setup_hint: 'Create a schedule trigger under Hub -> Communication -> Triggers.',
+    icon_hint: 'schedule',
+    tenant_has_configured: false,
+  },
+  {
+    trigger_id: 'github',
+    id: 'github',
+    display_name: 'GitHub',
+    description: 'Receive signed repository events and wake agents from matching activity.',
+    requires_setup: true,
+    setup_hint: 'Create a GitHub trigger under Hub -> Communication -> Triggers.',
+    icon_hint: 'github',
+    tenant_has_configured: false,
+  },
 ]
 
-const ICONS: Record<TriggerId, string> = {
-  email: '✉️',
-  webhook: '↪',
+const ICONS: Record<TriggerId, { Icon: ComponentType<IconProps>; className: string; bg: string }> = {
+  email: { Icon: EnvelopeIcon, className: 'text-red-300', bg: 'bg-red-500/10' },
+  webhook: { Icon: WebhookIcon, className: 'text-cyan-300', bg: 'bg-cyan-500/10' },
+  jira: { Icon: CodeIcon, className: 'text-blue-300', bg: 'bg-blue-500/10' },
+  schedule: { Icon: CalendarDaysIcon, className: 'text-amber-300', bg: 'bg-amber-500/10' },
+  github: { Icon: GitHubIcon, className: 'text-violet-300', bg: 'bg-violet-500/10' },
 }
 
 export default function TriggerWizard({ isOpen, onClose, onTriggerSelected }: Props) {
@@ -128,7 +163,7 @@ export default function TriggerWizard({ isOpen, onClose, onTriggerSelected }: Pr
         </div>
       )}
       stepTitle="Pick a trigger type"
-      stepDescription="Triggers wake agents from events outside the regular chat channels. Start with inbox activity or signed webhooks."
+      stepDescription="Triggers wake agents from events outside regular chat channels. Pick the source, then finish the compact setup flow."
     >
       <div className="space-y-5">
         {loadError && (
@@ -140,6 +175,7 @@ export default function TriggerWizard({ isOpen, onClose, onTriggerSelected }: Pr
         <div className="grid gap-3 md:grid-cols-2">
           {actionableTriggers.map((trigger) => {
             const selected = selectedTrigger === trigger.trigger_id
+            const { Icon, bg, className } = ICONS[trigger.trigger_id]
             return (
               <button
                 key={trigger.trigger_id}
@@ -152,8 +188,8 @@ export default function TriggerWizard({ isOpen, onClose, onTriggerSelected }: Pr
                 }`}
               >
                 <div className="mb-3 flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/20 text-lg">
-                    <span aria-hidden="true">{ICONS[trigger.trigger_id]}</span>
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${bg}`}>
+                    <Icon size={18} className={className} />
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">

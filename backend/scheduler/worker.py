@@ -132,28 +132,38 @@ class SchedulerWorker:
 
                 if not due_events:
                     logger.info("No events due for execution")
-                    return
+                else:
+                    logger.info(f"Found {len(due_events)} event(s) due for execution")
 
-                logger.info(f"Found {len(due_events)} event(s) due for execution")
+                    # Execute each event with a tenant-scoped SchedulerService
+                    for event in due_events:
+                        try:
+                            logger.info(f"Executing event {event.id} ({event.event_type})")
+                            event_service = SchedulerService(
+                                db,
+                                token_tracker=token_tracker,
+                                tenant_id=getattr(event, "tenant_id", None),
+                            )
+                            event_service.execute_event(event)
+                            logger.info(f"Successfully executed event {event.id}")
 
-                # Execute each event with a tenant-scoped SchedulerService
-                for event in due_events:
-                    try:
-                        logger.info(f"Executing event {event.id} ({event.event_type})")
-                        event_service = SchedulerService(
-                            db,
-                            token_tracker=token_tracker,
-                            tenant_id=getattr(event, "tenant_id", None),
-                        )
-                        event_service.execute_event(event)
-                        logger.info(f"Successfully executed event {event.id}")
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to execute event {event.id}: {e}",
+                                exc_info=True
+                            )
+                            # Error is already logged to event.error_message by execute_event
 
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to execute event {event.id}: {e}",
-                            exc_info=True
-                        )
-                        # Error is already logged to event.error_message by execute_event
+                try:
+                    from channels.schedule.trigger import ScheduleTrigger
+
+                    schedule_results = ScheduleTrigger.poll_due(db)
+                    logger.info(
+                        "Schedule trigger poll completed with %s due trigger(s)",
+                        len(schedule_results),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to poll schedule triggers: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error in poll_and_execute: {e}", exc_info=True)

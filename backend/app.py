@@ -108,6 +108,10 @@ from api.routes_mcp_instances import router as mcp_instances_router
 from api.routes_webhook_inbound import router as webhook_inbound_router
 from api.routes_webhook_instances import router as webhook_instances_router
 from api.routes_email_triggers import router as email_triggers_router
+from api.routes_jira_triggers import router as jira_triggers_router
+from api.routes_schedule_triggers import router as schedule_triggers_router
+from api.routes_github_triggers import router as github_triggers_router
+from api.routes_github_inbound import router as github_inbound_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -1350,6 +1354,10 @@ app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integrat
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
 app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/triggers/webhook/*)
 app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
+app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
+app.include_router(schedule_triggers_router)  # Schedule trigger CRUD (/api/triggers/schedule/*)
+app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router

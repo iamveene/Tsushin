@@ -1363,6 +1363,27 @@ export interface DefaultAgentsSettings {
   user_defaults: UserChannelDefaultAgent[]
 }
 
+export type TriggerKind = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
+export type TriggerCriteria = Record<string, unknown>
+
+export interface TriggerInstanceBase {
+  id: number
+  tenant_id: string
+  integration_name: string
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  is_active: boolean
+  status: string
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_activity_at?: string | null
+  last_cursor?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
 export interface EmailTrigger {
   id: number
   tenant_id: string
@@ -1401,6 +1422,136 @@ export interface EmailTriggerUpdateRequest {
   search_query?: string | null
   poll_interval_seconds?: number
   is_active?: boolean
+}
+
+export interface JiraTrigger extends TriggerInstanceBase {
+  site_url: string
+  project_key?: string | null
+  jql: string
+  auth_email?: string | null
+  api_token_preview?: string | null
+  poll_interval_seconds: number
+}
+
+export interface JiraTriggerCreateRequest {
+  integration_name: string
+  site_url: string
+  project_key?: string | null
+  jql: string
+  auth_email?: string | null
+  api_token?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  poll_interval_seconds?: number
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
+
+export interface JiraTriggerTestQueryRequest {
+  site_url: string
+  jql: string
+  auth_email?: string | null
+  api_token?: string | null
+}
+
+export interface JiraTriggerTestQueryResponse {
+  success: boolean
+  issue_count?: number | null
+  sample_issues?: Array<Record<string, unknown>>
+  error?: string | null
+  message?: string | null
+}
+
+export interface ScheduleTrigger extends TriggerInstanceBase {
+  cron_expression: string
+  timezone: string
+  payload_template?: Record<string, unknown> | null
+  next_fire_at?: string | null
+  last_fire_at?: string | null
+}
+
+export interface ScheduleTriggerCreateRequest {
+  integration_name: string
+  cron_expression: string
+  timezone?: string
+  payload_template?: Record<string, unknown> | null
+  trigger_criteria?: TriggerCriteria | null
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type ScheduleTriggerUpdateRequest = Partial<ScheduleTriggerCreateRequest>
+
+export interface SchedulePreviewRequest {
+  cron_expression: string
+  timezone?: string
+  payload_template?: Record<string, unknown> | null
+}
+
+export interface SchedulePreviewResponse {
+  next_fire_times?: string[]
+  next_fire_preview?: string[]
+  next_runs?: string[]
+  timezone?: string
+  error?: string | null
+  message?: string | null
+}
+
+export type GitHubTriggerAuthMethod = 'pat' | 'app'
+
+export interface GitHubTrigger extends TriggerInstanceBase {
+  auth_method: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  has_pat_token?: boolean
+  pat_token_preview?: string | null
+  webhook_secret_preview?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  last_delivery_id?: string | null
+  inbound_url?: string
+}
+
+export interface GitHubTriggerCreateRequest {
+  integration_name: string
+  auth_method?: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  pat_token?: string | null
+  webhook_secret?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
+
+export interface GitHubTriggerTestConnectionRequest {
+  auth_method?: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  pat_token?: string | null
+}
+
+export interface GitHubTriggerTestConnectionResponse {
+  success: boolean
+  ok?: boolean
+  status?: string
+  status_code?: number | null
+  detail?: string | null
+  message?: string | null
+  error?: string | null
+  repository?: string | null
 }
 
 export interface PageResponse<T> {
@@ -1479,6 +1630,7 @@ export interface WakeEvent {
 export interface WakeEventListParams extends PageParams {
   status?: string
   channel_type?: string
+  channel_instance_id?: number
 }
 
 export type ConversationalChannelType = 'whatsapp' | 'telegram' | 'slack' | 'discord'
@@ -1516,8 +1668,8 @@ export interface ChannelRoutingRuleUpdate {
 
 export type ChannelRoutingRuleListParams = PageParams
 
-export type TriggerDetailKind = 'email' | 'webhook'
-export type TriggerDetail = EmailTrigger | WebhookIntegration
+export type TriggerDetailKind = TriggerKind
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | ScheduleTrigger | GitHubTrigger
 
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
@@ -2060,6 +2212,9 @@ export interface WebhookIntegration {
   ip_allowlist: string[] | null
   rate_limit_rpm: number
   max_payload_bytes: number
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  trigger_criteria?: TriggerCriteria | null
   is_active: boolean
   status: 'active' | 'paused' | 'error'
   health_status: 'unknown' | 'healthy' | 'unhealthy'
@@ -2079,6 +2234,8 @@ export interface WebhookIntegrationCreate {
   ip_allowlist?: string[] | null
   rate_limit_rpm?: number
   max_payload_bytes?: number
+  default_agent_id?: number | null
+  trigger_criteria?: TriggerCriteria | null
 }
 
 export interface WebhookIntegrationUpdate {
@@ -2089,6 +2246,8 @@ export interface WebhookIntegrationUpdate {
   ip_allowlist?: string[] | null
   rate_limit_rpm?: number
   max_payload_bytes?: number
+  default_agent_id?: number | null
+  trigger_criteria?: TriggerCriteria | null
   is_active?: boolean
 }
 
@@ -2102,6 +2261,16 @@ export interface WebhookSecretRotateResponse {
   api_secret: string
   api_secret_preview: string
   warning: string
+}
+
+export interface WebhookCriteriaTestRequest {
+  payload: Record<string, unknown>
+  trigger_criteria?: TriggerCriteria | null
+}
+
+export interface WebhookCriteriaTestResponse {
+  matched: boolean
+  reason?: string | null
 }
 
 export interface WebhookSlugAvailability {
@@ -4019,6 +4188,7 @@ export const api = {
     if (params.offset !== undefined) query.set('offset', String(params.offset))
     if (params.status) query.set('status', params.status)
     if (params.channel_type) query.set('channel_type', params.channel_type)
+    if (params.channel_instance_id !== undefined) query.set('channel_instance_id', String(params.channel_instance_id))
     const suffix = query.toString() ? `?${query.toString()}` : ''
     const res = await authenticatedFetch(`${API_URL}/api/wake-events${suffix}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch wake events')
@@ -5321,10 +5491,162 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete email trigger')
   },
 
+  async listJiraTriggers(): Promise<JiraTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira triggers')
+    return res.json()
+  },
+
+  async getJiraTrigger(id: number): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira trigger')
+    return res.json()
+  },
+
+  async createJiraTrigger(data: JiraTriggerCreateRequest): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create Jira trigger')
+    return res.json()
+  },
+
+  async updateJiraTrigger(id: number, data: JiraTriggerUpdateRequest): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update Jira trigger')
+    return res.json()
+  },
+
+  async deleteJiraTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Jira trigger')
+  },
+
+  async testJiraTriggerQuery(data: JiraTriggerTestQueryRequest): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async listScheduleTriggers(): Promise<ScheduleTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule triggers')
+    return res.json()
+  },
+
+  async getScheduleTrigger(id: number): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule trigger')
+    return res.json()
+  },
+
+  async createScheduleTrigger(data: ScheduleTriggerCreateRequest): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create schedule trigger')
+    return res.json()
+  },
+
+  async updateScheduleTrigger(id: number, data: ScheduleTriggerUpdateRequest): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update schedule trigger')
+    return res.json()
+  },
+
+  async deleteScheduleTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete schedule trigger')
+  },
+
+  async previewScheduleTrigger(data: SchedulePreviewRequest): Promise<SchedulePreviewResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to preview schedule')
+    return res.json()
+  },
+
+  async listGitHubTriggers(): Promise<GitHubTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub triggers')
+    return res.json()
+  },
+
+  async getGitHubTrigger(id: number): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub trigger')
+    return res.json()
+  },
+
+  async createGitHubTrigger(data: GitHubTriggerCreateRequest): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitHub trigger')
+    return res.json()
+  },
+
+  async updateGitHubTrigger(id: number, data: GitHubTriggerUpdateRequest): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitHub trigger')
+    return res.json()
+  },
+
+  async deleteGitHubTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
+  },
+
+  async testGitHubTriggerConnection(data: GitHubTriggerTestConnectionRequest): Promise<GitHubTriggerTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
   async getTriggerDetail(kind: TriggerDetailKind, id: number): Promise<TriggerDetail> {
-    const path = kind === 'email'
-      ? `/api/triggers/email/${id}`
-      : `/api/triggers/webhook/${id}`
+    const pathByKind: Record<TriggerDetailKind, string> = {
+      email: `/api/triggers/email/${id}`,
+      webhook: `/api/triggers/webhook/${id}`,
+      jira: `/api/triggers/jira/${id}`,
+      schedule: `/api/triggers/schedule/${id}`,
+      github: `/api/triggers/github/${id}`,
+    }
+    const path = pathByKind[kind]
     const res = await authenticatedFetch(`${API_URL}${path}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch trigger detail')
     return res.json()
@@ -5371,6 +5693,16 @@ export const api = {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to rotate webhook secret')
+    return res.json()
+  },
+
+  async testWebhookCriteria(id: number, data: WebhookCriteriaTestRequest): Promise<WebhookCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}/criteria/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test webhook criteria')
     return res.json()
   },
 

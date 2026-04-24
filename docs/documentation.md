@@ -208,7 +208,17 @@ Track B starts with a no-migration dispatch foundation before Jira, Schedule, an
 * **Dedupe ledger** — dispatch records accepted outcomes in `channel_event_dedupe`. A duplicate unique key returns deterministic duplicate behavior without creating a second wake event.
 * **Wake evidence** — matching active `continuous_subscription` rows produce `wake_event` rows and queued `continuous_run` rows. Wake payload content stays out of row; dispatch stores a redacted JSON payload under `backend/data/wake_events/` and exposes only `payload_ref`.
 * **Webhook compatibility** — signed webhook inbound requests keep returning `202` with `{status, queue_id, poll_url}` for the existing direct queue-to-agent path. The dispatch foundation can dual-write wake/run evidence for continuous-agent subscribers without replacing the direct queue behavior.
-* **Deferred breadth** — Jira, Schedule, and GitHub trigger instance migrations remain deferred. Later Track B migrations must chain from current head as `0052 -> 0053 -> 0054`, with `0052.down_revision = "0058"`. `continuous_task` queue dispatch remains reserved until intentionally implemented.
+* **Breadth handoff** — the dispatch foundation is now consumed by Jira, Schedule, GitHub, and Webhook criteria in Track B breadth. `continuous_task` queue dispatch remains reserved until intentionally implemented.
+
+### 2.11 v0.7.0 Track B Trigger Breadth
+
+Track B breadth turns the dispatch foundation into user-facing trigger adapters and Hub UI.
+
+* **Migrations** — `0052_add_jira_trigger_and_webhook_criteria.py` revises `0058`, `0053_add_schedule_trigger_instance.py` revises `0052`, and `0054_add_github_trigger_instance.py` revises `0053`.
+* **Trigger rows** — `JiraChannelInstance`, `ScheduleChannelInstance`, and `GitHubChannelInstance` store tenant-scoped source config, encrypted credentials/secrets where applicable, default-agent references, health snapshots, cursors, and active/paused state.
+* **Webhook criteria** — Webhook trigger rows now carry optional `trigger_criteria`. JSONPath matchers are evaluated before subscription matching; failed criteria write `filtered_out` dedupe evidence and do not create wake/run rows.
+* **Runtime adapters** — Jira normalizes JQL issue payloads, Schedule polls due cron rows without creating legacy `ScheduledEvent` duplicates, and GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`.
+* **Hub UI** — Hub → Communication now supports Email, Webhook, Jira, Schedule, and GitHub trigger setup. Jira/Schedule/GitHub have compact creation flows, cards, `/hub/triggers/{type}/{id}` detail pages, criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
 
 ---
 
@@ -1875,6 +1885,8 @@ Capability flags (`trigger.py:19-27`):
 
 **Model:** `WebhookIntegration` (`backend/models.py:2918`).
 
+**Criteria filtering:** `WebhookIntegration.trigger_criteria` stores the shared trigger-criteria envelope. Supported payload matchers live in `filters.jsonpath_matchers` with `path`, `operator`, and optional `value`. Supported operators are `exists`, `not_exists`, `equals`, `not_equals`, `contains`, `in`, and `regex`. Criteria are evaluated before wake dispatch; a mismatch returns `204 No Content` from inbound processing and records `filtered_out` in `channel_event_dedupe`.
+
 **Canonical management surface:** `GET /api/triggers` lists trigger catalog entries, and `/api/triggers/webhook/*` is the canonical CRUD namespace. Legacy `Agent.webhook_integration_id` bindings still exist during the migration window, but the long-term routing model is instance-level `default_agent_id` plus trigger-aware default resolution.
 
 **E2E setup — Webhook trigger:**
@@ -1933,6 +1945,50 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 - This phase is control-plane only. Actual inbox polling, dedupe, wake-event emission, and downstream triage execution land in a later phase.
 - Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
 - If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
+
+#### Jira triggers
+
+**Source:** `backend/api/routes_jira_triggers.py`, `backend/channels/jira/trigger.py`, `frontend/components/triggers/TriggerSetupModal.tsx`
+
+Jira triggers poll a Jira Cloud REST JQL query and normalize matching issue payloads into `TriggerDispatchInput`.
+
+**API surface:**
+- `GET/POST /api/triggers/jira`
+- `GET/PATCH/DELETE /api/triggers/jira/{id}`
+- `POST /api/triggers/jira/test-query`
+- `POST /api/triggers/jira/{id}/test-query`
+
+**Stored config:** site URL, project key, JQL, optional auth email + encrypted API token preview, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps.
+
+#### Schedule triggers
+
+**Source:** `backend/api/routes_schedule_triggers.py`, `backend/channels/schedule/trigger.py`, `backend/scheduler/worker.py`
+
+Schedule triggers use `ScheduleChannelInstance` as their source of truth. The scheduler worker remains the poll-loop driver, but trigger-backed schedules dispatch wake events through `ScheduleTrigger.poll_due()` instead of creating or executing legacy `ScheduledEvent` rows.
+
+**API surface:**
+- `GET/POST /api/triggers/schedule`
+- `GET/PATCH/DELETE /api/triggers/schedule/{id}`
+- `POST /api/triggers/schedule/preview`
+
+**Stored config:** cron expression, IANA timezone, optional payload template, trigger criteria, next/last fire timestamps, default agent, and health/activity fields.
+
+#### GitHub triggers
+
+**Source:** `backend/api/routes_github_triggers.py`, `backend/api/routes_github_inbound.py`, `backend/channels/github/trigger.py`
+
+GitHub triggers receive signed repository webhook deliveries and dispatch matching events to continuous-agent wakeups.
+
+**API surface:**
+- `GET/POST /api/triggers/github`
+- `GET/PATCH/DELETE /api/triggers/github/{id}`
+- `POST /api/triggers/github/test-connection`
+- `POST /api/triggers/github/{id}/check-connection`
+- `POST /api/triggers/github/{id}/inbound`
+
+**Stored config:** auth method (`pat` or `app`), repository owner/name, optional installation id, encrypted PAT preview, encrypted webhook-secret preview, event filters, branch/path/author filters, trigger criteria, default agent, and delivery/activity cursors.
+
+**Inbound contract:** GitHub sends `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. The route validates HMAC using the stored webhook secret, applies repo/event/branch/path/author filters, dedupes on delivery id, and dispatches via `TriggerDispatchService`.
 
 ### 15.6 Playground
 

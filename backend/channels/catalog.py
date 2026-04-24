@@ -81,6 +81,30 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         setup_hint="Create a webhook trigger under Hub -> Communication -> Triggers.",
         icon_hint="webhook",
     ),
+    EntryPointInfo(
+        id="jira",
+        display_name="Jira",
+        description="Watch Jira issues with JQL and wake agents from matching updates.",
+        requires_setup=True,
+        setup_hint="Create a Jira trigger under Hub -> Communication -> Triggers.",
+        icon_hint="jira",
+    ),
+    EntryPointInfo(
+        id="schedule",
+        display_name="Schedule",
+        description="Wake agents on cron schedules with structured payloads.",
+        requires_setup=True,
+        setup_hint="Create a schedule trigger under Hub -> Communication -> Triggers.",
+        icon_hint="schedule",
+    ),
+    EntryPointInfo(
+        id="github",
+        display_name="GitHub",
+        description="Receive signed repository events and wake agents from matching activity.",
+        requires_setup=True,
+        setup_hint="Create a GitHub trigger under Hub -> Communication -> Triggers.",
+        icon_hint="github",
+    ),
 ]
 
 
