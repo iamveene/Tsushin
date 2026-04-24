@@ -7,7 +7,7 @@ import { api, type PageResponse, type WakeEvent } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { BellIcon, ClockIcon, EyeIcon, FilterIcon, RefreshIcon, ZapIcon } from '@/components/ui/icons'
 
-const STATUS_OPTIONS = ['all', 'queued', 'claimed', 'processed', 'failed', 'filtered_out']
+const STATUS_OPTIONS = ['all', 'pending', 'claimed', 'processed', 'failed', 'filtered']
 const CHANNEL_OPTIONS = ['all', 'email', 'webhook', 'whatsapp', 'telegram', 'slack', 'discord']
 
 function getErrorMessage(err: unknown, fallback: string): string {
@@ -19,7 +19,7 @@ function statusClass(status: string): string {
   if (['processed', 'success', 'completed'].includes(normalized)) return 'bg-green-500/10 text-green-300 border-green-500/30'
   if (['queued', 'claimed', 'pending'].includes(normalized)) return 'bg-yellow-500/10 text-yellow-300 border-yellow-500/30'
   if (['failed', 'error'].includes(normalized)) return 'bg-red-500/10 text-red-300 border-red-500/30'
-  if (['filtered_out', 'duplicate'].includes(normalized)) return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  if (['filtered', 'filtered_out', 'duplicate'].includes(normalized)) return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
   return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
 }
 

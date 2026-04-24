@@ -21,6 +21,7 @@ import ipaddress
 import json as _json
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -29,7 +30,7 @@ from sqlalchemy.orm import Session
 from db import get_db
 from fastapi import Depends
 from middleware.rate_limiter import api_rate_limiter
-from models import Agent, WebhookIntegration
+from models import Agent, MessageQueue, WebhookIntegration
 from services.message_queue_service import MessageQueueService
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,106 @@ def _ip_in_allowlist(client_ip: str, allowlist_json: str) -> bool:
     except Exception:
         # Fail closed on allowlist parse errors
         return False
+
+
+def _queued_response(queue_id: int) -> dict:
+    return {
+        "status": "queued",
+        "queue_id": queue_id,
+        "poll_url": f"/api/v1/queue/{queue_id}",
+    }
+
+
+def _result_status(result) -> Optional[str]:
+    status = getattr(result, "status", None)
+    if status is None:
+        return None
+    return str(getattr(status, "value", status))
+
+
+def _find_existing_webhook_queue_item(
+    *,
+    db: Session,
+    integration: WebhookIntegration,
+    agent: Agent,
+    sender_key: str,
+    source_id: str,
+) -> Optional[MessageQueue]:
+    candidates = (
+        db.query(MessageQueue)
+        .filter(
+            MessageQueue.tenant_id == integration.tenant_id,
+            MessageQueue.channel == "webhook",
+            MessageQueue.message_type == "trigger_event",
+            MessageQueue.agent_id == agent.id,
+            MessageQueue.sender_key == sender_key,
+        )
+        .order_by(MessageQueue.id.desc())
+        .all()
+    )
+    for item in candidates:
+        payload = item.payload or {}
+        if payload.get("webhook_id") == integration.id and payload.get("source_id") == source_id:
+            return item
+    return None
+
+
+async def _maybe_dispatch_trigger_event(
+    *,
+    db: Session,
+    integration: WebhookIntegration,
+    agent: Agent,
+    sender_key: str,
+    payload: dict,
+    dedupe_key: str,
+    occurred_at: datetime,
+) -> Optional[dict]:
+    """Best-effort bridge to the shared trigger dispatcher when it exists.
+
+    The direct message_queue path remains authoritative for webhook replies;
+    the shared service writes dedupe/wake/run evidence when available.
+    """
+    try:
+        from services.trigger_dispatch_service import (
+            TriggerDispatchInput,
+            TriggerDispatchService,
+        )
+    except Exception:
+        return None
+
+    try:
+        result = TriggerDispatchService(db).dispatch(
+            TriggerDispatchInput(
+                trigger_type="webhook",
+                instance_id=integration.id,
+                event_type="webhook.inbound",
+                dedupe_key=dedupe_key,
+                payload=payload,
+                occurred_at=occurred_at,
+                importance="normal",
+                explicit_agent_id=agent.id,
+                sender_key=sender_key,
+                source_id=payload.get("source_id"),
+            )
+        )
+        if _result_status(result) == "duplicate":
+            existing = _find_existing_webhook_queue_item(
+                db=db,
+                integration=integration,
+                agent=agent,
+                sender_key=sender_key,
+                source_id=dedupe_key,
+            )
+            if existing is not None:
+                return _queued_response(existing.id)
+    except Exception as exc:
+        logger.warning(
+            "TriggerDispatchService webhook bridge failed; falling back to direct queue: %s",
+            type(exc).__name__,
+        )
+        return None
+
+    return None
 
 
 # BUG-593: queued responses are semantically 202 Accepted, not 200. The
@@ -243,19 +344,28 @@ async def receive_webhook(
         "timestamp": ts_int,
         "raw_event": body,
     }
+    sender_key = f"webhook_{webhook_id}_{sender_id}"[:255]
+    dispatch_response = await _maybe_dispatch_trigger_event(
+        db=db,
+        integration=integration,
+        agent=agent,
+        sender_key=sender_key,
+        payload=payload,
+        dedupe_key=source_id[:128],
+        occurred_at=datetime.fromtimestamp(ts_int, UTC).replace(tzinfo=None),
+    )
+    if dispatch_response is not None:
+        return dispatch_response
+
     mqs = MessageQueueService(db)
     item = mqs.enqueue(
         channel="webhook",
         tenant_id=integration.tenant_id,
         agent_id=agent.id,
-        sender_key=f"webhook_{webhook_id}_{sender_id}"[:255],
+        sender_key=sender_key,
         payload=payload,
         priority=0,
         message_type="trigger_event",
     )
 
-    return {
-        "status": "queued",
-        "queue_id": item.id,
-        "poll_url": f"/api/v1/queue/{item.id}",
-    }
+    return _queued_response(item.id)

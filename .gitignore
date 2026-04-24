@@ -275,6 +275,8 @@ backend/tests/*
 !backend/tests/test_invitation_scope.py
 !backend/tests/test_routes_default_agents.py
 !backend/tests/test_routes_email_triggers.py
+!backend/tests/test_trigger_dispatch_service.py
+!backend/tests/test_webhook_trigger_dispatch_foundation.py
 !backend/tests/test_gmail_send_phase3_live_gate.py
 !backend/tests/test_invitation_link_portability.py
 !backend/tests/test_skill_integration_tenant_isolation.py
