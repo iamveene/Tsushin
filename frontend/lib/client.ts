@@ -1676,6 +1676,10 @@ export interface ChannelRoutingRuleUpdate {
   is_active?: boolean
 }
 
+export interface ChannelRoutingRuleReorderRequest {
+  rule_ids: number[]
+}
+
 export type ChannelRoutingRuleListParams = PageParams
 
 export type TriggerDetailKind = TriggerKind
@@ -5787,6 +5791,20 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to update channel routing rule')
+    return res.json()
+  },
+
+  async reorderChannelRoutingRules(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    data: ChannelRoutingRuleReorderRequest,
+  ): Promise<PageResponse<ChannelRoutingRule>> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reorder channel routing rules')
     return res.json()
   },
 
