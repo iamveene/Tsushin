@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +58,7 @@ from models import (  # noqa: E402
     GitHubChannelInstance,
     HubIntegration,
     JiraChannelInstance,
+    OAuthToken,
     ScheduleChannelInstance,
     SentinelProfile,
     WebhookIntegration,
@@ -82,6 +83,7 @@ def db_session():
             ContinuousAgent.__table__,
             ContinuousSubscription.__table__,
             HubIntegration.__table__,
+            OAuthToken.__table__,
             GmailIntegration.__table__,
             EmailChannelInstance.__table__,
             WebhookIntegration.__table__,
@@ -135,18 +137,40 @@ def _seed_agent(db, *, agent_id: int, tenant_id: str, contact_id: int):
     return agent
 
 
-def _seed_gmail_integration(db, *, tenant_id: str, email_address: str, health_status: str = "healthy"):
+def _seed_gmail_integration(
+    db,
+    *,
+    tenant_id: str,
+    email_address: str,
+    health_status: str = "healthy",
+    is_active: bool = True,
+    scopes: str = (
+        "https://www.googleapis.com/auth/gmail.readonly "
+        "https://www.googleapis.com/auth/gmail.send "
+        "https://www.googleapis.com/auth/gmail.compose"
+    ),
+):
     integration = GmailIntegration(
         tenant_id=tenant_id,
         type="gmail",
         name=f"Gmail - {email_address}",
         display_name=f"{tenant_id.title()} Gmail",
-        is_active=True,
+        is_active=is_active,
         health_status=health_status,
         email_address=email_address,
         authorized_at=datetime.utcnow(),
     )
     db.add(integration)
+    db.flush()
+    db.add(
+        OAuthToken(
+            integration_id=integration.id,
+            access_token_encrypted="encrypted-access",
+            refresh_token_encrypted="encrypted-refresh",
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+            scope=scopes,
+        )
+    )
     db.flush()
     return integration
 
@@ -379,3 +403,114 @@ def test_create_email_triage_subscription_requires_default_agent(db_session):
 
     assert exc_info.value.status_code == 400
     assert "default agent" in exc_info.value.detail
+
+
+def test_create_email_triage_subscription_rejects_cross_tenant_gmail_integration(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    db_session.add(Tenant(id="tenant-b", name="Tenant B", slug="tenant-b"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    foreign_gmail = _seed_gmail_integration(
+        db_session,
+        tenant_id="tenant-b",
+        email_address="foreign@example.com",
+    )
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=foreign_gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_email_triage_subscription(
+            trigger_id=trigger.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tenant-owned Gmail integration" in exc_info.value.detail
+    assert db_session.query(ContinuousAgent).count() == 0
+    assert db_session.query(ContinuousSubscription).count() == 0
+
+
+def test_create_email_triage_subscription_rejects_disconnected_gmail_integration(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    gmail = _seed_gmail_integration(
+        db_session,
+        tenant_id="tenant-a",
+        email_address="support@example.com",
+        health_status="disconnected",
+    )
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_email_triage_subscription(
+            trigger_id=trigger.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tenant-owned Gmail integration" in exc_info.value.detail
+    assert db_session.query(ContinuousAgent).count() == 0
+    assert db_session.query(ContinuousSubscription).count() == 0
+
+
+def test_create_email_triage_subscription_rejects_send_only_gmail_integration(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    gmail = _seed_gmail_integration(
+        db_session,
+        tenant_id="tenant-a",
+        email_address="support@example.com",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly "
+            "https://www.googleapis.com/auth/gmail.send"
+        ),
+    )
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_email_triage_subscription(
+            trigger_id=trigger.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "gmail.compose" in exc_info.value.detail
+    assert db_session.query(ContinuousAgent).count() == 0
+    assert db_session.query(ContinuousSubscription).count() == 0

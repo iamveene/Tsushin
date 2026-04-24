@@ -310,6 +310,20 @@ def create_email_triage_subscription(
                 status_code=400,
                 detail="Email trigger needs a default agent before triage can be enabled",
             ) from exc
+        if reason in {
+            "unsupported_email_provider",
+            "missing_gmail_integration",
+            "gmail_integration_not_found",
+            "gmail_integration_tenant_mismatch",
+            "gmail_integration_type_mismatch",
+            "gmail_integration_inactive",
+            "gmail_integration_missing_token",
+            "gmail_integration_missing_draft_scope",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Email triage requires an active tenant-owned Gmail integration reauthorized with gmail.compose.",
+            ) from exc
         raise HTTPException(status_code=400, detail=reason) from exc
 
     return EmailTriageSubscriptionRead(

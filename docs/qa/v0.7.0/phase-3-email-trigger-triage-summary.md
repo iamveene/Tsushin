@@ -14,6 +14,7 @@ This summary records the local Phase 3 Email Trigger + Email Triage runtime chec
 - Tenant-safety checks for missing tenant context, missing Gmail integration, foreign Gmail integration ownership, unsupported provider, and disconnected integrations.
 - Managed Email Triage subscription endpoint at `POST /api/triggers/email/{id}/triage-subscription`.
 - System-owned continuous agent/subscription creation for `email.message.received`, using the existing default-agent resolution path.
+- Fail-closed managed triage enablement: the backend now rejects cross-tenant, inactive/disconnected, missing-token, and send-only Gmail integrations before creating system-owned routing.
 - Managed draft creation through `GmailSkill` with `continuous_agent_context`, so the existing Sentinel continuous-action approval gate applies.
 - Sentinel-config-gated MemGuard trigger payload pre-check in `TriggerDispatchService`; blocked payloads write `blocked_by_security` and emit no wake/run.
 - Hub Email trigger detail parity: source matching, recent wake events, danger zone, managed triage setup, and `gmail.compose` scope messaging.
@@ -25,6 +26,8 @@ This summary records the local Phase 3 Email Trigger + Email Triage runtime chec
 - `pytest -q -o addopts='' backend/tests/test_email_trigger_runtime.py`
 - `pytest -q -o addopts='' backend/tests/test_trigger_dispatch_service.py backend/tests/test_email_trigger_runtime.py backend/tests/test_routes_email_triggers.py`
 - `pytest -q -o addopts='' backend/tests/test_email_trigger_runtime.py backend/tests/test_routes_email_triggers.py backend/tests/test_trigger_dispatch_service.py backend/tests/test_gmail_send_phase3_checkpoint.py`
+- Follow-up hardening check: `pytest -q -o addopts='' backend/tests/test_routes_email_triggers.py` -> `10 passed`, including cross-tenant, disconnected, and send-only Gmail triage rejection.
+- Added root-only live gate scaffold: `pytest -q -o addopts='' backend/tests/test_email_trigger_phase3_live_gate.py` -> skipped by default; set `TSN_RUN_EMAIL_PHASE3_LIVE_GATE=1` after Gmail compose reauthorization to prove live poll, duplicate protection, managed triage draft creation, and MemGuard blocking.
 - `cd frontend && ./node_modules/.bin/eslint 'app/hub/triggers/email/[id]/page.tsx' --max-warnings 0`
 - `cd frontend && ./node_modules/.bin/eslint components/triggers/EmailTriggerWizard.tsx --max-warnings 0`
 - `cd frontend && ./node_modules/.bin/eslint lib/client.ts --max-warnings 0 --rule '@typescript-eslint/no-explicit-any: off' --rule '@typescript-eslint/no-empty-object-type: off'`
@@ -39,8 +42,7 @@ This summary records the local Phase 3 Email Trigger + Email Triage runtime chec
 ## Remaining Gates
 
 - Run `TSN_RUN_GMAIL_PHASE3_LIVE_GATE=1` after Gmail fixture reauthorization with `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
-- Record live Email poll proof: one incoming Gmail message creates one wake/run and duplicate polling does not double-fire.
-- Record live MemGuard block proof against a tenant with Sentinel block mode enabled. Targeted MemGuard dispatch tests are green, but live proof is not recorded yet.
+- Run `TSN_RUN_EMAIL_PHASE3_LIVE_GATE=1` after Gmail fixture reauthorization to record live Email poll proof, duplicate protection, managed triage draft proof, and MemGuard block proof.
 - Fresh-install Ubuntu VM validation remains reserved for phase exit/final regression.
 
 ## Evidence References

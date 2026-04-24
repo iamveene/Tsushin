@@ -9,11 +9,19 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from models import ContinuousAgent, ContinuousSubscription, EmailChannelInstance
+from hub.google.gmail_service import GMAIL_DRAFT_COMPATIBLE_SCOPES
+from models import (
+    ContinuousAgent,
+    ContinuousSubscription,
+    EmailChannelInstance,
+    GmailIntegration,
+    OAuthToken,
+)
 from services.default_agent_service import get_default_agent
 
 
 EMAIL_TRIAGE_EVENT_TYPE = "email.message.received"
+_INACTIVE_GMAIL_HEALTH = {"disconnected", "unavailable", "unhealthy"}
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,8 @@ def ensure_email_triage_subscription(
     )
     if trigger is None:
         raise ValueError("email_trigger_not_found")
+
+    _validate_triage_gmail_integration(db, tenant_id=tenant_id, trigger=trigger)
 
     agent_id = get_default_agent(db, tenant_id, "email", instance_id=trigger.id)
     if agent_id is None:
@@ -116,6 +126,46 @@ def ensure_email_triage_subscription(
         created_agent=created_agent,
         created_subscription=created_subscription,
     )
+
+
+def _validate_triage_gmail_integration(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger: EmailChannelInstance,
+) -> None:
+    """Fail closed before enabling managed triage for a Gmail trigger."""
+
+    if trigger.provider != "gmail":
+        raise ValueError("unsupported_email_provider")
+    if not trigger.gmail_integration_id:
+        raise ValueError("missing_gmail_integration")
+
+    integration = (
+        db.query(GmailIntegration)
+        .filter(GmailIntegration.id == trigger.gmail_integration_id)
+        .first()
+    )
+    if integration is None:
+        raise ValueError("gmail_integration_not_found")
+    if integration.tenant_id != tenant_id:
+        raise ValueError("gmail_integration_tenant_mismatch")
+    if integration.type != "gmail":
+        raise ValueError("gmail_integration_type_mismatch")
+    if not integration.is_active or (integration.health_status or "").lower() in _INACTIVE_GMAIL_HEALTH:
+        raise ValueError("gmail_integration_inactive")
+
+    token = (
+        db.query(OAuthToken)
+        .filter(OAuthToken.integration_id == integration.id)
+        .order_by(OAuthToken.created_at.desc())
+        .first()
+    )
+    if token is None:
+        raise ValueError("gmail_integration_missing_token")
+    token_scopes = set((token.scope or "").split())
+    if not (token_scopes & GMAIL_DRAFT_COMPATIBLE_SCOPES):
+        raise ValueError("gmail_integration_missing_draft_scope")
 
 
 def _first_address(value: Any) -> Optional[str]:
