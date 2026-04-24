@@ -30,6 +30,7 @@ from models import (
     GitHubChannelInstance,
     JiraChannelInstance,
     ScheduleChannelInstance,
+    SentinelConfig,
     WakeEvent,
     WebhookIntegration,
 )
@@ -153,7 +154,7 @@ class TriggerDispatchService:
                 reason=criteria_reason,
             )
 
-        block_reason = self._security_block_reason(event)
+        block_reason = self._security_block_reason(event, tenant_id=tenant_id)
         if block_reason:
             return self._record_terminal_outcome(
                 event=event,
@@ -279,8 +280,72 @@ class TriggerDispatchService:
             return False
         return (getattr(instance, "status", None) or self._ACTIVE_STATUS) == self._ACTIVE_STATUS
 
-    def _security_block_reason(self, event: TriggerDispatchInput) -> Optional[str]:
-        """Policy hook for later MemGuard/Sentinel integration."""
+    def _security_block_reason(self, event: TriggerDispatchInput, *, tenant_id: Optional[str] = None) -> Optional[str]:
+        """Return a security block reason for trigger payloads.
+
+        This is deliberately synchronous because trigger dispatch currently runs
+        inside sync request/worker paths. It uses Sentinel's deterministic
+        heuristic floor as the MemGuard pre-check and leaves slower LLM
+        escalation to the existing Sentinel paths.
+        """
+        if not tenant_id:
+            return None
+        try:
+            from agent.sentinel.heuristics import evaluate_content
+
+            config = (
+                self.db.query(SentinelConfig)
+                .filter(SentinelConfig.tenant_id == tenant_id)
+                .first()
+            )
+            if config is None:
+                config = (
+                    self.db.query(SentinelConfig)
+                    .filter(SentinelConfig.tenant_id.is_(None))
+                    .first()
+                )
+            if config is None:
+                return None
+            if not getattr(config, "is_enabled", True):
+                return None
+            if (getattr(config, "detection_mode", "block") or "block") != "block":
+                return None
+            if getattr(config, "block_on_detection", True) is False:
+                return None
+
+            enabled_types = set()
+            detection_flags = {
+                "prompt_injection": "detect_prompt_injection",
+                "memory_poisoning": "detect_memory_poisoning",
+                "poisoning": "detect_poisoning",
+                "agent_takeover": "detect_agent_takeover",
+                "continuous_agent_action_approval": "detect_continuous_agent_action_approval",
+            }
+            for detection_type, flag_name in detection_flags.items():
+                if getattr(config, flag_name, True):
+                    enabled_types.add(detection_type)
+            if not enabled_types:
+                return None
+
+            payload_text = json.dumps(
+                self._redact(event.payload),
+                default=self._json_default,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            max_chars = max(256, int(getattr(config, "max_input_chars", 5000) or 5000))
+            match = evaluate_content(
+                payload_text[:max_chars],
+                int(getattr(config, "aggressiveness_level", 1) or 1),
+                enabled_types,
+            )
+            if match is None:
+                return None
+            return f"{match.detection_type}:{match.reason}"
+        except Exception:
+            # The pre-check must never take down trigger ingestion if Sentinel's
+            # optional profile/config tables are unavailable in focused tests.
+            return None
         return None
 
     def _criteria_filter_reason(self, instance: Any, event: TriggerDispatchInput) -> Optional[str]:

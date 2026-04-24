@@ -1,29 +1,107 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { api, type EmailTrigger } from '@/lib/client'
+import { api, authenticatedFetch, type EmailTrigger, type PageResponse, type WakeEvent } from '@/lib/client'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, ClockIcon, EnvelopeIcon, RefreshIcon, TrashIcon } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, ClockIcon, EnvelopeIcon, RefreshIcon, SparklesIcon, TrashIcon } from '@/components/ui/icons'
+
+type TabId = 'overview' | 'matching' | 'events' | 'danger'
+
+interface GmailIntegrationSummary {
+  id: number
+  name: string
+  email_address: string
+  health_status: string
+  health_status_reason?: string | null
+  is_active: boolean
+  can_send: boolean
+  can_draft?: boolean
+}
+
+const TABS: Array<{ id: TabId; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'matching', label: 'Source matching' },
+  { id: 'events', label: 'Recent wake events' },
+  { id: 'danger', label: 'Danger zone' },
+]
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
-function statusClass(active: boolean, status: string): string {
-  if (!active || status === 'paused') return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
-  if (status === 'error') return 'bg-red-500/10 text-red-300 border-red-500/30'
-  return 'bg-green-500/10 text-green-300 border-green-500/30'
+async function fetchGmailIntegrations(): Promise<GmailIntegrationSummary[]> {
+  const response = await authenticatedFetch('/api/hub/google/gmail/integrations')
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  const data = await response.json()
+  return Array.isArray(data.integrations) ? data.integrations : []
+}
+
+function statusClass(trigger: EmailTrigger): string {
+  if (!trigger.is_active || trigger.status === 'paused') return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  if (trigger.status === 'error' || trigger.health_status === 'unhealthy') return 'bg-red-500/10 text-red-300 border-red-500/30'
+  if (trigger.health_status === 'healthy') return 'bg-green-500/10 text-green-300 border-green-500/30'
+  return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+}
+
+function statusLabel(trigger: EmailTrigger): string {
+  if (!trigger.is_active || trigger.status === 'paused') return 'paused'
+  return trigger.status || 'unknown'
+}
+
+function gmailScopeLabel(integration?: GmailIntegrationSummary | null): string {
+  if (!integration) return 'Scope unknown'
+  if (integration.can_send && integration.can_draft) return 'Read + send/draft'
+  if (integration.can_send) return 'Read + send/reply'
+  return 'Read-only'
+}
+
+function gmailScopeClass(integration?: GmailIntegrationSummary | null): string {
+  if (!integration) return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  if (integration.can_send && integration.can_draft) return 'bg-green-500/10 text-green-300 border-green-500/30'
+  if (integration.can_send) return 'bg-yellow-500/10 text-yellow-200 border-yellow-500/30'
+  return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+}
+
+function gmailScopeMessage(integration?: GmailIntegrationSummary | null): string {
+  if (!integration) {
+    return 'This trigger can still monitor Gmail. Open the Gmail integration details in Hub to confirm outbound send and draft access.'
+  }
+  if (integration.can_send && integration.can_draft) {
+    return 'This trigger only watches Gmail. The reused account also has outbound send and compose access for agents that use it.'
+  }
+  if (integration.can_send) {
+    return 'This trigger can monitor Gmail. Agents using this account can send and reply, but draft creation needs gmail.compose reauthorization.'
+  }
+  return 'This trigger can monitor Gmail with read access. Agents using this account need outbound reauthorization before they can send or create drafts.'
+}
+
+function healthClass(healthStatus?: string | null): string {
+  if (healthStatus === 'healthy') return 'bg-green-500/10 text-green-300 border-green-500/30'
+  if (healthStatus === 'unhealthy') return 'bg-red-500/10 text-red-300 border-red-500/30'
+  if (healthStatus === 'disconnected') return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
 }
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
       <div className="text-xs uppercase tracking-wide text-tsushin-slate">{label}</div>
-      <div className="mt-2 text-sm text-white">{value}</div>
+      <div className="mt-2 break-words text-sm text-white">{value}</div>
+    </div>
+  )
+}
+
+function DetailRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs text-tsushin-slate">{label}</div>
+      <div className="mt-1 break-words text-sm text-white">{children}</div>
     </div>
   )
 }
@@ -36,18 +114,28 @@ export default function EmailTriggerDetailPage() {
   const { hasPermission } = useAuth()
   const canWriteHub = hasPermission('hub.write')
   const [trigger, setTrigger] = useState<EmailTrigger | null>(null)
+  const [eventsPage, setEventsPage] = useState<PageResponse<WakeEvent> | null>(null)
+  const [gmailIntegrations, setGmailIntegrations] = useState<GmailIntegrationSummary[]>([])
+  const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [triageLoading, setTriageLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  const loadTrigger = useCallback(async () => {
+  const loadData = useCallback(async () => {
     if (!hasValidId) return
     setLoading(true)
     setError(null)
     try {
-      const data = await api.getEmailTrigger(triggerId)
-      setTrigger(data)
+      const [triggerData, wakeEvents, integrations] = await Promise.all([
+        api.getEmailTrigger(triggerId),
+        api.getWakeEvents({ limit: 25, channel_type: 'email', channel_instance_id: triggerId }).catch(() => null),
+        fetchGmailIntegrations().catch(() => []),
+      ])
+      setTrigger(triggerData)
+      setEventsPage(wakeEvents)
+      setGmailIntegrations(integrations)
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to load email trigger'))
     } finally {
@@ -60,9 +148,20 @@ export default function EmailTriggerDetailPage() {
       router.replace('/hub?tab=communication')
       return
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadTrigger()
-  }, [hasValidId, loadTrigger, router])
+    loadData()
+  }, [hasValidId, loadData, router])
+
+  const events = useMemo(
+    () => (eventsPage?.items || []).filter((event) => event.channel_instance_id === triggerId),
+    [eventsPage, triggerId],
+  )
+
+  const gmailIntegration = useMemo(() => {
+    if (!trigger) return null
+    return gmailIntegrations.find((integration) => integration.id === trigger.gmail_integration_id) ||
+      gmailIntegrations.find((integration) => integration.email_address === trigger.gmail_account_email) ||
+      null
+  }, [gmailIntegrations, trigger])
 
   const toggleActive = async () => {
     if (!trigger) return
@@ -94,6 +193,120 @@ export default function EmailTriggerDetailPage() {
     }
   }
 
+  const enableTriage = async () => {
+    if (!trigger) return
+    setTriageLoading(true)
+    setError(null)
+    try {
+      const result = await api.createEmailTriageSubscription(trigger.id)
+      setSuccess(result.created_subscription ? 'Email triage flow enabled' : 'Email triage flow is already active')
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to enable email triage'))
+    } finally {
+      setTriageLoading(false)
+    }
+  }
+
+  const renderEventsTab = () => (
+    <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+          <BellIcon size={18} /> Recent wake events
+        </h2>
+        <Link href="/hub/wake-events?channel_type=email" className="text-sm text-cyan-200 hover:text-white">
+          Open browser
+        </Link>
+      </div>
+      {events.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-tsushin-border p-8 text-center text-sm text-tsushin-slate">
+          No wake events found for this trigger yet.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-tsushin-slate">
+              <tr className="border-b border-tsushin-border">
+                <th className="px-3 py-2">Event</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Occurred</th>
+                <th className="px-3 py-2">Payload ref</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((event) => (
+                <tr key={event.id} className="border-b border-tsushin-border/60">
+                  <td className="px-3 py-2">
+                    <Link href={`/hub/wake-events?highlight=${event.id}`} className="font-mono text-cyan-200 hover:text-white">#{event.id}</Link>
+                    <div className="text-xs text-tsushin-slate">{event.event_type}</div>
+                  </td>
+                  <td className="px-3 py-2 text-white">{event.status}</td>
+                  <td className="px-3 py-2 text-tsushin-slate">{formatRelative(event.occurred_at)}</td>
+                  <td className="px-3 py-2">
+                    {event.payload_ref ? (
+                      <code className="rounded bg-black/30 px-2 py-1 text-xs text-cyan-200">{event.payload_ref}</code>
+                    ) : (
+                      <span className="text-tsushin-slate">None</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+
+  const renderDangerTab = () => {
+    if (!trigger) return null
+    return (
+      <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-5">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-red-100">
+          <AlertTriangleIcon size={18} /> Danger zone
+        </h2>
+        {!canWriteHub && (
+          <p className="mt-3 text-sm text-red-100/80">Your role can view this trigger but cannot modify it.</p>
+        )}
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-red-500/20 bg-black/20 p-4">
+            <div className="font-medium text-white">{trigger.is_active ? 'Pause trigger' : 'Resume trigger'}</div>
+            <p className="mt-1 text-sm text-red-100/80">
+              Pausing preserves configuration but stops new wake events from this Gmail account.
+            </p>
+            {canWriteHub && (
+              <button
+                type="button"
+                onClick={toggleActive}
+                disabled={saving}
+                className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-100 hover:text-white disabled:opacity-50"
+              >
+                {trigger.is_active ? 'Pause Trigger' : 'Resume Trigger'}
+              </button>
+            )}
+          </div>
+          <div className="rounded-xl border border-red-500/20 bg-black/20 p-4">
+            <div className="font-medium text-white">Delete trigger</div>
+            <p className="mt-1 text-sm text-red-100/80">
+              Delete this trigger and remove the saved Gmail source binding.
+            </p>
+            {canWriteHub && (
+              <button
+                type="button"
+                onClick={deleteTrigger}
+                disabled={saving}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/50 bg-red-500/20 px-4 py-2 text-sm text-red-100 hover:text-white disabled:opacity-50"
+              >
+                <TrashIcon size={16} />
+                Delete Trigger
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (!hasValidId) return null
 
   return (
@@ -112,38 +325,15 @@ export default function EmailTriggerDetailPage() {
             Gmail-backed trigger detail using the v0.7.0 trigger namespace.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={loadTrigger}
-            disabled={loading || saving}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-          >
-            <RefreshIcon size={16} />
-            Refresh
-          </button>
-          {trigger && canWriteHub && (
-            <>
-              <button
-                type="button"
-                onClick={toggleActive}
-                disabled={saving}
-                className="rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-              >
-                {trigger.is_active ? 'Pause' : 'Resume'}
-              </button>
-              <button
-                type="button"
-                onClick={deleteTrigger}
-                disabled={saving}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200 hover:text-white disabled:opacity-50"
-              >
-                <TrashIcon size={16} />
-                Delete
-              </button>
-            </>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={loadData}
+          disabled={loading || saving}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+        >
+          <RefreshIcon size={16} />
+          Refresh
+        </button>
       </div>
 
       {success && (
@@ -175,64 +365,134 @@ export default function EmailTriggerDetailPage() {
           )}
 
           <div className="grid gap-4 md:grid-cols-4">
-            <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger.is_active, trigger.status)}`}>{trigger.is_active ? trigger.status : 'paused'}</span>} />
-            <Field label="Provider" value={trigger.provider} />
-            <Field label="Poll interval" value={`${trigger.poll_interval_seconds}s`} />
+            <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger)}`}>{statusLabel(trigger)}</span>} />
+            <Field label="Health" value={trigger.health_status || 'unknown'} />
+            <Field label="Gmail scope" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${gmailScopeClass(gmailIntegration)}`}>{gmailScopeLabel(gmailIntegration)}</span>} />
             <Field label="Last activity" value={trigger.last_activity_at ? formatRelative(trigger.last_activity_at) : 'No activity'} />
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                <EnvelopeIcon size={18} /> Inbox Binding
-              </h2>
-              <div className="mt-4 space-y-4 text-sm">
-                <div>
-                  <div className="text-xs text-tsushin-slate">Gmail account</div>
-                  <div className="mt-1 text-white">{trigger.gmail_account_email || 'Not reported'}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-tsushin-slate">Gmail integration</div>
-                  <div className="mt-1 text-white">{trigger.gmail_integration_name || trigger.gmail_integration_id || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-tsushin-slate">Search query</div>
-                  <code className="mt-1 block rounded-lg border border-tsushin-border bg-black/30 p-3 text-xs text-cyan-200">
-                    {trigger.search_query || 'Inbox default'}
-                  </code>
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {gmailScopeMessage(gmailIntegration)}
+          </div>
+
+          <div className="flex flex-wrap gap-2 border-b border-tsushin-border pb-2">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                  activeTab === tab.id
+                    ? 'bg-cyan-500/10 text-cyan-200'
+                    : 'text-tsushin-slate hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'overview' && (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+                <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                  <EnvelopeIcon size={18} /> Inbox Binding
+                </h2>
+                <div className="mt-4 space-y-4 text-sm">
+                  <DetailRow label="Gmail account">{trigger.gmail_account_email || 'Not reported'}</DetailRow>
+                  <DetailRow label="Gmail integration">{trigger.gmail_integration_name || trigger.gmail_integration_id || '-'}</DetailRow>
+                  <DetailRow label="Provider">{trigger.provider}</DetailRow>
+                  <DetailRow label="Integration health">
+                    <span className={`rounded-full border px-2.5 py-1 text-xs ${healthClass(gmailIntegration?.health_status)}`}>
+                      {gmailIntegration?.health_status || 'unknown'}
+                    </span>
+                    {gmailIntegration?.health_status_reason && (
+                      <p className="mt-2 text-xs text-yellow-200">{gmailIntegration.health_status_reason}</p>
+                    )}
+                  </DetailRow>
                 </div>
               </div>
-            </div>
 
-            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                <ClockIcon size={18} /> Routing Detail
-              </h2>
-              <div className="mt-4 space-y-4 text-sm">
-                <div>
-                  <div className="text-xs text-tsushin-slate">Default agent</div>
-                  <div className="mt-1 text-white">{trigger.default_agent_name || (trigger.default_agent_id ? `Agent #${trigger.default_agent_id}` : 'None')}</div>
+              <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+                <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                  <ClockIcon size={18} /> Routing Detail
+                </h2>
+                <div className="mt-4 space-y-4 text-sm">
+                  <DetailRow label="Default agent">
+                    {trigger.default_agent_name || (trigger.default_agent_id ? `Agent #${trigger.default_agent_id}` : 'None')}
+                  </DetailRow>
+                  <DetailRow label="Poll interval">{`${trigger.poll_interval_seconds}s`}</DetailRow>
+                  <DetailRow label="Trigger health">
+                    {trigger.health_status}
+                    {trigger.health_status_reason && (
+                      <p className="mt-1 text-xs text-yellow-200">{trigger.health_status_reason}</p>
+                    )}
+                  </DetailRow>
+                  <div className="grid grid-cols-2 gap-3">
+                    <DetailRow label="Created">{formatDateTime(trigger.created_at)}</DetailRow>
+                    <DetailRow label="Updated">{trigger.updated_at ? formatDateTime(trigger.updated_at) : '-'}</DetailRow>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-xs text-tsushin-slate">Health</div>
-                  <div className="mt-1 text-white">{trigger.health_status}</div>
-                  {trigger.health_status_reason && (
-                    <p className="mt-1 text-xs text-yellow-200">{trigger.health_status_reason}</p>
+              </div>
+
+              <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5 lg:col-span-2">
+                <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                  <SparklesIcon size={18} /> Managed Email Triage
+                </h2>
+                <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
+                  <div className="space-y-2 text-sm text-tsushin-slate">
+                    <p>
+                      Link this Gmail trigger to the default agent and create system-owned continuous-agent routing for draft-based triage.
+                    </p>
+                    {!trigger.default_agent_id && (
+                      <p className="text-yellow-200">Choose a default agent before enabling managed triage.</p>
+                    )}
+                    {gmailIntegration && !gmailIntegration.can_draft && (
+                      <p className="text-yellow-200">
+                        Re-authorize this Gmail account with <code className="font-mono">gmail.compose</code> before draft creation can run.
+                      </p>
+                    )}
+                  </div>
+                  {canWriteHub && (
+                    <button
+                      type="button"
+                      onClick={enableTriage}
+                      disabled={triageLoading || !trigger.default_agent_id || Boolean(gmailIntegration && !gmailIntegration.can_draft)}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <SparklesIcon size={16} />
+                      {triageLoading ? 'Enabling...' : 'Enable Triage'}
+                    </button>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-xs text-tsushin-slate">Created</div>
-                    <div className="mt-1 text-white">{formatDateTime(trigger.created_at)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-tsushin-slate">Updated</div>
-                    <div className="mt-1 text-white">{trigger.updated_at ? formatDateTime(trigger.updated_at) : '-'}</div>
-                  </div>
-                </div>
               </div>
             </div>
-          </div>
+          )}
+
+          {activeTab === 'matching' && (
+            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                <EnvelopeIcon size={18} /> Source matching
+              </h2>
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <Field
+                  label="Gmail search query"
+                  value={(
+                    <code className="block rounded-lg border border-tsushin-border bg-black/30 p-3 text-xs text-cyan-200">
+                      {trigger.search_query || 'Inbox default'}
+                    </code>
+                  )}
+                />
+                <Field label="Polling cadence" value={`${trigger.poll_interval_seconds}s`} />
+              </div>
+              <p className="mt-4 text-sm text-tsushin-slate">
+                Gmail search is the source filter for email trigger wakeups. Leave the query blank to watch new inbox activity.
+              </p>
+            </div>
+          )}
+
+          {activeTab === 'events' && renderEventsTab()}
+          {activeTab === 'danger' && renderDangerTab()}
         </div>
       )}
     </div>

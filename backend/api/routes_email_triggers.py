@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from db import get_db
 from models import Agent, Contact, EmailChannelInstance, GmailIntegration
+from services.email_triage_service import ensure_email_triage_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,16 @@ class EmailTriggerRead(BaseModel):
     last_activity_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+
+class EmailTriageSubscriptionRead(BaseModel):
+    email_trigger_id: int
+    continuous_agent_id: int
+    continuous_subscription_id: int
+    agent_id: int
+    created_agent: bool
+    created_subscription: bool
+    status: str = "active"
 
 
 def _load_gmail_integration(db: Session, tenant_id: str, integration_id: int) -> GmailIntegration:
@@ -275,3 +286,37 @@ def delete_email_trigger(
     db.delete(instance)
     db.commit()
     return None
+
+
+@router.post("/{trigger_id}/triage-subscription", response_model=EmailTriageSubscriptionRead)
+def create_email_triage_subscription(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> EmailTriageSubscriptionRead:
+    try:
+        result = ensure_email_triage_subscription(
+            db,
+            tenant_id=ctx.tenant_id,
+            email_trigger_id=trigger_id,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "email_trigger_not_found":
+            raise HTTPException(status_code=404, detail="Email trigger not found") from exc
+        if reason == "missing_default_agent":
+            raise HTTPException(
+                status_code=400,
+                detail="Email trigger needs a default agent before triage can be enabled",
+            ) from exc
+        raise HTTPException(status_code=400, detail=reason) from exc
+
+    return EmailTriageSubscriptionRead(
+        email_trigger_id=result.email_trigger_id,
+        continuous_agent_id=result.continuous_agent_id,
+        continuous_subscription_id=result.continuous_subscription_id,
+        agent_id=result.agent_id,
+        created_agent=result.created_agent,
+        created_subscription=result.created_subscription,
+    )

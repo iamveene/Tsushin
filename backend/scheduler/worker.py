@@ -6,6 +6,7 @@ Runs as a daemon thread with graceful shutdown support.
 """
 
 import logging
+import asyncio
 import threading
 import time
 from datetime import datetime
@@ -164,6 +165,17 @@ class SchedulerWorker:
                     )
                 except Exception as e:
                     logger.error(f"Failed to poll schedule triggers: {e}", exc_info=True)
+
+                try:
+                    from channels.email.trigger import EmailTrigger
+
+                    email_results = asyncio.run(EmailTrigger.poll_active(db))
+                    logger.info(
+                        "Email trigger poll completed with %s active trigger(s)",
+                        len(email_results),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to poll email triggers: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error in poll_and_execute: {e}", exc_info=True)
