@@ -25,6 +25,7 @@ Date: 2026-04-24
 - Direct backend `http://localhost:8081/api/health` and HTTPS proxy `https://localhost/api/health` returned healthy.
 - `docker exec tsushin-backend alembic current` and `docker exec tsushin-backend alembic heads` both reported `0054 (head)`.
 - Live authenticated API smoke passed for trigger catalog breadth, Webhook criteria create/test/update/delete, Jira CRUD, Schedule preview/CRUD, GitHub CRUD/PAT-check skip behavior, signed GitHub inbound, duplicate GitHub delivery handling, invalid GitHub signature rejection, and `channel_instance_id` wake-event filtering. Temporary smoke rows were cleaned up.
+- Live in-container schedule proof passed against the rebuilt backend: a due `ScheduleChannelInstance` with a temporary continuous subscription created exactly one wake event and one queued continuous run, and a second immediate poll did not double-fire. Temporary schedule, subscription, wake, run, and dedupe rows were cleaned up.
 - Browser automation passed for login, Hub Communication trigger cards, `/hub/wake-events`, and Webhook/Jira/Schedule/GitHub detail pages with 0 console errors, 0 failed requests, and 0 unexpected HTTP 4xx/5xx responses. The invalid Jira detail route rendered the expected not-found state and produced the expected API 404 for that error path.
 
 ## Notes
