@@ -1,6 +1,7 @@
 # v0.7.0 Phase 3.1 Gmail Send Checkpoint Summary
 
 Date: 2026-04-23
+Phase 8 docs-sync refresh: 2026-04-24
 Branch: `release/0.7.0`
 Merged checkpoint: `merge: Track G Gmail send checkpoint`
 
@@ -30,22 +31,31 @@ Merged checkpoint: `merge: Track G Gmail send checkpoint`
 
 Private evidence was saved under `.private/qa/v0.7.0/phase-3-1-checkpoint/`.
 
-## Remaining root-only validation before Phase 3.1 is complete
+## Current remaining validation
 
-- Re-authorize the Phase 0.5 Gmail fixture account with `gmail.compose` or a broader Gmail write scope.
-- Run the opt-in live gate from the repository root with `TSN_RUN_GMAIL_PHASE3_LIVE_GATE=1`; the gate intentionally fails if the fixture still has only `gmail.readonly + gmail.send`.
-- Run the optional full API/agent-chat scaffold with `TSN_RUN_GMAIL_AGENT_CHAT_LIVE_GATE=1`, `TSN_GMAIL_AGENT_CHAT_BASE_URL`, `TSN_GMAIL_AGENT_CHAT_API_TOKEN`, and `TSN_GMAIL_AGENT_CHAT_AGENT_ID` so a public chat call sends mail and Sent visibility is proven.
-- The downstream Email Trigger + triage managed-flow work remains blocked on later Phase 3 slices
+- Optional API/agent-chat Gmail send proof remains pending until `TSN_RUN_GMAIL_AGENT_CHAT_LIVE_GATE=1`, `TSN_GMAIL_AGENT_CHAT_BASE_URL`, `TSN_GMAIL_AGENT_CHAT_API_TOKEN`, and `TSN_GMAIL_AGENT_CHAT_AGENT_ID` are available.
+- Fresh-install Ubuntu VM validation remains pending on the documented Parallels path because SSH works but `sudo -n true` on `parallels@10.211.55.5` requires a human password.
 
 ## Phase 3.1 exit-proof update
 
-Follow-up live validation on 2026-04-23 against the dedicated Phase 0.5 Gmail fixture account found:
+Initial follow-up live validation on 2026-04-23 against the dedicated Phase 0.5 Gmail fixture account found:
 
 - Direct `GmailService.send_message(...)` succeeds and Sent visibility is real.
 - Direct `GmailService.reply_to_message(...)` succeeds and remains threaded.
 - `GmailSkill.execute_tool({"action":"send", ...})` succeeds against the live integration and the sent mail is visible in `in:sent`.
 - `GmailService.create_draft(...)` does **not** work on the current fixture account because the integration only has `gmail.readonly + gmail.send`. Gmail's `users.drafts.create` requires `gmail.compose`, `gmail.modify`, or `mail.google.com/`, so the product now fails fast with an explicit reauthorization error instead of surfacing Gmail's raw `403 Forbidden`.
 
-This means Track G's code is corrected for Gmail's real scope model, but the full Phase 3.1 live exit proof is still blocked on re-authorizing the fixture integration with `gmail.compose`.
+At that checkpoint, Track G's code was corrected for Gmail's real scope model, but the full Phase 3.1 live exit proof was still blocked on re-authorizing the fixture integration with `gmail.compose`.
 
-This checkpoint is safe to merge before reauthorization, but it is not a Phase 3.1 completion claim.
+That checkpoint was safe to merge before reauthorization, but it was not a Phase 3.1 completion claim. The 2026-04-24 refresh below supersedes that blocker.
+
+## Phase 3 exit-proof refresh
+
+Follow-up live validation on 2026-04-24 superseded the draft-scope blocker above:
+
+- Gmail compose reauthorization completed through Hub for integration `4` (`mv@archsec.io`), and `backend/tests/fixtures/gmail_oauth.enc` was re-exported with draft-compatible scope.
+- `TSN_GMAIL_REQUIRE_COMPOSE_SCOPE=1 pytest -q -o addopts='' backend/tests/test_gmail_oauth_fixture.py::test_gmail_oauth_fixture_compose_readiness_is_explicit` -> `1 passed`.
+- `TSN_RUN_GMAIL_PHASE3_LIVE_GATE=1 pytest -q -o addopts='' tests/test_gmail_send_phase3_live_gate.py` inside the backend container -> `3 passed, 1 skipped`; proved direct send, direct reply, `GmailSkill` send, and live Gmail draft creation. The one skipped case is the optional API/agent-chat proof because API token/agent env vars were not set.
+- `TSN_RUN_EMAIL_PHASE3_LIVE_GATE=1 pytest -q --tb=short -o addopts='' tests/test_email_trigger_phase3_live_gate.py` inside the backend container -> `1 passed`; proved one incoming Gmail message creates exactly one wake/run, duplicate polling does not double-fire, managed triage creates a Gmail draft, and Sentinel/MemGuard block mode records `blocked_by_security` with no wake/run.
+
+The Phase 3.1 Gmail send/reply/draft and Phase 3 Email poll/triage/MemGuard live gates have passed for the allowed fixture. Remaining open items are optional API-agent proof and the Ubuntu fresh-install sudo handoff listed above.
