@@ -148,7 +148,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       router.replace('/hub?tab=communication')
       return
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [hasValidId, loadData, router])
 

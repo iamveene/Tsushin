@@ -108,7 +108,6 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   const [pathFiltersText, setPathFiltersText] = useState('')
   const [authorFilter, setAuthorFilter] = useState('')
 
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isOpen) return
     setError(null)
@@ -156,7 +155,6 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
       cancelled = true
     }
   }, [isOpen, triggerType])
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === defaultAgentId) || null,

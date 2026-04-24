@@ -83,7 +83,6 @@ export default function WebhookTriggerDetailPage() {
       router.replace('/hub?tab=communication')
       return
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadTrigger()
   }, [hasValidId, loadTrigger, router])
 
