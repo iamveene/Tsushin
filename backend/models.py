@@ -2032,6 +2032,10 @@ class JiraIntegration(HubIntegration):
     auth_email = Column(String(255), nullable=True)
     api_token_encrypted = Column(Text, nullable=True)
     api_token_preview = Column(String(32), nullable=True)
+    # 'programmatic' = REST API + token (shipped); 'agentic' = Atlassian Remote
+    # MCP (OAuth 2.1) — UI exposes the option as "coming soon" but backend
+    # rejects this value with 400 until the agentic transport ships.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
 
     __mapper_args__ = {
         'polymorphic_identity': 'jira',

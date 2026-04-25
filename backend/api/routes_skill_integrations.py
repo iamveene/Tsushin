@@ -23,6 +23,7 @@ from models import (
     AsanaIntegration,
     AmadeusIntegration,
     GoogleFlightsIntegration,
+    JiraIntegration,
     Agent,
 )
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -636,6 +637,56 @@ async def get_available_providers(
             return {
                 "skill_type": skill_type,
                 "providers": providers
+            }
+
+        elif skill_type == 'ticket_management':
+            # Ticket Management providers — Jira today; Linear/ServiceNow later.
+            providers = []
+
+            # Jira (programmatic mode only — agentic surfaces as "coming soon"
+            # in the UI but does not appear in the available_integrations list).
+            jira_list = db.query(JiraIntegration)\
+                .join(HubIntegration, HubIntegration.id == JiraIntegration.id)\
+                .filter(JiraIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
+                .all()
+
+            jira_integrations = [
+                {
+                    "integration_id": jira.id,
+                    "name": jira.name or jira.display_name or f"Jira #{jira.id}",
+                    "site_url": jira.site_url,
+                    "project_key": jira.project_key,
+                    "provider_mode": getattr(jira, "provider_mode", None) or "programmatic",
+                    "health_status": jira.health_status,
+                }
+                for jira in jira_list
+                if (getattr(jira, "provider_mode", None) or "programmatic") == "programmatic"
+            ]
+
+            providers.append({
+                "provider_type": "jira",
+                "provider_name": "Atlassian Jira",
+                "description": "Search, read, and act on Jira tickets via the REST API",
+                "requires_integration": True,
+                "available_integrations": jira_integrations,
+                "is_default": True,
+            })
+
+            # Placeholder for the agentic transport — surface but with no integrations.
+            providers.append({
+                "provider_type": "jira_agentic",
+                "provider_name": "Atlassian Remote MCP",
+                "description": "OAuth 2.1 to mcp.atlassian.com/v1/mcp — coming soon",
+                "requires_integration": True,
+                "available_integrations": [],
+                "is_default": False,
+                "coming_soon": True,
+            })
+
+            return {
+                "skill_type": skill_type,
+                "providers": providers,
             }
 
         elif skill_type == 'web_search':

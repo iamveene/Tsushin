@@ -31,6 +31,28 @@ router = APIRouter(
 
 _MAX_SAMPLE_SIZE = 10
 
+# Provider modes for Jira integrations.
+# 'programmatic' = REST API + token (shipped). 'agentic' = Atlassian Remote
+# MCP (OAuth 2.1) — UI exposes the option as "coming soon"; API rejects it.
+_VALID_PROVIDER_MODES = {"programmatic", "agentic"}
+_DEFAULT_PROVIDER_MODE = "programmatic"
+
+
+def _validate_provider_mode(value: Optional[str]) -> str:
+    """Normalize and validate provider_mode. Reject 'agentic' until shipped."""
+    mode = (value or _DEFAULT_PROVIDER_MODE).strip().lower()
+    if mode not in _VALID_PROVIDER_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider_mode '{mode}'. Allowed: {sorted(_VALID_PROVIDER_MODES)}.",
+        )
+    if mode == "agentic":
+        raise HTTPException(
+            status_code=400,
+            detail="agentic_mode_not_yet_supported",
+        )
+    return mode
+
 
 class JiraIntegrationCreate(BaseModel):
     integration_name: str = Field(..., min_length=1, max_length=100)
@@ -39,6 +61,7 @@ class JiraIntegrationCreate(BaseModel):
     auth_email: str = Field(..., min_length=1, max_length=255)
     api_token: str = Field(..., min_length=1, max_length=4096)
     is_active: bool = True
+    provider_mode: Optional[str] = Field(default=_DEFAULT_PROVIDER_MODE, max_length=16)
 
     @field_validator("integration_name", "auth_email", "api_token")
     @classmethod
@@ -66,6 +89,7 @@ class JiraIntegrationUpdate(BaseModel):
     auth_email: Optional[str] = Field(default=None, max_length=255)
     api_token: Optional[str] = Field(default=None, min_length=1, max_length=4096)
     is_active: Optional[bool] = None
+    provider_mode: Optional[str] = Field(default=None, max_length=16)
 
     @field_validator("integration_name", "auth_email", "api_token")
     @classmethod
@@ -95,6 +119,7 @@ class JiraIntegrationRead(BaseModel):
     auth_email: Optional[str] = None
     api_token_preview: Optional[str] = None
     is_active: bool
+    provider_mode: str = _DEFAULT_PROVIDER_MODE
     health_status: Optional[str] = None
     health_status_reason: Optional[str] = None
     last_health_check: Optional[datetime] = None
@@ -168,6 +193,7 @@ def _to_read(db: Session, integration: JiraIntegration) -> JiraIntegrationRead:
         auth_email=integration.auth_email,
         api_token_preview=integration.api_token_preview,
         is_active=bool(integration.is_active),
+        provider_mode=getattr(integration, "provider_mode", None) or _DEFAULT_PROVIDER_MODE,
         health_status=integration.health_status or "unknown",
         health_status_reason=integration.health_status_reason,
         last_health_check=integration.last_health_check,
@@ -239,6 +265,7 @@ def create_jira_integration(
     db: Session = Depends(get_db),
 ) -> JiraIntegrationRead:
     tenant_id = _require_tenant(ctx)
+    provider_mode = _validate_provider_mode(payload.provider_mode)
     integration = JiraIntegration(
         type="jira",
         name=payload.integration_name,
@@ -251,6 +278,7 @@ def create_jira_integration(
         auth_email=payload.auth_email,
         api_token_encrypted=encrypt_jira_token(db, tenant_id, payload.api_token),
         api_token_preview=token_preview(payload.api_token),
+        provider_mode=provider_mode,
     )
     db.add(integration)
     db.commit()
@@ -289,6 +317,8 @@ def update_jira_integration(
             integration.health_status_reason = None
     if "is_active" in data and data["is_active"] is not None:
         integration.is_active = data["is_active"]
+    if "provider_mode" in data and data["provider_mode"] is not None:
+        integration.provider_mode = _validate_provider_mode(data["provider_mode"])
     integration.updated_at = datetime.utcnow()
     db.add(integration)
     db.commit()
@@ -303,14 +333,24 @@ def delete_jira_integration(
     _user=Depends(require_permission("hub.write")),
     db: Session = Depends(get_db),
 ) -> None:
+    from models import AgentSkillIntegration
+
     tenant_id = _require_tenant(ctx)
     integration = _load_integration_or_404(db, tenant_id, integration_id)
-    in_use = db.query(JiraChannelInstance.id).filter(
+    in_use_trigger = db.query(JiraChannelInstance.id).filter(
         JiraChannelInstance.tenant_id == tenant_id,
         JiraChannelInstance.jira_integration_id == integration.id,
     ).first()
-    if in_use is not None:
+    if in_use_trigger is not None:
         raise HTTPException(status_code=409, detail="Jira integration is used by one or more triggers")
+    in_use_skill = db.query(AgentSkillIntegration.id).filter(
+        AgentSkillIntegration.integration_id == integration.id,
+    ).first()
+    if in_use_skill is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Jira integration is linked to one or more agent skills. Detach it from agents first.",
+        )
     db.delete(integration)
     db.commit()
     return None
