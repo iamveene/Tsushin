@@ -4,9 +4,27 @@ import os
 import time
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from pathlib import Path
 
 import httpx
 import pytest
+
+
+# The Gmail OAuth fixture file is encrypted with TSN_GMAIL_FIXTURE_KEY (a
+# Fernet key). Without the key, conftest's session-scoped ``gmail_oauth_fixture``
+# raises a RuntimeError and every test in this module errors out at setup.
+# In the standard backend container the key is intentionally not present, so
+# skip the whole module cleanly when it is missing or the encrypted blob is
+# absent — the Phase 0.5 release gate is enforced by the dedicated fixture
+# CI workflow which exports the key explicitly.
+_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "gmail_oauth.enc"
+if not os.getenv("TSN_GMAIL_FIXTURE_KEY") or not _FIXTURE_PATH.exists():
+    pytest.skip(
+        "Gmail OAuth fixture not available in this environment "
+        "(TSN_GMAIL_FIXTURE_KEY unset or backend/tests/fixtures/gmail_oauth.enc "
+        "missing). Phase 0.5 gate runs only in the dedicated fixture CI job.",
+        allow_module_level=True,
+    )
 
 
 REQUIRED_SCOPES = {

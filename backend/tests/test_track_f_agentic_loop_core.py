@@ -53,6 +53,13 @@ sys.modules.setdefault("services.playground_thread_service", playground_thread_s
 
 knowledge_service_stub = types.ModuleType("agent.knowledge.knowledge_service")
 knowledge_service_stub.KnowledgeService = object
+# `api/routes_knowledge_base.py` imports `KnowledgeMetadataError` from this
+# module; downstream tests in the same pytest session that import
+# `from app import app` will fail with ImportError if the stub doesn't expose
+# this attribute when it lands in sys.modules ahead of the real module.
+knowledge_service_stub.KnowledgeMetadataError = type(
+    "KnowledgeMetadataError", (RuntimeError,), {}
+)
 sys.modules.setdefault("agent.knowledge.knowledge_service", knowledge_service_stub)
 
 from agent.followup_detector import build_data_block, is_followup_to_prior_skill

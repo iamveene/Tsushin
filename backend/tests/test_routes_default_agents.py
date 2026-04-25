@@ -49,8 +49,11 @@ from models import (  # noqa: E402
     Contact,
     DiscordIntegration,
     EmailChannelInstance,
+    GitHubChannelInstance,
     GmailIntegration,
     HubIntegration,
+    JiraChannelInstance,
+    ScheduleChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
     UserChannelDefaultAgent,
@@ -80,6 +83,9 @@ def db_session():
             HubIntegration.__table__,
             GmailIntegration.__table__,
             EmailChannelInstance.__table__,
+            JiraChannelInstance.__table__,
+            ScheduleChannelInstance.__table__,
+            GitHubChannelInstance.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)

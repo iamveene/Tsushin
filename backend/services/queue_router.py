@@ -213,6 +213,8 @@ class QueueRouter:
                             "status": "skipped",
                             "reason": "budget_exhausted",
                             "decision": budget_decision.value,
+                            "budget_decision": budget_decision.value,
+                            "continuous_run_id": run.id,
                         }
 
         # Mark running and persist before invoking the agent.
