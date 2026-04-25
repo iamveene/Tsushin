@@ -106,6 +106,39 @@ def health_check():
     }
 
 
+@router.get("/api/system/public-info")
+def public_system_info():
+    """
+    BUG-720: small public-info endpoint that lets client components reason
+    about the install (currently: SSL mode, so the beacon registration UI
+    can emit `curl -k` for self-signed deployments). No tenant data, no
+    secrets — only deployment-level posture flags.
+    """
+    import os
+    import settings
+
+    raw_mode = (
+        os.environ.get("TSN_SSL_MODE")
+        or os.environ.get("SSL_MODE")
+        or ""
+    ).strip().lower()
+    if raw_mode in ("", "off", "none", "disabled"):
+        normalized_mode = "disabled"
+    elif raw_mode in ("self-signed", "selfsigned"):
+        normalized_mode = "selfsigned"
+    elif raw_mode in ("letsencrypt", "le"):
+        normalized_mode = "letsencrypt"
+    elif raw_mode == "manual":
+        normalized_mode = "manual"
+    else:
+        normalized_mode = raw_mode
+
+    return {
+        "ssl_mode": normalized_mode,
+        "version": settings.SERVICE_VERSION,
+    }
+
+
 @router.get("/api/readiness", response_model=ReadinessResponse)
 def readiness_check():
     """
