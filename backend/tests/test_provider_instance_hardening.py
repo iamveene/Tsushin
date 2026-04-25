@@ -378,6 +378,60 @@ def test_agent_service_parse_tool_call_response_prefers_sandboxed_parser():
     }
 
 
+def test_agent_service_parse_tool_call_block_defaults_command_name_to_tool_name():
+    """Single-tool skills (gmail_operation, ticket_operation) often have one
+    command per tool, and frontier LLMs frequently elide the redundant
+    `command_name` field. The parser must default `command_name` to `tool_name`
+    in that case so the dispatch layer can route the call.
+    """
+    AgentService, _SkillManager = _load_agent_service_parser_boundary()
+
+    ai_response = """
+[TOOL_CALL]
+tool_name: ticket_operation
+parameters:
+  action: search
+  jql: project = JSM
+[/TOOL_CALL]
+"""
+
+    parsed = AgentService._parse_tool_call_block(ai_response)
+
+    assert parsed == {
+        "tool_name": "ticket_operation",
+        "command_name": "ticket_operation",
+        "parameters": {
+            "action": "search",
+            "jql": "project = JSM",
+        },
+    }
+
+
+def test_agent_service_parse_tool_call_block_preserves_explicit_command_name():
+    """When BOTH tool_name and command_name are emitted (as the prompt
+    instructs), the parser must use the explicit command_name verbatim. This
+    guards against the new fallback accidentally clobbering multi-command
+    sandboxed-tools dispatch."""
+    AgentService, _SkillManager = _load_agent_service_parser_boundary()
+
+    ai_response = """
+[TOOL_CALL]
+tool_name: nmap
+command_name: quick_scan
+parameters:
+  target: example.com
+[/TOOL_CALL]
+"""
+
+    parsed = AgentService._parse_tool_call_block(ai_response)
+
+    assert parsed == {
+        "tool_name": "nmap",
+        "command_name": "quick_scan",
+        "parameters": {"target": "example.com"},
+    }
+
+
 def test_skill_manager_audit_agent_skill_config_collisions_reports_reserved_keys():
     _, SkillManager = _load_agent_service_parser_boundary()
 
