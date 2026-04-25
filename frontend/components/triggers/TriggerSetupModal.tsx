@@ -282,7 +282,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     branch_filter: branchFilter.trim() || null,
     path_filters: splitList(pathFiltersText),
     author_filter: authorFilter.trim() || null,
-    draft_only: prDraftOnly,
+    exclude_drafts: prDraftOnly,
     title_contains: prTitleContains.trim() || null,
     body_contains: prBodyContains.trim() || null,
   })

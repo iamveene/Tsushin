@@ -16,7 +16,7 @@ Canonical envelope shape (v1)::
         "branch_filter": "main",        # glob — empty/null = any
         "path_filters": ["backend/**"], # glob list — empty/null = any
         "author_filter": "alice",       # exact GitHub login — empty/null = any
-        "draft_only": false,             # bool: true → fire ONLY for non-draft PRs
+        "exclude_drafts": false,             # bool: true → fire ONLY for non-draft PRs
         "title_contains": null,          # case-insensitive substring (optional)
         "body_contains": null            # case-insensitive substring (optional)
       },
@@ -77,7 +77,7 @@ _ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
         "branch_filter",
         "path_filters",
         "author_filter",
-        "draft_only",
+        "exclude_drafts",
         "title_contains",
         "body_contains",
     }
@@ -169,9 +169,9 @@ def _normalize_filters(raw: dict[str, Any]) -> dict[str, Any]:
     if author_filter is not None:
         author_filter = str(author_filter).strip() or None
 
-    draft_only = raw.get("draft_only", False)
-    if not isinstance(draft_only, bool):
-        raise ValueError("draft_only must be a boolean")
+    exclude_drafts = raw.get("exclude_drafts", False)
+    if not isinstance(exclude_drafts, bool):
+        raise ValueError("exclude_drafts must be a boolean")
 
     title_contains = raw.get("title_contains")
     if title_contains is not None:
@@ -189,7 +189,7 @@ def _normalize_filters(raw: dict[str, Any]) -> dict[str, Any]:
         "branch_filter": branch_filter,
         "path_filters": path_filters,
         "author_filter": author_filter,
-        "draft_only": draft_only,
+        "exclude_drafts": exclude_drafts,
         "title_contains": title_contains,
         "body_contains": body_contains,
     }
@@ -260,7 +260,7 @@ def evaluate_pr_criteria(
             login = _pr_author_login(pull_request) or "unknown"
             return False, f"author_no_match:{login}"
 
-    if filters.get("draft_only") is True:
+    if filters.get("exclude_drafts") is True:
         if pull_request.get("draft") is True:
             return False, "draft_excluded"
 
