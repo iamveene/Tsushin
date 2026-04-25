@@ -228,9 +228,15 @@ def test_delete_provider_instance_deprovisions_auto_provisioned_ollama_before_so
         mock_manager = MagicMock()
         mock_manager.deprovision.side_effect = _deprovision
 
+        # Minimal Request stand-in for log_tenant_event (reads .client.host and
+        # .headers.get(...)). Either no client (request.client is None) or no
+        # user-agent header is acceptable.
+        request = SimpleNamespace(client=None, headers={})
+
         with patch("services.ollama_container_manager.OllamaContainerManager", return_value=mock_manager):
             result = routes_provider_instances.delete_provider_instance(
                 instance_id=instance.id,
+                request=request,
                 db=db,
                 current_user=current_user,
                 ctx=ctx,
