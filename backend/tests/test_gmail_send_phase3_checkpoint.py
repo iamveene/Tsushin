@@ -52,6 +52,33 @@ _ensure_package("agent.skills", os.path.join("agent", "skills"))
 _ensure_package("hub", "hub")
 _ensure_package("hub.google", os.path.join("hub", "google"))
 
+# `_ensure_package` only creates a placeholder package — `__init__.py` is
+# never executed, so `get_skill_manager` / `InboundMessage` aren't on the
+# placeholder. Downstream tests in the same pytest session that import
+# `from app import app` need those attributes for `agent/agent_service.py`'s
+# top-level `from .skills import get_skill_manager` to succeed.
+_skills_pkg = sys.modules.get("agent.skills")
+if _skills_pkg is not None:
+    if not hasattr(_skills_pkg, "get_skill_manager"):
+        _skills_pkg.get_skill_manager = lambda *args, **kwargs: None
+    if not hasattr(_skills_pkg, "InboundMessage"):
+        _skills_pkg.InboundMessage = type("InboundMessage", (), {})
+
+# `api/routes_google.py` does `from hub.google import GoogleOAuthHandler, ...`
+# at module import. If our placeholder `hub.google` is the resident module,
+# those symbols are missing — populate stubs.
+_hub_google_pkg = sys.modules.get("hub.google")
+if _hub_google_pkg is not None:
+    for _name in (
+        "GoogleOAuthHandler",
+        "GmailService",
+        "CalendarService",
+    ):
+        if not hasattr(_hub_google_pkg, _name):
+            setattr(_hub_google_pkg, _name, type(_name, (), {}))
+    if not hasattr(_hub_google_pkg, "get_google_oauth_handler"):
+        _hub_google_pkg.get_google_oauth_handler = lambda *args, **kwargs: None
+
 _load_module("agent.skills.base", os.path.join("agent", "skills", "base.py"))
 GmailSkill = _load_module(
     "agent.skills.gmail_skill",

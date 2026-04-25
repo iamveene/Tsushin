@@ -43,6 +43,60 @@ _ensure_package("hub", "hub")
 _ensure_package("hub.providers", os.path.join("hub", "providers"))
 _ensure_package("services", "services")
 
+# `_ensure_package` only creates a placeholder package — `__init__.py` is
+# never executed, so attributes the real package re-exports aren't present.
+# Some downstream tests in the same pytest session (test_invitation_scope.py
+# via `from app import app`) trigger imports like
+# `from agent.skills import get_skill_manager` and
+# `from hub.providers import FlightProviderRegistry` that hit these
+# placeholders. Populate the placeholders with no-op shims so those imports
+# resolve. Real classes get re-bound by _load_module() below where used.
+_skills_pkg = sys.modules.get("agent.skills")
+if _skills_pkg is not None:
+    if not hasattr(_skills_pkg, "get_skill_manager"):
+        _skills_pkg.get_skill_manager = lambda *args, **kwargs: None
+    if not hasattr(_skills_pkg, "InboundMessage"):
+        _skills_pkg.InboundMessage = type("InboundMessage", (), {})
+
+_hub_providers_pkg = sys.modules.get("hub.providers")
+if _hub_providers_pkg is not None:
+    for _name in (
+        "FlightProviderRegistry",
+        "FlightProvider",
+        "FlightSearchRequest",
+        "FlightSearchResponse",
+        "TTSProviderRegistry",
+        "TTSProvider",
+        "TTSRequest",
+        "TTSResponse",
+        "SearchProviderRegistry",
+        "SearchProvider",
+        "SearchRequest",
+        "SearchResponse",
+    ):
+        if not hasattr(_hub_providers_pkg, _name):
+            setattr(_hub_providers_pkg, _name, type(_name, (), {}))
+
+
+def _ensure_real_whisper_instance_service():
+    """Ensure `services.whisper_instance_service` is the REAL module.
+
+    Other tests (e.g. test_whisper_auth.py) install a lightweight stub at
+    sys.modules["services.whisper_instance_service"] during pytest collection.
+    These tests exercise the real `WhisperInstanceService.update_instance` and
+    `get_tenant_default` business logic, so we must drop any stub before each
+    test that depends on it.
+    """
+    existing = sys.modules.get("services.whisper_instance_service")
+    if existing is not None and not hasattr(existing, "__file__"):
+        sys.modules.pop("services.whisper_instance_service", None)
+
+
+# Run once at module load time too, so the audio_transcript skill's lazy
+# imports resolve against the real module on the first test that triggers
+# them.
+_ensure_real_whisper_instance_service()
+
 base_module = _load_module("agent.skills.base", os.path.join("agent", "skills", "base.py"))
 audio_module = _load_module(
     "agent.skills.audio_transcript",
@@ -113,6 +167,7 @@ def _make_message(audio_path: str) -> InboundMessage:
 
 
 def test_audio_transcript_prefers_asr_instance_when_configured():
+    _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     try:
@@ -154,6 +209,7 @@ def test_audio_transcript_prefers_asr_instance_when_configured():
 
 
 def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
+    _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     try:
@@ -201,6 +257,7 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
 
 
 def test_audio_transcript_uses_tenant_default_instance_when_requested():
+    _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     try:
@@ -242,6 +299,7 @@ def test_audio_transcript_uses_tenant_default_instance_when_requested():
 
 
 def test_audio_transcript_openai_mode_skips_tenant_default_lookup():
+    _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     try:
@@ -279,6 +337,7 @@ def test_audio_transcript_openai_mode_skips_tenant_default_lookup():
 
 
 def test_whisper_instance_service_clears_default_when_instance_deactivated():
+    _ensure_real_whisper_instance_service()
     from services.whisper_instance_service import WhisperInstanceService
 
     tenant = SimpleNamespace(id="tenant-alpha", default_asr_instance_id=9, updated_at=None)
@@ -306,6 +365,7 @@ def test_whisper_instance_service_clears_default_when_instance_deactivated():
 
 
 def test_whisper_instance_service_clears_stale_inactive_default_on_read():
+    _ensure_real_whisper_instance_service()
     from services.whisper_instance_service import WhisperInstanceService
 
     tenant = SimpleNamespace(id="tenant-alpha", default_asr_instance_id=9, updated_at=None)

@@ -33,7 +33,17 @@ FRONTEND = REPO_ROOT / "frontend"
 
 # Skills intentionally hidden from the wizard (require post-creation setup
 # the wizard doesn't collect inline). Must match the BaseSkill subclass attr.
-WIZARD_HIDDEN_SKILLS: Set[str] = {"gmail", "shell", "flows", "agent_communication"}
+# Note: ``scheduler`` is registered as an alias of ``FlowsSkill``; since
+# FlowsSkill has wizard_visible=False the alias inherits the flag and shows
+# up here too — the wizard already renders the unified Scheduler card via
+# the ``flows`` entry, so the alias staying hidden is correct.
+WIZARD_HIDDEN_SKILLS: Set[str] = {
+    "gmail",
+    "shell",
+    "flows",
+    "agent_communication",
+    "scheduler",
+}
 
 # TTS provider IDs registered at startup in TTSProviderRegistry.initialize_providers().
 # If you add a provider there, add its ID here AND ensure a matching entry exists
@@ -49,6 +59,27 @@ def _read(path: Path) -> str:
 # Guard 1 — Skill catalog drift
 # ---------------------------------------------------------------------------
 
+def _evict_stale_skill_modules():
+    """Remove any stale `agent.skills.*` modules that other tests in the
+    same pytest session loaded via `_load_module()`.
+
+    Several tests (e.g. test_audio_transcript_skill_asr.py,
+    test_agent_communication_service.py) bypass the regular import system to
+    avoid heavy dependencies. Each call to `_load_module("agent.skills.base",
+    ...)` puts a fresh `BaseSkill` instance in sys.modules. Any skill class
+    that was imported earlier (against a different `BaseSkill`) ends up
+    failing `issubclass(SkillCls, BaseSkill)` inside SkillManager.
+
+    By dropping all `agent.skills.*` and `agent.skills` entries here, the
+    next `from agent.skills.skill_manager import SkillManager` re-imports
+    everything from the real package against the SAME `BaseSkill`.
+    """
+    import sys
+    stale = [name for name in sys.modules if name == "agent.skills" or name.startswith("agent.skills.")]
+    for name in stale:
+        sys.modules.pop(name, None)
+
+
 def test_skill_catalog_frontend_matches_backend_registry():
     """
     Every skill registered by SkillManager._register_builtin_skills must also
@@ -59,6 +90,7 @@ def test_skill_catalog_frontend_matches_backend_registry():
     This catches the recurring bug where a new skill is added to the backend
     but the frontend skill card / wizard row is never updated.
     """
+    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -110,6 +142,7 @@ def test_skill_wizard_visible_matches_expected_hidden_set():
     the top of this file. If you add wizard_visible=False to a skill, add the
     skill_type to WIZARD_HIDDEN_SKILLS; if you remove it, remove it here too.
     """
+    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()

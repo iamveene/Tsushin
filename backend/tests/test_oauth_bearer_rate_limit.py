@@ -35,6 +35,9 @@ from middleware.rate_limiter import (  # noqa: E402
     SlidingWindowRateLimiter,
 )
 from models import ApiClient, ApiRequestLog, Base  # noqa: E402
+# Importing models_rbac registers Tenant and User tables on Base.metadata so
+# that FKs from api_client (tenant_id, created_by) resolve during create_all.
+from models_rbac import Tenant as _RBACTenant, User as _RBACUser  # noqa: E402, F401
 
 
 @pytest.fixture
@@ -53,7 +56,12 @@ def isolated_engine(monkeypatch):
     )
     Base.metadata.create_all(
         engine,
-        tables=[ApiClient.__table__, ApiRequestLog.__table__],
+        tables=[
+            _RBACTenant.__table__,
+            _RBACUser.__table__,
+            ApiClient.__table__,
+            ApiRequestLog.__table__,
+        ],
     )
 
     def _engine_getter():

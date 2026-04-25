@@ -163,8 +163,8 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
 }
 
-/** Skills that should never be shown (removed from system) */
-export const HIDDEN_SKILLS = new Set<string>(['weather', 'web_scraping'])
+/** Skills that should never be shown (removed from system, or alias for an already-rendered skill) */
+export const HIDDEN_SKILLS = new Set<string>(['weather', 'web_scraping', 'scheduler'])
 
 /** Skills rendered as a composite group (Audio = TTS + Transcript) */
 export const COMPOSITE_SKILLS: Record<string, { displayName: string; skillTypes: string[]; icon: React.FC<IconProps>; description: string }> = {

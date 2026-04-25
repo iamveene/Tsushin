@@ -307,7 +307,10 @@ class GmailService(HubIntegrationBase):
                 missing_scopes=[GMAIL_SEND_SCOPE, GMAIL_COMPOSE_SCOPE],
                 message=(
                     "Gmail integration is missing outbound Gmail send permission. "
-                    "Re-authorize the integration to enable send and reply operations."
+                    "Re-authorize the integration with one of: "
+                    f"{GMAIL_SEND_SCOPE}, {GMAIL_COMPOSE_SCOPE}, "
+                    f"{GMAIL_MODIFY_SCOPE}, or {GMAIL_FULL_ACCESS_SCOPE} "
+                    "to enable send and reply operations."
                 ),
             )
 
@@ -317,8 +320,10 @@ class GmailService(HubIntegrationBase):
             raise InsufficientScopesError(
                 missing_scopes=[GMAIL_COMPOSE_SCOPE],
                 message=(
-                    "Gmail integration is missing gmail.compose. "
-                    "Re-authorize the integration to enable draft creation."
+                    "Gmail integration is missing draft-compose permission. "
+                    "Re-authorize the integration with one of: "
+                    f"{GMAIL_COMPOSE_SCOPE}, {GMAIL_MODIFY_SCOPE}, or "
+                    f"{GMAIL_FULL_ACCESS_SCOPE} to enable draft creation."
                 ),
             )
 

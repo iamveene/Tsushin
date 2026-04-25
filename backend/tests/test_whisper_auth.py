@@ -63,62 +63,107 @@ asr_provider_module = _load_module(
 
 # Stub `services.whisper_instance_service` BEFORE importing the provider so
 # the provider's `from services.whisper_instance_service import ...` resolves
-# against the stub (no DB / models / alembic dependencies).
-_whisper_instance_service_stub = types.ModuleType("services.whisper_instance_service")
+# against the stub (no DB / models / alembic dependencies). The stub expects
+# instances with a `_token` attribute (see _make_provider helpers below); the
+# real `WhisperInstanceService.resolve_api_token` would try to decrypt
+# `instance.api_token_encrypted` and fail.
+#
+# IMPORTANT: only install the stub if the real module hasn't already been
+# imported by another test in this pytest session. If we clobber a real
+# module, downstream tests like test_audio_transcript_skill_asr.py that
+# patch `services.whisper_instance_service.WhisperInstanceService.<method>`
+# fail with AttributeError. The stub class below also exposes the surface
+# (`get_instance`, `get_tenant_default`, `update_instance`) that those
+# downstream tests patch, so even when this file is collected first they
+# can still mock those attributes successfully.
+if "services.whisper_instance_service" not in sys.modules:
+    _whisper_instance_service_stub = types.ModuleType(
+        "services.whisper_instance_service"
+    )
 
 
-class _StubWhisperInstanceService:
-    @staticmethod
-    def resolve_api_token(instance, db):
-        return getattr(instance, "_token", None) or "test-token-bearer-707"
+    class _StubWhisperInstanceService:
+        @staticmethod
+        def resolve_api_token(instance, db):
+            return getattr(instance, "_token", None) or "test-token-bearer-707"
+
+        @staticmethod
+        def get_instance(*args, **kwargs):  # pragma: no cover - stub for patches
+            return None
+
+        @staticmethod
+        def get_tenant_default(*args, **kwargs):  # pragma: no cover - stub
+            return None, None
+
+        @staticmethod
+        def update_instance(*args, **kwargs):  # pragma: no cover - stub
+            return None
 
 
-_whisper_instance_service_stub.WhisperInstanceService = _StubWhisperInstanceService
-_whisper_instance_service_stub.DEFAULT_MODEL_ID = "Systran/faster-distil-whisper-small.en"
-sys.modules["services.whisper_instance_service"] = _whisper_instance_service_stub
+    _whisper_instance_service_stub.WhisperInstanceService = _StubWhisperInstanceService
+    _whisper_instance_service_stub.DEFAULT_MODEL_ID = (
+        "Systran/faster-distil-whisper-small.en"
+    )
+    sys.modules["services.whisper_instance_service"] = (
+        _whisper_instance_service_stub
+    )
 
 # Also stub container_runtime + docker_network_utils so we can import the
-# container manager without docker/alembic side-effects.
-_container_runtime_stub = types.ModuleType("services.container_runtime")
-_container_runtime_stub.PORT_RANGES = {"whisper": (9000, 9099), "kokoro": (9100, 9199)}
+# container manager without docker/alembic side-effects. Same guard as above:
+# don't clobber the real module if it's already loaded — downstream tests
+# (e.g. test_provider_instance_hardening.py) need the real PORT_RANGES dict
+# which includes "ollama".
+if "services.container_runtime" not in sys.modules:
+    _container_runtime_stub = types.ModuleType("services.container_runtime")
+    _container_runtime_stub.PORT_RANGES = {
+        "whisper": (9000, 9099),
+        "kokoro": (9100, 9199),
+        # Include keys other tests need so this stub is broadly compatible.
+        "ollama": (11400, 11499),
+        "vector_store": (6300, 6399),
+        "searxng": (8800, 8899),
+    }
 
 
-class _StubContainerNotFoundError(Exception):
-    pass
+    class _StubContainerNotFoundError(Exception):
+        pass
 
 
-class _StubContainerRuntimeError(Exception):
-    pass
+    class _StubContainerRuntimeError(Exception):
+        pass
 
 
-class _StubContainerRuntime:
-    raw_client = None
+    class _StubContainerRuntime:
+        raw_client = None
 
 
-def _stub_get_container_runtime():
-    return _StubContainerRuntime()
+    def _stub_get_container_runtime():
+        return _StubContainerRuntime()
 
 
-def _stub_iter_port_range(_name):
-    yield from range(9000, 9099)
+    def _stub_iter_port_range(_name):
+        yield from range(9000, 9099)
 
 
-_container_runtime_stub.ContainerNotFoundError = _StubContainerNotFoundError
-_container_runtime_stub.ContainerRuntimeError = _StubContainerRuntimeError
-_container_runtime_stub.ContainerRuntime = _StubContainerRuntime
-_container_runtime_stub.get_container_runtime = _stub_get_container_runtime
-_container_runtime_stub.iter_port_range = _stub_iter_port_range
-sys.modules["services.container_runtime"] = _container_runtime_stub
+    _container_runtime_stub.ContainerNotFoundError = _StubContainerNotFoundError
+    _container_runtime_stub.ContainerRuntimeError = _StubContainerRuntimeError
+    _container_runtime_stub.ContainerRuntime = _StubContainerRuntime
+    _container_runtime_stub.get_container_runtime = _stub_get_container_runtime
+    _container_runtime_stub.iter_port_range = _stub_iter_port_range
+    sys.modules["services.container_runtime"] = _container_runtime_stub
 
-_docker_network_stub = types.ModuleType("services.docker_network_utils")
-
-
-def _stub_resolve_tsushin_network_name(_client):
-    return "tsushin-network"
+if "services.docker_network_utils" not in sys.modules:
+    _docker_network_stub = types.ModuleType("services.docker_network_utils")
 
 
-_docker_network_stub.resolve_tsushin_network_name = _stub_resolve_tsushin_network_name
-sys.modules["services.docker_network_utils"] = _docker_network_stub
+    def _stub_resolve_tsushin_network_name(_client):
+        return "tsushin-network"
+
+
+    _docker_network_stub.resolve_tsushin_network_name = (
+        _stub_resolve_tsushin_network_name
+    )
+    sys.modules["services.docker_network_utils"] = _docker_network_stub
 
 provider_module = _load_module(
     "hub.providers.whisper_asr_provider",
