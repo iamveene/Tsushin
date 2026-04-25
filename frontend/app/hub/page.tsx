@@ -50,7 +50,7 @@ const TriggerSetupModal = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, ScheduleTrigger, GitHubTrigger } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, ScheduleTrigger, GitHubTrigger } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -120,6 +120,7 @@ import {
   CopyIcon,
   CloudIcon,
   ChevronRightIcon,
+  CodeIcon,
   type IconProps
 } from '@/components/ui/icons'
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
@@ -291,6 +292,7 @@ const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>
 ]
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
+  { value: 'jira', label: 'Jira', Icon: CodeIcon, description: 'Atlassian Jira issue search API for JQL-driven triggers', status: 'available' },
   { value: 'brave_search', label: 'Brave Search', Icon: SearchIcon, description: 'Privacy-focused web search API', status: 'available' },
   { value: 'searxng', label: 'SearXNG', Icon: GlobeIcon, description: 'Self-hosted open-source metasearch', status: 'available' },
   { value: 'tavily', label: 'Tavily', Icon: GlobeIcon, description: 'AI-focused web search API', status: 'available' },
@@ -305,6 +307,293 @@ const NOTIFICATION_SERVICES: { value: string; label: string; Icon: React.FC<Icon
 // OllamaSetupWizard); 'custom' is appended here because this panel supports
 // pulling arbitrary tags, whereas the wizard offers it via a separate flow.
 const CURATED_OLLAMA_MODELS = [...OLLAMA_CURATED_MODEL_IDS, 'custom']
+
+type JiraIntegrationDraft = {
+  integration_name: string
+  site_url: string
+  auth_email: string
+  api_token: string
+  is_active: boolean
+}
+
+function jiraIntegrationName(integration: JiraIntegration): string {
+  return integration.integration_name || integration.name || `Jira connection #${integration.id}`
+}
+
+function safeTokenPreview(preview?: string | null): string {
+  if (!preview) return 'Stored token hidden'
+  const hasMask = /[*•]/.test(preview) || preview.includes('...')
+  return hasMask ? preview : 'Stored token hidden'
+}
+
+function jiraStatusClasses(status?: string | null): string {
+  const normalized = (status || '').toLowerCase()
+  if (['healthy', 'success', 'ok', 'active'].includes(normalized)) return 'border-green-500/30 bg-green-500/10 text-green-300'
+  if (['unhealthy', 'error', 'failed'].includes(normalized)) return 'border-red-500/30 bg-red-500/10 text-red-300'
+  if (['degraded', 'warning'].includes(normalized)) return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-300'
+  return 'border-tsushin-border bg-tsushin-slate/10 text-tsushin-slate'
+}
+
+function jiraIntegrationDraftFromTarget(target: JiraIntegration | null): JiraIntegrationDraft {
+  return {
+    integration_name: target ? jiraIntegrationName(target) : 'Jira',
+    site_url: target?.site_url || '',
+    auth_email: target?.auth_email || '',
+    api_token: '',
+    is_active: target?.is_active ?? true,
+  }
+}
+
+function JiraIntegrationModal({
+  isOpen,
+  target,
+  saving,
+  onClose,
+  onSave,
+}: {
+  isOpen: boolean
+  target: JiraIntegration | null
+  saving: boolean
+  onClose: () => void
+  onSave: (draft: JiraIntegrationDraft) => void
+}) {
+  const [draft, setDraft] = useState<JiraIntegrationDraft>(() => jiraIntegrationDraftFromTarget(target))
+
+  const canSave = Boolean(
+    draft.integration_name.trim()
+      && draft.site_url.trim()
+      && draft.auth_email.trim()
+      && (target || draft.api_token.trim())
+      && !saving
+  )
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={target ? 'Edit Jira Connection' : 'Add Jira Connection'}
+      footer={(
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-tsushin-border px-4 py-2 text-sm text-tsushin-slate hover:text-white disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(draft)}
+            disabled={!canSave}
+            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Connection name</label>
+            <input
+              type="text"
+              value={draft.integration_name}
+              onChange={(event) => setDraft((current) => ({ ...current, integration_name: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="Jira production"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Site URL</label>
+            <input
+              type="url"
+              value={draft.site_url}
+              onChange={(event) => setDraft((current) => ({ ...current, site_url: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="https://acme.atlassian.net"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Auth email</label>
+            <input
+              type="email"
+              value={draft.auth_email}
+              onChange={(event) => setDraft((current) => ({ ...current, auth_email: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="ops@example.com"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">
+              API token {target ? <span className="text-xs text-tsushin-slate">(leave blank to keep current)</span> : null}
+            </label>
+            <input
+              type="password"
+              value={draft.api_token}
+              onChange={(event) => setDraft((current) => ({ ...current, api_token: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder={target ? 'Enter a replacement token' : 'Enter API token'}
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.is_active}
+            onChange={(event) => setDraft((current) => ({ ...current, is_active: event.target.checked }))}
+          />
+          <span className="text-sm text-gray-300">Enable this Jira connection</span>
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+function JiraIntegrationsPanel({
+  integrations,
+  loading,
+  testingId,
+  testResults,
+  canWriteHub,
+  onAdd,
+  onEdit,
+  onDelete,
+  onTest,
+}: {
+  integrations: JiraIntegration[]
+  loading: boolean
+  testingId: number | null
+  testResults: Record<number, { success: boolean; message: string }>
+  canWriteHub: boolean
+  onAdd: () => void
+  onEdit: (integration: JiraIntegration) => void
+  onDelete: (integration: JiraIntegration) => void
+  onTest: (integration: JiraIntegration, jql: string) => void
+}) {
+  const [testJqlById, setTestJqlById] = useState<Record<number, string>>({})
+
+  const updateTestJql = (id: number, value: string) => {
+    setTestJqlById((current) => ({ ...current, [id]: value }))
+  }
+
+  return (
+    <div className="card p-5 hover-glow group border-blue-700/30">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-300 transition-transform group-hover:scale-110">
+            <CodeIcon size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">Jira</h3>
+            <p className="text-xs text-tsushin-slate">Shared Jira credentials for JQL-powered triggers</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={integrations.some((item) => item.is_active) ? 'badge badge-success' : 'badge badge-neutral'}>
+            {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
+          </span>
+          {canWriteHub && (
+            <button
+              type="button"
+              onClick={onAdd}
+              className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-medium text-blue-200 transition-colors hover:bg-blue-500/30 hover:text-white"
+            >
+              + Add
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4 text-center text-xs text-tsushin-slate">Loading Jira connections...</div>
+      ) : integrations.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-ink/30 p-5 text-center">
+          <p className="text-sm text-tsushin-slate">
+            {canWriteHub ? 'No Jira connections yet. Add one here, then select it when creating Jira triggers.' : 'No Jira connections configured.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {integrations.map((integration) => {
+            const status = integration.health_status || integration.last_test_status || (integration.is_active ? 'active' : 'inactive')
+            const result = testResults[integration.id]
+            const defaultJql = integration.project_key
+              ? `project = ${integration.project_key} ORDER BY updated DESC`
+              : 'updated >= -30d ORDER BY updated DESC'
+            const testJql = testJqlById[integration.id] ?? defaultJql
+            return (
+              <div key={integration.id} className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-sm font-medium text-white">{jiraIntegrationName(integration)}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${jiraStatusClasses(status)}`}>{status}</span>
+                    </div>
+                    <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
+                      <span className="min-w-0 truncate font-mono text-tsushin-accent">{integration.site_url}</span>
+                      <span className="min-w-0 truncate">{integration.auth_email || 'Auth email not reported'}</span>
+                      <span className="min-w-0 truncate font-mono">{safeTokenPreview(integration.api_token_preview)}</span>
+                      <span>{integration.last_tested_at || integration.last_health_check ? `Checked ${new Date(integration.last_tested_at || integration.last_health_check || '').toLocaleString()}` : 'Not tested yet'}</span>
+                    </div>
+                    {integration.health_status_reason && (
+                      <p className="text-xs text-yellow-200">{integration.health_status_reason}</p>
+                    )}
+                  </div>
+                  {canWriteHub && (
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onEdit(integration)}
+                        className="rounded-lg border border-tsushin-border px-3 py-1.5 text-xs text-tsushin-slate hover:text-white"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(integration)}
+                        className="rounded-lg border border-tsushin-vermilion/30 bg-tsushin-vermilion/10 px-3 py-1.5 text-xs text-tsushin-vermilion hover:bg-tsushin-vermilion/20"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <input
+                    type="text"
+                    value={testJql}
+                    onChange={(event) => updateTestJql(integration.id, event.target.value)}
+                    placeholder="JQL for test query"
+                    className="w-full rounded-lg border border-tsushin-border bg-black/25 px-3 py-2 font-mono text-xs text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onTest(integration, testJql)}
+                    disabled={testingId === integration.id || !testJql.trim()}
+                    className="inline-flex items-center justify-center rounded-lg border border-blue-400/40 bg-blue-500/10 px-4 py-2 text-xs text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {testingId === integration.id ? 'Testing...' : 'Test Query'}
+                  </button>
+                </div>
+                {result && (
+                  <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                    result.success ? 'border-green-500/30 bg-green-500/10 text-green-200' : 'border-red-500/30 bg-red-500/10 text-red-200'
+                  }`}>
+                    {result.message}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function HubPage() {
   const toast = useToast()
@@ -429,6 +718,12 @@ export default function HubPage() {
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [emailTriggers, setEmailTriggers] = useState<EmailTrigger[]>([])
   const [jiraTriggers, setJiraTriggers] = useState<JiraTrigger[]>([])
+  const [jiraIntegrations, setJiraIntegrations] = useState<JiraIntegration[]>([])
+  const [jiraIntegrationsLoading, setJiraIntegrationsLoading] = useState(false)
+  const [editingJiraIntegration, setEditingJiraIntegration] = useState<JiraIntegration | null>(null)
+  const [showJiraIntegrationModal, setShowJiraIntegrationModal] = useState(false)
+  const [jiraIntegrationTestingId, setJiraIntegrationTestingId] = useState<number | null>(null)
+  const [jiraIntegrationTestResults, setJiraIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
   const [scheduleTriggers, setScheduleTriggers] = useState<ScheduleTrigger[]>([])
   const [githubTriggers, setGithubTriggers] = useState<GitHubTrigger[]>([])
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
@@ -662,6 +957,18 @@ export default function HubPage() {
     }
   }
 
+  async function loadJiraIntegrations() {
+    setJiraIntegrationsLoading(true)
+    try {
+      const data = await api.listJiraIntegrations()
+      setJiraIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load Jira integrations:', err)
+    } finally {
+      setJiraIntegrationsLoading(false)
+    }
+  }
+
   async function loadScheduleTriggers() {
     try {
       const data = await api.listScheduleTriggers()
@@ -703,6 +1010,9 @@ export default function HubPage() {
         loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
         loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
         loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
+      }
+      if (activeTab === 'tool-apis') {
+        loadJiraIntegrations()
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -878,6 +1188,7 @@ export default function HubPage() {
         loadSlackIntegrations(),  // v0.6.0
         loadDiscordIntegrations(),  // v0.6.0
         loadEmailTriggers(),
+        loadJiraIntegrations(),
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         loadBreadthTriggers(),  // v0.7.0: Jira, Schedule, GitHub triggers
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
@@ -1824,6 +2135,100 @@ export default function HubPage() {
     setShowApiKeyModal(true)
   }
 
+  const openAddJiraIntegrationModal = () => {
+    setEditingJiraIntegration(null)
+    setShowJiraIntegrationModal(true)
+  }
+
+  const openEditJiraIntegrationModal = (integration: JiraIntegration) => {
+    setEditingJiraIntegration(integration)
+    setShowJiraIntegrationModal(true)
+  }
+
+  const saveJiraIntegration = async (draft: JiraIntegrationDraft) => {
+    setSaving(true)
+    setError(null)
+    try {
+      if (editingJiraIntegration) {
+        await api.updateJiraIntegration(editingJiraIntegration.id, {
+          integration_name: draft.integration_name.trim(),
+          site_url: draft.site_url.trim(),
+          auth_email: draft.auth_email.trim(),
+          api_token: draft.api_token.trim() || undefined,
+          is_active: draft.is_active,
+        })
+      } else {
+        await api.createJiraIntegration({
+          integration_name: draft.integration_name.trim(),
+          site_url: draft.site_url.trim(),
+          auth_email: draft.auth_email.trim(),
+          api_token: draft.api_token.trim(),
+          is_active: draft.is_active,
+        })
+      }
+      await Promise.all([loadJiraIntegrations(), loadBreadthTriggers()])
+      setShowJiraIntegrationModal(false)
+      setEditingJiraIntegration(null)
+      setSuccessMessage(editingJiraIntegration ? 'Jira connection updated' : 'Jira connection added')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save Jira connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteJiraIntegration = async (integration: JiraIntegration) => {
+    if (!confirm(`Remove Jira connection "${jiraIntegrationName(integration)}"? Existing triggers may need another Jira connection before they can poll.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.deleteJiraIntegration(integration.id)
+      await Promise.all([loadJiraIntegrations(), loadBreadthTriggers()])
+      setSuccessMessage('Jira connection removed')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to remove Jira connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const testJiraIntegrationQuery = async (integration: JiraIntegration, jql: string) => {
+    setJiraIntegrationTestingId(integration.id)
+    setJiraIntegrationTestResults((current) => {
+      const next = { ...current }
+      delete next[integration.id]
+      return next
+    })
+    try {
+      const result = await api.testSavedJiraIntegrationQuery(integration.id, {
+        jql: jql.trim(),
+        max_results: 5,
+      })
+      setJiraIntegrationTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: result.success,
+          message: result.success
+            ? `Query returned ${result.issue_count ?? result.total ?? 0} issue(s).`
+            : result.error || result.message || 'Jira query test failed',
+        },
+      }))
+      await loadJiraIntegrations()
+    } catch (err: unknown) {
+      setJiraIntegrationTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: false,
+          message: err instanceof Error ? err.message : 'Failed to test Jira query',
+        },
+      }))
+    } finally {
+      setJiraIntegrationTestingId(null)
+    }
+  }
+
   // Bridge function: maintained for the existing call sites inside this
   // file. Routes everything to the new multi-step ProviderWizard. A vendor
   // preset lands the user directly on the credentials/container step (the
@@ -2700,6 +3105,7 @@ export default function HubPage() {
 
   const handleBreadthTriggerComplete = async (trigger: JiraTrigger | ScheduleTrigger | GitHubTrigger) => {
     await loadBreadthTriggers()
+    await loadJiraIntegrations()
     await loadHubIntegrations()
     setTriggerSetupTarget(null)
     setSuccessMessage(`Trigger created: ${trigger.integration_name}`)
@@ -2796,8 +3202,9 @@ export default function HubPage() {
     // Tool APIs — SearXNG has no API key; its configured state is driven by
     // SearxngInstance rows, not the `api_keys` table.
     const hasSearxngInstance = type === 'tool' && item.value === 'searxng' && searxngInstances.some(i => i.is_active)
+    const hasJiraIntegration = type === 'tool' && item.value === 'jira' && jiraIntegrations.some(i => i.is_active)
     const hasInstanceKey = Boolean(configuredInstance)
-    const configuredViaInstance = !apiKey && (hasInstanceKey || hasSearxngInstance)
+    const configuredViaInstance = !apiKey && (hasInstanceKey || hasSearxngInstance || hasJiraIntegration)
     const ItemIcon = item.Icon
 
     return (
@@ -2820,7 +3227,7 @@ export default function HubPage() {
                   by construction. */}
               {configuredViaInstance && (
                 <span className="text-[10px] text-teal-400/80">
-                  Configured via instance: {configuredInstance?.instance_name}
+                  {hasJiraIntegration ? 'Configured via Hub Jira connection' : `Configured via instance: ${configuredInstance?.instance_name}`}
                 </span>
               )}
             </div>
@@ -2835,7 +3242,9 @@ export default function HubPage() {
                 ? (apiKey.is_active ? 'Active' : 'Inactive')
                 : hasSearxngInstance
                   ? 'Active'
-                  : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
+                  : hasJiraIntegration
+                    ? 'Active'
+                    : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
             </span>
           )}
         </div>
@@ -2878,6 +3287,10 @@ export default function HubPage() {
                   // Tool APIs that own a richer flow (auto-provisioning, OAuth-style credentials)
                   // route through the generic Add Integration wizard so we share one codepath.
                   const wizardProviders = new Set(['searxng', 'amadeus', 'google_flights'])
+                  if (type === 'tool' && item.value === 'jira') {
+                    openAddJiraIntegrationModal()
+                    return
+                  }
                   if (type === 'tool' && wizardProviders.has(item.value)) {
                     setAddIntegrationInitialProvider(item.value)
                     setShowSearchWizard(true)
@@ -2937,6 +3350,7 @@ export default function HubPage() {
     Boolean(getApiKeyForService(provider.value)) && !vendorsWithInstances.has(provider.value)
   )
   const visibleToolApis = TOOL_APIS.filter(tool => {
+    if (tool.value === 'jira') return false
     if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
     return Boolean(getApiKeyForService(tool.value))
   })
@@ -4918,6 +5332,14 @@ export default function HubPage() {
                               </p>
                             </div>
                           )}
+                          {integration.health_status !== 'unavailable' && integration.can_draft === false && (
+                            <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                              <p className="text-xs text-amber-300">
+                                <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
+                                Drafts require <span className="font-mono">gmail.compose</span>. Reconnect to enable draft creation.
+                              </p>
+                            </div>
+                          )}
                           <div className="flex gap-2">
                             {integration.health_status === 'unavailable' ? (
                               <button
@@ -4926,6 +5348,21 @@ export default function HubPage() {
                               >
                                 Re-authorize
                               </button>
+                            ) : integration.can_draft === false ? (
+                              <>
+                                <button
+                                  onClick={() => handleReauthorize(integration.id, integration.type)}
+                                  className="flex-1 py-2 text-sm rounded-lg font-medium bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20 transition-all"
+                                >
+                                  Reconnect for drafts
+                                </button>
+                                <button
+                                  onClick={() => handleGmailDisconnect(integration.id)}
+                                  className="py-2 px-3 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
+                                >
+                                  Disconnect
+                                </button>
+                              </>
                             ) : (
                               <button
                                 onClick={() => handleGmailDisconnect(integration.id)}
@@ -5233,6 +5670,18 @@ export default function HubPage() {
                     {visibleToolApis.map(tool => renderIntegrationCard(tool, 'tool'))}
                   </div>
                 )}
+
+                <JiraIntegrationsPanel
+                  integrations={jiraIntegrations}
+                  loading={jiraIntegrationsLoading}
+                  testingId={jiraIntegrationTestingId}
+                  testResults={jiraIntegrationTestResults}
+                  canWriteHub={canWriteHub}
+                  onAdd={openAddJiraIntegrationModal}
+                  onEdit={openEditJiraIntegrationModal}
+                  onDelete={deleteJiraIntegration}
+                  onTest={testJiraIntegrationQuery}
+                />
 
                 {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) — structure mirrors Kokoro panel */}
                 {searxngInstances.length > 0 && (
@@ -5794,6 +6243,20 @@ export default function HubPage() {
           </div>
         </div>
       </Modal>
+
+      {showJiraIntegrationModal && (
+        <JiraIntegrationModal
+          key={editingJiraIntegration?.id ?? 'new'}
+          isOpen={showJiraIntegrationModal}
+          target={editingJiraIntegration}
+          saving={saving}
+          onClose={() => {
+            setShowJiraIntegrationModal(false)
+            setEditingJiraIntegration(null)
+          }}
+          onSave={saveJiraIntegration}
+        />
+      )}
 
       {/* API Key Modal */}
       {showApiKeyModal && (
@@ -6610,7 +7073,7 @@ export default function HubPage() {
       <AddIntegrationWizard
         isOpen={showSearchWizard}
         onClose={() => { setShowSearchWizard(false); setAddIntegrationInitialProvider(undefined) }}
-        onComplete={() => { refreshSearxngInstances(); loadHubIntegrations() }}
+        onComplete={() => { refreshSearxngInstances(); loadJiraIntegrations(); loadHubIntegrations() }}
         initialProviderId={addIntegrationInitialProvider as any}
       />
 

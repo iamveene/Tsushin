@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — RC sweep (2026-04-24)
+
+**Added:**
+- WS-1: Continuous-agent CRUD — `POST/PATCH/DELETE /api/continuous-agents` and nested `/{id}/subscriptions/...` plus `GET /api/continuous-agents/{id}/subscriptions`. New permission scope `agents.write`. New Pydantic schemas `ContinuousAgentCreate/Update`, `ContinuousSubscriptionCreate/Update/Read`. System-owned rows are protected from delete and disable. Pending wake events block delete unless `?force=true` (which sets them to `filtered`).
+- WS-1: Frontend write surface — `ContinuousAgentSetupModal` (single-step modal mirrors `TriggerSetupModal`), `SubscriptionEditor` panel on the detail page, create/edit/delete affordances on the list page. The "read-only" banner is removed.
+- WS-2: Phase-7 Analytics dashboard at `/settings/analytics` — tenant-scoped token consumption summary, daily trend (recharts area chart), per-operation/per-model breakdowns (recharts bar chart), per-agent table with inline drill-down, recent transactions table. Wired to the existing `/api/analytics/token-usage/*` endpoints. Settings hub gets a new card under `analytics.read`.
+- WS-3: `gmail.compose` is now in `DEFAULT_SCOPES["gmail"]` so new connections can create drafts. Existing connections lazy-upgrade: a draft action raises a typed `InsufficientScopesError` (subclass of `PermissionError` for backward compatibility) carrying `missing_scopes`. The Hub Gmail card surfaces an amber "Drafts require gmail.compose" pill plus a "Reconnect for drafts" button when `can_draft === false`. The hub `IntegrationResponse` exposes new `can_send`/`can_draft` capability flags computed from the granted OAuth scope string.
+- WS-4: Bumped `SERVICE_VERSION` to `0.7.0` (`backend/settings.py`, `frontend/package.json`, README badge + footer).
+- WS-5: New dev-only seeder `backend/scripts/seed_dev_tenants.py` — idempotent, opt-in (requires `TSN_SEED_ALLOW=true`), gated by a 5-tenant ceiling. Seeds a second tenant (`acme2-dev`) with an owner + member user, three default agents, and two paused trigger stubs (Email + Schedule) for cross-tenant isolation testing.
+
+**Changed:**
+- `ContinuousAgent.subscriptions` now declares `cascade="all, delete-orphan"` at the ORM layer; route handlers also explicitly delete child subscriptions before deleting the agent (belt-and-suspenders for SQLite-backed tests).
+- `_ensure_send_capability()` and `_ensure_draft_capability()` in `gmail_service.py` now raise the new `InsufficientScopesError` (still a `PermissionError`) instead of the bare base class. The Gmail skill catches `PermissionError` as before but surfaces `missing_scopes` and `needs_reauth=true` in the result metadata when present.
+- `frontend/lib/client.ts` gained 11 new typed methods (continuous-agent CRUD x6, continuous-subscription CRUD x4, analytics x4) plus matching interfaces (`ContinuousAgent{Create,Update}`, `ContinuousSubscription{,Create,Update}`, `TokenUsageSummary`, `TokenUsageByAgentResponse`, `AgentTokenUsageDetail`, `RecentTokenUsageResponse`, breakdown items). `HubIntegration` gained optional `can_send` / `can_draft`.
+
+**Validated:**
+- Pytest: `test_routes_continuous_crud.py` (15 cases) covers create happy-path, cross-tenant 403, invalid execution_mode/status, partial PATCH, system-owned disable/delete blocks, delete with pending wake events (409 + force path), subscription create/dedupe/unsupported channel/missing instance, subscription delete system-owned block, subscription pagination, subscription status update.
+- Browser: Continuous Agents create → edit → delete loop confirmed live. Settings → Analytics renders summary, by-agent drill-down, recent transactions. Hub Gmail card shows the reauth pill when `can_draft=false` and the new "Reconnect for drafts" button kicks off OAuth with the upgraded scope set.
+- ASR E2E (WS-6): captured under `docs/qa/v0.7.0/asr-e2e/`.
+
+### Release 0.7.0 — Jira Tool APIs credential placement (2026-04-24)
+
+**Added:**
+- Added tenant-scoped Jira Tool API integrations via Alembic `0062`, with encrypted Jira API token storage, masked token previews, health/test metadata, and backfill from existing Jira trigger credential rows.
+- Added `/api/hub/jira-integrations` CRUD and test-query endpoints so Jira base URL, auth email, and API token setup lives under Hub → Tool APIs.
+
+**Changed:**
+- Jira trigger create/update/read/test-query/poll flows now accept and resolve `jira_integration_id`, using linked Tool API credentials first and legacy trigger-local credentials as a compatibility fallback.
+- Hub → Tool APIs now shows Jira connection cards with edit and test-query actions; Hub → Communication Jira trigger setup now selects an existing Jira connection instead of collecting base URL and credentials inline.
+- Jira trigger detail now links credential management back to Hub → Tool APIs, while keeping trigger-specific JQL, polling, criteria, notifier, wake-event, and poll-now controls under Hub → Communication.
+
+**Validated:**
+- `python -m pytest -o addopts='' backend/tests/test_routes_jira_triggers.py -q` -> `14 passed`.
+- `python -m pytest -o addopts='' backend/tests/test_routes_email_triggers.py backend/tests/test_trigger_dispatch_service.py -q` -> `31 passed`.
+- `docker-compose exec -T backend python -m pytest -q -o addopts='' tests/test_routes_jira_triggers.py tests/test_routes_email_triggers.py tests/test_trigger_dispatch_service.py` -> `45 passed, 2 warnings`.
+- `cd frontend && ./node_modules/.bin/eslint components/triggers/TriggerSetupModal.tsx components/triggers/TriggerDetailShell.tsx components/triggers/TriggerWizard.tsx --max-warnings 0` -> clean.
+- `docker-compose build --no-cache backend frontend`, `docker-compose build --no-cache frontend`, and targeted `docker-compose up -d backend frontend`/`frontend` runs completed from the repository root; backend, frontend, postgres, and proxy were healthy.
+- Alembic current/head reported `0062 (head)`; existing Jira trigger credentials backfilled into Jira Tool API integration `#11` with masked token preview only.
+- Live API/browser smoke confirmed Hub → Tool APIs shows the migrated Questrade Jira connection, stored test-query succeeds, the Jira trigger wizard selects the existing Jira connection instead of asking for credentials, and `/hub/triggers/jira/4` saved test-query returns `JSM-193570` and `JSM-189100`.
+
 ### Release 0.7.0 — Email trigger criteria/notifier parity (2026-04-24)
 
 **Added:**

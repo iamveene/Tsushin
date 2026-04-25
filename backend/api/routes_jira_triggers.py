@@ -16,9 +16,15 @@ from channels.jira.trigger import JiraPollResult, JiraTrigger
 from channels.jira.utils import jira_description_to_text, jira_issue_link, normalize_jira_site_url
 from channels.trigger_criteria import validate_criteria
 from db import get_db
-from hub.security import TokenEncryption
-from models import Agent, Contact, JiraChannelInstance
-from services.encryption_key_service import get_webhook_encryption_key
+from models import Agent, Contact, JiraChannelInstance, JiraIntegration
+from services.jira_integration_service import (
+    decrypt_jira_token,
+    encrypt_jira_token,
+    load_jira_integration,
+    normalize_optional,
+    resolve_jira_config,
+    token_preview,
+)
 from services.jira_notification_service import (
     ensure_jira_notification_subscription,
     jira_notification_status,
@@ -39,7 +45,8 @@ _MAX_SAMPLE_SIZE = 10
 
 class JiraTriggerCreate(BaseModel):
     integration_name: str = Field(..., min_length=1, max_length=100)
-    site_url: str = Field(..., min_length=1, max_length=500)
+    jira_integration_id: Optional[int] = Field(default=None, ge=1)
+    site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
     project_key: Optional[str] = Field(default=None, max_length=64)
     jql: str = Field(..., min_length=1, max_length=4000)
     auth_email: Optional[str] = Field(default=None, max_length=255)
@@ -59,7 +66,9 @@ class JiraTriggerCreate(BaseModel):
 
     @field_validator("site_url")
     @classmethod
-    def _normalize_site_url(cls, value: str) -> str:
+    def _normalize_site_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         return _normalize_site_url(value)
 
     @field_validator("project_key")
@@ -85,6 +94,7 @@ class JiraTriggerCreate(BaseModel):
 
 class JiraTriggerUpdate(BaseModel):
     integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    jira_integration_id: Optional[int] = Field(default=None, ge=1)
     site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
     project_key: Optional[str] = Field(default=None, max_length=64)
     jql: Optional[str] = Field(default=None, min_length=1, max_length=4000)
@@ -146,6 +156,10 @@ class JiraTriggerRead(BaseModel):
     id: int
     tenant_id: str
     integration_name: str
+    jira_integration_id: Optional[int] = None
+    jira_integration_name: Optional[str] = None
+    jira_integration_health_status: Optional[str] = None
+    jira_integration_health_status_reason: Optional[str] = None
     site_url: str
     project_key: Optional[str] = None
     jql: str
@@ -176,6 +190,7 @@ class JiraTriggerRead(BaseModel):
 
 
 class JiraTestQueryRequest(BaseModel):
+    jira_integration_id: Optional[int] = Field(default=None, ge=1)
     site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
     jql: Optional[str] = Field(default=None, min_length=1, max_length=4000)
     auth_email: Optional[str] = Field(default=None, max_length=255)
@@ -270,12 +285,7 @@ class JiraPollNowResponse(BaseModel):
 
 
 def _normalize_optional(value: Optional[str], *, upper: bool = False) -> Optional[str]:
-    if value is None:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    return normalized.upper() if upper else normalized
+    return normalize_optional(value, upper=upper)
 
 
 def _normalize_site_url(value: str) -> str:
@@ -283,27 +293,29 @@ def _normalize_site_url(value: str) -> str:
 
 
 def _token_preview(token: str) -> str:
-    if len(token) <= 8:
-        return f"{token[:2]}..."
-    return f"{token[:4]}...{token[-4:]}"
-
-
-def _get_encryptor(db: Session) -> TokenEncryption:
-    master_key = get_webhook_encryption_key(db)
-    if not master_key:
-        raise HTTPException(status_code=500, detail="Server configuration error")
-    return TokenEncryption(master_key.encode())
+    return token_preview(token)
 
 
 def _encrypt_token(db: Session, tenant_id: str, plaintext: str) -> str:
-    return _get_encryptor(db).encrypt(plaintext, tenant_id)
+    try:
+        return encrypt_jira_token(db, tenant_id, plaintext)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="Server configuration error") from exc
 
 
 def _decrypt_token(db: Session, tenant_id: str, encrypted: str) -> str:
     try:
-        return _get_encryptor(db).decrypt(encrypted, tenant_id)
+        token = decrypt_jira_token(db, tenant_id, encrypted)
+        return token or ""
     except ValueError as exc:
         raise HTTPException(status_code=500, detail="Could not decrypt Jira API token") from exc
+
+
+def _load_jira_integration(db: Session, tenant_id: str, integration_id: int) -> JiraIntegration:
+    integration = load_jira_integration(db, tenant_id=tenant_id, integration_id=integration_id)
+    if integration is None:
+        raise HTTPException(status_code=404, detail="Jira integration not found")
+    return integration
 
 
 def _load_active_agent(db: Session, tenant_id: str, agent_id: int) -> Agent:
@@ -341,6 +353,22 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
 
 
 def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
+    try:
+        config = resolve_jira_config(db, instance)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Jira integration not found") from exc
+    jira_integration_name = None
+    jira_integration_health_status = None
+    jira_integration_health_status_reason = None
+    if config.jira_integration_id:
+        integration = db.query(JiraIntegration).filter(
+            JiraIntegration.id == config.jira_integration_id,
+            JiraIntegration.tenant_id == instance.tenant_id,
+        ).first()
+        if integration is not None:
+            jira_integration_name = integration.display_name or integration.name
+            jira_integration_health_status = integration.health_status
+            jira_integration_health_status_reason = integration.health_status_reason
     notification = jira_notification_status(db, tenant_id=instance.tenant_id, jira_trigger_id=instance.id)
     notification_status_value = None
     if notification["continuous_subscription_id"] is not None:
@@ -360,11 +388,15 @@ def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
         id=instance.id,
         tenant_id=instance.tenant_id,
         integration_name=instance.integration_name,
-        site_url=instance.site_url,
-        project_key=instance.project_key,
+        jira_integration_id=config.jira_integration_id,
+        jira_integration_name=jira_integration_name,
+        jira_integration_health_status=jira_integration_health_status,
+        jira_integration_health_status_reason=jira_integration_health_status_reason,
+        site_url=config.site_url,
+        project_key=instance.project_key or config.project_key,
         jql=instance.jql,
-        auth_email=instance.auth_email,
-        api_token_preview=instance.api_token_preview,
+        auth_email=config.auth_email,
+        api_token_preview=config.api_token_preview,
         trigger_criteria=instance.trigger_criteria,
         poll_interval_seconds=instance.poll_interval_seconds,
         default_agent_id=instance.default_agent_id,
@@ -563,19 +595,31 @@ def create_jira_trigger(
     if payload.default_agent_id is not None:
         _load_active_agent(db, ctx.tenant_id, payload.default_agent_id)
 
+    jira_integration = None
+    if payload.jira_integration_id is not None:
+        jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
+    if payload.site_url is None and jira_integration is None:
+        raise HTTPException(status_code=400, detail="site_url or jira_integration_id is required")
+
     encrypted_token = None
     token_preview = None
     if payload.api_token:
         encrypted_token = _encrypt_token(db, ctx.tenant_id, payload.api_token)
         token_preview = _token_preview(payload.api_token)
+    elif jira_integration is not None:
+        encrypted_token = jira_integration.api_token_encrypted
+        token_preview = jira_integration.api_token_preview
 
+    site_url = payload.site_url or jira_integration.site_url
+    project_key = payload.project_key if payload.project_key is not None else getattr(jira_integration, "project_key", None)
     instance = JiraChannelInstance(
         tenant_id=ctx.tenant_id,
         integration_name=payload.integration_name,
-        site_url=payload.site_url,
-        project_key=payload.project_key,
+        jira_integration_id=payload.jira_integration_id,
+        site_url=site_url,
+        project_key=project_key,
         jql=payload.jql,
-        auth_email=payload.auth_email,
+        auth_email=payload.auth_email if payload.auth_email is not None else getattr(jira_integration, "auth_email", None),
         api_token_encrypted=encrypted_token,
         api_token_preview=token_preview,
         trigger_criteria=payload.trigger_criteria,
@@ -599,13 +643,24 @@ async def run_jira_test_query(
     _user=Depends(require_permission("hub.read")),
     db: Session = Depends(get_db),
 ) -> JiraTestQueryResponse:
-    if not payload.site_url or not payload.jql:
-        raise HTTPException(status_code=400, detail="site_url and jql are required")
+    if not payload.jql:
+        raise HTTPException(status_code=400, detail="jql is required")
+    jira_integration = None
+    if payload.jira_integration_id is not None:
+        jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
+    if not payload.site_url and jira_integration is None:
+        raise HTTPException(status_code=400, detail="site_url or jira_integration_id is required")
+    auth_email = payload.auth_email
+    api_token = payload.api_token
+    if jira_integration is not None:
+        auth_email = auth_email if auth_email is not None else jira_integration.auth_email
+        if api_token is None and jira_integration.api_token_encrypted:
+            api_token = _decrypt_token(db, ctx.tenant_id, jira_integration.api_token_encrypted)
     return await _run_test_query(
-        site_url=payload.site_url,
+        site_url=payload.site_url or jira_integration.site_url,
         jql=payload.jql,
-        auth_email=payload.auth_email,
-        api_token=payload.api_token,
+        auth_email=auth_email,
+        api_token=api_token,
         max_results=payload.max_results,
     )
 
@@ -619,12 +674,16 @@ async def run_saved_jira_test_query(
     db: Session = Depends(get_db),
 ) -> JiraTestQueryResponse:
     instance = _load_jira_trigger(db, ctx.tenant_id, trigger_id)
-    site_url = payload.site_url or instance.site_url
+    try:
+        config = resolve_jira_config(db, instance)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Jira integration not found") from exc
+    site_url = payload.site_url or config.site_url
     jql = payload.jql or instance.jql
-    auth_email = payload.auth_email if payload.auth_email is not None else instance.auth_email
+    auth_email = payload.auth_email if payload.auth_email is not None else config.auth_email
     api_token = payload.api_token
-    if api_token is None and instance.api_token_encrypted:
-        api_token = _decrypt_token(db, instance.tenant_id, instance.api_token_encrypted)
+    if api_token is None and config.api_token_encrypted:
+        api_token = _decrypt_token(db, instance.tenant_id, config.api_token_encrypted)
 
     return await _run_test_query(
         site_url=site_url,
@@ -732,6 +791,18 @@ def update_jira_trigger(
         instance.default_agent_id = data["default_agent_id"]
     if "integration_name" in data:
         instance.integration_name = data["integration_name"]
+    if "jira_integration_id" in data:
+        if data["jira_integration_id"] is None:
+            instance.jira_integration_id = None
+        else:
+            integration = _load_jira_integration(db, ctx.tenant_id, data["jira_integration_id"])
+            instance.jira_integration_id = integration.id
+            instance.site_url = integration.site_url
+            instance.auth_email = integration.auth_email
+            instance.api_token_encrypted = integration.api_token_encrypted
+            instance.api_token_preview = integration.api_token_preview
+            if instance.project_key is None:
+                instance.project_key = integration.project_key
     if "site_url" in data:
         instance.site_url = data["site_url"]
     if "project_key" in data:

@@ -1,6 +1,6 @@
 {
   "name": "@tsushin/frontend",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Tsushin Frontend - The agentic messaging OS",
   "private": true,
   "scripts": {

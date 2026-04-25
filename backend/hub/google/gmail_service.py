@@ -61,6 +61,19 @@ GMAIL_DRAFT_COMPATIBLE_SCOPES = frozenset(
 )
 
 
+class InsufficientScopesError(PermissionError):
+    """Raised when the stored Gmail OAuth token lacks scopes for the requested action.
+
+    Subclasses PermissionError so legacy `except PermissionError` blocks still
+    catch the new typed exception while new code can branch on
+    InsufficientScopesError to surface a structured 409 with `missing_scopes`.
+    """
+
+    def __init__(self, missing_scopes: List[str], message: str = ""):
+        self.missing_scopes = list(missing_scopes)
+        super().__init__(message or f"Missing OAuth scopes: {self.missing_scopes}")
+
+
 class GmailService(HubIntegrationBase):
     """
     Gmail API service.
@@ -288,32 +301,25 @@ class GmailService(HubIntegrationBase):
         return bool(self._get_token_scopes() & GMAIL_DRAFT_COMPATIBLE_SCOPES)
 
     def _ensure_send_capability(self) -> None:
-        """
-        Require a Gmail write scope that supports users.messages.send.
-
-        Older Gmail integrations may have been authorized before outbound mail
-        was introduced. Those integrations must be re-authorized to add the
-        Gmail send/compose scopes.
-        """
+        """Require a Gmail write scope that supports users.messages.send."""
         if not self.can_send_messages():
-            raise PermissionError(
-                "Gmail integration is missing outbound Gmail send permission. "
-                "Re-authorize the integration with gmail.send + gmail.compose "
-                "(or a broader Gmail write scope) to enable send and reply operations."
+            raise InsufficientScopesError(
+                missing_scopes=[GMAIL_SEND_SCOPE, GMAIL_COMPOSE_SCOPE],
+                message=(
+                    "Gmail integration is missing outbound Gmail send permission. "
+                    "Re-authorize the integration to enable send and reply operations."
+                ),
             )
 
     def _ensure_draft_capability(self) -> None:
-        """
-        Require a Gmail write scope that supports users.drafts.create.
-
-        Gmail draft creation is stricter than messages.send and requires
-        gmail.compose, gmail.modify, or full-mail scope.
-        """
+        """Require a Gmail write scope that supports users.drafts.create."""
         if not self.can_create_drafts():
-            raise PermissionError(
-                "Gmail integration is missing gmail.compose. Re-authorize the "
-                "integration with gmail.compose, gmail.modify, or mail.google.com/ "
-                "to enable draft creation."
+            raise InsufficientScopesError(
+                missing_scopes=[GMAIL_COMPOSE_SCOPE],
+                message=(
+                    "Gmail integration is missing gmail.compose. "
+                    "Re-authorize the integration to enable draft creation."
+                ),
             )
 
     @staticmethod

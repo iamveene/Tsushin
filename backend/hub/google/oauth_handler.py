@@ -78,6 +78,7 @@ class GoogleOAuthHandler:
     DEFAULT_SCOPES = {
         "gmail": [
             "https://www.googleapis.com/auth/gmail.readonly",  # Inbound read access
+            "https://www.googleapis.com/auth/gmail.compose",   # Drafts + replies (compose only)
             "https://www.googleapis.com/auth/userinfo.email",
         ],
         "calendar": [

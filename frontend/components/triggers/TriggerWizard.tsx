@@ -56,7 +56,7 @@ const FALLBACK_TRIGGERS: Array<TriggerCatalogEntry & { trigger_id: TriggerId }> 
     display_name: 'Jira',
     description: 'Watch Jira issues with JQL and wake agents from matching issues.',
     requires_setup: true,
-    setup_hint: 'Create a Jira trigger under Hub -> Communication -> Triggers.',
+    setup_hint: 'Configure Jira credentials under Hub -> Tool APIs, then create the trigger here.',
     icon_hint: 'jira',
     tenant_has_configured: false,
   },

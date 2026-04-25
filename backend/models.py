@@ -2019,6 +2019,30 @@ class AmadeusIntegration(HubIntegration):
     }
 
 
+class JiraIntegration(HubIntegration):
+    """
+    Jira Tool API Integration.
+    Stores tenant-scoped Jira Cloud connection settings for Jira triggers.
+    """
+    __tablename__ = "jira_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'jira',
+    }
+
+    __table_args__ = (
+        Index("idx_jira_integration_site_url", "site_url"),
+        Index("idx_jira_integration_auth_email", "auth_email"),
+    )
+
+
 # ============================================================================
 # Phase 18: Shell Skill - Remote Command Execution (C2 Architecture)
 # ============================================================================
@@ -3155,6 +3179,7 @@ class JiraChannelInstance(Base):
     site_url = Column(String(500), nullable=False)
     project_key = Column(String(64), nullable=True)
     jql = Column(Text, nullable=False)
+    jira_integration_id = Column(Integer, ForeignKey("jira_integration.id", ondelete="SET NULL"), nullable=True, index=True)
     auth_email = Column(String(255), nullable=True)
     api_token_encrypted = Column(Text, nullable=True)
     api_token_preview = Column(String(32), nullable=True)
@@ -3172,10 +3197,13 @@ class JiraChannelInstance(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    jira_integration = relationship("JiraIntegration")
+
     __table_args__ = (
         Index("idx_jira_channel_instance_tenant", "tenant_id"),
         Index("idx_jira_channel_instance_status", "status"),
         Index("idx_jira_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_jira_channel_instance_jira_integration_id", "jira_integration_id"),
     )
 
 
@@ -3310,11 +3338,7 @@ class BudgetPolicy(Base):
 
 
 class ContinuousAgent(Base):
-    """
-    Always-on wrapper around an Agent. Write APIs are intentionally deferred
-    beyond Track A2; this model is read by the control-plane APIs and later
-    consumed by trigger adapters.
-    """
+    """Always-on wrapper around an Agent. CRUD exposed via routes_continuous."""
     __tablename__ = "continuous_agent"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -3333,6 +3357,12 @@ class ContinuousAgent(Base):
     agent = relationship("Agent", foreign_keys=[agent_id])
     delivery_policy = relationship("DeliveryPolicy")
     budget_policy = relationship("BudgetPolicy")
+    subscriptions = relationship(
+        "ContinuousSubscription",
+        primaryjoin="ContinuousAgent.id == ContinuousSubscription.continuous_agent_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("ix_continuous_agent_tenant_status", "tenant_id", "status"),
@@ -3361,7 +3391,7 @@ class ContinuousSubscription(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    continuous_agent = relationship("ContinuousAgent")
+    continuous_agent = relationship("ContinuousAgent", overlaps="subscriptions")
     delivery_policy = relationship("DeliveryPolicy")
 
     __table_args__ = (

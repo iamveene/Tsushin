@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { api, type ContinuousAgent, type ContinuousRun, type PageResponse, type WakeEvent } from '@/lib/client'
+import { ContinuousAgentSetupModal } from '@/components/continuous-agents/ContinuousAgentSetupModal'
+import { SubscriptionEditor } from '@/components/continuous-agents/SubscriptionEditor'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import {
   ActivityIcon,
@@ -100,6 +102,8 @@ export default function ContinuousAgentDetailPage() {
   const [wakeEventsError, setWakeEventsError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -127,6 +131,42 @@ export default function ContinuousAgentDetailPage() {
     }
     loadData()
   }, [hasValidId, loadData, router])
+
+  const handleDelete = useCallback(async () => {
+    if (!agent) return
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(
+        `Delete continuous agent "${agent.name || `#${agent.id}`}"? Subscriptions are removed too.`,
+      )
+      if (!confirmed) return
+    }
+    setDeleting(true)
+    setError(null)
+    try {
+      try {
+        await api.deleteContinuousAgent(agent.id)
+      } catch (firstErr) {
+        const message = firstErr instanceof Error ? firstErr.message : ''
+        if (typeof window !== 'undefined' && /pending/i.test(message)) {
+          const force = window.confirm(
+            'This agent has pending wake events. Force delete? Pending events will be marked filtered.',
+          )
+          if (!force) {
+            setDeleting(false)
+            return
+          }
+          await api.deleteContinuousAgent(agent.id, { force: true })
+        } else {
+          throw firstErr
+        }
+      }
+      router.replace('/continuous-agents')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to delete continuous agent'))
+    } finally {
+      setDeleting(false)
+    }
+  }, [agent, router])
 
   const runs = useMemo(() => runsPage?.items ?? [], [runsPage])
   const runTypes = useMemo(() => {
@@ -193,22 +233,39 @@ export default function ContinuousAgentDetailPage() {
             {agent?.name || agent?.agent_name || `Continuous Agent #${agentId}`}
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Read-only A2 detail for the continuous-agent row and its latest continuous runs.
+            Detail view for this continuous agent, its subscriptions, and recent run history.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-        >
-          <RefreshIcon size={16} />
-          Refresh
-        </button>
-      </div>
-
-      <div className="mb-6 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4 text-sm text-cyan-100">
-        Create, edit, pause, and delete actions are intentionally absent until backend write APIs exist for continuous agents.
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+          >
+            <RefreshIcon size={16} />
+            Refresh
+          </button>
+          {agent && (
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              className="rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white"
+            >
+              Edit
+            </button>
+          )}
+          {agent && !agent.is_system_owned && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:opacity-40"
+            >
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -448,6 +505,8 @@ export default function ContinuousAgentDetailPage() {
             </div>
           </div>
 
+          <SubscriptionEditor agentId={agent.id} readOnly={agent.is_system_owned} />
+
           <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
             <h2 className="text-lg font-semibold text-white">Policy References</h2>
             <div className="mt-4 grid gap-4 md:grid-cols-3">
@@ -467,6 +526,16 @@ export default function ContinuousAgentDetailPage() {
           </div>
         </div>
       )}
+
+      <ContinuousAgentSetupModal
+        isOpen={editOpen}
+        existing={agent}
+        onClose={() => setEditOpen(false)}
+        onSaved={async () => {
+          setEditOpen(false)
+          await loadData()
+        }}
+      />
     </div>
   )
 }
