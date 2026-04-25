@@ -287,6 +287,11 @@ backend/tests/*
 !backend/tests/test_phase0_5_fixtures.py
 !backend/tests/test_agent_knowledge_metadata.py
 !backend/tests/test_track_e_shell_audit_hardening.py
+!backend/tests/test_webhook_replay.py
+!backend/tests/test_oauth_bearer_rate_limit.py
+!backend/tests/test_unauth_rate_limit.py
+!backend/tests/test_provider_audit.py
+!backend/tests/test_429_logged.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
