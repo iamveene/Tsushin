@@ -50,7 +50,7 @@ const TriggerSetupModal = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, ScheduleTrigger, GitHubTrigger } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, ScheduleTrigger, GitHubTrigger, GitHubIntegration } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -121,6 +121,9 @@ import {
   CloudIcon,
   ChevronRightIcon,
   CodeIcon,
+  GitHubIcon,
+  CheckIcon,
+  XIcon,
   type IconProps
 } from '@/components/ui/icons'
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
@@ -638,6 +641,386 @@ function JiraIntegrationsPanel({
   )
 }
 
+// =============================================================================
+// v0.7.0: GitHub Integration (Hub-side, mirrors Jira pair).
+// Shared PAT + default owner/repo so both the GitHub trigger and the new
+// generic `code_repository` skill (provider=github) can reuse one connection
+// per tenant. Mounted under the Developer Tools tab.
+// =============================================================================
+
+type GitHubIntegrationDraft = {
+  integration_name: string
+  pat_token: string
+  default_owner: string
+  default_repo: string
+  is_active: boolean
+  provider_mode: 'programmatic' | 'agentic'
+}
+
+function githubIntegrationName(integration: GitHubIntegration): string {
+  return integration.integration_name || integration.name || `GitHub connection #${integration.id}`
+}
+
+function githubStatusClasses(status?: string | null): string {
+  const normalized = (status || '').toLowerCase()
+  if (['healthy', 'success', 'ok', 'active', 'connected'].includes(normalized)) return 'border-green-500/30 bg-green-500/10 text-green-300'
+  if (['unhealthy', 'error', 'failed'].includes(normalized)) return 'border-red-500/30 bg-red-500/10 text-red-300'
+  if (['degraded', 'warning'].includes(normalized)) return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-300'
+  return 'border-tsushin-border bg-tsushin-slate/10 text-tsushin-slate'
+}
+
+function githubIntegrationDraftFromTarget(target: GitHubIntegration | null): GitHubIntegrationDraft {
+  return {
+    integration_name: target ? githubIntegrationName(target) : 'GitHub',
+    pat_token: '',
+    default_owner: target?.default_owner || '',
+    default_repo: target?.default_repo || '',
+    is_active: target?.is_active ?? true,
+    provider_mode: (target?.provider_mode as 'programmatic' | 'agentic') || 'programmatic',
+  }
+}
+
+function GitHubIntegrationModal({
+  isOpen,
+  target,
+  saving,
+  onClose,
+  onSave,
+}: {
+  isOpen: boolean
+  target: GitHubIntegration | null
+  saving: boolean
+  onClose: () => void
+  onSave: (draft: GitHubIntegrationDraft) => void
+}) {
+  const [draft, setDraft] = useState<GitHubIntegrationDraft>(() => githubIntegrationDraftFromTarget(target))
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+
+  // PAT is required on create, optional on edit (leave blank to keep the
+  // server-stored token). `default_owner`/`default_repo` are always optional.
+  const canSave = Boolean(
+    draft.integration_name.trim()
+      && (target || draft.pat_token.trim())
+      && !saving
+  )
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      // For new connections we send the PAT inline. For existing connections
+      // with no replacement PAT, the backend uses the stored token via the
+      // /:id/test-connection endpoint — but the modal doesn't have an `id`
+      // to use mid-edit, so we always go through the unsaved test path with
+      // the PAT the user just typed (or fail if neither PAT nor edit target).
+      const result = await api.testGitHubConnection({
+        pat_token: draft.pat_token.trim() || null,
+        owner: draft.default_owner.trim() || null,
+        repo: draft.default_repo.trim() || null,
+      })
+      setTestResult({
+        success: result.success,
+        message: result.success
+          ? `Connected${result.full_name ? ` — Repository: ${result.full_name}` : result.repository ? ` — Repository: ${result.repository}` : ''}${result.default_branch ? ` (default branch: ${result.default_branch})` : ''}`
+          : result.error || result.message || result.detail || 'GitHub connection failed',
+      })
+    } catch (err) {
+      setTestResult({ success: false, message: err instanceof Error ? err.message : 'GitHub connection failed' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={target ? 'Edit GitHub Connection' : 'Add GitHub Connection'}
+      footer={(
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-tsushin-border px-4 py-2 text-sm text-tsushin-slate hover:text-white disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(draft)}
+            disabled={!canSave}
+            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Connection name</label>
+            <input
+              type="text"
+              value={draft.integration_name}
+              onChange={(event) => setDraft((current) => ({ ...current, integration_name: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="GitHub production"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">
+              GitHub PAT {target ? <span className="text-xs text-tsushin-slate">(leave blank to keep current)</span> : null}
+            </label>
+            <input
+              type="password"
+              value={draft.pat_token}
+              onChange={(event) => setDraft((current) => ({ ...current, pat_token: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+              placeholder={target ? 'Enter a replacement token' : 'ghp_…'}
+              autoComplete="new-password"
+            />
+            <p className="mt-1 text-xs text-tsushin-slate">
+              Fine-grained PAT recommended. Required scopes depend on the capabilities you enable on the skill (e.g. `repo:read`, `issues:write`).
+            </p>
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Default owner <span className="text-xs text-tsushin-slate">(optional)</span></label>
+            <input
+              type="text"
+              value={draft.default_owner}
+              onChange={(event) => setDraft((current) => ({ ...current, default_owner: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="octo-org"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Default repo <span className="text-xs text-tsushin-slate">(optional)</span></label>
+            <input
+              type="text"
+              value={draft.default_repo}
+              onChange={(event) => setDraft((current) => ({ ...current, default_repo: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="platform"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-tsushin-slate">
+          Default owner/repo are used by the Code Repository skill when the LLM does not specify a target — they make tool calls shorter for single-repo agents.
+        </p>
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-300">Connection mode</label>
+          <div className="grid gap-2 md:grid-cols-2">
+            <label
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${draft.provider_mode === 'programmatic' ? 'border-teal-500 bg-teal-500/10' : 'border-tsushin-border bg-tsushin-ink/40'}`}
+            >
+              <input
+                type="radio"
+                name="github-provider-mode"
+                value="programmatic"
+                checked={draft.provider_mode === 'programmatic'}
+                onChange={() => setDraft((current) => ({ ...current, provider_mode: 'programmatic' }))}
+                className="mt-1"
+              />
+              <div>
+                <div className="text-sm font-medium text-white">Programmatic (PAT, REST API)</div>
+                <div className="text-xs text-tsushin-slate">Direct GitHub REST API calls with the PAT above. Available now.</div>
+              </div>
+            </label>
+            <label
+              className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-tsushin-border bg-tsushin-ink/20 px-3 py-2 opacity-60"
+              title="Coming soon — GitHub App + OAuth"
+            >
+              <input
+                type="radio"
+                name="github-provider-mode"
+                value="agentic"
+                checked={false}
+                disabled
+                className="mt-1"
+              />
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium text-white">
+                  Agentic (GitHub App + OAuth)
+                  <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">Coming soon</span>
+                </div>
+                <div className="text-xs text-tsushin-slate">Per-user OAuth via a GitHub App, no PAT to rotate. Pending v0.8.0.</div>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-ink/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium text-white">Test connection</div>
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testing || (!target && !draft.pat_token.trim())}
+              className="rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {testing ? 'Testing...' : 'Test Connection'}
+            </button>
+          </div>
+          {testResult && (
+            <div className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+              testResult.success ? 'border-green-500/30 bg-green-500/10 text-green-200' : 'border-red-500/30 bg-red-500/10 text-red-200'
+            }`}>
+              {testResult.success ? <CheckIcon size={14} className="mt-0.5 shrink-0" /> : <XIcon size={14} className="mt-0.5 shrink-0" />}
+              <span>{testResult.message}</span>
+            </div>
+          )}
+          {!testResult && (
+            <p className="mt-2 text-xs text-tsushin-slate">
+              Validates the PAT against `GET /user` (and `GET /repos/{`{owner}/{repo}`}` when both default fields are set).
+            </p>
+          )}
+        </div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.is_active}
+            onChange={(event) => setDraft((current) => ({ ...current, is_active: event.target.checked }))}
+          />
+          <span className="text-sm text-gray-300">Enable this GitHub connection</span>
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+function GitHubIntegrationsPanel({
+  integrations,
+  loading,
+  testingId,
+  testResults,
+  canWriteHub,
+  onAdd,
+  onEdit,
+  onDelete,
+  onTest,
+}: {
+  integrations: GitHubIntegration[]
+  loading: boolean
+  testingId: number | null
+  testResults: Record<number, { success: boolean; message: string }>
+  canWriteHub: boolean
+  onAdd: () => void
+  onEdit: (integration: GitHubIntegration) => void
+  onDelete: (integration: GitHubIntegration) => void
+  onTest: (integration: GitHubIntegration) => void
+}) {
+  return (
+    <div className="card p-5 hover-glow group border-violet-700/30">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-300 transition-transform group-hover:scale-110">
+            <GitHubIcon size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">GitHub</h3>
+            <p className="text-xs text-tsushin-slate">Shared GitHub PAT for the Code Repository skill and PR triggers</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={integrations.some((item) => item.is_active) ? 'badge badge-success' : 'badge badge-neutral'}>
+            {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
+          </span>
+          {canWriteHub && (
+            <button
+              type="button"
+              onClick={onAdd}
+              className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
+            >
+              + Add
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4 text-center text-xs text-tsushin-slate">Loading GitHub connections...</div>
+      ) : integrations.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-ink/30 p-5 text-center">
+          <p className="text-sm text-tsushin-slate">
+            {canWriteHub ? 'No GitHub connections yet. Add one here, then attach it to agent skills or PR triggers.' : 'No GitHub connections configured.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {integrations.map((integration) => {
+            const status = integration.health_status || integration.last_test_status || (integration.is_active ? 'active' : 'inactive')
+            const result = testResults[integration.id]
+            const repoFull = integration.default_owner && integration.default_repo
+              ? `${integration.default_owner}/${integration.default_repo}`
+              : integration.default_owner || ''
+            return (
+              <div key={integration.id} className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-sm font-medium text-white">{githubIntegrationName(integration)}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${githubStatusClasses(status)}`}>{status}</span>
+                      <span className="rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">
+                        {integration.provider_mode === 'agentic' ? 'Agentic' : 'Programmatic'}
+                      </span>
+                    </div>
+                    <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
+                      <span className="min-w-0 truncate font-mono text-tsushin-accent">{repoFull || 'No default repo'}</span>
+                      <span className="min-w-0 truncate font-mono">{safeTokenPreview(integration.pat_token_preview)}</span>
+                      <span className="min-w-0">
+                        Triggers: {integration.trigger_count ?? 0} · Skills: {integration.skill_attached_count ?? 0}
+                      </span>
+                      <span>{integration.last_tested_at || integration.last_health_check ? `Checked ${new Date(integration.last_tested_at || integration.last_health_check || '').toLocaleString()}` : 'Not tested yet'}</span>
+                    </div>
+                    {integration.health_status_reason && (
+                      <p className="text-xs text-yellow-200">{integration.health_status_reason}</p>
+                    )}
+                  </div>
+                  {canWriteHub && (
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onTest(integration)}
+                        disabled={testingId === integration.id}
+                        className="rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {testingId === integration.id ? 'Testing...' : 'Test'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onEdit(integration)}
+                        className="rounded-lg border border-tsushin-border px-3 py-1.5 text-xs text-tsushin-slate hover:text-white"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(integration)}
+                        className="rounded-lg border border-tsushin-vermilion/30 bg-tsushin-vermilion/10 px-3 py-1.5 text-xs text-tsushin-vermilion hover:bg-tsushin-vermilion/20"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {result && (
+                  <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+                    result.success ? 'border-green-500/30 bg-green-500/10 text-green-200' : 'border-red-500/30 bg-red-500/10 text-red-200'
+                  }`}>
+                    {result.message}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function HubPage() {
   const toast = useToast()
   const { isGlobalAdmin, hasPermission } = useAuth()
@@ -769,6 +1152,14 @@ export default function HubPage() {
   const [jiraIntegrationTestResults, setJiraIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
   const [scheduleTriggers, setScheduleTriggers] = useState<ScheduleTrigger[]>([])
   const [githubTriggers, setGithubTriggers] = useState<GitHubTrigger[]>([])
+  // v0.7.0: GitHub Hub Integrations (mirrors Jira state above) — used by both
+  // the Code Repository skill and PR Submitted triggers.
+  const [githubIntegrations, setGithubIntegrations] = useState<GitHubIntegration[]>([])
+  const [githubIntegrationsLoading, setGithubIntegrationsLoading] = useState(false)
+  const [editingGithubIntegration, setEditingGithubIntegration] = useState<GitHubIntegration | null>(null)
+  const [showGithubIntegrationModal, setShowGithubIntegrationModal] = useState(false)
+  const [githubIntegrationTestingId, setGithubIntegrationTestingId] = useState<number | null>(null)
+  const [githubIntegrationTestResults, setGithubIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
   const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
 
   // v0.7.0: Guided wizards for the Productivity + Communication tabs. These
@@ -1012,6 +1403,18 @@ export default function HubPage() {
     }
   }
 
+  async function loadGitHubIntegrations() {
+    setGithubIntegrationsLoading(true)
+    try {
+      const data = await api.listGitHubIntegrations()
+      setGithubIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load GitHub integrations:', err)
+    } finally {
+      setGithubIntegrationsLoading(false)
+    }
+  }
+
   async function loadScheduleTriggers() {
     try {
       const data = await api.listScheduleTriggers()
@@ -1056,6 +1459,9 @@ export default function HubPage() {
       }
       if (activeTab === 'tool-apis') {
         loadJiraIntegrations()
+      }
+      if (activeTab === 'developer') {
+        loadGitHubIntegrations()
       }
       if (activeTab === 'mcp-servers') {
         loadMcpServers()  // Phase 26
@@ -1232,6 +1638,7 @@ export default function HubPage() {
         loadDiscordIntegrations(),  // v0.6.0
         loadEmailTriggers(),
         loadJiraIntegrations(),
+        loadGitHubIntegrations(),  // v0.7.0: GitHub Hub integrations
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         loadBreadthTriggers(),  // v0.7.0: Jira, Schedule, GitHub triggers
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
@@ -2236,6 +2643,101 @@ export default function HubPage() {
       setError(err instanceof Error ? err.message : 'Failed to remove Jira connection')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ---- v0.7.0: GitHub Hub Integration handlers (mirror Jira) ----
+
+  const openAddGitHubIntegrationModal = () => {
+    setEditingGithubIntegration(null)
+    setShowGithubIntegrationModal(true)
+  }
+
+  const openEditGitHubIntegrationModal = (integration: GitHubIntegration) => {
+    setEditingGithubIntegration(integration)
+    setShowGithubIntegrationModal(true)
+  }
+
+  const saveGitHubIntegration = async (draft: GitHubIntegrationDraft) => {
+    setSaving(true)
+    setError(null)
+    try {
+      if (editingGithubIntegration) {
+        await api.updateGitHubIntegration(editingGithubIntegration.id, {
+          integration_name: draft.integration_name.trim(),
+          pat_token: draft.pat_token.trim() || undefined,
+          default_owner: draft.default_owner.trim() || null,
+          default_repo: draft.default_repo.trim() || null,
+          is_active: draft.is_active,
+          provider_mode: draft.provider_mode,
+        })
+      } else {
+        await api.createGitHubIntegration({
+          integration_name: draft.integration_name.trim(),
+          pat_token: draft.pat_token.trim(),
+          default_owner: draft.default_owner.trim() || null,
+          default_repo: draft.default_repo.trim() || null,
+          is_active: draft.is_active,
+          provider_mode: draft.provider_mode,
+        })
+      }
+      await Promise.all([loadGitHubIntegrations(), loadBreadthTriggers()])
+      setShowGithubIntegrationModal(false)
+      setEditingGithubIntegration(null)
+      setSuccessMessage(editingGithubIntegration ? 'GitHub connection updated' : 'GitHub connection added')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save GitHub connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteGitHubIntegration = async (integration: GitHubIntegration) => {
+    if (!confirm(`Remove GitHub connection "${githubIntegrationName(integration)}"? Skills and triggers attached to it may need another connection before they can run.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.deleteGitHubIntegration(integration.id)
+      await Promise.all([loadGitHubIntegrations(), loadBreadthTriggers()])
+      setSuccessMessage('GitHub connection removed')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to remove GitHub connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const testGitHubIntegrationConnection = async (integration: GitHubIntegration) => {
+    setGithubIntegrationTestingId(integration.id)
+    setGithubIntegrationTestResults((current) => {
+      const next = { ...current }
+      delete next[integration.id]
+      return next
+    })
+    try {
+      const result = await api.testGitHubConnectionForId(integration.id)
+      setGithubIntegrationTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: result.success,
+          message: result.success
+            ? `Connected${result.full_name ? ` — ${result.full_name}` : result.repository ? ` — ${result.repository}` : ''}${result.default_branch ? ` (default: ${result.default_branch})` : ''}`
+            : result.error || result.message || result.detail || 'GitHub connection test failed',
+        },
+      }))
+      await loadGitHubIntegrations()
+    } catch (err: unknown) {
+      setGithubIntegrationTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: false,
+          message: err instanceof Error ? err.message : 'Failed to test GitHub connection',
+        },
+      }))
+    } finally {
+      setGithubIntegrationTestingId(null)
     }
   }
 
@@ -5681,6 +6183,20 @@ export default function HubPage() {
 
                 </div>
 
+                {/* v0.7.0: GitHub Hub Integrations — shared PAT used by both
+                    the Code Repository skill and PR Submitted triggers. */}
+                <GitHubIntegrationsPanel
+                  integrations={githubIntegrations}
+                  loading={githubIntegrationsLoading}
+                  testingId={githubIntegrationTestingId}
+                  testResults={githubIntegrationTestResults}
+                  canWriteHub={canWriteHub}
+                  onAdd={openAddGitHubIntegrationModal}
+                  onEdit={openEditGitHubIntegrationModal}
+                  onDelete={deleteGitHubIntegration}
+                  onTest={testGitHubIntegrationConnection}
+                />
+
                 {/* Info Box */}
                 <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-blue-300 mb-2 flex items-center gap-2">
@@ -5688,7 +6204,8 @@ export default function HubPage() {
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
-                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts.
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub connections power
+                    the Code Repository skill (PR/issue read/write) and the PR Submitted trigger.
                   </p>
                 </div>
               </div>
@@ -6300,6 +6817,20 @@ export default function HubPage() {
             setEditingJiraIntegration(null)
           }}
           onSave={saveJiraIntegration}
+        />
+      )}
+
+      {showGithubIntegrationModal && (
+        <GitHubIntegrationModal
+          key={editingGithubIntegration?.id ?? 'new'}
+          isOpen={showGithubIntegrationModal}
+          target={editingGithubIntegration}
+          saving={saving}
+          onClose={() => {
+            setShowGithubIntegrationModal(false)
+            setEditingGithubIntegration(null)
+          }}
+          onSave={saveGitHubIntegration}
         />
       )}
 
