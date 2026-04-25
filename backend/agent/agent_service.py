@@ -939,10 +939,23 @@ class AgentService:
         tool_used = None
         tool_result = None
         tool_result_structured = None
-        agentic_scratchpad: List[Dict[str, Any]] = []
+        # BUG-707: Seed scratchpad from prior thread so a no-tool turn (e.g. a
+        # follow-up that re-uses already-fetched DATA) does not silently wipe
+        # the trace from earlier rounds. Router/playground only persist when a
+        # tool actually fires, but we still want process_message() callers that
+        # supply prior scratchpad via config to keep their history.
+        prior_scratchpad: List[Dict[str, Any]] = []
+        try:
+            cfg_prior = (self.config or {}).get("prior_agentic_scratchpad")
+            if isinstance(cfg_prior, list):
+                prior_scratchpad = list(cfg_prior)
+        except Exception:
+            prior_scratchpad = []
+        agentic_scratchpad: List[Dict[str, Any]] = list(prior_scratchpad)
         max_agentic_rounds = self._get_max_agentic_rounds()
         agentic_loop_byte_cap = self._get_agentic_loop_byte_cap()
         agentic_loop_cap_reached = False
+        tool_was_called = False  # BUG-707: track whether any tool fired this turn
 
         self.logger.info(f"Processing message from {sender_key}")
         self.logger.info(f"Message text: {message_text[:200]}")
@@ -1591,6 +1604,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 ai_response = tool_execution_result
 
                             tool_used = f"skill:{tool_name}"
+                            tool_was_called = True  # BUG-707
                             tool_result = tool_execution_result
                             tool_result_structured = self._build_structured_tool_result(
                                 skill_type=tool_name,
@@ -1693,6 +1707,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 ai_response = tool_execution_result
 
                             tool_used = f"custom:{tool_call['tool_name']}"
+                            tool_was_called = True  # BUG-707
                             tool_result = tool_execution_result
                             tool_result_structured = self._build_structured_tool_result(
                                 skill_type=tool_call.get("tool_name", "custom"),
@@ -1792,6 +1807,9 @@ IMPORTANT: When the user asks for system information, server status, file listin
                 "tool_result_structured": tool_result_structured,
                 "agentic_scratchpad": agentic_scratchpad,
                 "agentic_loop_cap_reached": agentic_loop_cap_reached,
+                # BUG-707: caller (router/playground) only persists scratchpad
+                # to thread.agentic_scratchpad when a tool fired this turn.
+                "tool_was_called": tool_was_called or bool(tool_used),
                 "tokens": result["token_usage"],
                 "execution_time_ms": execution_time,
                 "kb_used": kb_used,  # KB usage tracking

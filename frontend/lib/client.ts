@@ -173,6 +173,9 @@ export interface Config {
   ollama_api_key: string | null
   // Phase 18: Global WhatsApp conversation delay
   whatsapp_conversation_delay_seconds: number
+  // v0.7.0 Track F: platform-wide agentic loop bounds (BUG-716)
+  platform_min_agentic_rounds?: number | null
+  platform_max_agentic_rounds?: number | null
 }
 
 export interface OllamaHealthResponse {
@@ -917,6 +920,10 @@ export interface Agent {
 
   // Agent avatar
   avatar?: string | null
+
+  // v0.7.0 Track F: bounded outer agentic loop (BUG-716)
+  max_agentic_rounds?: number | null
+  max_agentic_loop_bytes?: number | null
 
   is_active: boolean
   is_default: boolean
@@ -4246,6 +4253,9 @@ export const api = {
     is_default: boolean
     vector_store_instance_id: number | null
     vector_store_mode: string
+    // v0.7.0 Track F (BUG-716)
+    max_agentic_rounds: number | null
+    max_agentic_loop_bytes: number | null
   }>): Promise<Agent> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${id}`, {
       method: 'PUT',

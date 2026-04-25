@@ -12,6 +12,15 @@ FOLLOWUP_PATTERNS = [
     r"\b(of these|from those|among them|qual desses|quais desses|entre eles|entre esses)\b",
     r"\b(more important|mais importante|best|melhor|priorit|resum|summari[sz]e|compare|comparar)\b",
     r"\b(the first|the second|o primeiro|a primeira|o segundo|a segunda|último|ultimo|last one)\b",
+    # BUG-706: EN interrogatives — common in follow-ups like "what was the IP?",
+    # "where did you find it?", "when was it last seen?", "how many were there?".
+    # PT/ES equivalents are also covered so multilingual follow-ups still match.
+    r"\b(what|which|who|whom|whose|where|when|why|how)\b",
+    r"\b(o que|que|quem|onde|quando|porque|por que|por quê|como|qual\s+(?:foi|era|é))\b",
+    # Pronoun phrasings and demonstrative referencing
+    r"\b(that one|this one|these ones|those ones|the one (?:that|which|with)|the one you)\b",
+    r"\b(the (?:first|second|third|fourth|fifth|last|latest|previous|earlier|recent|most recent) one)\b",
+    r"\b(esse|essa|esta|este|aquele|aquela|aquilo|o\s+que\s+você|o\s+que\s+voce)\b",
 ]
 
 FRESH_FETCH_PATTERNS = [

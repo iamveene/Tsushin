@@ -10,15 +10,16 @@ import AgentKnowledgeManager from '@/components/AgentKnowledgeManager'
 // AgentSandboxedToolsManager is now embedded in the Skills > Sandboxed Tools config modal
 import AgentConfigurationManager from '@/components/AgentConfigurationManager'
 import AgentChannelsManager from '@/components/AgentChannelsManager'
+import AgentAdvancedManager from '@/components/AgentAdvancedManager'
 import SharedKnowledgeViewer from '@/components/SharedKnowledgeViewer'
 import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
   LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon, WrenchIcon
 } from '@/components/ui/icons'
 
-type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge'
+type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge' | 'advanced'
 
-const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'custom-skills', 'knowledge', 'shared-knowledge']
+const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'custom-skills', 'knowledge', 'shared-knowledge', 'advanced']
 
 export default function AgentDetailPage() {
   const params = useParams()
@@ -225,6 +226,15 @@ export default function AgentDetailPage() {
             >
               <LinkIcon size={16} /> Shared Knowledge
             </button>
+            <button
+              onClick={() => setActiveTab('advanced')}
+              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'advanced'
+                  ? 'border-teal-500 text-teal-400'
+                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
+                }`}
+            >
+              <SettingsIcon size={16} /> Advanced
+            </button>
           </nav>
         </div>
 
@@ -256,6 +266,10 @@ export default function AgentDetailPage() {
 
           {activeTab === 'shared-knowledge' && (
             <SharedKnowledgeViewer agentId={agentId} />
+          )}
+
+          {activeTab === 'advanced' && (
+            <AgentAdvancedManager agentId={agentId} />
           )}
 
         </div>
