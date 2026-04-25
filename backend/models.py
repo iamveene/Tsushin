@@ -2047,6 +2047,48 @@ class JiraIntegration(HubIntegration):
     )
 
 
+class GitHubIntegration(HubIntegration):
+    """
+    GitHub Hub Integration.
+
+    Stores tenant-scoped GitHub connection settings used by the
+    ``code_repository`` skill. The ``provider`` column is currently always
+    ``github`` but is reserved so the table can host other repository
+    providers (Bitbucket, GitLab) in the future.
+
+    Auth today: Personal Access Token (PAT). ``auth_method`` reserves space
+    for ``app`` (GitHub App installation) when that ships.
+
+    Mirrors the shape of :class:`JiraIntegration` exactly (polymorphic
+    single-table-inheritance subclass of ``HubIntegration``).
+    """
+    __tablename__ = "github_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    # Reserved for future providers (bitbucket, gitlab). Always 'github' today.
+    provider = Column(String(32), nullable=False, server_default="github")
+    # 'pat' (shipped) | 'app' (reserved — GitHub App installation flow)
+    auth_method = Column(String(20), nullable=False, server_default="pat")
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    # Optional default repo owner / name surfaced in the UI as a convenience
+    # so callers don't have to specify both each request.
+    default_owner = Column(String(100), nullable=True)
+    default_repo = Column(String(100), nullable=True)
+    # 'programmatic' = REST API + PAT (shipped); 'agentic' reserved for a
+    # future GitHub MCP transport. Backend rejects 'agentic' until shipped.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'github',
+    }
+
+    __table_args__ = (
+        Index("idx_github_integration_provider", "provider"),
+        Index("idx_github_integration_default_owner", "default_owner"),
+    )
+
+
 # ============================================================================
 # Phase 18: Shell Skill - Remote Command Execution (C2 Architecture)
 # ============================================================================

@@ -6,7 +6,7 @@ import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
-  SearchIcon, AlertTriangleIcon, CheckIcon,
+  SearchIcon, AlertTriangleIcon, CheckIcon, GitHubIcon,
   IconProps,
 } from '@/components/ui/icons'
 import AddSkillModal from './skills/AddSkillModal'
@@ -24,9 +24,10 @@ const PROVIDER_SKILLS = {
   'email': { displayName: 'Email', skillType: 'gmail', providerKey: 'email' },
   'web_search': { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
   'ticket_management': { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
+  'code_repository': { displayName: 'Code Repository', skillType: 'code_repository', providerKey: 'code_repository' },
 }
 
-type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management'
+type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository'
 
 // Ticket Management capability labels (mirrors backend default_config)
 const TICKET_MANAGEMENT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
@@ -47,6 +48,24 @@ const EMAIL_CAPABILITY_LABELS: Record<string, { label: string; description: stri
   send_email: { label: 'Send email', description: 'Send a new outbound email (write — off by default)', defaultEnabled: false },
   reply_email: { label: 'Reply to email', description: 'Reply within an existing email thread (write — off by default)', defaultEnabled: false },
   draft_email: { label: 'Create draft', description: 'Save an email draft without sending it (write — off by default)', defaultEnabled: false },
+}
+
+// Code Repository capability labels — mirrors backend CodeRepositorySkill
+// default_config. Read defaults ON, write defaults OFF (same safety stance as
+// Ticket Management / Email). Provider today: GitHub via REST.
+const CODE_REPOSITORY_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
+  search_repos: { label: 'Search repositories', description: 'Search across the connected account’s repositories (read)', defaultEnabled: true },
+  list_pull_requests: { label: 'List pull requests', description: 'List PRs on a repository, filterable by state (read)', defaultEnabled: true },
+  read_pull_request: { label: 'Read pull request', description: 'Fetch one PR’s metadata, files, and reviews (read)', defaultEnabled: true },
+  list_issues: { label: 'List issues', description: 'List issues on a repository (read)', defaultEnabled: true },
+  read_issue: { label: 'Read issue', description: 'Fetch one issue’s metadata and comments (read)', defaultEnabled: true },
+  create_issue: { label: 'Create issue', description: 'Open a new issue on a repository (write — off by default)', defaultEnabled: false },
+  add_pr_comment: { label: 'Add PR comment', description: 'Post a comment on an existing pull request (write — off by default)', defaultEnabled: false },
+  approve_pull_request: { label: 'Approve pull request', description: 'Submit an APPROVE review on a PR (write — off by default)', defaultEnabled: false },
+  request_changes: { label: 'Request changes on PR', description: 'Submit a REQUEST_CHANGES review on a PR (write — off by default)', defaultEnabled: false },
+  merge_pull_request: { label: 'Merge pull request', description: 'Merge a PR via merge/squash/rebase (write — off by default)', defaultEnabled: false },
+  close_pull_request: { label: 'Close pull request', description: 'Close a PR without merging (write — off by default)', defaultEnabled: false },
+  close_issue: { label: 'Close issue', description: 'Close an issue (write — off by default)', defaultEnabled: false },
 }
 
 // Audio sub-skill tabs
@@ -159,6 +178,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [emailProviders, setEmailProviders] = useState<SkillProvider[]>([])
   const [webSearchProviders, setWebSearchProviders] = useState<SkillProvider[]>([])
   const [ticketManagementProviders, setTicketManagementProviders] = useState<SkillProvider[]>([])
+  const [codeRepositoryProviders, setCodeRepositoryProviders] = useState<SkillProvider[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [selectedIntegration, setSelectedIntegration] = useState<number | null>(null)
   const [providerLoading, setProviderLoading] = useState(false)
@@ -180,6 +200,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [emailCapabilities, setEmailCapabilities] = useState<Record<string, boolean>>(
     Object.fromEntries(
       Object.entries(EMAIL_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
+    )
+  )
+
+  // Code Repository (GitHub) capability toggles — read defaults ON, write OFF.
+  const [codeRepositoryCapabilities, setCodeRepositoryCapabilities] = useState<Record<string, boolean>>(
+    Object.fromEntries(
+      Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
     )
   )
 
@@ -440,6 +467,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setWebSearchProviders(providers)
       } else if (providerKey === 'ticket_management') {
         setTicketManagementProviders(providers)
+      } else if (providerKey === 'code_repository') {
+        setCodeRepositoryProviders(providers)
       }
 
       // Load current integration for this skill
@@ -449,7 +478,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
       const defaultProvider =
         (providersWithDefaults.find(p => p.is_default)?.provider_type)
         || providers[0]?.provider_type
-        || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : (providerKey === 'ticket_management' ? 'jira' : 'brave')))
+        || (providerKey === 'scheduler' ? 'flows'
+          : providerKey === 'email' ? 'gmail'
+          : providerKey === 'ticket_management' ? 'jira'
+          : providerKey === 'code_repository' ? 'github'
+          : 'brave')
 
       if (integration) {
         setSelectedProvider(
@@ -468,6 +501,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setSelectedIntegration(null)
         // For ticket_management, auto-select the only integration when there's exactly one
         if (providerKey === 'ticket_management') {
+          const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
+          if (defaultProviderEntry?.available_integrations?.length === 1) {
+            setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
+          }
+        }
+        // Same auto-select-only-integration UX for code_repository (GitHub).
+        if (providerKey === 'code_repository') {
           const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
           if (defaultProviderEntry?.available_integrations?.length === 1) {
             setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
@@ -499,6 +539,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
           next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
         }
         setEmailCapabilities(next)
+      }
+
+      // Load code_repository capability toggles (GitHub provider).
+      if (providerKey === 'code_repository') {
+        const skillCfg = getSkillConfig(skillType)
+        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
+        const next: Record<string, boolean> = {}
+        for (const [capKey, meta] of Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)) {
+          const stored = cfgCaps[capKey]
+          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
+        }
+        setCodeRepositoryCapabilities(next)
       }
     } catch (err) {
       console.error('Failed to load providers:', err)
@@ -575,6 +627,38 @@ export default function AgentSkillsManager({ agentId }: Props) {
         for (const [capKey, meta] of Object.entries(EMAIL_CAPABILITY_LABELS)) {
           capabilities[capKey] = {
             enabled: emailCapabilities[capKey] ?? meta.defaultEnabled,
+            label: meta.label,
+            description: meta.description,
+          }
+        }
+        const mergedConfig: SkillConfig = {
+          ...currentConfig,
+          execution_mode: 'tool',
+          integration_id: selectedIntegration,
+          capabilities,
+        }
+        await Promise.all([
+          api.updateAgentSkill(agentId, skillType, {
+            is_enabled: true,
+            config: mergedConfig,
+          }),
+          api.updateSkillIntegration(agentId, skillType, {
+            scheduler_provider: null,
+            integration_id: selectedIntegration,
+            config: undefined,
+          }),
+        ])
+      } else if (configuringProvider === 'code_repository') {
+        // Code Repository (GitHub today): same atomic Promise.all pattern as
+        // ticket_management/email — keep AgentSkill.config and the
+        // AgentSkillIntegration link in sync so the LLM tool spec and the
+        // integration link can never disagree about which connection or
+        // which capabilities are active.
+        const currentConfig = getSkillConfig(skillType)
+        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
+        for (const [capKey, meta] of Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)) {
+          capabilities[capKey] = {
+            enabled: codeRepositoryCapabilities[capKey] ?? meta.defaultEnabled,
             label: meta.label,
             description: meta.description,
           }
@@ -1502,6 +1586,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.' },
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
       { providerKey: 'ticket_management', displayName: 'Ticket Management', skillType: 'ticket_management', icon: WrenchIcon, description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.' },
+      { providerKey: 'code_repository', displayName: 'Code Repository', skillType: 'code_repository', icon: GitHubIcon, description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.' },
     ]
     for (const entry of providerEntries) {
       if (enabledSkillTypes.has(entry.skillType)) {
@@ -1534,6 +1619,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     configuringProvider === 'email' ? emailProviders :
     configuringProvider === 'web_search' ? webSearchProviders :
     configuringProvider === 'ticket_management' ? ticketManagementProviders :
+    configuringProvider === 'code_repository' ? codeRepositoryProviders :
     []
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
 
@@ -1896,6 +1982,48 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       </div>
                     </div>
                   )}
+
+                  {/* Capability toggles — Code Repository (GitHub) */}
+                  {configuringProvider === 'code_repository' && !providerLoading && (
+                    <div className="border-t pt-6 border-tsushin-border">
+                      <label className="block text-sm font-medium mb-3">
+                        Capabilities
+                      </label>
+                      <p className="text-xs text-tsushin-muted mb-3">
+                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
+                        Read actions are on by default; write actions are off by default for safety.
+                      </p>
+                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
+                        {Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([capKey, meta]) => (
+                          <div key={capKey} className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              id={`coderepo-cap-${capKey}`}
+                              checked={!!codeRepositoryCapabilities[capKey]}
+                              onChange={(e) =>
+                                setCodeRepositoryCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
+                              }
+                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={`coderepo-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
+                                {meta.label}
+                                {!meta.defaultEnabled && (
+                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
+                                )}
+                              </label>
+                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {!Object.values(codeRepositoryCapabilities).some(Boolean) && (
+                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
+                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -1914,13 +2042,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) return true
                   if (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) return true
                   if (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) return true
+                  if (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)) return true
                   return false
                 })()}
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
                   ((selectedProviderData?.requires_integration && !selectedIntegration) ||
                     (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) ||
                     (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) ||
-                    (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)))
+                    (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) ||
+                    (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)))
                     ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}

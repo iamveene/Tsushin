@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from channels.github.criteria import evaluate_pr_criteria, validate_pr_criteria
 from channels.github.trigger import (
     decrypt_pat_token,
     encrypt_pat_token,
@@ -106,6 +107,17 @@ class GitHubTriggerCreate(BaseModel):
     def _validate_trigger_criteria(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         if value is None:
             return None
+        if not isinstance(value, dict):
+            raise ValueError("trigger_criteria must be an object")
+        # The GitHub trigger ships a dedicated PR-submitted envelope today.
+        # When ``event`` is set, route through the GitHub-specific validator;
+        # otherwise fall back to the shared envelope so JSONPath-style rules
+        # continue to round-trip cleanly.
+        if str(value.get("event") or "").strip().lower() == "pull_request":
+            try:
+                return validate_pr_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_pr_criteria: {exc}") from exc
         try:
             return validate_criteria(value)
         except ValueError as exc:
@@ -190,6 +202,17 @@ class GitHubTriggerUpdate(BaseModel):
     def _validate_trigger_criteria(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         if value is None:
             return None
+        if not isinstance(value, dict):
+            raise ValueError("trigger_criteria must be an object")
+        # The GitHub trigger ships a dedicated PR-submitted envelope today.
+        # When ``event`` is set, route through the GitHub-specific validator;
+        # otherwise fall back to the shared envelope so JSONPath-style rules
+        # continue to round-trip cleanly.
+        if str(value.get("event") or "").strip().lower() == "pull_request":
+            try:
+                return validate_pr_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_pr_criteria: {exc}") from exc
         try:
             return validate_criteria(value)
         except ValueError as exc:
@@ -237,6 +260,24 @@ class GitHubConnectionCheckResponse(BaseModel):
     error: Optional[str] = None
     repository: Optional[str] = None
     checked_at: datetime
+
+
+class GitHubCriteriaTestRequest(BaseModel):
+    """Body for the unsaved-criteria dry-run endpoint."""
+
+    criteria: dict[str, Any] = Field(..., description="Candidate trigger_criteria envelope")
+    payload: dict[str, Any] = Field(..., description="Sample GitHub webhook payload")
+
+
+class GitHubCriteriaPayloadRequest(BaseModel):
+    """Body for the saved-trigger dry-run endpoint."""
+
+    payload: dict[str, Any] = Field(..., description="Sample GitHub webhook payload")
+
+
+class GitHubCriteriaTestResponse(BaseModel):
+    matched: bool
+    reason: str
 
 
 class GitHubConnectionTestRequest(BaseModel):
@@ -504,6 +545,52 @@ async def test_github_connection(
         repo_name=payload.repo_name,
         checked_at=datetime.utcnow(),
     )
+
+
+@router.post("/test-criteria", response_model=GitHubCriteriaTestResponse)
+def dry_run_github_pr_criteria_unsaved(
+    payload: GitHubCriteriaTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> GitHubCriteriaTestResponse:
+    """Dry-run a candidate criteria envelope against a sample webhook payload.
+
+    Used by the trigger wizard before the row exists, so it doesn't persist
+    anything. Validation errors return a 400 with ``invalid_pr_criteria``.
+    """
+    del ctx, db
+    try:
+        validated = validate_pr_criteria(payload.criteria)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
+    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+    return GitHubCriteriaTestResponse(matched=matched, reason=reason)
+
+
+@router.post("/{trigger_id}/test-criteria", response_model=GitHubCriteriaTestResponse)
+def dry_run_github_pr_criteria_saved(
+    trigger_id: int,
+    payload: GitHubCriteriaPayloadRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> GitHubCriteriaTestResponse:
+    """Dry-run the saved trigger's criteria envelope against a sample payload.
+
+    Returns a 409 if the saved row has no ``trigger_criteria`` configured (so
+    callers don't accidentally interpret a no-op envelope as "matches anything").
+    """
+    instance = _load_github_trigger(db, ctx, trigger_id)
+    criteria = instance.trigger_criteria
+    if not criteria:
+        raise HTTPException(status_code=409, detail="trigger_criteria not configured")
+    try:
+        validated = validate_pr_criteria(criteria)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
+    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+    return GitHubCriteriaTestResponse(matched=matched, reason=reason)
 
 
 @router.get("/{trigger_id}", response_model=GitHubTriggerRead)

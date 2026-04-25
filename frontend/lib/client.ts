@@ -1790,6 +1790,103 @@ export interface GitHubTriggerTestConnectionResponse {
   repository?: string | null
 }
 
+// v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
+// shared PAT + default owner/repo so the code_repository skill and GitHub
+// triggers can reuse one connection per tenant.
+export type GitHubProviderMode = 'programmatic' | 'agentic'
+
+export interface GitHubIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  default_owner?: string | null
+  default_repo?: string | null
+  pat_token_preview?: string | null
+  is_active: boolean
+  provider_mode?: GitHubProviderMode
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  trigger_count?: number
+  skill_attached_count?: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface GitHubIntegrationCreateRequest {
+  integration_name: string
+  pat_token: string
+  default_owner?: string | null
+  default_repo?: string | null
+  is_active?: boolean
+  provider_mode?: GitHubProviderMode
+}
+
+export interface GitHubIntegrationUpdateRequest {
+  integration_name?: string
+  pat_token?: string | null
+  default_owner?: string | null
+  default_repo?: string | null
+  is_active?: boolean
+  provider_mode?: GitHubProviderMode
+}
+
+export interface GitHubIntegrationTestConnectionRequest {
+  pat_token?: string | null
+  owner?: string | null
+  repo?: string | null
+}
+
+export interface GitHubIntegrationTestConnectionResponse {
+  success: boolean
+  ok?: boolean
+  status?: string
+  status_code?: number | null
+  detail?: string | null
+  message?: string | null
+  error?: string | null
+  repository?: string | null
+  full_name?: string | null
+  default_branch?: string | null
+}
+
+// v0.7.0: PR Submitted criteria envelope — matches the backend canonical
+// payload that `/api/triggers/github/test-criteria` evaluates against a
+// sample push/PR webhook payload.
+export type PRSubmittedAction =
+  | 'opened'
+  | 'reopened'
+  | 'synchronize'
+  | 'edited'
+  | 'ready_for_review'
+
+export interface PRSubmittedCriteria {
+  event_type: 'pull_request'
+  actions: PRSubmittedAction[]
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  draft_only?: boolean
+  title_contains?: string | null
+  body_contains?: string | null
+}
+
+export interface GitHubPRCriteriaTestRequest {
+  criteria: PRSubmittedCriteria
+  sample_payload?: Record<string, unknown> | null
+}
+
+export interface GitHubPRCriteriaTestResponse {
+  matched: boolean
+  reason?: string | null
+  rejected_field?: string | null
+  message?: string | null
+  error?: string | null
+}
+
 export interface PageResponse<T> {
   items: T[]
   total: number
@@ -6271,6 +6368,84 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  // ---- v0.7.0: GitHub Hub Integrations (shared PAT, mirrors Jira) ----
+
+  async listGitHubIntegrations(): Promise<GitHubIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub integrations')
+    return res.json()
+  },
+
+  async createGitHubIntegration(data: GitHubIntegrationCreateRequest): Promise<GitHubIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitHub integration')
+    return res.json()
+  },
+
+  async updateGitHubIntegration(id: number, data: GitHubIntegrationUpdateRequest): Promise<GitHubIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitHub integration')
+    return res.json()
+  },
+
+  async deleteGitHubIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
+  },
+
+  async testGitHubConnection(data: GitHubIntegrationTestConnectionRequest): Promise<GitHubIntegrationTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  async testGitHubConnectionForId(id: number, data: GitHubIntegrationTestConnectionRequest = {}): Promise<GitHubIntegrationTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  // PR Submitted criteria evaluator. Posts the criteria + an optional sample
+  // payload to the backend, which runs the same matcher used by the
+  // production webhook dispatcher and returns `{matched, reason}`.
+  async testGitHubPRCriteria(criteria: PRSubmittedCriteria, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criteria, sample_payload: samplePayload ?? null }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
+    return res.json()
+  },
+
+  async testGitHubPRCriteriaForTrigger(triggerId: number, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${triggerId}/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sample_payload: samplePayload ?? null }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
     return res.json()
   },
 

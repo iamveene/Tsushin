@@ -113,6 +113,7 @@ from api.routes_jira_triggers import router as jira_triggers_router
 from api.routes_schedule_triggers import router as schedule_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
 from api.routes_github_inbound import router as github_inbound_router
+from api.routes_github_integrations import router as github_integrations_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -1360,6 +1361,7 @@ app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jir
 app.include_router(schedule_triggers_router)  # Schedule trigger CRUD (/api/triggers/schedule/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
+app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router

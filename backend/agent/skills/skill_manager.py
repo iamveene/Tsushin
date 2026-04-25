@@ -160,7 +160,11 @@ class SkillManager:
             from agent.skills.jira_skill import JiraSkill
             self.register_skill(JiraSkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management")
+            # v0.7.0: Code Repository — GitHub provider (read/write capability-gated)
+            from agent.skills.code_repository_skill import CodeRepositorySkill
+            self.register_skill(CodeRepositorySkill)
+
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 

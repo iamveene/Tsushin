@@ -1,7 +1,7 @@
 import {
   CalendarIcon, MailIcon, SearchIcon, MicrophoneIcon, TerminalIcon,
   WrenchIcon, BotIcon, FileTextIcon, RocketIcon, PlugIcon,
-  GlobeIcon, BrainIcon,
+  GlobeIcon, BrainIcon, GitHubIcon,
   IconProps,
 } from '@/components/ui/icons'
 
@@ -16,7 +16,7 @@ export interface SkillDisplayInfo {
   /** Skills that are rendered as part of another composite skill (e.g., audio_tts is part of "Audio") */
   compositeParent?: string
   /** Provider key for provider-based skills */
-  providerKey?: 'scheduler' | 'email' | 'web_search' | 'ticket_management'
+  providerKey?: 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository'
 }
 
 export const SKILL_CATEGORIES: Record<SkillCategory, { label: string; icon: React.FC<IconProps> }> = {
@@ -161,6 +161,14 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
     icon: WrenchIcon,
     providerKey: 'ticket_management',
   },
+  code_repository: {
+    displayName: 'Code Repository',
+    description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.',
+    category: 'automation_tools',
+    configType: 'provider',
+    icon: GitHubIcon,
+    providerKey: 'code_repository',
+  },
 }
 
 /** Skills that should never be shown (removed from system, or alias for an already-rendered skill) */
@@ -182,11 +190,12 @@ export const PROVIDER_SKILLS: Record<string, { displayName: string; skillType: s
   email: { displayName: 'Email', skillType: 'gmail', providerKey: 'email' },
   web_search: { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
   ticket_management: { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
+  code_repository: { displayName: 'Code Repository', skillType: 'code_repository', providerKey: 'code_repository' },
 }
 
 /** Skills handled by special card renderers (not the generic standard card) */
 export const SPECIAL_RENDERED_SKILLS = new Set<string>([
-  'flows', 'gmail', 'web_search', 'ticket_management',  // Provider skills
+  'flows', 'gmail', 'web_search', 'ticket_management', 'code_repository',  // Provider skills
   'audio_tts', 'audio_transcript', // Composite audio
   'shell',                          // Dedicated shell card
 ])

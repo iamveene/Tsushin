@@ -509,12 +509,45 @@ export default function TriggerDetailShell({ kind }: Props) {
       )
     }
     const github = trigger as GitHubTrigger
+    // v0.7.0: When the saved criteria envelope is a PR Submitted envelope,
+    // render it as a read-only structured panel so operators can scan the
+    // matching rules at a glance instead of decoding raw JSON.
+    const rawCriteria = github.trigger_criteria as Record<string, unknown> | null | undefined
+    const isPRCriteria = !!rawCriteria && rawCriteria.event_type === 'pull_request'
+    const prActions = isPRCriteria && Array.isArray(rawCriteria!.actions) ? (rawCriteria!.actions as string[]) : []
+    const prDraftOnly = isPRCriteria ? Boolean(rawCriteria!.draft_only) : false
+    const prTitleContains = isPRCriteria ? (rawCriteria!.title_contains as string | null | undefined) : null
+    const prBodyContains = isPRCriteria ? (rawCriteria!.body_contains as string | null | undefined) : null
     return (
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Field label="Repository" value={`${github.repo_owner}/${github.repo_name}`} />
-        <Field label="Auth method" value={github.auth_method} />
-        <Field label="Events" value={(github.events || []).length > 0 ? github.events!.join(', ') : 'Default'} />
-        <Field label="Branch" value={github.branch_filter || 'Any branch'} />
+      <div className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label="Repository" value={`${github.repo_owner}/${github.repo_name}`} />
+          <Field label="Auth method" value={github.auth_method} />
+          <Field label="Events" value={(github.events || []).length > 0 ? github.events!.join(', ') : 'Default'} />
+          <Field label="Branch" value={github.branch_filter || 'Any branch'} />
+        </div>
+        {isPRCriteria && (
+          <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-white">PR Submitted criteria</div>
+                <p className="text-xs text-tsushin-slate">Structured envelope used by the dispatcher to decide which webhooks wake an agent.</p>
+              </div>
+              <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-violet-200">
+                pull_request
+              </span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <DetailRow label="Actions">{prActions.length > 0 ? prActions.join(', ') : 'Any action'}</DetailRow>
+              <DetailRow label="Only non-draft PRs">{prDraftOnly ? 'Yes' : 'No'}</DetailRow>
+              <DetailRow label="Title contains">{prTitleContains || 'Any title'}</DetailRow>
+              <DetailRow label="Body contains">{prBodyContains || 'Any body'}</DetailRow>
+              <DetailRow label="Branch filter">{github.branch_filter || 'Any branch'}</DetailRow>
+              <DetailRow label="Author filter">{github.author_filter || 'Any author'}</DetailRow>
+              <DetailRow label="Path filters">{(github.path_filters || []).length > 0 ? (github.path_filters || []).join(', ') : 'Any path'}</DetailRow>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

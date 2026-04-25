@@ -328,9 +328,18 @@ def _read_wake_payload(wake_event: Any) -> dict:
         candidate = Path(payload_ref)
         if not candidate.is_absolute():
             # payload_ref is stored relative to the repo root, e.g.
-            # "backend/data/wake_events/<file>.json".
-            if str(candidate).startswith("backend/"):
-                candidate = backend_root.parent / candidate
+            # "backend/data/wake_events/<file>.json". On host, backend_root is
+            # "<repo>/backend"; in the container, backend_root is "/app". In
+            # both cases the file lives at "<backend_root>/data/wake_events/...",
+            # so when payload_ref is repo-rooted ("backend/...") we strip the
+            # "backend/" prefix and re-anchor on backend_root. When it's
+            # already backend-rooted (e.g. "data/wake_events/..."), join
+            # directly. Avoids the prior "<repo_root>/backend/data/..." path
+            # which only works on the host (in the container it resolves to
+            # "/backend/data/..." and the file isn't there).
+            parts = candidate.parts
+            if parts and parts[0] == "backend":
+                candidate = backend_root.joinpath(*parts[1:])
             else:
                 candidate = backend_root / candidate
         if not candidate.exists():

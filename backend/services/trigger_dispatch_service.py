@@ -417,6 +417,30 @@ class TriggerDispatchService:
         criteria = getattr(instance, "trigger_criteria", None)
         if not criteria:
             return None
+
+        # GitHub PR-submitted envelope (criteria_version 1): the dedicated
+        # evaluator runs BEFORE the legacy top-level filters fire. If the
+        # envelope sets ``event`` to something other than ``pull_request``,
+        # log + fall back to the shared payload-criteria evaluator (which
+        # honors ``filters.jsonpath_matchers``); the GitHub trigger today only
+        # ships the PR-submitted envelope, but this keeps newer envelopes
+        # forward-compatible without a dispatcher rev.
+        trigger_type = (event.trigger_type or "").strip().lower()
+        if trigger_type == "github" and isinstance(criteria, dict):
+            envelope_event = str(criteria.get("event") or "").strip().lower()
+            if envelope_event == "pull_request":
+                return self._github_pr_criteria_reason(event.payload, criteria)
+            if envelope_event and envelope_event != "pull_request":
+                # Reserved for future envelope shapes; fall through to the
+                # shared evaluator (or no-op if the envelope is unstructured).
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "GitHub trigger criteria event=%r not yet implemented; falling back to legacy filters",
+                    envelope_event,
+                )
+                return None
+
         try:
             matched, reason = evaluate_payload_criteria(event.payload, criteria)
         except ValueError as exc:
@@ -424,6 +448,35 @@ class TriggerDispatchService:
         if matched:
             return None
         return f"criteria_no_match:{reason or 'payload'}"
+
+    def _github_pr_criteria_reason(
+        self,
+        payload: dict[str, Any],
+        criteria: dict[str, Any],
+    ) -> Optional[str]:
+        """Return ``criteria_no_match:<reason>`` if the GitHub PR envelope rejects.
+
+        ``payload`` here is the dispatch envelope built by
+        ``channels.github.trigger.build_dispatch_payload`` — the original
+        GitHub webhook body lives under ``raw_event``. Pass that to the
+        evaluator (which expects ``action`` + ``pull_request`` at the top
+        level). Falls back to the wrapper itself if ``raw_event`` is absent
+        (defensive for callers that hand us the raw webhook directly, e.g.
+        ``test-criteria`` endpoint).
+        """
+        try:
+            from channels.github.criteria import evaluate_pr_criteria
+        except ImportError:  # pragma: no cover — channels package is part of the app
+            return None
+        unwrapped = payload.get("raw_event") if isinstance(payload, dict) else None
+        evaluation_target = unwrapped if isinstance(unwrapped, dict) else payload
+        try:
+            matched, reason = evaluate_pr_criteria(evaluation_target, criteria)
+        except ValueError as exc:
+            return f"invalid_trigger_criteria:{exc}"
+        if matched:
+            return None
+        return f"criteria_no_match:{reason}"
 
     def _resolve_agent_id(
         self,
