@@ -354,10 +354,11 @@ PREDEFINED_MODELS = {
         "o1", "o1-mini", "o3-mini", "o4-mini",
     ],
     "anthropic": [
+        # Current generation. Older claude-3.5-sonnet / claude-3-opus removed
+        # from selectable list (BUG-697); pricing rows in token_tracker.py are
+        # retained for legacy invoice cost calculation.
         "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
     ],
     "gemini": [
         # Static fallback only — used when the live /v1beta/models call fails
