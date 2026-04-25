@@ -96,16 +96,11 @@ class KnowledgeService:
         self.processor = DocumentProcessor()
         self.embedding_service = get_shared_embedding_service()
 
-        # Initialize ChromaDB client for knowledge base
+        # Initialize ChromaDB client via process-wide factory (BUG-695).
         vector_dir = Path("./data/chroma/knowledge")
         vector_dir.mkdir(parents=True, exist_ok=True)
-        self.chroma_client = chromadb.PersistentClient(
-            path=str(vector_dir),
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
-        )
+        from chroma_client_factory import get_chroma_client
+        self.chroma_client = get_chroma_client(str(vector_dir))
 
         # Storage directory for uploaded files
         self.storage_dir = Path("./data/knowledge")

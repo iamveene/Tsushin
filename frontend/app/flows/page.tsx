@@ -1402,17 +1402,26 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
       return
     }
 
-    // Flush all pending step config form changes before submitting
+    // BUG-686 fix: flush callbacks may call setFlowData() which is async; the
+    // single setTimeout(0) await wasn't enough for the React reconciler to
+    // commit, leading to stale ref reads and "Create Flow" appearing to do
+    // nothing. Flush, await two microtasks, then read the ref freshly.
     createFlushRef.current.forEach(flush => flush())
+    await Promise.resolve()
     await new Promise(r => setTimeout(r, 0))
 
     setSubmitting(true)
     try {
-      await api.createFlowV2(flowDataRef.current)
+      const payload = flowDataRef.current
+      await api.createFlowV2(payload)
       onSuccess()
     } catch (error) {
+      // BUG-686 fix: surface the real error message instead of a generic one.
       console.error('Failed to create flow:', error)
-      toast.error('Creation Failed', 'Failed to create flow')
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to create flow'
+      toast.error('Creation Failed', message)
     } finally {
       setSubmitting(false)
     }

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Bug-fix close-out (2026-04-25)
+
+**Fixed (7 open BUGS.md items closed):**
+- BUG-694 — Sentinel block-mode test endpoint `NameError` on `_should_log_analysis(blocked_result, ...)`. Replaced with locally-built `result` reference; removed retired `claude-3-5-sonnet-*` from `LLM_MODELS["anthropic"]` so the test surface no longer selects 404'ing model IDs.
+- BUG-695 — ChromaDB singleton settings conflict. New `backend/chroma_client_factory.py` with `get_chroma_client(path)` and a single shared `Settings(anonymized_telemetry=False, allow_reset=True)`. Refactored 13 prior `chromadb.PersistentClient(...)` call sites across `combined_knowledge_service`, `project_memory_service`, `project_service`, `playground_document_service`, `vector_store`, `agent/knowledge/knowledge_service`.
+- BUG-696 — Studio Projects back-arrow in `frontend/app/studio/projects/page.tsx:186` rerouted to `/agents/projects` (was the missing `/studio` route).
+- BUG-697 — Anthropic catalogs in `routes_provider_instances.py` and `routes_sentinel.py` no longer expose retired `claude-3-5-sonnet-20241022` / `claude-3-opus-20240229`. OpenRouter list also cleaned (`anthropic/claude-3.5-sonnet`, `anthropic/claude-3-opus` → replaced with `anthropic/claude-sonnet-4-6`). Pricing rows in `analytics/token_tracker.py` retained for legacy invoice cost calculation.
+- BUG-698 — `qdrant-client` pinned to `>=1.13.0,<1.14.0` in `backend/requirements-optional.txt` to match the auto-provisioned Qdrant server `v1.13.x` and stay inside the supported compat window.
+- BUG-687 — Three Sentinel modal containers in `frontend/app/settings/sentinel/page.tsx` (Profile Editor, Clone, Exception) raised from `z-50` to `z-[210]` so Test Analysis results render above the User Guide overlay (`z-[201]`).
+- BUG-686 — Flows builder `handleSubmit` race fixed by adding a `Promise.resolve()` microtask before reading `flowDataRef.current`, plus surfacing the actual server error message in the toast.
+- BUG-690 — `frontend/components/ui/Modal.tsx` `title` prop made optional (was `string`, now `string?`) to eliminate the silent runtime prop-type mismatch that intermittently swallowed onboarding modal close-button events.
+
+**Validated:**
+- 107/107 focused pytest pass (continuous, email, jira, schedule, github, webhook, dispatch, ASR suites — no regressions).
+- Backend logs since restart: 0 `ERROR|Traceback|Exception` entries beyond the expected tester-MCP DNS resolution warning.
+- WhatsApp ASR round-trip 4/4: tester → bot → backend ASR → contextual reply → tester.
+- Cross-tenant DB isolation: 11 vs 3 agents, no overlap.
+- Live qa-tester browser verification of each fix (see `docs/qa/v0.7.0/validation/final-bug-fix-verify-2026-04-25/`).
+
+**Deferred to v0.7.x (out of session scope):**
+- BUG-684 (Gmail poll DB session leak) — already mitigated to operational margin (8s `wait_for`, 10s httpx). Deeper structural fix is cross-cutting; needs dedicated soak test.
+- BUG-685 (local Caddy HTTPS routing) — debugging would break the browser-sweep dependency.
+- BUG-688 (VM self-signed IP TLS) — requires disposable Parallels VM.
+- BUG-693 (a2a context leak) — defensive layer holding; structural typed-context schema is v0.7.x architectural change.
+
 ### Release 0.7.0 — RC sweep + WS-6 ASR fix (2026-04-24)
 
 **Fixed (WS-6 ASR):**

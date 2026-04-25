@@ -990,8 +990,11 @@ class SentinelService:
                 response_time_ms=int((time.time() - start_time) * 1000),
             )
 
-            # Log with exception info (if logging enabled)
-            if self._should_log_analysis(blocked_result, config):
+            # Log with exception info (if logging enabled).
+            # BUG-694 fix: previously referenced `blocked_result` which is
+            # only defined later in the function — use the local `result`
+            # built in the exception-matched branch above.
+            if self._should_log_analysis(result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,

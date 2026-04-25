@@ -875,12 +875,12 @@ LLM_MODELS = {
         "gemini-2.0-flash-lite",
     ],
     "anthropic": [
+        # Retired claude-3.5-sonnet / claude-3-opus removed from selectable
+        # list (BUG-697). Pricing rows preserved in analytics/token_tracker.py.
         "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
     ],
     "openai": [
         "gpt-4o",
@@ -892,9 +892,8 @@ LLM_MODELS = {
         "google/gemini-2.5-flash",
         "google/gemini-2.5-pro",
         "google/gemini-2.0-flash-thinking-exp",
+        "anthropic/claude-sonnet-4-6",
         "anthropic/claude-sonnet-4-5",
-        "anthropic/claude-3.5-sonnet",
-        "anthropic/claude-3-opus",
         "openai/gpt-4o",
         "openai/gpt-4-turbo",
         "meta-llama/llama-3.1-8b-instruct",
