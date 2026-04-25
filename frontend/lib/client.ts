@@ -1869,7 +1869,7 @@ export interface PRSubmittedCriteria {
   branch_filter?: string | null
   path_filters?: string[] | null
   author_filter?: string | null
-  draft_only?: boolean
+  exclude_drafts?: boolean
   title_contains?: string | null
   body_contains?: string | null
 }

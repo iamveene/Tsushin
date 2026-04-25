@@ -585,6 +585,30 @@ def dry_run_github_pr_criteria_saved(
     criteria = instance.trigger_criteria
     if not criteria:
         raise HTTPException(status_code=409, detail="trigger_criteria not configured")
+    if not isinstance(criteria, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="trigger_criteria is not an object — cannot dry-run",
+        )
+    # The dry-run path is PR-specific. If the saved envelope is a different
+    # shape (legacy JSONPath-style criteria, no `event` key, or an
+    # unsupported event), reject with a clear 409 instead of silently
+    # coercing to a PR envelope (which `validate_pr_criteria` would do by
+    # defaulting `event` to `pull_request` and `actions` to `["opened"]`).
+    envelope_event = str(criteria.get("event") or "").strip().lower()
+    if not envelope_event:
+        raise HTTPException(
+            status_code=409,
+            detail="trigger_criteria has no 'event' field — only PR-shaped envelopes can be dry-run.",
+        )
+    if envelope_event != "pull_request":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"trigger_criteria.event='{envelope_event}' is not yet supported by the dry-run endpoint "
+                "(only 'pull_request' envelopes can be dry-run today)."
+            ),
+        )
     try:
         validated = validate_pr_criteria(criteria)
     except ValueError as exc:

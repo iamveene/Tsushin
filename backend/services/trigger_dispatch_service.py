@@ -411,7 +411,6 @@ class TriggerDispatchService:
             # The pre-check must never take down trigger ingestion if Sentinel's
             # optional profile/config tables are unavailable in focused tests.
             return None
-        return None
 
     def _criteria_filter_reason(self, instance: Any, event: TriggerDispatchInput) -> Optional[str]:
         criteria = getattr(instance, "trigger_criteria", None)

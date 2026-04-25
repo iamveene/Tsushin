@@ -1002,6 +1002,11 @@ class CodeRepositorySkill(BaseSkill):
             "read_issue",
             "create_issue",
             "add_pr_comment",
+            "approve_pull_request",
+            "request_changes",
+            "merge_pull_request",
+            "close_pull_request",
+            "close_issue",
         ]:
             cap_props[cap] = {
                 "type": "object",
