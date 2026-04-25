@@ -1571,6 +1571,8 @@ export interface JiraTriggerTestQueryRequest {
   max_results?: number
 }
 
+export type JiraProviderMode = 'programmatic' | 'agentic'
+
 export interface JiraIntegration {
   id: number
   tenant_id?: string
@@ -1581,6 +1583,7 @@ export interface JiraIntegration {
   auth_email?: string | null
   api_token_preview?: string | null
   is_active: boolean
+  provider_mode?: JiraProviderMode
   health_status?: string | null
   health_status_reason?: string | null
   last_health_check?: string | null
@@ -1598,6 +1601,7 @@ export interface JiraIntegrationCreateRequest {
   auth_email: string
   api_token: string
   is_active?: boolean
+  provider_mode?: JiraProviderMode
 }
 
 export interface JiraIntegrationUpdateRequest {
@@ -1607,6 +1611,7 @@ export interface JiraIntegrationUpdateRequest {
   auth_email?: string
   api_token?: string | null
   is_active?: boolean
+  provider_mode?: JiraProviderMode
 }
 
 export interface JiraIssuePreview {

@@ -314,6 +314,7 @@ type JiraIntegrationDraft = {
   auth_email: string
   api_token: string
   is_active: boolean
+  provider_mode: 'programmatic' | 'agentic'
 }
 
 function jiraIntegrationName(integration: JiraIntegration): string {
@@ -341,6 +342,7 @@ function jiraIntegrationDraftFromTarget(target: JiraIntegration | null): JiraInt
     auth_email: target?.auth_email || '',
     api_token: '',
     is_active: target?.is_active ?? true,
+    provider_mode: (target?.provider_mode as 'programmatic' | 'agentic') || 'programmatic',
   }
 }
 
@@ -437,6 +439,47 @@ function JiraIntegrationModal({
               placeholder={target ? 'Enter a replacement token' : 'Enter API token'}
               autoComplete="new-password"
             />
+          </div>
+        </div>
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-300">Connection mode</label>
+          <div className="grid gap-2 md:grid-cols-2">
+            <label
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${draft.provider_mode === 'programmatic' ? 'border-teal-500 bg-teal-500/10' : 'border-tsushin-border bg-tsushin-ink/40'}`}
+            >
+              <input
+                type="radio"
+                name="jira-provider-mode"
+                value="programmatic"
+                checked={draft.provider_mode === 'programmatic'}
+                onChange={() => setDraft((current) => ({ ...current, provider_mode: 'programmatic' }))}
+                className="mt-1"
+              />
+              <div>
+                <div className="text-sm font-medium text-white">Programmatic (REST API)</div>
+                <div className="text-xs text-tsushin-slate">Direct Jira REST API calls with the API token above. Available now.</div>
+              </div>
+            </label>
+            <label
+              className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-tsushin-border bg-tsushin-ink/20 px-3 py-2 opacity-60"
+              title="Coming soon — Atlassian Remote MCP (OAuth 2.1)"
+            >
+              <input
+                type="radio"
+                name="jira-provider-mode"
+                value="agentic"
+                checked={false}
+                disabled
+                className="mt-1"
+              />
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium text-white">
+                  Agentic (Atlassian Remote MCP)
+                  <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">Coming soon</span>
+                </div>
+                <div className="text-xs text-tsushin-slate">OAuth 2.1 to <code>mcp.atlassian.com/v1/mcp</code>. Pending Atlassian admin enablement.</div>
+              </div>
+            </label>
           </div>
         </div>
         <label className="flex items-center gap-2">
@@ -2156,6 +2199,7 @@ export default function HubPage() {
           auth_email: draft.auth_email.trim(),
           api_token: draft.api_token.trim() || undefined,
           is_active: draft.is_active,
+          provider_mode: draft.provider_mode,
         })
       } else {
         await api.createJiraIntegration({
@@ -2164,6 +2208,7 @@ export default function HubPage() {
           auth_email: draft.auth_email.trim(),
           api_token: draft.api_token.trim(),
           is_active: draft.is_active,
+          provider_mode: draft.provider_mode,
         })
       }
       await Promise.all([loadJiraIntegrations(), loadBreadthTriggers()])

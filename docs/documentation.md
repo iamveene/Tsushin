@@ -991,6 +991,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `okg_term_memory` | OKG Term Memory | hybrid | Store/recall structured term memory with MemGuard validation | `okg_term_memory_skill.py:158-164` |
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
+| `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
@@ -2043,7 +2044,7 @@ Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue pay
 - `POST /api/triggers/jira/{id}/notification-subscription`
 - `POST /api/triggers/jira/{id}/poll-now`
 
-**Stored config:** Jira Tool API rows store site URL, optional project key, auth email, encrypted API token, token preview, active flag, and health metadata. Jira trigger rows store the selected `jira_integration_id`, JQL, optional project override, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps, with legacy trigger-local credential fields retained as a v0.7.0 compatibility fallback.
+**Stored config:** Jira Tool API rows store site URL, optional project key, auth email, encrypted API token, token preview, active flag, health metadata, and (since v0.7.0) `provider_mode` (`'programmatic' | 'agentic'`, default `'programmatic'` — see §20.5 below). Jira trigger rows store the selected `jira_integration_id`, JQL, optional project override, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps, with legacy trigger-local credential fields retained as a v0.7.0 compatibility fallback.
 
 **Runtime and notifier contract:**
 - Active Jira triggers poll on their configured interval using Jira Cloud's enhanced JQL search endpoint (`/rest/api/3/search/jql`), dispatch matching issues through the shared trigger dispatch path, and persist dedupe evidence so the same issue is processed once.
@@ -2748,6 +2749,34 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 | Kokoro TTS | 6600–6699 | `services/kokoro_container_manager.py` |
 | Ollama | 6700–6799 | `services/ollama_container_manager.py` |
 | SearXNG | 6500–6599 | `services/searxng_container_manager.py` |
+
+### 20.4.1 Atlassian Jira (programmatic + ticket_management skill)
+
+**Sources:** `backend/hub/jira/jira_ticket_service.py`, `backend/services/jira_integration_service.py`, `backend/api/routes_jira_integrations.py`, `frontend/app/hub/page.tsx` (JiraIntegrationModal), `backend/agent/skills/jira_skill.py`.
+
+A Jira integration row (`jira_integration` — subclass of `hub_integration`) stores the site URL, optional default project key, auth email, encrypted API token, and (since v0.7.0) a `provider_mode` discriminator:
+
+| `provider_mode` | Status | Path |
+|---|---|---|
+| `programmatic` | ✅ shipped | Direct REST API + token (HTTP Basic auth). Used by both Jira triggers and the `ticket_management` skill. |
+| `agentic` | ⏳ Coming soon | OAuth 2.1 to `https://mcp.atlassian.com/v1/mcp` (Atlassian Remote MCP). UI exposes the option as a disabled radio with a "Coming soon" tooltip; backend rejects `provider_mode='agentic'` with `400 agentic_mode_not_yet_supported`. |
+
+**Hub modal flow** (`frontend/app/hub/page.tsx` JiraIntegrationModal): name, site URL, auth email, API token, Connection-mode radio, active checkbox. Editing keeps the existing token unless replaced.
+
+**Ticket Management skill** (§9 row `ticket_management`): the same `JiraIntegration` row is reused on demand by agents. The agent's Skills tab auto-selects a Jira integration when exactly one exists for the tenant. Capability matrix:
+
+| Capability | Default | Endpoint |
+|---|---|---|
+| `search_tickets` | ✅ on | POST `/rest/api/3/search/jql` |
+| `read_ticket` | ✅ on | GET `/rest/api/3/issue/{key}` |
+| `read_comments` | ✅ on | GET `/rest/api/3/issue/{key}/comment` |
+| `update_ticket` | ❌ off | PUT `/rest/api/3/issue/{key}` |
+| `add_comment` | ❌ off | POST `/rest/api/3/issue/{key}/comment` |
+| `transition_ticket` | ❌ off | POST `/rest/api/3/issue/{key}/transitions` |
+
+Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool schema (the LLM never sees actions it cannot run). `JiraSkill.get_mcp_tool_definition` (classmethod) returns the *full* spec so `SkillManager._find_skill_by_tool_name('ticket_operation')` can map the tool name to the class for dispatch; per-agent filtering happens in instance-level `to_openai_tool` / `to_anthropic_tool` helpers that read `AgentSkill.config["capabilities"]`.
+
+**DELETE protection:** `DELETE /api/hub/jira-integrations/{id}` returns `409` if the integration is still referenced by any `JiraChannelInstance` (trigger) or `AgentSkillIntegration` row. The user must detach those references first; the modal's Remove button surfaces the reason.
 
 ### 20.5 Browser Automation (Playwright, CDP)
 

@@ -23,6 +23,19 @@ const PROVIDER_SKILLS = {
   'scheduler': { displayName: 'Scheduler', skillType: 'flows', providerKey: 'scheduler' },
   'email': { displayName: 'Email', skillType: 'gmail', providerKey: 'email' },
   'web_search': { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
+  'ticket_management': { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
+}
+
+type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management'
+
+// Ticket Management capability labels (mirrors backend default_config)
+const TICKET_MANAGEMENT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
+  search_tickets: { label: 'Search tickets', description: 'JQL search across tickets (read)', defaultEnabled: true },
+  read_ticket: { label: 'Read ticket', description: "Fetch one ticket's fields (read)", defaultEnabled: true },
+  read_comments: { label: 'Read comments', description: "Fetch a ticket's comments (read)", defaultEnabled: true },
+  update_ticket: { label: 'Update ticket', description: 'Modify ticket fields (write — off by default)', defaultEnabled: false },
+  add_comment: { label: 'Add comment', description: 'Post a comment on a ticket (write — off by default)', defaultEnabled: false },
+  transition_ticket: { label: 'Transition ticket', description: 'Move a ticket through its workflow (write — off by default)', defaultEnabled: false },
 }
 
 // Audio sub-skill tabs
@@ -134,6 +147,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [schedulerProviders, setSchedulerProviders] = useState<SkillProvider[]>([])
   const [emailProviders, setEmailProviders] = useState<SkillProvider[]>([])
   const [webSearchProviders, setWebSearchProviders] = useState<SkillProvider[]>([])
+  const [ticketManagementProviders, setTicketManagementProviders] = useState<SkillProvider[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [selectedIntegration, setSelectedIntegration] = useState<number | null>(null)
   const [providerLoading, setProviderLoading] = useState(false)
@@ -143,6 +157,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
     read: true,
     write: false
   })
+
+  // Ticket Management capability toggles (per-agent, six booleans)
+  const [ticketCapabilities, setTicketCapabilities] = useState<Record<string, boolean>>(
+    Object.fromEntries(
+      Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
+    )
+  )
 
   // Unified Audio skill state
   const [configuringAudio, setConfiguringAudio] = useState(false)
@@ -294,7 +315,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Open the appropriate config modal
       const info = SKILL_DISPLAY_INFO[skillType]
       if (info?.configType === 'provider' && info.providerKey) {
-        openProviderConfig(info.providerKey as 'scheduler' | 'email' | 'web_search')
+        openProviderConfig(info.providerKey as ProviderKey)
       } else if (info?.configType === 'audio') {
         openAudioConfig(skillType === 'audio_transcript' ? 'transcript' : 'tts')
       } else if (info?.configType === 'shell') {
@@ -387,7 +408,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const openProviderConfig = async (providerKey: 'scheduler' | 'email' | 'web_search') => {
+  const openProviderConfig = async (providerKey: ProviderKey) => {
     setProviderLoading(true)
     setConfiguringProvider(providerKey)
 
@@ -399,6 +420,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setEmailProviders(providers)
       } else if (providerKey === 'web_search') {
         setWebSearchProviders(providers)
+      } else if (providerKey === 'ticket_management') {
+        setTicketManagementProviders(providers)
       }
 
       // Load current integration for this skill
@@ -408,7 +431,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       const defaultProvider =
         (providersWithDefaults.find(p => p.is_default)?.provider_type)
         || providers[0]?.provider_type
-        || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : 'brave'))
+        || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : (providerKey === 'ticket_management' ? 'jira' : 'brave')))
 
       if (integration) {
         setSelectedProvider(
@@ -425,8 +448,27 @@ export default function AgentSkillsManager({ agentId }: Props) {
         // Set default provider
         setSelectedProvider(defaultProvider)
         setSelectedIntegration(null)
+        // For ticket_management, auto-select the only integration when there's exactly one
+        if (providerKey === 'ticket_management') {
+          const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
+          if (defaultProviderEntry?.available_integrations?.length === 1) {
+            setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
+          }
+        }
         // Default permissions: read-only for safety
         setProviderPermissions({ read: true, write: false })
+      }
+
+      // Load ticket capability toggles for ticket_management
+      if (providerKey === 'ticket_management') {
+        const skillCfg = getSkillConfig(skillType)
+        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
+        const next: Record<string, boolean> = {}
+        for (const [capKey, meta] of Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS)) {
+          const stored = cfgCaps[capKey]
+          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
+        }
+        setTicketCapabilities(next)
       }
     } catch (err) {
       console.error('Failed to load providers:', err)
@@ -441,7 +483,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     if (!configuringProvider) return
 
     try {
-      const skillType = PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].skillType
+      const skillType = PROVIDER_SKILLS[configuringProvider as ProviderKey].skillType
 
       // Build config with permissions (for Google Calendar)
       const config: SkillConfig = {}
@@ -462,6 +504,34 @@ export default function AgentSkillsManager({ agentId }: Props) {
         await api.updateAgentSkill(agentId, skillType, {
           is_enabled: true,
           config: config
+        })
+      } else if (configuringProvider === 'ticket_management') {
+        // Persist the integration link AND merge capability toggles into the
+        // AgentSkill.config so per-action filtering kicks in at tool-spec time.
+        await api.updateSkillIntegration(agentId, skillType, {
+          scheduler_provider: null,
+          integration_id: selectedIntegration,
+          config: undefined,
+        })
+
+        const currentConfig = getSkillConfig(skillType)
+        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
+        for (const [capKey, meta] of Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS)) {
+          capabilities[capKey] = {
+            enabled: ticketCapabilities[capKey] ?? meta.defaultEnabled,
+            label: meta.label,
+            description: meta.description,
+          }
+        }
+        const mergedConfig: SkillConfig = {
+          ...currentConfig,
+          execution_mode: 'tool',
+          integration_id: selectedIntegration,
+          capabilities,
+        }
+        await api.updateAgentSkill(agentId, skillType, {
+          is_enabled: true,
+          config: mergedConfig,
         })
       } else {
         // Save skill integration for scheduler/email
@@ -821,10 +891,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
-  // Render provider-based skill card (Scheduler, Email, Web Search)
+  // Render provider-based skill card (Scheduler, Email, Web Search, Ticket Management)
   const renderProviderSkillCard = (
     displayName: string,
-    providerKey: 'scheduler' | 'email' | 'web_search',
+    providerKey: ProviderKey,
     SkillIcon: React.FC<IconProps>,
     description: string
   ) => {
@@ -862,6 +932,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
           default:
             providerDisplay = integration.scheduler_provider || 'Flows (Built-in)'
         }
+      } else if (providerKey === 'ticket_management') {
+        providerDisplay = 'Atlassian Jira'
+        integrationDisplay = integration.integration_name || ''
       } else {
         providerDisplay = 'Gmail'
         integrationDisplay = integration.integration_email || ''
@@ -1360,11 +1433,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
   // Filter which provider skills are enabled
   const enabledProviderSkills = useMemo(() => {
-    const result: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
-    const providerEntries: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
+    const result: { providerKey: ProviderKey; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
+    const providerEntries: { providerKey: ProviderKey; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
       { providerKey: 'scheduler', displayName: 'Scheduler', skillType: 'flows', icon: CalendarIcon, description: 'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.' },
       { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.' },
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
+      { providerKey: 'ticket_management', displayName: 'Ticket Management', skillType: 'ticket_management', icon: WrenchIcon, description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.' },
     ]
     for (const entry of providerEntries) {
       if (enabledSkillTypes.has(entry.skillType)) {
@@ -1396,6 +1470,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     configuringProvider === 'scheduler' ? schedulerProviders :
     configuringProvider === 'email' ? emailProviders :
     configuringProvider === 'web_search' ? webSearchProviders :
+    configuringProvider === 'ticket_management' ? ticketManagementProviders :
     []
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
 
@@ -1482,7 +1557,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
             <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-white">
-                Configure {PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].displayName}
+                Configure {PROVIDER_SKILLS[configuringProvider as ProviderKey].displayName}
               </h3>
               <button
                 onClick={() => setConfiguringProvider(null)}
@@ -1674,6 +1749,48 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       </div>
                     </div>
                   )}
+
+                  {/* Capability toggles — Ticket Management (Jira) */}
+                  {configuringProvider === 'ticket_management' && !providerLoading && (
+                    <div className="border-t pt-6 border-tsushin-border">
+                      <label className="block text-sm font-medium mb-3">
+                        Capabilities
+                      </label>
+                      <p className="text-xs text-tsushin-muted mb-3">
+                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
+                        Read actions are on by default; write actions are off by default for safety.
+                      </p>
+                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
+                        {Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS).map(([capKey, meta]) => (
+                          <div key={capKey} className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              id={`ticket-cap-${capKey}`}
+                              checked={!!ticketCapabilities[capKey]}
+                              onChange={(e) =>
+                                setTicketCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
+                              }
+                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={`ticket-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
+                                {meta.label}
+                                {!meta.defaultEnabled && (
+                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
+                                )}
+                              </label>
+                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {!Object.values(ticketCapabilities).some(Boolean) && (
+                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
+                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -1687,13 +1804,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
               </button>
               <button
                 onClick={saveProviderConfig}
-                disabled={
-                  (selectedProviderData?.requires_integration && !selectedIntegration) ||
-                  (!providerPermissions.read && !providerPermissions.write)
-                }
+                disabled={(() => {
+                  if (selectedProviderData?.requires_integration && !selectedIntegration) return true
+                  if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) return true
+                  if (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) return true
+                  return false
+                })()}
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                  (selectedProviderData?.requires_integration && !selectedIntegration) ||
-                  (!providerPermissions.read && !providerPermissions.write)
+                  ((selectedProviderData?.requires_integration && !selectedIntegration) ||
+                    (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) ||
+                    (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)))
                     ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}

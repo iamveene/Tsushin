@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Ticket Management Skill (Jira provider) (2026-04-25)
+
+Adds a **Ticket Management** skill (`skill_type=ticket_management`) that lets agents search/read/act on tickets in a connected ticketing system. v0.7.0 ships **Atlassian Jira** as the only provider, using the REST API + token auth that the existing `JiraIntegration` Hub row already stored. The skill reuses the modern `/rest/api/3/search/jql` endpoint and the encrypted-token plumbing from the Jira trigger path, so no credentials are duplicated.
+
+- **Skill class:** `backend/agent/skills/jira_skill.py` — single MCP tool `ticket_operation` with six actions (`search`, `read`, `read_comments`, `update`, `add_comment`, `transition`). Default config enables only the three read actions; write actions ship implemented but disabled-by-default and **untested in this PR pending explicit approval**.
+- **HTTP client:** `backend/hub/jira/jira_ticket_service.py` — async `httpx` wrapper. JQL search, single-issue read, comments read/write, field update, transitions list/execute. ADF (Atlassian Document Format) text extraction for comment bodies.
+- **Capability gating at the tool spec, not runtime:** disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool schema sent to the LLM (`JiraSkill.to_openai_tool` / `to_anthropic_tool` rebuild the `action` enum from `AgentSkill.config["capabilities"]`). The LLM literally cannot propose `update` on a read-only agent — verified end-to-end in the playground (the agent says "I currently only have the ability to search, read, and read comments"). A defense-in-depth check in `execute_tool` remains as a fallback.
+- **Provider mode (programmatic vs agentic):** new `provider_mode VARCHAR(16) NOT NULL DEFAULT 'programmatic'` column on `jira_integration` (alembic `0064_jira_provider_mode`). The Hub modal now shows a "Connection mode" radio with "Programmatic (REST API)" enabled and "Agentic (Atlassian Remote MCP) — Coming soon" disabled. `POST /api/hub/jira-integrations` rejects `provider_mode='agentic'` with `400 agentic_mode_not_yet_supported`.
+- **Hub modal UX:** `frontend/app/hub/page.tsx` JiraIntegrationModal — Connection mode radio + tooltip "OAuth 2.1 to mcp.atlassian.com/v1/mcp. Pending Atlassian admin enablement.".
+- **AgentSkillsManager UX:** `frontend/components/AgentSkillsManager.tsx` — new `ticket_management` provider entry; auto-selects the lone Jira integration when only one exists; capability toggles modal with explicit safety copy ("Disabled actions are removed from the agent's tool spec — the LLM never even sees them") and a "WRITE" badge on update/add_comment/transition.
+- **Skill providers endpoint:** `GET /api/skill-providers/ticket_management` returns the Jira programmatic integrations and a placeholder `jira_agentic` provider with `coming_soon: true` and an empty `available_integrations` list.
+- **Hub DELETE hardening:** `routes_jira_integrations.delete_jira_integration` now also returns a friendly `409` when the integration is referenced by an `AgentSkillIntegration` row (previously raised `500` on FK constraint), with the message "Jira integration is linked to one or more agent skills. Detach it from agents first."
+- **Framework parser tolerance:** `agent/agent_service._parse_tool_call_block` now defaults `command_name` to `tool_name` when the LLM's `[TOOL_CALL]` block omits it. Single-tool skills (gmail_operation, ticket_operation, …) have one command per tool, and frontier LLMs frequently elide the redundant `command_name`. Multi-command sandboxed tools (`nmap quick_scan`) are unaffected because they always emit both fields.
+
+**Validated live (Questrade Jira tenant, JSM project):**
+- "List open Pen Test tickets in JSM" → returned the 2 real open Pen Test issues (`JSM-193570` "Pen testing | NetCommander Application" / Incoming requests, `JSM-189100` "Multi-community" / In Progress).
+- "Status of JSM-193570?" → "Incoming requests, type Pen Test, assignee Matheus Pires" (matches Jira ground truth via raw curl).
+- Filter chain "type Pen Test, not Done, contains 'community'" → narrowed to the single matching ticket `JSM-189100`.
+- "Update JSM-193570 priority to High" → agent refused with the message that it only has search/read/read_comments capabilities; backend logs show no `update` tool call emitted (proving the action wasn't even in the tool spec).
+- Wizard delete-and-recreate cycle: deleted `JiraChannelInstance #4`, hit the new 409 by trying to delete the integration with a skill still attached, detached the skill, deleted `JiraIntegration #11`, recreated as `JiraIntegration #12` via the wizard with `provider_mode=programmatic`, recreated the trigger pointing at #12, re-attached the skill on the test agent, and ran the search prompt again successfully against the new integration.
+- Confirmed in the Hub UI that the new "Connection mode" radio displays Programmatic + Agentic-coming-soon side by side.
+- Confirmed in the Agent > Skills tab that Ticket Management appears with provider "Atlassian Jira", account "Questrade JSM Pen Test", status "healthy", and the capability toggle modal renders with safety copy and WRITE badges.
+- pytest: `tests/test_jira_skill.py` 13 tests pass; `tests/test_routes_jira_triggers.py` + `tests/test_phase0_foundation.py` 24 tests pass (no regression).
+
 ### Release 0.7.0 — Agentic-loop bundle (2026-04-25)
 
 Closed four related agentic-loop bugs surfaced by the v0.7.0 deep-regression

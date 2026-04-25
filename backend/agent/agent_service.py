@@ -459,6 +459,16 @@ class AgentService:
                     "command_name": command_name,
                     "parameters": parameters,
                 }
+            # If only tool_name is present, default command_name to tool_name.
+            # Many single-tool skills (gmail_operation, ticket_operation, etc.)
+            # have one command per tool, and LLMs sometimes omit the redundant
+            # command_name even when the prompt asks for it.
+            if tool_name and not command_name:
+                return {
+                    "tool_name": tool_name,
+                    "command_name": tool_name,
+                    "parameters": parameters,
+                }
         except Exception:
             return None
 
