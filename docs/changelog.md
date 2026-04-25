@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — UI bug fixes from full regression (2026-04-25)
+
+Two frontend bugs surfaced by the v0.7.0 full-platform UI regression. Both were silently hiding shipped functionality from the user.
+
+- **Add Skill catalog hid Code Repository and Ticket Management** — `frontend/components/skills/AddSkillModal.tsx` listed only `flows`, `gmail`, `web_search` as provider-skill types; the new `code_repository` and `ticket_management` skills were filtered out of the standard branch by `SPECIAL_RENDERED_SKILLS` and never reached the provider branch, so the modal showed 12 skills instead of 14. Added both to `providerSkillTypes`. Catalog now correctly surfaces all five provider skills.
+- **GitHub trigger "Test against sample payload" returned 422** — `frontend/lib/client.ts` `testGitHubPRCriteria` and `testGitHubPRCriteriaForTrigger` posted `{criteria, sample_payload}`, but the backend `GitHubCriteriaTestRequest` / `GitHubCriteriaPayloadRequest` Pydantic models declare the field as `payload`. Renamed the JSON keys; dry-run now returns `{matched: true, reason: "Sample payload matches the criteria."}` for a matching example.
+
+Verified live: agent on integration #15 + PR `iamveene/Tsushin#38` round-trip → `tool_used=skill:repository_operation`, merge_commit_sha `128af22d723f9247614250a96a5acc68c013e5b0`. Email trigger #15 polled the live `mv@archsec.io` Gmail box and emitted `New email detected — Subject: [v0.7.0 regression] XYZCODEX20260424T195215` to WhatsApp tester `5527999616279`.
+
 ### Release 0.7.0 — Ticket Management Skill (Jira provider) (2026-04-25)
 
 Adds a **Ticket Management** skill (`skill_type=ticket_management`) that lets agents search/read/act on tickets in a connected ticketing system. v0.7.0 ships **Atlassian Jira** as the only provider, using the REST API + token auth that the existing `JiraIntegration` Hub row already stored. The skill reuses the modern `/rest/api/3/search/jql` endpoint and the encrypted-token plumbing from the Jira trigger path, so no credentials are duplicated.
