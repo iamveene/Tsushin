@@ -7,6 +7,14 @@
 		reverse_proxy backend:8081
 	}
 
+	# BUG-712: Prometheus /metrics — route directly to backend so Next.js
+	# auth middleware does not 307 it to /auth/login. Backend already enforces
+	# `Authorization: Bearer <TSN_METRICS_SCRAPE_TOKEN>` when the env is set
+	# (see backend/services/metrics_service.py:110), so no extra gate here.
+	handle /metrics {
+		reverse_proxy backend:8081
+	}
+
 	# Frontend (Next.js)
 	handle {
 		reverse_proxy frontend:3030
