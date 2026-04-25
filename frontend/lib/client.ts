@@ -1145,6 +1145,8 @@ export interface HubIntegration {
   health_status: string
   workspace_gid?: string
   workspace_name?: string
+  can_send?: boolean | null
+  can_draft?: boolean | null
 }
 
 export interface ConversationDetails {
@@ -1516,6 +1518,10 @@ export interface EmailPollNowResponse {
 }
 
 export interface JiraTrigger extends TriggerInstanceBase {
+  jira_integration_id?: number | null
+  jira_integration_name?: string | null
+  jira_integration_health_status?: string | null
+  jira_integration_health_status_reason?: string | null
   site_url: string
   project_key?: string | null
   jql: string
@@ -1535,7 +1541,8 @@ export interface JiraTrigger extends TriggerInstanceBase {
 
 export interface JiraTriggerCreateRequest {
   integration_name: string
-  site_url: string
+  jira_integration_id?: number | null
+  site_url?: string | null
   project_key?: string | null
   jql: string
   auth_email?: string | null
@@ -1549,11 +1556,50 @@ export interface JiraTriggerCreateRequest {
 export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
 
 export interface JiraTriggerTestQueryRequest {
+  jira_integration_id?: number | null
   site_url?: string | null
   jql?: string | null
   auth_email?: string | null
   api_token?: string | null
   max_results?: number
+}
+
+export interface JiraIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  site_url: string
+  project_key?: string | null
+  auth_email?: string | null
+  api_token_preview?: string | null
+  is_active: boolean
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  trigger_count?: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface JiraIntegrationCreateRequest {
+  integration_name: string
+  site_url: string
+  project_key?: string | null
+  auth_email: string
+  api_token: string
+  is_active?: boolean
+}
+
+export interface JiraIntegrationUpdateRequest {
+  integration_name?: string
+  site_url?: string
+  project_key?: string | null
+  auth_email?: string
+  api_token?: string | null
+  is_active?: boolean
 }
 
 export interface JiraIssuePreview {
@@ -1817,6 +1863,137 @@ export interface WakeEventPayload {
   wake_event_id: number
   payload_ref: string
   payload: unknown
+}
+
+export interface ContinuousAgentCreate {
+  agent_id: number
+  name?: string | null
+  execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface ContinuousAgentUpdate {
+  name?: string | null
+  execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface ContinuousSubscription {
+  id: number
+  tenant_id: string
+  continuous_agent_id: number
+  channel_type: string
+  channel_instance_id: number
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status: string
+  is_system_owned: boolean
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousSubscriptionCreate {
+  channel_type: string
+  channel_instance_id: number
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status?: 'active' | 'paused'
+}
+
+export interface ContinuousSubscriptionUpdate {
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface OperationBreakdownItem {
+  operation: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface ModelBreakdownItem {
+  model: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface DailyTrendItem {
+  date: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface TokenUsageSummary {
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+  operation_breakdown: OperationBreakdownItem[]
+  model_breakdown: ModelBreakdownItem[]
+  daily_trend: DailyTrendItem[]
+}
+
+export interface AgentUsageSummary {
+  agent_id: number
+  agent_name: string
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+}
+
+export interface TokenUsageByAgentResponse {
+  agents: AgentUsageSummary[]
+  days: number
+}
+
+export interface SkillBreakdownItem {
+  skill: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface AgentTokenUsageDetail {
+  agent_id: number
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+  skill_breakdown: SkillBreakdownItem[]
+  model_breakdown: ModelBreakdownItem[]
+}
+
+export interface RecentTokenUsageRecord {
+  id?: number
+  timestamp?: string
+  created_at?: string
+  agent_name?: string
+  agent_id?: number | null
+  operation_type?: string
+  skill_type?: string | null
+  model?: string
+  model_provider?: string
+  model_name?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens: number
+  estimated_cost: number
+}
+
+export interface RecentTokenUsageResponse {
+  records: RecentTokenUsageRecord[]
+  count: number
 }
 
 export type ConversationalChannelType = 'whatsapp' | 'telegram' | 'slack' | 'discord'
@@ -4399,6 +4576,125 @@ export const api = {
     return res.json()
   },
 
+  async createContinuousAgent(payload: ContinuousAgentCreate): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create continuous agent')
+    return res.json()
+  },
+
+  async updateContinuousAgent(id: number, payload: ContinuousAgentUpdate): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update continuous agent')
+    return res.json()
+  },
+
+  async deleteContinuousAgent(id: number, options: { force?: boolean } = {}): Promise<void> {
+    const suffix = options.force ? '?force=true' : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}${suffix}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete continuous agent')
+  },
+
+  async listContinuousSubscriptions(
+    agentId: number,
+    params: { limit?: number; offset?: number } = {},
+  ): Promise<PageResponse<ContinuousSubscription>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions${suffix}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous subscriptions')
+    return res.json()
+  },
+
+  async createContinuousSubscription(
+    agentId: number,
+    payload: ContinuousSubscriptionCreate,
+  ): Promise<ContinuousSubscription> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to create continuous subscription')
+    return res.json()
+  },
+
+  async updateContinuousSubscription(
+    agentId: number,
+    subscriptionId: number,
+    payload: ContinuousSubscriptionUpdate,
+  ): Promise<ContinuousSubscription> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions/${subscriptionId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to update continuous subscription')
+    return res.json()
+  },
+
+  async deleteContinuousSubscription(agentId: number, subscriptionId: number): Promise<void> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions/${subscriptionId}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to delete continuous subscription')
+  },
+
+  async getTokenUsageSummary(days: number = 30): Promise<TokenUsageSummary> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/summary?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch token usage summary')
+    return res.json()
+  },
+
+  async getTokenUsageByAgent(days: number = 30): Promise<TokenUsageByAgentResponse> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/by-agent?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch token usage by agent')
+    return res.json()
+  },
+
+  async getTokenUsageForAgent(agentId: number, days: number = 30): Promise<AgentTokenUsageDetail> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/agent/${agentId}?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent token usage detail')
+    return res.json()
+  },
+
+  async getRecentTokenUsage(limit: number = 100, agentId?: number): Promise<RecentTokenUsageResponse> {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (agentId !== undefined) params.set('agent_id', String(agentId))
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/recent?${params.toString()}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch recent token usage')
+    return res.json()
+  },
+
   async getDefaultAgentSettings(): Promise<DefaultAgentsSettings> {
     const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch default agent settings')
@@ -5732,6 +6028,59 @@ export const api = {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to poll email trigger')
+    return res.json()
+  },
+
+  async listJiraIntegrations(): Promise<JiraIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira integrations')
+    return res.json()
+  },
+
+  async createJiraIntegration(data: JiraIntegrationCreateRequest): Promise<JiraIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create Jira integration')
+    return res.json()
+  },
+
+  async updateJiraIntegration(id: number, data: JiraIntegrationUpdateRequest): Promise<JiraIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update Jira integration')
+    return res.json()
+  },
+
+  async deleteJiraIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Jira integration')
+  },
+
+  async testJiraIntegrationQuery(data: JiraTriggerTestQueryRequest): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async testSavedJiraIntegrationQuery(id: number, data: JiraTriggerTestQueryRequest = {}): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
     return res.json()
   },
 

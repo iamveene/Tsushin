@@ -96,6 +96,8 @@ class IntegrationResponse(BaseModel):
     default_assignee_gid: Optional[str] = None
     email: Optional[str] = None
     display_name: Optional[str] = None
+    can_send: Optional[bool] = None
+    can_draft: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):
@@ -529,6 +531,21 @@ async def list_integrations(
                             except Exception:
                                 pass
 
+            # Compute Gmail capability flags from the granted OAuth scope string.
+            can_send = None
+            can_draft = None
+            if hub.type == 'gmail' and gmail is not None:
+                try:
+                    gmail_service = GmailService(db, hub.id)
+                    can_send = bool(gmail_service.can_send_messages())
+                    can_draft = bool(gmail_service.can_create_drafts())
+                except Exception as cap_exc:
+                    # Capability probe must never fail the list endpoint —
+                    # leave the flags as None and continue.
+                    logger.debug(
+                        "Gmail capability probe failed for integration %s: %s", hub.id, cap_exc,
+                    )
+
             # Build response with type-specific data
             response = IntegrationResponse(
                 id=hub.id,
@@ -544,7 +561,9 @@ async def list_integrations(
                 default_assignee_gid=asana.default_assignee_gid if asana else None,
                 # Add email for calendar/gmail integrations
                 email=(calendar.email_address if calendar else (gmail.email_address if gmail else None)),
-                display_name=hub.display_name
+                display_name=hub.display_name,
+                can_send=can_send,
+                can_draft=can_draft,
             )
             integrations.append(response)
         except Exception as e:

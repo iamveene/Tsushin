@@ -37,6 +37,11 @@ sys.modules.setdefault("argon2", argon2_stub)
 sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
 
 from api import routes_jira_triggers as jira_routes  # noqa: E402
+from api.routes_jira_integrations import (  # noqa: E402
+    JiraIntegrationCreate,
+    create_jira_integration,
+    list_jira_integrations,
+)
 from api.routes_jira_triggers import (  # noqa: E402
     JiraTestQueryRequest,
     JiraNotificationSubscriptionRequest,
@@ -63,13 +68,16 @@ from models import (  # noqa: E402
     ContinuousRun,
     ContinuousSubscription,
     DeliveryPolicy,
+    HubIntegration,
     JiraChannelInstance,
+    JiraIntegration,
     SentinelProfile,
     WakeEvent,
     WhatsAppMCPInstance,
 )
 from models_rbac import Tenant, User  # noqa: E402
 from services.jira_notification_service import build_jira_notification_message  # noqa: E402
+from services import jira_integration_service  # noqa: E402
 
 
 TEST_MASTER_KEY = "jira-test-master-key"
@@ -77,7 +85,7 @@ TEST_MASTER_KEY = "jira-test-master-key"
 
 @pytest.fixture
 def db_session(monkeypatch):
-    monkeypatch.setattr(jira_routes, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY)
+    monkeypatch.setattr(jira_integration_service, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY)
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -91,6 +99,8 @@ def db_session(monkeypatch):
             SentinelProfile.__table__,
             DeliveryPolicy.__table__,
             BudgetPolicy.__table__,
+            HubIntegration.__table__,
+            JiraIntegration.__table__,
             ContinuousAgent.__table__,
             ContinuousSubscription.__table__,
             WakeEvent.__table__,
@@ -165,6 +175,41 @@ def _seed_whatsapp_instance(db, *, instance_id: int, tenant_id: str, user_id: in
     return instance
 
 
+def test_create_jira_integration_encrypts_token_and_lists_preview_only(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    db_session.commit()
+
+    created = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Jira Production",
+            site_url="https://example.atlassian.net/jira/",
+            auth_email="jira@example.com",
+            api_token="secret-token-1234",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    stored = db_session.query(JiraIntegration).filter(JiraIntegration.id == created.id).one()
+    decrypted = TokenEncryption(TEST_MASTER_KEY.encode()).decrypt(
+        stored.api_token_encrypted,
+        "tenant-a",
+    )
+    listed = list_jira_integrations(ctx=_ctx("tenant-a"), _user=SimpleNamespace(id=1), db=db_session)
+
+    assert created.integration_name == "Jira Production"
+    assert created.site_url == "https://example.atlassian.net"
+    assert created.api_token_preview == "secr...1234"
+    assert created.trigger_count == 0
+    assert not hasattr(created, "api_token")
+    assert stored.type == "jira"
+    assert stored.api_token_encrypted != "secret-token-1234"
+    assert decrypted == "secret-token-1234"
+    assert [row.id for row in listed] == [created.id]
+
+
 def test_create_jira_trigger_encrypts_token_and_lists_preview_only(db_session):
     db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
     _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
@@ -202,6 +247,111 @@ def test_create_jira_trigger_encrypts_token_and_lists_preview_only(db_session):
     assert stored.api_token_encrypted != "secret-token-1234"
     assert decrypted == "secret-token-1234"
     assert [row.integration_name for row in listed] == ["Jira Support"]
+
+
+def test_create_jira_trigger_uses_hub_jira_integration_credentials(db_session, monkeypatch):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    db_session.commit()
+
+    integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Jira Production",
+            site_url="https://example.atlassian.net/jira",
+            auth_email="jira@example.com",
+            api_token="secret-token",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+    created = create_jira_trigger(
+        payload=JiraTriggerCreate(
+            integration_name="Jira Support",
+            jira_integration_id=integration.id,
+            jql="project = HELP",
+        ),
+        ctx=_ctx("tenant-a"),
+        current_user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+    captured = {}
+
+    async def fake_execute_jira_search(**kwargs):
+        captured.update(kwargs)
+        return {
+            "total": 1,
+            "issues": [
+                {
+                    "id": "10001",
+                    "key": "HELP-1",
+                    "fields": {"summary": "First issue", "status": {"name": "To Do"}},
+                }
+            ],
+        }
+
+    monkeypatch.setattr(jira_routes, "_execute_jira_search", fake_execute_jira_search)
+
+    response = asyncio.run(
+        run_saved_jira_test_query(
+            trigger_id=created.id,
+            payload=JiraTestQueryRequest(max_results=2),
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    )
+
+    assert created.jira_integration_id == integration.id
+    assert created.jira_integration_name == "Jira Production"
+    assert created.site_url == "https://example.atlassian.net"
+    assert created.auth_email == "jira@example.com"
+    assert created.api_token_preview == "secr...oken"
+    assert captured == {
+        "site_url": "https://example.atlassian.net",
+        "jql": "project = HELP",
+        "auth_email": "jira@example.com",
+        "api_token": "secret-token",
+        "max_results": 2,
+    }
+    assert response.issues[0].key == "HELP-1"
+
+
+def test_create_jira_trigger_rejects_foreign_jira_integration(db_session):
+    db_session.add_all(
+        [
+            Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"),
+            Tenant(id="tenant-b", name="Tenant B", slug="tenant-b"),
+        ]
+    )
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    db_session.commit()
+    integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Tenant B Jira",
+            site_url="https://b.atlassian.net",
+            auth_email="jira@example.com",
+            api_token="secret-token",
+        ),
+        ctx=_ctx("tenant-b"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_jira_trigger(
+            payload=JiraTriggerCreate(
+                integration_name="Jira Support",
+                jira_integration_id=integration.id,
+                jql="project = HELP",
+            ),
+            ctx=_ctx("tenant-a"),
+            current_user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Jira integration not found"
 
 
 def test_create_jira_trigger_rejects_foreign_default_agent(db_session):
@@ -635,7 +785,7 @@ def test_jira_poll_now_sends_notification_once_per_issue(db_session, monkeypatch
         }
 
     monkeypatch.setattr(JiraTrigger, "_fetch_issues", staticmethod(fake_fetch_issues))
-    monkeypatch.setattr(jira_routes, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY)
+    monkeypatch.setattr(jira_integration_service, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY)
     monkeypatch.setattr("channels.jira.trigger.send_jira_whatsapp_notification", fake_send_notification)
 
     first = asyncio.run(

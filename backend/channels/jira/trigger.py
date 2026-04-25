@@ -17,6 +17,7 @@ from channels.types import HealthResult, TriggerEvent
 from hub.security import TokenEncryption
 from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, JiraChannelInstance, WakeEvent
 from services.encryption_key_service import get_webhook_encryption_key
+from services.jira_integration_service import resolve_jira_config
 from services.jira_notification_service import (
     JIRA_NOTIFICATION_ACTION_TYPE,
     JIRA_NOTIFICATION_EVENT_TYPE,
@@ -151,13 +152,14 @@ class JiraTrigger(Trigger):
         dedupe_key = f"jira_issue:{issue_key or issue_identity}"
         occurred_at = _parse_jira_datetime(updated)
 
+        config = resolve_jira_config(self.db, instance)
         payload = {
             "issue": issue,
             "jira": {
-                "site_url": instance.site_url,
-                "project_key": instance.project_key,
+                "site_url": config.site_url,
+                "project_key": instance.project_key or config.project_key,
                 "jql": instance.jql,
-                "link": jira_issue_link(instance.site_url, issue_key),
+                "link": jira_issue_link(config.site_url, issue_key),
             },
         }
         sender_key = _first_user_identifier(fields.get("reporter"), fields.get("assignee"))
@@ -251,11 +253,12 @@ class JiraTrigger(Trigger):
 
         poll_started_at = datetime.utcnow()
         try:
-            api_token = _decrypt_token(db, instance.tenant_id, instance.api_token_encrypted)
+            config = resolve_jira_config(db, instance)
+            api_token = _decrypt_token(db, instance.tenant_id, config.api_token_encrypted)
             issues = await cls._fetch_issues(
-                site_url=instance.site_url,
+                site_url=config.site_url,
                 jql=instance.jql,
-                auth_email=instance.auth_email,
+                auth_email=config.auth_email,
                 api_token=api_token,
                 max_results=_max_events_per_poll(instance.trigger_criteria),
             )
@@ -283,6 +286,11 @@ class JiraTrigger(Trigger):
             instance.last_health_check = poll_started_at
             instance.health_status = "healthy"
             instance.health_status_reason = None
+            if instance.jira_integration is not None:
+                instance.jira_integration.last_health_check = poll_started_at
+                instance.jira_integration.health_status = "healthy"
+                instance.jira_integration.health_status_reason = None
+                db.add(instance.jira_integration)
             if newest_cursor and newest_cursor != instance.last_cursor:
                 instance.last_cursor = newest_cursor
             if any(status == "dispatched" for status in dispatch_statuses):
@@ -397,6 +405,11 @@ class JiraTrigger(Trigger):
         instance.last_health_check = datetime.utcnow()
         instance.health_status = "unhealthy"
         instance.health_status_reason = reason[:500]
+        if instance.jira_integration is not None:
+            instance.jira_integration.last_health_check = instance.last_health_check
+            instance.jira_integration.health_status = "unavailable"
+            instance.jira_integration.health_status_reason = reason[:500]
+            db.add(instance.jira_integration)
         db.add(instance)
         db.commit()
         return JiraPollResult(

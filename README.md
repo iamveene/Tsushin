@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href=""><img src="https://img.shields.io/badge/status-beta-orange" alt="Status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-v0.6.0-blue" alt="Version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-v0.7.0-blue" alt="Version"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -19,7 +19,7 @@
 ## Feature Highlights
 
 - **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
-- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground; event triggers cover Email, Webhook, Jira, Schedule, and GitHub under Hub → Communication.
+- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground; event triggers cover Email, Webhook, Jira, Schedule, and GitHub under Hub → Communication, with Jira API credentials managed under Hub → Tool APIs.
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
 - **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph).
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas.
@@ -39,7 +39,7 @@
 
 ---
 
-## What's New in v0.6.0
+## Previously in v0.6.0
 
 v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes since the last `main` release:
 
@@ -86,11 +86,11 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 
 ---
 
-## Release 0.7.0 Preview
+## What's New in v0.7.0
 
 v0.7.0 separates conversational **Channels** from event **Triggers**. Hub → Communication now hosts Email, Webhook, Jira, Schedule, and GitHub triggers alongside WhatsApp/Telegram/Slack/Discord channel setup, with wake-event evidence and continuous-agent read surfaces.
 
-The final Jira trigger slice adds live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted UI-managed Jira credentials, and a managed WhatsApp notifier that sends one notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient. See [docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md](docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md) for the sanitized validation evidence.
+The final Jira trigger slice adds live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted Hub → Tool APIs Jira credentials, and a managed WhatsApp notifier that sends one notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient. See [docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md](docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md) for the sanitized validation evidence.
 
 Email triggers now use the same criteria/query definition shape: saved Gmail queries are mirrored into `trigger_criteria`, operators can test sample messages, force a poll-now run, and enable a managed WhatsApp notifier with an explicit recipient for flows such as an email containing keyword `XYZ` waking the selected Email agent and sending one deduped WhatsApp summary.
 
@@ -290,4 +290,4 @@ Tsushin is open-source software licensed under the [MIT License](LICENSE).
 
 ---
 
-**Version 0.6.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)
+**Version 0.7.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)

@@ -224,8 +224,8 @@ Track B breadth turns the dispatch foundation into user-facing trigger adapter r
 
 The final Jira release contract completes the gap left by Track B breadth: Jira triggers are not just saved and tested in the UI; active rows are polled against Jira Cloud JQL on their configured interval, matching issues are dispatched through `TriggerDispatchService`, and duplicates are suppressed so the same issue creates at most one wake/run.
 
-* **Placement** — Jira setup and detail remain under Hub → Communication → Triggers. Jira is an event trigger, not a conversational channel; WhatsApp remains the outbound communication channel used by the managed notifier.
-* **Credentials** — Jira site URL, auth email, and API token are captured through the Hub setup/edit/test-query flow. Tokens are stored encrypted and API reads return only a masked preview. Documentation, QA artifacts, browser traces, and logs must not include plaintext Jira tokens.
+* **Placement** — Jira credentials are configured under Hub → Tool APIs as tenant-owned Jira connections; Jira trigger rows remain under Hub → Communication → Triggers because Jira is an event trigger, not a conversational channel. WhatsApp remains the outbound communication channel used by the managed notifier.
+* **Credentials** — Jira site URL, auth email, and API token are captured through the Hub → Tool APIs Jira connection flow. Tokens are stored encrypted and API reads return only a masked preview. Documentation, QA artifacts, browser traces, and logs must not include plaintext Jira tokens.
 * **Polling and dedupe** — the poll loop fetches matching JQL results, normalizes issue payloads, dispatches wake evidence, updates cursor/activity state, and records a deterministic dedupe key per issue so repeated polls and later ticket updates do not double-fire.
 * **Managed WhatsApp notifier** — the release includes a managed notifier path for Jira issue events. It sends one WhatsApp notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient, and fails closed when the recipient is omitted or the selected channel is missing, paused, or not owned by the tenant.
 * **Validation evidence** — release QA includes targeted backend coverage for live Jira polling and once-per-issue dedupe, tenant/credential safety checks, notifier success and failure paths, browser coverage for Hub Jira setup/detail plus wake-event evidence, and a live poll-now duplicate-suppression smoke.
@@ -241,6 +241,13 @@ Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release
 * **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
 * **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, managed WhatsApp notification setup, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
 * **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
+
+### 2.13.1 v0.7.0 RC sweep — Continuous-Agent CRUD, Analytics, Gmail compose
+
+* **Continuous-agent write surface (WS-1)** — `POST /api/continuous-agents`, `PATCH /api/continuous-agents/{id}`, `DELETE /api/continuous-agents/{id}` (with `?force=true` to filter pending wake events), plus nested `GET/POST/PATCH/DELETE /api/continuous-agents/{id}/subscriptions[/{sub_id}]`. New permission scope `agents.write`. System-owned rows reject delete and `status="disabled"` on PATCH. Creation refuses cross-tenant `agent_id`/policy IDs; subscription creation validates `(channel_type, channel_instance_id)` against the appropriate channel-instance table and enforces `(continuous_agent_id, channel_type, channel_instance_id, event_type)` uniqueness. Deletion explicitly removes child subscriptions before deleting the parent (belt-and-suspenders for the SQLAlchemy ORM cascade).
+* **Continuous-agent UI (WS-1)** — `/continuous-agents` lists agents with create/edit/delete affordances. Single-step setup modal mirrors `TriggerSetupModal`. Detail page renders `SubscriptionEditor` (add/pause/resume/delete) plus header edit/delete actions. The previous read-only banner is removed.
+* **Analytics dashboard (WS-2)** — `/settings/analytics` (permission `analytics.read`) renders summary KPIs (tokens, estimated cost, requests), a daily trend area chart, per-operation/per-model breakdown bar charts, a per-agent table with inline drill-down to skill/model breakdowns, and a recent-transactions table. Date range picker translates preset choices into the backend's `days` query parameter (1–365). Uses `recharts` (already a frontend dependency).
+* **Gmail compose scope (WS-3)** — `gmail.compose` now ships in `DEFAULT_SCOPES["gmail"]` so new connections grant draft creation immediately. Existing connections lazy-upgrade: a draft action raises a typed `InsufficientScopesError` carrying `missing_scopes`. The Gmail integration card in the Hub shows an amber pill "Drafts require gmail.compose" plus a "Reconnect for drafts" button when `can_draft === false`. The hub `IntegrationResponse` exposes new optional `can_send` / `can_draft` flags computed from the granted OAuth scope string.
 
 ### 2.13 v0.7.0 Phase 8 UI polish and control-plane UX
 
@@ -372,6 +379,26 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 The fresh-install regression checklist used on the Ubuntu VM is maintained as an internal deployment playbook. The current checklist covers 13 first-run cases: infrastructure health, tenant/global-admin login, Watcher, Studio, Playground basic chat, Memory Inspector, Flows, Hub, all 15 Settings routes, the 4 System admin routes, conditional Browser Automation, and final log review.
 
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
+
+#### 3.4.1 Optional dev-only second-tenant seeder (v0.7.0)
+
+For local cross-tenant runtime testing, run `backend/scripts/seed_dev_tenants.py` from inside the backend container:
+
+```bash
+docker exec -e TSN_SEED_ALLOW=true tsushin-backend python scripts/seed_dev_tenants.py
+```
+
+The script is **opt-in** (refuses to run unless `TSN_SEED_ALLOW=true` is set) and **gated** by a 5-tenant ceiling. It is fully **idempotent** — re-running it exits 0 with `"Tenant 'acme2-dev' already exists — nothing to do."` once seeded. Pass `--dry-run` to preview without writing.
+
+Default seed contents:
+* Tenant `acme2-dev` ("Acme #2 Dev")
+* Owner user `test-acme2@example.com` (password `test1234`)
+* Member user `member-acme2@example.com` (password `test1234`)
+* Three default agents (via `services.agent_seeding.seed_default_agents`)
+* One paused `EmailChannelInstance` ("Acme2 Email Watch") with no Gmail integration linked
+* One paused `ScheduleChannelInstance` ("Acme2 Weekly Digest")
+
+After seeding, log in as `test-acme2@example.com` and verify only `acme2-dev` resources are visible. Log back in as `test@example.com` to confirm the original tenant sees zero `acme2-dev` rows. Continuous-agent fixtures are gated behind `--with-continuous` (placeholder until WS-1 CRUD ships).
 
 For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
 
@@ -2001,6 +2028,10 @@ Email triggers are modeled as trigger rows, not communication channels. The Gmai
 Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue payloads into `TriggerDispatchInput`. Track B introduced the persisted trigger row, JQL test-query, credential encryption, detail UI, and issue-normalization contract; v0.7.0 finalization adds the live poll loop and managed WhatsApp notifier proof.
 
 **API surface:**
+- `GET/POST /api/hub/jira-integrations`
+- `PATCH/DELETE /api/hub/jira-integrations/{id}`
+- `POST /api/hub/jira-integrations/test-query`
+- `POST /api/hub/jira-integrations/{id}/test-query`
 - `GET/POST /api/triggers/jira`
 - `GET/PATCH/DELETE /api/triggers/jira/{id}`
 - `POST /api/triggers/jira/test-query`
@@ -2008,11 +2039,11 @@ Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue pay
 - `POST /api/triggers/jira/{id}/notification-subscription`
 - `POST /api/triggers/jira/{id}/poll-now`
 
-**Stored config:** site URL, project key, JQL, optional auth email + encrypted API token preview, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps.
+**Stored config:** Jira Tool API rows store site URL, optional project key, auth email, encrypted API token, token preview, active flag, and health metadata. Jira trigger rows store the selected `jira_integration_id`, JQL, optional project override, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps, with legacy trigger-local credential fields retained as a v0.7.0 compatibility fallback.
 
 **Runtime and notifier contract:**
 - Active Jira triggers poll on their configured interval using Jira Cloud's enhanced JQL search endpoint (`/rest/api/3/search/jql`), dispatch matching issues through the shared trigger dispatch path, and persist dedupe evidence so the same issue is processed once.
-- Jira credentials are UI-managed and encrypted at rest; API responses expose only `api_token_preview`.
+- Jira credentials are UI-managed from Hub → Tool APIs and encrypted at rest; API responses expose only `api_token_preview`.
 - The managed WhatsApp notifier is an outbound action for Jira trigger results, not a Jira channel. It requires an operator-provided recipient, must use a tenant-owned WhatsApp instance, and should produce one notification per deduped Jira issue.
 - Jira base URLs are normalized by stripping a trailing `/jira`; issue links and REST calls use the canonical site root.
 - Browser QA covers setup/edit/test-query, detail state, wake-event evidence, and the poll-now manual proof action. Backend QA covers successful polling, duplicate suppression, missing/paused channel failures, and cross-tenant ownership rejection.

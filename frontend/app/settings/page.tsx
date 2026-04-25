@@ -19,7 +19,7 @@ interface SettingCard {
 }
 
 // Essential setting titles — always visible
-const ESSENTIAL_TITLES = ['Organization', 'Team Members', 'System AI', 'Integrations']
+const ESSENTIAL_TITLES = ['Organization', 'Team Members', 'System AI', 'Integrations', 'Analytics']
 
 // SVG Icon components
 const icons = {
@@ -177,6 +177,13 @@ export default function SettingsHubPage() {
       icon: icons.audit,
       href: '/settings/audit-logs',
       permission: 'audit.read',
+    },
+    {
+      title: 'Analytics',
+      description: 'Token consumption, cost breakdown, and per-agent usage trends',
+      icon: icons.pricing,
+      href: '/settings/analytics',
+      permission: 'analytics.read',
     },
     {
       title: 'Model Pricing',

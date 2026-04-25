@@ -1054,10 +1054,15 @@ class GmailSkill(BaseSkill):
             )
         except PermissionError as e:
             logger.error(f"GmailSkill.execute_tool: Permission error: {e}")
+            metadata: Dict[str, Any] = {"error": "missing_scope", "action": action}
+            missing_scopes = getattr(e, "missing_scopes", None)
+            if missing_scopes:
+                metadata["missing_scopes"] = list(missing_scopes)
+                metadata["needs_reauth"] = True
             return SkillResult(
                 success=False,
                 output=str(e),
-                metadata={"error": "missing_scope", "action": action}
+                metadata=metadata,
             )
         except Exception as e:
             logger.error(f"GmailSkill.execute_tool error: {e}", exc_info=True)

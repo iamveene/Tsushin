@@ -413,6 +413,12 @@ export default function TriggerDetailShell({ kind }: Props) {
       return (
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
+            <Field
+              label="Jira connection"
+              value={jira.jira_integration_name
+                ? <Link href="/hub?tab=tool-apis" className="text-cyan-200 hover:text-white">{jira.jira_integration_name}</Link>
+                : <Link href="/hub?tab=tool-apis" className="text-yellow-200 hover:text-white">Legacy trigger credentials</Link>}
+            />
             <Field label="Site" value={jira.site_url} />
             <Field label="Project" value={jira.project_key || 'Any project in JQL'} />
             <Field label="Poll interval" value={`${jira.poll_interval_seconds}s`} />

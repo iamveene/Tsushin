@@ -244,9 +244,11 @@ def build_jira_notification_message(trigger: JiraChannelInstance, issue_payload:
     summary = str(fields.get("summary") or issue.get("summary") or "(No title)").strip()
     status = _named_field(fields.get("status")) or "Unknown"
     issue_type = _named_field(fields.get("issuetype")) or "Unknown"
-    project = _project_key(fields.get("project")) or trigger.project_key or "Unknown"
+    linked_integration = getattr(trigger, "jira_integration", None)
+    project = _project_key(fields.get("project")) or trigger.project_key or getattr(linked_integration, "project_key", None) or "Unknown"
     description = jira_description_to_text(fields.get("description"), max_chars=700) or "(No description provided)"
-    link = jira_issue_link(trigger.site_url, issue_key) or trigger.site_url
+    site_url = getattr(linked_integration, "site_url", None) or trigger.site_url
+    link = jira_issue_link(site_url, issue_key) or site_url
 
     return (
         "New Jira ticket detected\n"

@@ -7,8 +7,8 @@ Date: 2026-04-24
 - Finalize Jira triggers from setup/test-query/normalization into live JQL polling.
 - Prove once-per-issue dedupe so repeated polls do not create duplicate wake events or continuous runs.
 - Validate the managed WhatsApp notifier path for Jira issue events.
-- Keep Jira credentials UI-managed, encrypted at rest, and represented only by masked previews in API/UI output.
-- Preserve Hub → Communication → Triggers placement for Jira; WhatsApp remains a conversational channel used only for outbound notification delivery.
+- Keep Jira credentials UI-managed under Hub → Tool APIs, encrypted at rest, and represented only by masked previews in API/UI output.
+- Preserve Hub → Communication → Triggers placement for Jira trigger rows; WhatsApp remains a conversational channel used only for outbound notification delivery.
 
 ## Required Validation
 
@@ -16,7 +16,7 @@ Date: 2026-04-24
 - Backend: duplicate polling or later updates of the same issue record duplicate/dedupe behavior without creating a second wake/run or a second WhatsApp notification.
 - Backend: missing, paused, or cross-tenant WhatsApp notifier configuration fails closed.
 - Backend: Jira API tokens are encrypted in storage and never returned from read endpoints beyond masked preview fields.
-- Browser: Hub Communication Jira setup/detail supports credential entry, test-query, active/paused state, wake-event evidence, and any exposed poll-now/manual proof action.
+- Browser: Hub Tool APIs supports Jira credential entry/edit/test-query, while Hub Communication Jira trigger setup/detail supports selecting an existing Jira connection, test-query, active/paused state, wake-event evidence, and any exposed poll-now/manual proof action.
 - Browser: managed notifier success, empty state, and error state render without console errors or failed unexpected network requests.
 
 ## Validation Completed
@@ -24,12 +24,15 @@ Date: 2026-04-24
 - `python -m pytest -q -o addopts='' backend/tests/test_routes_jira_triggers.py backend/tests/test_routes_email_triggers.py backend/tests/test_email_trigger_runtime.py backend/tests/test_trigger_dispatch_service.py` -> `52 passed`.
 - `docker-compose build --no-cache backend frontend && docker-compose up -d backend frontend` -> backend/frontend rebuilt from the repository root without tearing down the stack.
 - `docker-compose exec -T backend python -m pytest -q -o addopts='' tests/test_routes_jira_triggers.py tests/test_routes_email_triggers.py tests/test_email_trigger_runtime.py tests/test_trigger_dispatch_service.py` -> `52 passed, 2 warnings`.
-- Direct/proxy health checks returned healthy; `docker-compose exec -T backend alembic current` and `docker-compose exec -T backend alembic heads` both reported `0061 (head)`.
+- Direct/proxy health checks returned healthy; `docker-compose exec -T backend alembic current` and `docker-compose exec -T backend alembic heads` both reported `0062 (head)` after the Jira Tool APIs credential migration.
+- The Jira Tool API migration backfilled the existing live trigger credentials into tenant-scoped Jira integration `#11`; API and DB verification showed the site URL, auth email, and masked token preview only.
+- Browser validation on Hub → Tool APIs showed the migrated Questrade Jira connection card, health/test metadata, edit modal fields for site URL/auth email/API token rotation, and stored test-query success. Browser validation of Jira trigger creation showed the wizard selecting the existing Jira connection instead of collecting credentials inline.
 - `PLAYWRIGHT_BASE_URL=https://localhost npm run test:visual` -> `6 passed`.
 - Direct browser smoke covered Hub Communication, Jira detail notifier input, manual Poll Now controls, criteria/test-query controls, Email detail notifier/poll/criteria controls, and Jira/Email wake-event filters. No console warnings/errors or API/page HTTP failures were observed; benign Next.js `_rsc` prefetch aborts were filtered.
 - Live Jira saved-query test for `project = JSM AND statusCategory != Done AND type = "Pen Test"` returned two sample issues, including `JSM-193570` and `JSM-189100`.
 - Browser validation on `/hub/triggers/jira/4`:
   - overview displayed the normalized Jira site root, active status, healthy health, default `Jira Agent`, masked WhatsApp recipient preview, and active notification subscription `#8`
+  - overview displayed a Jira connection link back to Hub → Tool APIs for credential edits
   - criteria tab displayed the exact saved JQL and shared criteria JSON
   - test-query returned two issue previews, including `JSM-193570`, with link, type, status, title, updated timestamp, and short description preview
   - recent wake events tab showed processed `jira.issue.detected` wake events `#12` and `#11`

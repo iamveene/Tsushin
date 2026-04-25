@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ComponentType } from 'react'
 import Modal from '@/components/ui/Modal'
-import { api, type Agent, type GitHubTrigger, type GitHubTriggerAuthMethod, type JiraIssuePreview, type JiraTrigger, type ScheduleTrigger, type TriggerCriteria, type TriggerKind } from '@/lib/client'
+import { api, type Agent, type GitHubTrigger, type GitHubTriggerAuthMethod, type JiraIntegration, type JiraIssuePreview, type JiraTrigger, type ScheduleTrigger, type TriggerCriteria, type TriggerKind } from '@/lib/client'
 import { CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, type IconProps } from '@/components/ui/icons'
 import CriteriaBuilder, { parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
@@ -82,17 +82,17 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null)
   const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
+  const [jiraIntegrations, setJiraIntegrations] = useState<JiraIntegration[]>([])
+  const [jiraIntegrationsLoading, setJiraIntegrationsLoading] = useState(false)
 
   const [integrationName, setIntegrationName] = useState('')
   const [defaultAgentId, setDefaultAgentId] = useState<number | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [criteriaText, setCriteriaText] = useState('')
 
-  const [jiraSiteUrl, setJiraSiteUrl] = useState('')
+  const [jiraIntegrationId, setJiraIntegrationId] = useState<number | null>(null)
   const [jiraProjectKey, setJiraProjectKey] = useState('')
   const [jiraJql, setJiraJql] = useState('project = OPS ORDER BY updated DESC')
-  const [jiraAuthEmail, setJiraAuthEmail] = useState('')
-  const [jiraApiToken, setJiraApiToken] = useState('')
   const [jiraPollInterval, setJiraPollInterval] = useState('300')
   const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
@@ -122,11 +122,9 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     setDefaultAgentId(null)
     setIsActive(true)
     setCriteriaText('')
-    setJiraSiteUrl('')
+    setJiraIntegrationId(null)
     setJiraProjectKey('')
     setJiraJql('project = OPS ORDER BY updated DESC')
-    setJiraAuthEmail('')
-    setJiraApiToken('')
     setJiraPollInterval('300')
     setJiraNotificationRecipient('')
     setCronExpression('0 * * * *')
@@ -156,6 +154,23 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
         if (!cancelled) setAgentsLoading(false)
       })
 
+    if (triggerType === 'jira') {
+      setJiraIntegrationsLoading(true)
+      api.listJiraIntegrations()
+        .then((list) => {
+          if (cancelled) return
+          setJiraIntegrations(list)
+          const firstActive = list.find((item) => item.is_active) || list[0]
+          setJiraIntegrationId(firstActive?.id ?? null)
+        })
+        .catch(() => {
+          if (!cancelled) setJiraIntegrations([])
+        })
+        .finally(() => {
+          if (!cancelled) setJiraIntegrationsLoading(false)
+        })
+    }
+
     return () => {
       cancelled = true
     }
@@ -165,18 +180,22 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     () => agents.find((agent) => agent.id === defaultAgentId) || null,
     [agents, defaultAgentId],
   )
+  const selectedJiraIntegration = useMemo(
+    () => jiraIntegrations.find((integration) => integration.id === jiraIntegrationId) || null,
+    [jiraIntegrationId, jiraIntegrations],
+  )
 
   const canSubmit = useMemo(() => {
     if (saving || !integrationName.trim()) return false
     if (triggerType === 'jira') {
       const poll = Number(jiraPollInterval)
-      return Boolean(jiraSiteUrl.trim() && jiraJql.trim() && Number.isFinite(poll) && poll >= 60 && poll <= 3600)
+      return Boolean(jiraIntegrationId && jiraJql.trim() && Number.isFinite(poll) && poll >= 60 && poll <= 3600)
     }
     if (triggerType === 'schedule') {
       return Boolean(cronExpression.trim() && timezone.trim())
     }
     return Boolean(repoOwner.trim() && repoName.trim() && githubEvents.length > 0)
-  }, [cronExpression, githubEvents.length, integrationName, jiraJql, jiraPollInterval, jiraSiteUrl, repoName, repoOwner, saving, timezone, triggerType])
+  }, [cronExpression, githubEvents.length, integrationName, jiraIntegrationId, jiraJql, jiraPollInterval, repoName, repoOwner, saving, timezone, triggerType])
 
   const runValidation = () => {
     const criteria = parseCriteriaText(criteriaText)
@@ -193,11 +212,11 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     setTesting(true)
     try {
       if (triggerType === 'jira') {
-        const result = await api.testJiraTriggerQuery({
-          site_url: jiraSiteUrl.trim(),
+        if (!jiraIntegrationId) {
+          throw new Error('Select a Jira connection before testing.')
+        }
+        const result = await api.testSavedJiraIntegrationQuery(jiraIntegrationId, {
           jql: jiraJql.trim(),
-          auth_email: jiraAuthEmail.trim() || null,
-          api_token: jiraApiToken.trim() || null,
           max_results: 5,
         })
         setJiraSampleIssues(result.sample_issues || result.issues || [])
@@ -252,11 +271,9 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
       if (triggerType === 'jira') {
         saved = await api.createJiraTrigger({
           integration_name: integrationName.trim(),
-          site_url: jiraSiteUrl.trim(),
+          jira_integration_id: jiraIntegrationId,
           project_key: jiraProjectKey.trim() || null,
           jql: jiraJql.trim(),
-          auth_email: jiraAuthEmail.trim() || null,
-          api_token: jiraApiToken.trim() || null,
           trigger_criteria: criteria,
           poll_interval_seconds: Number(jiraPollInterval),
           default_agent_id: defaultAgentId,
@@ -395,7 +412,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
         {triggerType === 'jira' && jiraSampleIssues.length > 0 && (
           <div className="space-y-2">
             <div className="text-sm font-medium text-white">Sample issues</div>
-            <JiraIssuePreviewList issues={jiraSampleIssues} siteUrl={jiraSiteUrl} />
+            <JiraIssuePreviewList issues={jiraSampleIssues} siteUrl={selectedJiraIntegration?.site_url || ''} />
           </div>
         )}
 
@@ -433,14 +450,24 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
         {triggerType === 'jira' && (
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-white">Jira Site URL *</label>
-              <input
-                type="url"
-                value={jiraSiteUrl}
-                onChange={(event) => setJiraSiteUrl(event.target.value)}
-                placeholder="https://acme.atlassian.net"
+              <label className="block text-sm font-medium text-white">Jira Connection *</label>
+              <select
+                value={jiraIntegrationId ?? ''}
+                onChange={(event) => setJiraIntegrationId(event.target.value ? Number(event.target.value) : null)}
                 className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              />
+              >
+                <option value="">{jiraIntegrationsLoading ? 'Loading Jira connections...' : 'Select a Jira connection'}</option>
+                {jiraIntegrations.map((integration) => (
+                  <option key={integration.id} value={integration.id}>
+                    {integration.integration_name || integration.name || `Jira connection #${integration.id}`}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-tsushin-slate">
+                {selectedJiraIntegration
+                  ? `${selectedJiraIntegration.site_url} · ${selectedJiraIntegration.auth_email || 'No auth email reported'}`
+                  : 'Add or edit Jira base URL and credentials in Hub > Tool APIs.'}
+              </p>
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-white">Project Key</label>
@@ -459,25 +486,6 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
                 onChange={(event) => setJiraJql(event.target.value)}
                 rows={3}
                 className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 font-mono text-xs text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-white">Auth Email</label>
-              <input
-                type="email"
-                value={jiraAuthEmail}
-                onChange={(event) => setJiraAuthEmail(event.target.value)}
-                placeholder="ops@example.com"
-                className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-white">API Token</label>
-              <input
-                type="password"
-                value={jiraApiToken}
-                onChange={(event) => setJiraApiToken(event.target.value)}
-                className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
               />
             </div>
             <div className="space-y-2">

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { api, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { ActivityIcon, BotIcon, ClockIcon, EyeIcon, LightningIcon, RefreshIcon } from '@/components/ui/icons'
+import { ContinuousAgentSetupModal } from '@/components/continuous-agents/ContinuousAgentSetupModal'
 
 const STATUS_OPTIONS = ['all', 'active', 'paused', 'disabled', 'error']
 
@@ -26,7 +27,7 @@ function statusClass(status: string): string {
   return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
 }
 
-function EmptyState() {
+function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="rounded-xl border border-dashed border-tsushin-border p-10 text-center">
       <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-300">
@@ -34,8 +35,15 @@ function EmptyState() {
       </div>
       <h2 className="text-lg font-semibold text-white">No continuous agents yet</h2>
       <p className="mx-auto mt-2 max-w-xl text-sm text-tsushin-slate">
-        The v0.7.0 A2 backend exposes read-only continuous-agent inventory here. Create, edit, and delete flows are intentionally hidden until the write APIs land.
+        Wrap one of your existing agents to make it always-on. Continuous agents wake on triggers, run autonomously, and persist their run history.
       </p>
+      <button
+        type="button"
+        onClick={onCreate}
+        className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-400"
+      >
+        Create continuous agent
+      </button>
     </div>
   )
 }
@@ -47,6 +55,9 @@ export default function ContinuousAgentsPage() {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editingAgent, setEditingAgent] = useState<ContinuousAgent | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   const pageSize = 50
 
   const loadData = useCallback(async () => {
@@ -74,6 +85,44 @@ export default function ContinuousAgentsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [loadData])
+
+  const handleDelete = useCallback(
+    async (agent: ContinuousAgent) => {
+      if (typeof window !== 'undefined') {
+        const confirmed = window.confirm(
+          `Delete continuous agent "${agent.name || `#${agent.id}`}"? This also removes its subscriptions.`,
+        )
+        if (!confirmed) return
+      }
+      setDeletingId(agent.id)
+      setError(null)
+      try {
+        try {
+          await api.deleteContinuousAgent(agent.id)
+        } catch (firstErr) {
+          const message = firstErr instanceof Error ? firstErr.message : ''
+          if (typeof window !== 'undefined' && /pending/i.test(message)) {
+            const force = window.confirm(
+              'This agent has pending wake events. Force delete? Pending events will be marked filtered.',
+            )
+            if (!force) {
+              setDeletingId(null)
+              return
+            }
+            await api.deleteContinuousAgent(agent.id, { force: true })
+          } else {
+            throw firstErr
+          }
+        }
+        await loadData()
+      } catch (err: unknown) {
+        setError(getErrorMessage(err, 'Failed to delete continuous agent'))
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [loadData],
+  )
 
   const runsByAgent = useMemo(() => {
     const map = new Map<number, ContinuousRun[]>()
@@ -106,19 +155,27 @@ export default function ContinuousAgentsPage() {
             Always-on agent inventory, run history, and subscription readiness from the A2 read contracts.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-        >
-          <RefreshIcon size={16} />
-          Refresh
-        </button>
-      </div>
-
-      <div className="mb-6 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4 text-sm text-cyan-100">
-        This screen is read-only because the current backend exposes only <code className="font-mono">GET</code> contracts for continuous agents and runs.
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+          >
+            <RefreshIcon size={16} />
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditingAgent(null)
+              setModalOpen(true)
+            }}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-400"
+          >
+            + New continuous agent
+          </button>
+        </div>
       </div>
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
@@ -178,21 +235,26 @@ export default function ContinuousAgentsPage() {
           Loading continuous agents...
         </div>
       ) : agents.length === 0 ? (
-        <EmptyState />
+        <EmptyState onCreate={() => { setEditingAgent(null); setModalOpen(true) }} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {agents.map(agent => {
             const runs = runsByAgent.get(agent.id) || []
             const lastRun = runs[0]
+            const isDeleting = deletingId === agent.id
             return (
-              <Link
+              <div
                 key={agent.id}
-                href={`/continuous-agents/${agent.id}`}
                 className="rounded-xl border border-tsushin-border bg-tsushin-surface/70 p-5 transition-colors hover:border-cyan-500/40 hover:bg-tsushin-surface"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h2 className="truncate text-lg font-semibold text-white">{agent.name || agent.agent_name || `Continuous Agent #${agent.id}`}</h2>
+                    <Link
+                      href={`/continuous-agents/${agent.id}`}
+                      className="block truncate text-lg font-semibold text-white hover:text-cyan-300"
+                    >
+                      {agent.name || agent.agent_name || `Continuous Agent #${agent.id}`}
+                    </Link>
                     <p className="mt-1 text-xs text-tsushin-slate">
                       Agent #{agent.agent_id}{agent.agent_name ? ` - ${agent.agent_name}` : ''}
                     </p>
@@ -230,11 +292,35 @@ export default function ContinuousAgentsPage() {
                   )}
                 </div>
 
-                <div className="mt-4 inline-flex items-center gap-2 text-sm text-cyan-300">
-                  <EyeIcon size={15} />
-                  View read-only detail
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                  <Link
+                    href={`/continuous-agents/${agent.id}`}
+                    className="inline-flex items-center gap-2 text-sm text-cyan-300 hover:text-cyan-200"
+                  >
+                    <EyeIcon size={15} />
+                    View detail
+                  </Link>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setEditingAgent(agent); setModalOpen(true) }}
+                      className="rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
+                    >
+                      Edit
+                    </button>
+                    {!agent.is_system_owned && (
+                      <button
+                        type="button"
+                        disabled={isDeleting}
+                        onClick={() => handleDelete(agent)}
+                        className="rounded-lg border border-red-500/30 px-3 py-1 text-xs text-red-300 hover:bg-red-500/10 hover:text-red-200 disabled:opacity-40"
+                      >
+                        {isDeleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </Link>
+              </div>
             )
           })}
         </div>
@@ -259,6 +345,20 @@ export default function ContinuousAgentsPage() {
           Next
         </button>
       </div>
+
+      <ContinuousAgentSetupModal
+        isOpen={modalOpen}
+        existing={editingAgent}
+        onClose={() => {
+          setModalOpen(false)
+          setEditingAgent(null)
+        }}
+        onSaved={async () => {
+          setModalOpen(false)
+          setEditingAgent(null)
+          await loadData()
+        }}
+      />
     </div>
   )
 }
