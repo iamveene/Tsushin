@@ -6,7 +6,6 @@ Kokoro/SearXNG pattern, but uses an authenticated warm-up transcription call
 before marking the container healthy so we verify both auth and model load.
 """
 
-import base64
 import hashlib
 import io
 import logging
@@ -19,7 +18,7 @@ from datetime import datetime
 from typing import Optional, Set, Dict, Any
 
 import requests
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from services.container_runtime import (
     PORT_RANGES,
@@ -58,11 +57,6 @@ _provision_lock = threading.Lock()
 def _get_container_prefix() -> str:
     stack_name = (os.getenv("TSN_STACK_NAME") or "tsushin").strip() or "tsushin"
     return f"{stack_name}-whisper-"
-
-
-def _make_basic_auth_header(username: str, token: str) -> str:
-    raw = f"{username}:{token}".encode("utf-8")
-    return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
 def _build_silent_wav_bytes(duration_seconds: float = 1.0) -> bytes:
@@ -130,7 +124,6 @@ class WhisperContainerManager:
         token = WhisperInstanceService.resolve_api_token(instance, db)
         if not token:
             raise RuntimeError("Missing decrypted ASR API token")
-        username = (instance.auth_username or "tsushin").strip() or "tsushin"
         default_model = (instance.default_model or DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID
 
         instance.container_status = "creating"
@@ -141,13 +134,34 @@ class WhisperContainerManager:
         instance.is_auto_provisioned = True
         db.commit()
 
+        # BUG-717: capture every primitive needed downstream BEFORE the blocking
+        # `create_container()` call. Speaches image pull + model preload can
+        # block for minutes on first run, during which holding a pooled DB
+        # session races PostgreSQL's `idle_in_transaction_session_timeout`
+        # (BUG-665, set to 15s) and strands the row in `container_status=error`
+        # even when the container is actually healthy. Mirror the Kokoro/Ollama
+        # pattern: extract primitives, close the session, do the blocking I/O
+        # without any DB state, then re-open a fresh session for write-back.
+        instance_id = instance.id
+        tenant_id_capture = instance.tenant_id
+        internal_port = config["internal_port"]
+        volume_bind = config["volume_bind"]
+        engine = db.get_bind()
+
+        try:
+            db.close()
+        except Exception:
+            pass
+
+        from models import ASRInstance  # imported lazily to avoid circulars at module load
+
         container = None
         try:
             container = self.runtime.create_container(
                 image=image,
                 name=container_name,
-                volumes={volume_name: {"bind": config["volume_bind"], "mode": "rw"}},
-                ports={f'{config["internal_port"]}/tcp': ("127.0.0.1", port)},
+                volumes={volume_name: {"bind": volume_bind, "mode": "rw"}},
+                ports={f'{internal_port}/tcp': ("127.0.0.1", port)},
                 network=network_name,
                 restart_policy={"Name": "unless-stopped"},
                 mem_limit=mem_limit,
@@ -163,13 +177,13 @@ class WhisperContainerManager:
                     "tsushin.service": "asr",
                     "tsushin.vendor": vendor,
                     "tsushin.tenant": tenant_id,
-                    "tsushin.instance_id": str(instance.id),
+                    "tsushin.instance_id": str(instance_id),
                     "tsushin.lifecycle": "auto-provisioned",
                 },
                 detach=True,
             )
 
-            instance.container_id = container.id if hasattr(container, "id") else str(container)
+            container_id = container.id if hasattr(container, "id") else str(container)
 
             try:
                 raw = self.runtime.raw_client
@@ -183,41 +197,93 @@ class WhisperContainerManager:
             except Exception as alias_err:
                 logger.warning("Could not set DNS alias '%s': %s", dns_alias, alias_err)
 
-            instance.base_url = f"http://{dns_alias}:{config['internal_port']}"
-            db.commit()
+            base_url_capture = f"http://{dns_alias}:{internal_port}"
 
-            healthy = self._wait_for_health(instance, token=token, username=username)
+            # BUG-717: open a FRESH short-lived session to persist
+            # container_id + base_url before the (potentially multi-minute)
+            # health-poll. The original session was closed before the pull.
+            SessionLocal = sessionmaker(bind=engine)
+            db_post_create = SessionLocal()
             try:
-                db.rollback()
-            except Exception:
-                pass
+                row = db_post_create.query(ASRInstance).filter(
+                    ASRInstance.id == instance_id,
+                    ASRInstance.tenant_id == tenant_id_capture,
+                ).first()
+                if row is not None:
+                    row.container_id = container_id
+                    row.base_url = base_url_capture
+                    db_post_create.commit()
+            finally:
+                db_post_create.close()
 
-            instance.container_status = "running" if healthy else "error"
-            instance.health_status = "healthy" if healthy else "unavailable"
-            instance.health_status_reason = (
-                "Auto-provisioned and passed authenticated warm-up"
-                if healthy
-                else "Container started but authenticated warm-up failed"
+            # Reflect on the detached ORM instance so callers see up-to-date state.
+            instance.container_id = container_id
+            instance.base_url = base_url_capture
+
+            # BUG-717: run health poll WITHOUT a live DB connection so the
+            # multi-minute warm-up cannot hold a pooled session.
+            healthy = self._wait_for_health_detached(
+                base_url=base_url_capture,
+                token=token,
+                model=default_model,
             )
-            instance.last_health_check = datetime.utcnow()
-            db.commit()
-        except Exception as e:
+
+            # Final status write on another fresh short-lived session.
+            db_final = SessionLocal()
             try:
-                db.rollback()
-            except Exception:
-                pass
+                row = db_final.query(ASRInstance).filter(
+                    ASRInstance.id == instance_id,
+                    ASRInstance.tenant_id == tenant_id_capture,
+                ).first()
+                if row is not None:
+                    row.container_status = "running" if healthy else "error"
+                    row.health_status = "healthy" if healthy else "unavailable"
+                    row.health_status_reason = (
+                        "Auto-provisioned and passed authenticated warm-up"
+                        if healthy
+                        else "Container started but authenticated warm-up failed"
+                    )
+                    row.last_health_check = datetime.utcnow()
+                    db_final.commit()
+            finally:
+                db_final.close()
+
+            logger.info(
+                "Provisioned whisper container: %s (healthy=%s)",
+                container_name,
+                healthy,
+            )
+        except Exception as e:
+            # BUG-717: original `db` is closed; rebuild a fresh session for
+            # the error write-back. Clean up the orphan container first.
             if container_name:
                 try:
                     self.runtime.remove_container(container_name, force=True)
                 except Exception:
                     pass
-            instance.container_status = "error"
-            instance.container_name = None
-            instance.container_id = None
-            instance.container_port = None
-            instance.health_status = "unavailable"
-            instance.health_status_reason = str(e)[:500]
-            db.commit()
+
+            try:
+                SessionLocal = sessionmaker(bind=engine)
+                db_err = SessionLocal()
+                try:
+                    row = db_err.query(ASRInstance).filter(
+                        ASRInstance.id == instance_id,
+                        ASRInstance.tenant_id == tenant_id_capture,
+                    ).first()
+                    if row is not None:
+                        row.container_status = "error"
+                        row.container_name = None
+                        row.container_id = None
+                        row.container_port = None
+                        row.health_status = "unavailable"
+                        row.health_status_reason = str(e)[:500]
+                        db_err.commit()
+                finally:
+                    db_err.close()
+            except Exception as write_err:
+                logger.error(
+                    "Could not write Whisper provision error state: %s", write_err
+                )
             logger.error("Failed to provision whisper container: %s", e, exc_info=True)
             raise
 
@@ -321,10 +387,31 @@ class WhisperContainerManager:
             return ""
         return self.runtime.get_container_logs(instance.container_name, tail=tail)
 
-    def _wait_for_health(self, instance, *, token: str, username: str) -> bool:
+    def _wait_for_health(self, instance, *, token: str) -> bool:
         start = time.time()
         while time.time() - start < HEALTH_CHECK_TIMEOUT:
-            if self._warm_up(instance, token=token, username=username):
+            if self._warm_up(instance, token=token):
+                return True
+            time.sleep(HEALTH_CHECK_INTERVAL)
+        return False
+
+    def _wait_for_health_detached(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        model: str,
+    ) -> bool:
+        """BUG-717: detached health-poll variant.
+
+        Mirrors the Ollama/Kokoro pattern — takes only the primitives needed to
+        fire the warm-up call, never touches a SQLAlchemy session, so the long
+        wait (image pull + model load can be minutes) does not race
+        ``idle_in_transaction_session_timeout``.
+        """
+        start = time.time()
+        while time.time() - start < HEALTH_CHECK_TIMEOUT:
+            if self._warm_up_detached(base_url=base_url, token=token, model=model):
                 return True
             time.sleep(HEALTH_CHECK_INTERVAL)
         return False
@@ -334,8 +421,7 @@ class WhisperContainerManager:
         if not token:
             logger.warning("ASR instance %s missing API token during readiness check", instance.id)
             return False
-        username = (instance.auth_username or "tsushin").strip() or "tsushin"
-        return self._wait_for_health(instance, token=token, username=username)
+        return self._wait_for_health(instance, token=token)
 
     def _check_health(self, instance) -> bool:
         try:
@@ -346,22 +432,32 @@ class WhisperContainerManager:
         except Exception:
             return False
 
-    def _warm_up(self, instance, *, token: str, username: str) -> bool:
+    def _warm_up(self, instance, *, token: str) -> bool:
+        if not instance.base_url:
+            return False
+        return self._warm_up_detached(
+            base_url=instance.base_url,
+            token=token,
+            model=(instance.default_model or DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID,
+        )
+
+    def _warm_up_detached(self, *, base_url: str, token: str, model: str) -> bool:
         try:
-            if not instance.base_url:
+            if not base_url:
                 return False
             wav_bytes = _build_silent_wav_bytes()
+            # BUG-703: Speaches expects `Authorization: Bearer <token>`.
+            # Basic auth + X-API-Key both return 403 from the upstream API.
             headers = {
-                "Authorization": _make_basic_auth_header(username, token),
-                "X-API-Key": token,
+                "Authorization": f"Bearer {token}",
             }
             files = {"file": ("warmup.wav", wav_bytes, "audio/wav")}
             data = {
-                "model": (instance.default_model or DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID,
+                "model": model,
                 "language": "en",
             }
             resp = requests.post(
-                f"{instance.base_url}/v1/audio/transcriptions",
+                f"{base_url}/v1/audio/transcriptions",
                 headers=headers,
                 files=files,
                 data=data,
