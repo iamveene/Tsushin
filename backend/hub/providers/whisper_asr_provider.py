@@ -5,17 +5,12 @@ Uses the per-tenant ASRInstance row plus its encrypted token to call the
 OpenAI-compatible /v1/audio/transcriptions endpoint.
 """
 
-import base64
 from pathlib import Path
 
 import httpx
 
 from .asr_provider import ASRProvider, ASRRequest, ASRResponse
 from services.whisper_instance_service import WhisperInstanceService
-
-
-def _basic_auth(username: str, token: str) -> str:
-    return "Basic " + base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
 
 
 class WhisperASRProvider(ASRProvider):
@@ -36,11 +31,11 @@ class WhisperASRProvider(ASRProvider):
         if not token:
             return ASRResponse(success=False, provider=self.provider_name, error="missing_api_token")
 
-        username = (self.instance.auth_username or "tsushin").strip() or "tsushin"
         model = request.model or self.instance.default_model
+        # BUG-703: Speaches expects `Authorization: Bearer <token>`. Basic auth
+        # and X-API-Key both produce 403 against the upstream Speaches API.
         headers = {
-            "Authorization": _basic_auth(username, token),
-            "X-API-Key": token,
+            "Authorization": f"Bearer {token}",
         }
 
         with Path(request.audio_path).open("rb") as audio_file:
