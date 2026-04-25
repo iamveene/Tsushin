@@ -323,7 +323,15 @@ def test_gmail_skill_outbound_actions_dispatch_to_service():
 
     fake_service = FakeService()
     skill._get_gmail_service = lambda config=None: fake_service
+    # GmailSkill defaults send/reply/draft to enabled=False (write actions ship
+    # off — same safety stance as JiraSkill). This test exercises the
+    # service-dispatch path on purpose, so it must enable the three write
+    # capabilities explicitly. The companion gate test
+    # `test_gmail_skill_send_capability_gate_blocks_outbound_action`
+    # asserts the off-by-default behavior using the unmodified default config.
     config = skill.get_default_config()
+    for cap in ("send_email", "reply_email", "draft_email"):
+        config["capabilities"][cap]["enabled"] = True
 
     send_result = asyncio.run(
         skill.execute_tool(

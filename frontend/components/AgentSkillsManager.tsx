@@ -38,6 +38,17 @@ const TICKET_MANAGEMENT_CAPABILITY_LABELS: Record<string, { label: string; descr
   transition_ticket: { label: 'Transition ticket', description: 'Move a ticket through its workflow (write — off by default)', defaultEnabled: false },
 }
 
+// Email (Gmail) capability labels — mirrors backend GmailSkill default_config.
+// Read default ON, write default OFF — same safety stance as Ticket Management.
+const EMAIL_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
+  list_emails: { label: 'List emails', description: 'View recent messages in inbox (read)', defaultEnabled: true },
+  search_emails: { label: 'Search emails', description: 'Search with Gmail query syntax (read)', defaultEnabled: true },
+  read_email: { label: 'Read email', description: 'Get full email content (read)', defaultEnabled: true },
+  send_email: { label: 'Send email', description: 'Send a new outbound email (write — off by default)', defaultEnabled: false },
+  reply_email: { label: 'Reply to email', description: 'Reply within an existing email thread (write — off by default)', defaultEnabled: false },
+  draft_email: { label: 'Create draft', description: 'Save an email draft without sending it (write — off by default)', defaultEnabled: false },
+}
+
 // Audio sub-skill tabs
 type AudioTab = 'tts' | 'transcript'
 type TranscriptResponseMode = 'conversational' | 'transcript_only'
@@ -162,6 +173,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [ticketCapabilities, setTicketCapabilities] = useState<Record<string, boolean>>(
     Object.fromEntries(
       Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
+    )
+  )
+
+  // Email (Gmail) capability toggles — same shape, read on / write off by default.
+  const [emailCapabilities, setEmailCapabilities] = useState<Record<string, boolean>>(
+    Object.fromEntries(
+      Object.entries(EMAIL_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
     )
   )
 
@@ -470,6 +488,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         setTicketCapabilities(next)
       }
+
+      // Load email capability toggles for the email/gmail provider
+      if (providerKey === 'email') {
+        const skillCfg = getSkillConfig(skillType)
+        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
+        const next: Record<string, boolean> = {}
+        for (const [capKey, meta] of Object.entries(EMAIL_CAPABILITY_LABELS)) {
+          const stored = cfgCaps[capKey]
+          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
+        }
+        setEmailCapabilities(next)
+      }
     } catch (err) {
       console.error('Failed to load providers:', err)
       alert('Failed to load providers')
@@ -536,8 +566,38 @@ export default function AgentSkillsManager({ agentId }: Props) {
             config: undefined,
           }),
         ])
+      } else if (configuringProvider === 'email') {
+        // Email/Gmail: persist integration link AND capability toggles in
+        // parallel — same Promise.all pattern used by ticket_management so a
+        // transient API error doesn't leave a half-updated state.
+        const currentConfig = getSkillConfig(skillType)
+        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
+        for (const [capKey, meta] of Object.entries(EMAIL_CAPABILITY_LABELS)) {
+          capabilities[capKey] = {
+            enabled: emailCapabilities[capKey] ?? meta.defaultEnabled,
+            label: meta.label,
+            description: meta.description,
+          }
+        }
+        const mergedConfig: SkillConfig = {
+          ...currentConfig,
+          execution_mode: 'tool',
+          integration_id: selectedIntegration,
+          capabilities,
+        }
+        await Promise.all([
+          api.updateAgentSkill(agentId, skillType, {
+            is_enabled: true,
+            config: mergedConfig,
+          }),
+          api.updateSkillIntegration(agentId, skillType, {
+            scheduler_provider: null,
+            integration_id: selectedIntegration,
+            config: undefined,
+          }),
+        ])
       } else {
-        // Save skill integration for scheduler/email
+        // Save skill integration for scheduler
         await api.updateSkillIntegration(agentId, skillType, {
           scheduler_provider: configuringProvider === 'scheduler' ? selectedProvider : null,
           integration_id: selectedIntegration,
@@ -1753,6 +1813,48 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     </div>
                   )}
 
+                  {/* Capability toggles — Email (Gmail) */}
+                  {configuringProvider === 'email' && !providerLoading && (
+                    <div className="border-t pt-6 border-tsushin-border">
+                      <label className="block text-sm font-medium mb-3">
+                        Capabilities
+                      </label>
+                      <p className="text-xs text-tsushin-muted mb-3">
+                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
+                        Read actions are on by default; write actions are off by default for safety.
+                      </p>
+                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
+                        {Object.entries(EMAIL_CAPABILITY_LABELS).map(([capKey, meta]) => (
+                          <div key={capKey} className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              id={`email-cap-${capKey}`}
+                              checked={!!emailCapabilities[capKey]}
+                              onChange={(e) =>
+                                setEmailCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
+                              }
+                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={`email-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
+                                {meta.label}
+                                {!meta.defaultEnabled && (
+                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
+                                )}
+                              </label>
+                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {!Object.values(emailCapabilities).some(Boolean) && (
+                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
+                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Capability toggles — Ticket Management (Jira) */}
                   {configuringProvider === 'ticket_management' && !providerLoading && (
                     <div className="border-t pt-6 border-tsushin-border">
@@ -1811,12 +1913,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   if (selectedProviderData?.requires_integration && !selectedIntegration) return true
                   if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) return true
                   if (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) return true
+                  if (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) return true
                   return false
                 })()}
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
                   ((selectedProviderData?.requires_integration && !selectedIntegration) ||
                     (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) ||
-                    (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)))
+                    (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) ||
+                    (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)))
                     ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}
