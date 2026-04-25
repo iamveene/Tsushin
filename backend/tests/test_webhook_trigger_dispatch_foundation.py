@@ -176,9 +176,17 @@ def test_webhook_trigger_event_queues_direct_agent_message(db_session, monkeypat
     assert item.payload["source_id"] == "evt-1"
 
 
-def test_webhook_duplicate_uses_trigger_dispatch_queue_id_when_service_exists(
+def test_webhook_duplicate_signed_envelope_returns_409(
     db_session,
 ):
+    """
+    BUG-705: posting the same signed envelope twice now returns 409 on the
+    second attempt (the dedupe key is derived from the signed inputs, not
+    wall-clock millis). The first call writes both a replay-protection row
+    AND the trigger-dispatch dedupe row keyed on source_id; the second call
+    collides on the replay-protection row and raises before reaching the
+    trigger-dispatch path.
+    """
     agent, _integration = _seed_base(db_session)
 
     first_response = _receive(
@@ -189,27 +197,35 @@ def test_webhook_duplicate_uses_trigger_dispatch_queue_id_when_service_exists(
             "source_id": "evt-dup",
         },
     )
-    duplicate_response = _receive(
-        db_session,
-        {
-            "message": "Build report",
-            "sender_id": "customer-1",
-            "source_id": "evt-dup",
-        },
-    )
+    assert first_response["status"] == "queued"
 
-    assert duplicate_response == {
-        "status": "queued",
-        "queue_id": first_response["queue_id"],
-        "poll_url": f"/api/v1/queue/{first_response['queue_id']}",
-    }
+    with pytest.raises(HTTPException) as exc_info:
+        _receive(
+            db_session,
+            {
+                "message": "Build report",
+                "sender_id": "customer-1",
+                "source_id": "evt-dup",
+            },
+        )
+    assert exc_info.value.status_code == 409
+    assert "duplicate" in str(exc_info.value.detail).lower()
+
+    # Only the first call enqueued.
     assert db_session.query(MessageQueue).count() == 1
-    dedupe = db_session.query(ChannelEventDedupe).one()
-    assert dedupe.tenant_id == "tenant-a"
-    assert dedupe.channel_type == "webhook"
-    assert dedupe.instance_id == 301
-    assert dedupe.dedupe_key == "evt-dup"
-    assert dedupe.outcome == "filtered"
+
+    # Two dedupe rows from the first call: one replay-protection (sha256 hex,
+    # 64 chars) and one trigger-dispatch row keyed on source_id="evt-dup".
+    dedupe_rows = (
+        db_session.query(ChannelEventDedupe)
+        .order_by(ChannelEventDedupe.id.asc())
+        .all()
+    )
+    assert len(dedupe_rows) == 2
+    keys = {r.dedupe_key for r in dedupe_rows}
+    assert "evt-dup" in keys
+    sha_keys = [k for k in keys if len(k) == 64 and all(c in "0123456789abcdef" for c in k)]
+    assert len(sha_keys) == 1, f"Expected exactly one sha256-hex dedupe key, got: {keys}"
 
 
 def test_webhook_without_default_agent_fails_closed_before_queueing(db_session, monkeypatch):
