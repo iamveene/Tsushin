@@ -268,6 +268,8 @@ backend/tests/*
 !backend/tests/test_invitation_scope.py
 !backend/tests/test_invitation_link_portability.py
 !backend/tests/test_skill_integration_tenant_isolation.py
+!backend/tests/test_new_contact_welcome_template.py
+!backend/tests/test_flow_completed_steps_counter.py
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py
