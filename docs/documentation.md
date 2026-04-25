@@ -4,7 +4,7 @@
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
-> **Version:** v0.6.0 (`README.md`, `backend/settings.py`).
+> **Version:** v0.7.0 (`README.md`, `backend/settings.py`).
 > **License:** MIT. **Author:** Marcos Vinicios Penha ([@iamveene](https://github.com/iamveene)).
 
 ---

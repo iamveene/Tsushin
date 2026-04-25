@@ -513,8 +513,13 @@ def _validate_channel_instance(
             status_code=400,
             detail="channel_instance_not_found",
         )
+    # Inverted guard (post-review hardening, BUG-FIX-AUDIT 2026-04-25):
+    # missing tenant_id is now treated as a hard failure rather than a pass.
+    # Previously the code skipped the check when `instance_tenant is None`
+    # which would have silently allowed cross-tenant linkage if any future
+    # channel-instance model in `_CHANNEL_INSTANCE_MODELS` lacked the column.
     instance_tenant = getattr(row, "tenant_id", None)
-    if instance_tenant is not None and instance_tenant != tenant_id:
+    if instance_tenant is None or instance_tenant != tenant_id:
         raise HTTPException(
             status_code=403,
             detail="channel_instance_cross_tenant",

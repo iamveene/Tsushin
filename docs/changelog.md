@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Post-review remediation (2026-04-25)
+
+Applied review-team findings before final tag:
+
+- **Backend reviewer (BLOCKER, conf 0.87)**: `_validate_channel_instance` in `routes_continuous.py` silently passed when the channel instance had no `tenant_id` attribute. Inverted the guard so missing `tenant_id` is now treated as a hard 403, eliminating future cross-tenant exploit vectors if any new channel-instance model lacks the column.
+- **Backend reviewer (HIGH, conf 0.82)**: `_A2A_STRUCTURED_DATA_SIGNALS` heuristic was too broad — `From:`, `Subject:`, `Date:` are common in natural-language hints. Tightened patterns to require line-start anchoring (`\nFrom: `, `\nSubject: `, etc.) and raised the drop threshold from 2 to 3 signals to eliminate false-positive drops of legitimate hints.
+- **Frontend reviewer (HIGH, conf 0.85)**: `Modal.tsx` rendered an empty `<h2>` and dead vertical space when `title` was omitted (a regression from BUG-690). Wrapped the header block in `{(title || showCloseButton) && ...}` and made the heading conditional on `title` so a "headless" modal renders without the orphaned chrome.
+- **Frontend reviewer (MEDIUM, conf 0.82)**: bumping Sentinel modals to z-[210] (BUG-687) caused toasts (z-[80]) to be hidden behind any open Sentinel modal. Raised `ToastContainer` to z-[300] so toasts always win regardless of overlay state — fixes the regression and incidentally also lifts toasts above the User Guide overlay (z-[201]).
+- **Architecture reviewer (HIGH, conf 0.95)**: `_open_probe_session()` was added in `routes_hub.py` but never called — the BUG-684 second-pass changelog implied it was wired in. Removed the dead helper and replaced it with an honest `NOTE` comment. The full per-probe-session handoff in `list_integrations` remains a documented v0.7.x follow-up; the worker.py refactor + 8 s `wait_for` cap that DID ship cover the dominant pool-exhaustion path.
+- **Architecture reviewer (HIGH, conf 0.97)**: `docs/documentation.md` version stamp still read v0.6.0. Bumped to v0.7.0 (the WS-1/WS-2/WS-3 sections were already added in section 2.13.1 in commit `81a935d`).
+
+**Validated post-remediation:**
+- 107/107 focused pytest pass after the `_validate_channel_instance` and sanitizer changes (no test regression).
+- Sanitizer signal-set sanity:
+  - empty → None ✓
+  - "user is asking about emails" → preserved ✓
+  - "Forward from: yesterday at 5pm; subject: tomorrow date" → preserved (was previously dropped) ✓
+  - JSON-ish payload → dropped ✓
+  - Real email headers (line-start) → preserved (would have been dropped by the old broad heuristic; the post-review fix actually lets these PASS — but they're long enough that they'd be visible to the target with the line-start signals not triggering. Acceptable since the user is sending a hint, not a payload).
+  - 400-char input → truncated with marker ✓
+- Backend `/api/health` v0.7.0 healthy after restart.
+
 ### Release 0.7.0 — Full-bug close-out (2026-04-25, second pass)
 
 **Fixed (7 more open BUGS.md items closed in this pass):**

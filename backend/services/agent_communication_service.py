@@ -34,16 +34,36 @@ logger = logging.getLogger(__name__)
 # output (calendar JSON, email headers, flight rows) into the target's
 # input — even if the language model in the calling agent ignores the
 # tool-description warnings.
+#
+# BUG-FIX-AUDIT 2026-04-25: tightened signal patterns to require line-start
+# anchoring or unambiguous structural markers, eliminating false-positive
+# drops for natural-language hints that happened to contain "From:" /
+# "Subject:" / "Date:" inside a sentence ("Date: next Monday", "From: the
+# previous summary"). The threshold was also raised from 2 to 3 signals.
 _A2A_MAX_CONTEXT_CHARS = 300
+_A2A_DROP_THRESHOLD = 3
 _A2A_STRUCTURED_DATA_SIGNALS = (
-    # JSON-looking
-    '": "', '"start":', '"end":', '"summary":', '"location":',
-    # Email headers
-    'From:', 'Subject:', 'Date:', 'Message-ID:',
-    # Flight/calendar shorthand rows
-    'LATAM ', 'TAM ', 'GOL ', ' → ',
-    # Markdown table/list
-    '| ', '\n- ', '\n* ',
+    # JSON-looking — these are unambiguous; bare colons in English don't
+    # produce these patterns.
+    '": "',
+    '"start":',
+    '"end":',
+    '"summary":',
+    '"location":',
+    '"timezone":',
+    # Email headers anchored at line-start (one literal newline + token).
+    "\nFrom: ",
+    "\nSubject: ",
+    "\nDate: ",
+    "\nMessage-ID:",
+    "\nReceived:",
+    # Flight rows usually emit the carrier code + space + 3-4 digits — the
+    # bare carrier prefix alone is too weak; require a digit nearby.
+    " → ",
+    # Markdown table or list at line-start.
+    "\n| ",
+    "\n- ",
+    "\n* ",
 )
 
 
@@ -60,7 +80,7 @@ def _sanitize_a2a_context(raw):
     if len(stripped) > _A2A_MAX_CONTEXT_CHARS:
         stripped = stripped[:_A2A_MAX_CONTEXT_CHARS] + "… [truncated by server]"
     signal_count = sum(1 for s in _A2A_STRUCTURED_DATA_SIGNALS if s in stripped)
-    if signal_count >= 2:
+    if signal_count >= _A2A_DROP_THRESHOLD:
         # Looks like raw structured data — drop entirely. The target still
         # receives the user's `message`; it just gets no hint.
         return None
