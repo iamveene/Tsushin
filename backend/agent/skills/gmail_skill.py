@@ -23,7 +23,7 @@ Sub-capabilities:
 """
 
 from .base import BaseSkill, InboundMessage, SkillResult
-from typing import Dict, Any, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 import logging
 import re
 
@@ -803,16 +803,85 @@ class GmailSkill(BaseSkill):
         )
 
     # =========================================================================
-    # SKILLS-AS-TOOLS: MCP TOOL DEFINITION (Phase 3)
+    # SKILLS-AS-TOOLS: MCP TOOL DEFINITION (Phase 3) — capability-gated
     # =========================================================================
+    # Per-agent capability filtering happens at *tool-spec* time: the
+    # ``action`` enum is rebuilt from ``self._config["capabilities"]`` so
+    # disabled actions never enter the LLM tool list. The classmethod
+    # ``get_mcp_tool_definition`` returns the FULL spec (all 6 actions) for
+    # ``SkillManager._find_skill_by_tool_name`` to map name→class; the
+    # instance-level ``to_openai_tool`` / ``to_anthropic_tool`` /
+    # ``get_per_agent_mcp_tool_definition`` apply the filter.
+
+    _ACTION_ORDER: ClassVar[List[str]] = ["list", "search", "read", "send", "reply", "draft"]
+    _ACTION_TO_CAPABILITY: ClassVar[Dict[str, str]] = {
+        "list": "list_emails",
+        "search": "search_emails",
+        "read": "read_email",
+        "send": "send_email",
+        "reply": "reply_email",
+        "draft": "draft_email",
+    }
+
+    def _enabled_actions(self, config: Optional[Dict[str, Any]] = None) -> List[str]:
+        config = config or getattr(self, "_config", {}) or {}
+        defaults = self.get_default_config().get("capabilities", {})
+        capabilities = config.get("capabilities", {}) or {}
+        enabled: List[str] = []
+        for action in self._ACTION_ORDER:
+            cap_key = self._ACTION_TO_CAPABILITY[action]
+            default_entry = defaults.get(cap_key, {}) or {}
+            override_entry = capabilities.get(cap_key, {}) or {}
+            merged = {**default_entry, **override_entry}
+            if merged.get("enabled", False):
+                enabled.append(action)
+        return enabled
 
     @classmethod
     def get_mcp_tool_definition(cls) -> Dict[str, Any]:
-        """
-        Return MCP-compliant tool definition for Gmail operations.
+        """Return the FULL MCP-compliant tool definition (all 6 actions).
 
-        MCP Spec: https://modelcontextprotocol.io/docs/concepts/tools
+        Used by ``SkillManager._find_skill_by_tool_name`` to map the LLM's
+        ``gmail_operation`` tool name back to this class. Per-agent filtering
+        happens in :py:meth:`get_per_agent_mcp_tool_definition` and the
+        ``to_*_tool`` adapter overrides below.
         """
+        return cls._build_mcp_tool_definition_for_actions(cls._ACTION_ORDER)
+
+    def get_per_agent_mcp_tool_definition(self) -> Optional[Dict[str, Any]]:
+        """Return MCP definition with the ``action`` enum filtered to enabled
+        capabilities. ``None`` if no capabilities are enabled (skill is then
+        omitted from the LLM tool list entirely)."""
+        actions = self._enabled_actions()
+        if not actions:
+            return None
+        return self.__class__._build_mcp_tool_definition_for_actions(actions)
+
+    def to_openai_tool(self) -> Optional[Dict[str, Any]]:  # type: ignore[override]
+        mcp = self.get_per_agent_mcp_tool_definition()
+        if not mcp:
+            return None
+        return {
+            "type": "function",
+            "function": {
+                "name": mcp["name"],
+                "description": mcp["description"],
+                "parameters": mcp["inputSchema"],
+            },
+        }
+
+    def to_anthropic_tool(self) -> Optional[Dict[str, Any]]:  # type: ignore[override]
+        mcp = self.get_per_agent_mcp_tool_definition()
+        if not mcp:
+            return None
+        return {
+            "name": mcp["name"],
+            "description": mcp["description"],
+            "input_schema": mcp["inputSchema"],
+        }
+
+    @classmethod
+    def _build_mcp_tool_definition_for_actions(cls, actions: List[str]) -> Dict[str, Any]:
         return {
             "name": "gmail_operation",
             "title": "Gmail Operations",
@@ -826,7 +895,7 @@ class GmailSkill(BaseSkill):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "search", "read", "send", "reply", "draft"],
+                        "enum": list(actions),
                         "description": (
                             "Action to perform: 'list' (recent emails), "
                             "'search' (find specific emails), 'read' (get email "
@@ -1518,32 +1587,32 @@ class GmailSkill(BaseSkill):
                 "list_emails": {
                     "enabled": True,
                     "label": "List Emails",
-                    "description": "View recent messages in inbox"
+                    "description": "View recent messages in inbox (read)"
                 },
                 "search_emails": {
                     "enabled": True,
                     "label": "Search Emails",
-                    "description": "Search with Gmail query syntax"
+                    "description": "Search with Gmail query syntax (read)"
                 },
                 "read_email": {
                     "enabled": True,
                     "label": "Read Email",
-                    "description": "Get full email content"
+                    "description": "Get full email content (read)"
                 },
                 "send_email": {
-                    "enabled": True,
+                    "enabled": False,
                     "label": "Send Email",
-                    "description": "Send a new outbound email"
+                    "description": "Send a new outbound email (write — off by default)"
                 },
                 "reply_email": {
-                    "enabled": True,
+                    "enabled": False,
                     "label": "Reply to Email",
-                    "description": "Reply within an existing email thread"
+                    "description": "Reply within an existing email thread (write — off by default)"
                 },
                 "draft_email": {
-                    "enabled": True,
+                    "enabled": False,
                     "label": "Create Draft",
-                    "description": "Save an email draft without sending it"
+                    "description": "Save an email draft without sending it (write — off by default)"
                 }
             }
         }

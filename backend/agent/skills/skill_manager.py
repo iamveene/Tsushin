@@ -368,6 +368,17 @@ class SkillManager:
                 # SKILL-002 Fix: Use centralized _create_skill_instance method
                 skill_instance = self._create_skill_instance(skill_class, db, agent_id)
 
+                # BUG-FIX: propagate the saved AgentSkill.config to the instance
+                # so per-agent capability filtering (JiraSkill / GmailSkill /
+                # any future skill that overrides to_openai_tool to read
+                # self._config) actually sees the persisted toggles. Without
+                # this, the instance always falls back to get_default_config(),
+                # silently ignoring saved capability changes — the bug was
+                # masked while saved configs happened to match the defaults.
+                if not hasattr(skill_instance, '_agent_id') or skill_instance._agent_id is None:
+                    skill_instance._agent_id = agent_id
+                skill_instance._config = skill_record.config or {}
+
                 # Check if skill has is_tool_enabled
                 if hasattr(skill_instance, 'is_tool_enabled'):
                     config = skill_record.config or {}
