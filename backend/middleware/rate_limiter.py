@@ -410,26 +410,41 @@ class ApiV1RateLimitMiddleware(BaseHTTPMiddleware):
         # Apply rate limiting
         if not api_rate_limiter.allow(rate_key, rate_limit):
             client_ip = _client_ip(request)
-            # BUG-719: structured log line so spikes are visible to operators.
+            # BUG-719 close-out: structured log line so spikes are visible to operators.
+            # Belt-and-suspenders: emit through `logger` (FileHandler + StreamHandler via
+            # root) AND directly to stderr. The latter guarantees visibility under
+            # uvicorn's logger overrides (which can silently drop user-namespace
+            # WARNING records) and never raises from inside an exception handler.
+            payload = {
+                "event": "rate_limit_exceeded",
+                "request_id": request_id,
+                "bucket": bucket_kind,
+                "rate_key": rate_key,
+                "rate_limit": rate_limit,
+                "method": request.method,
+                "path": path,
+                "ip": client_ip or None,
+                "api_client_id": api_client_id,
+                "retry_after": 60,
+            }
             try:
-                logger.warning(
-                    json.dumps(
-                        {
-                            "event": "rate_limit_exceeded",
-                            "request_id": request_id,
-                            "bucket": bucket_kind,
-                            "rate_key": rate_key,
-                            "rate_limit": rate_limit,
-                            "method": request.method,
-                            "path": path,
-                            "ip": client_ip or None,
-                            "api_client_id": api_client_id,
-                            "retry_after": 60,
-                        }
-                    )
-                )
+                line = json.dumps(payload, default=str)
+            except Exception:
+                line = f"rate_limit_exceeded bucket={bucket_kind} key={rate_key}"
+            try:
+                logger.warning(line)
             except Exception:
                 # Logging must never escalate to 500 from a 429.
+                pass
+            try:
+                # Direct stderr write with a recognizable tag — survives any
+                # logger-config override applied by uvicorn workers and lands
+                # in `docker compose logs backend` regardless of the file
+                # handler state. Tag chosen to match the BUG-719 grep pattern.
+                import sys
+                sys.stderr.write(f"[rate_limit] {line}\n")
+                sys.stderr.flush()
+            except Exception:
                 pass
 
             # BUG-719: persist to api_request_log when attributable.
