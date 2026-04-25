@@ -25,12 +25,13 @@ from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db import get_db
 from fastapi import Depends
 from middleware.rate_limiter import api_rate_limiter
-from models import Agent, MessageQueue, WebhookIntegration
+from models import Agent, ChannelEventDedupe, MessageQueue, WebhookIntegration
 from services.message_queue_service import MessageQueueService
 
 logger = logging.getLogger(__name__)
@@ -292,6 +293,34 @@ async def receive_webhook(
         logger.warning(f"Webhook {webhook_id}: HMAC signature mismatch")
         _generic_403()
 
+    # --- Layer 5b: content-derived replay protection (BUG-705) ---
+    # Replay-blocking dedupe key derived from the signed envelope itself
+    # (slug + raw body + signature value). The previous implementation keyed
+    # on wall-clock millis embedded in `source_id`, so two replays of the
+    # same signed envelope produced different dedupe keys and were both
+    # accepted within the 300s skew window. Inserting a sha256 over the
+    # signed inputs into the unique-constrained `channel_event_dedupe` table
+    # makes the second attempt collide and return 409.
+    replay_dedupe_key = hashlib.sha256(
+        f"{slug}\x1f".encode("utf-8") + raw_body + b"\x1f" + provided.encode("utf-8")
+    ).hexdigest()
+    replay_row = ChannelEventDedupe(
+        tenant_id=integration.tenant_id,
+        channel_type="webhook",
+        instance_id=webhook_id,
+        dedupe_key=replay_dedupe_key,
+        outcome="accepted",
+    )
+    db.add(replay_row)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        logger.warning(
+            f"Webhook {webhook_id}: replay rejected (dedupe collision on signed envelope)"
+        )
+        raise HTTPException(status_code=409, detail="duplicate webhook")
+
     # --- Layer 6: parse body ---
     try:
         body = _json.loads(raw_body.decode("utf-8")) if raw_body else {}
@@ -311,7 +340,11 @@ async def receive_webhook(
 
     sender_id = str(body.get("sender_id") or body.get("user_id") or "webhook")
     sender_name = str(body.get("sender_name") or body.get("user_name") or "Webhook")
-    source_id = str(body.get("source_id") or f"whk_{webhook_id}_{int(time.time()*1000)}")
+    # BUG-705: Default source_id is now content-derived (sha256 over signed
+    # inputs) instead of wall-clock millis, so replay attempts produce the
+    # same source_id and the trigger-dispatch path treats them idempotently.
+    # An explicit body.source_id from the caller still wins.
+    source_id = str(body.get("source_id") or f"whk_{webhook_id}_{replay_dedupe_key[:24]}")
 
     # --- Layer 7: resolve configured agent ---
     from services.default_agent_service import get_default_agent
