@@ -155,6 +155,10 @@ services:
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
+      # BUG-712: optional bearer-token gate for /metrics (enforced inside backend
+      # services/metrics_service.py). Empty = open. The proxy now passes /metrics
+      # straight through, so this single env is the only auth knob to flip.
+      - TSN_METRICS_SCRAPE_TOKEN=${TSN_METRICS_SCRAPE_TOKEN:-}
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
