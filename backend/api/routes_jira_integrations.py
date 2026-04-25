@@ -345,6 +345,7 @@ def delete_jira_integration(
         raise HTTPException(status_code=409, detail="Jira integration is used by one or more triggers")
     in_use_skill = db.query(AgentSkillIntegration.id).filter(
         AgentSkillIntegration.integration_id == integration.id,
+        AgentSkillIntegration.skill_type == "ticket_management",
     ).first()
     if in_use_skill is not None:
         raise HTTPException(

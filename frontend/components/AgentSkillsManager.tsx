@@ -506,14 +506,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
           config: config
         })
       } else if (configuringProvider === 'ticket_management') {
-        // Persist the integration link AND merge capability toggles into the
-        // AgentSkill.config so per-action filtering kicks in at tool-spec time.
-        await api.updateSkillIntegration(agentId, skillType, {
-          scheduler_provider: null,
-          integration_id: selectedIntegration,
-          config: undefined,
-        })
-
+        // Persist the integration link AND the capability toggles in parallel.
+        // Both PUTs are idempotent on retry; running them concurrently avoids a
+        // half-updated DB state when a transient error fails the second call
+        // after the first has already committed.
         const currentConfig = getSkillConfig(skillType)
         const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
         for (const [capKey, meta] of Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS)) {
@@ -529,10 +525,17 @@ export default function AgentSkillsManager({ agentId }: Props) {
           integration_id: selectedIntegration,
           capabilities,
         }
-        await api.updateAgentSkill(agentId, skillType, {
-          is_enabled: true,
-          config: mergedConfig,
-        })
+        await Promise.all([
+          api.updateAgentSkill(agentId, skillType, {
+            is_enabled: true,
+            config: mergedConfig,
+          }),
+          api.updateSkillIntegration(agentId, skillType, {
+            scheduler_provider: null,
+            integration_id: selectedIntegration,
+            config: undefined,
+          }),
+        ])
       } else {
         // Save skill integration for scheduler/email
         await api.updateSkillIntegration(agentId, skillType, {

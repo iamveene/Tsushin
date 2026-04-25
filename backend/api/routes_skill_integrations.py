@@ -719,7 +719,7 @@ async def get_available_providers(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search"
+                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search, ticket_management"
             )
 
     except HTTPException:
