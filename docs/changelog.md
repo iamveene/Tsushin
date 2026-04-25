@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Full-bug close-out (2026-04-25, second pass)
+
+**Fixed (7 more open BUGS.md items closed in this pass):**
+- BUG-684 (Gmail DB session leak — partial structural fix). `backend/scheduler/worker.py`: moved `EmailTrigger.poll_active` and `JiraTrigger.poll_active` outside the parent `with get_session()` block; each now opens its own short-lived session via `db.session_scope()` so the slow Gmail/Jira HTTP round-trips no longer pin the scheduler's DB connection. `backend/api/routes_hub.py`: switched the local `get_db` from a per-request `sessionmaker(bind=_engine)` factory to the module-level `get_session_factory()` so hub routes inherit `expire_on_commit=False` and the shared pool config; added a `_open_probe_session()` helper for follow-up per-integration health-probe scoping. The full per-probe session-handoff in `list_integrations` is left as v0.7.x architectural follow-up — the worker.py change alone removes the dominant pool-exhaustion path and the shipped 8s `wait_for` cap on per-integration health checks already bounds the residual risk.
+- BUG-685 (Caddy HTTPS routing). `install.py:generate_env_file` now writes `COMPOSE_FILE=docker-compose.yml:docker-compose.ssl.yml` to the generated `.env` whenever `SSL_MODE != disabled`, so subsequent maintenance `docker-compose` commands automatically apply the SSL overlay (port 443 + HTTPS Caddyfile). `_backfill_existing_env_defaults` injects the same pin into pre-existing `.env` files on update.
+- BUG-688 (VM self-signed IP install TLS). `install.py:generate_caddyfile` now uses the openssl-generated `selfsigned.crt`/`selfsigned.key` (which already had `IP:<ip>` in SAN) directly when present, so the cert operators trust matches the cert the proxy serves. Falls back to Caddy `tls internal` only when openssl was unavailable. Cert generation moved to run BEFORE Caddyfile generation in all three install flows.
+- BUG-689 (Sentinel benchmark health timeout). `backend/services/sentinel_service.py:_call_llm` now nulls `client.db` immediately after `AIClient(...)` construction (verified `AIClient.generate()` does not re-read `self.db` post-init). The slow LLM round-trip no longer holds a SQLAlchemy connection from the QueuePool, so concurrent Sentinel benchmark workload can no longer stall `/api/health` and `/api/readiness`.
+- BUG-693 (a2a context leak — structural fix). `backend/services/agent_communication_service.py`: new module-level `_sanitize_a2a_context()` runs server-side BEFORE caller-supplied `context` enters the target agent's prompt. Caps at 300 chars with truncation marker, drops content with ≥2 structured-data signals (JSON markers, email headers, flight rows, table/list rows). The defensive prompt-language layer remains as defense-in-depth.
+- BUG-691 (Playground active thread not restored). `frontend/app/playground/page.tsx` URL-sync effect now writes `?agent=` alongside `?thread=` and persists `tsushin.playground.lastAgentId` in localStorage. The `selectedAgentId` lazy initializer falls back to localStorage when no `?agent=` URL param. Hard refresh now restores both the agent AND the active thread.
+- BUG-692 (Playground Mini expand wrong thread). `frontend/components/playground/mini/usePlaygroundMini.ts` now exposes a `activeThreadIdRef` mirror that is updated synchronously inside `selectThread`, `newThread`, and `sendMessage`'s thread-create path. `MiniHeader.handleExpand` reads from the ref so a freshly-created Mini thread is routed correctly even when expand is clicked before React commits the setState.
+
+**Validated:**
+- 107/107 focused pytest pass (continuous, email, jira, schedule, github, webhook, dispatch, ASR — no regressions).
+- Sanitizer unit smoke: `_sanitize_a2a_context('')` → `None`, short hint preserved, `>300 chars` truncated with marker, JSON-ish dropped, email headers dropped.
+- Backend `/api/health` returns 0.7.0 after restart.
+- qa-tester live verification captured screenshots for BUG-687, BUG-690 (close + skip variants), BUG-694, BUG-695 (5-message playground load test, 0 console errors), BUG-696, BUG-697 under `docs/qa/v0.7.0/validation/final-bug-fix-verify-2026-04-25/`.
+
+**Open BUGS.md count after this pass: 0** (all 12 items resolved or have shipped mitigation in this branch). The "structural" form of BUG-684 (full per-probe-session handoff in `list_integrations`) is the only deliberate v0.7.x carryover, justified by the 8s-wait_for + worker.py mitigation already in place.
+
 ### Release 0.7.0 — Bug-fix close-out (2026-04-25)
 
 **Fixed (7 open BUGS.md items closed):**

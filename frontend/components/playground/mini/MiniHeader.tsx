@@ -19,6 +19,10 @@ interface MiniHeaderProps {
   selectedAgentId: number | null
   selectedProjectId: number | null
   activeThreadId: number | null
+  /** BUG-692 ref-backed mirror so handleExpand can read the freshest
+   * thread id even right after sendMessage created a new one — without
+   * waiting for React to flush the setState. */
+  activeThreadIdRef?: { readonly current: number | null }
   activeThread: PlaygroundThread | null
 
   onSelectAgent: (id: number) => void
@@ -36,6 +40,7 @@ export default function MiniHeader({
   selectedAgentId,
   selectedProjectId,
   activeThreadId,
+  activeThreadIdRef,
   activeThread,
   onSelectAgent,
   onSelectProject,
@@ -53,7 +58,11 @@ export default function MiniHeader({
 
   const handleExpand = () => {
     const params = new URLSearchParams()
-    if (activeThreadId) params.set('thread', String(activeThreadId))
+    // BUG-692: prefer the ref-backed latest thread id over the (possibly
+    // stale) prop, so a freshly-created thread inside sendMessage is
+    // routed correctly even when expand is clicked before React commits.
+    const liveThreadId = activeThreadIdRef?.current ?? activeThreadId
+    if (liveThreadId) params.set('thread', String(liveThreadId))
     if (selectedAgentId) params.set('agent', String(selectedAgentId))
     if (selectedProjectId) params.set('project', String(selectedProjectId))
     onClose()

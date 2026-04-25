@@ -50,6 +50,15 @@ export default function PlaygroundPage() {
         const n = Number(agentParam)
         if (!Number.isNaN(n)) return n
       }
+      // BUG-691: when no ?agent= in URL (e.g. user landed via sidebar nav),
+      // restore the last-active agent from localStorage so a hard refresh
+      // can put them back where they were rather than defaulting to the
+      // tenant default agent (which loses the active thread context).
+      const storedAgent = window.localStorage.getItem('tsushin.playground.lastAgentId')
+      if (storedAgent) {
+        const n = Number(storedAgent)
+        if (!Number.isNaN(n) && n > 0) return n
+      }
     } catch {
       /* ignore */
     }
@@ -178,9 +187,19 @@ export default function PlaygroundPage() {
     try {
       if (activeThreadId) {
         window.localStorage.setItem('tsushin.playground.lastThreadId', String(activeThreadId))
+        // BUG-691: also persist the agent so a hard refresh (which has no
+        // ?agent= param if the user navigated via the sidebar) restores both
+        // the agent AND the thread, not just the thread under whatever
+        // default agent loadAgents() picked.
+        if (selectedAgentId) {
+          window.localStorage.setItem('tsushin.playground.lastAgentId', String(selectedAgentId))
+        }
         const params = new URLSearchParams(window.location.search)
-        if (params.get('thread') !== String(activeThreadId)) {
+        const threadChanged = params.get('thread') !== String(activeThreadId)
+        const agentChanged = selectedAgentId !== null && params.get('agent') !== String(selectedAgentId)
+        if (threadChanged || agentChanged) {
           params.set('thread', String(activeThreadId))
+          if (selectedAgentId !== null) params.set('agent', String(selectedAgentId))
           const next = `${window.location.pathname}?${params.toString()}`
           window.history.replaceState(null, '', next)
         }
@@ -188,7 +207,7 @@ export default function PlaygroundPage() {
     } catch {
       /* ignore — URL sync is best-effort */
     }
-  }, [activeThreadId])
+  }, [activeThreadId, selectedAgentId])
 
   // --- Playground Mini handover (de-dupe)
   // Tracks the last-consumed ?thread= so re-expanding with the same thread

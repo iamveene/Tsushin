@@ -166,30 +166,43 @@ class SchedulerWorker:
                 except Exception as e:
                     logger.error(f"Failed to poll schedule triggers: {e}", exc_info=True)
 
-                try:
-                    from channels.email.trigger import EmailTrigger
-
-                    email_results = asyncio.run(EmailTrigger.poll_active(db))
-                    logger.info(
-                        "Email trigger poll completed with %s active trigger(s)",
-                        len(email_results),
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to poll email triggers: {e}", exc_info=True)
-
-                try:
-                    from channels.jira.trigger import JiraTrigger
-
-                    jira_results = asyncio.run(JiraTrigger.poll_active(db))
-                    logger.info(
-                        "Jira trigger poll completed with %s active trigger(s)",
-                        len(jira_results),
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to poll Jira triggers: {e}", exc_info=True)
+                # NOTE: email + jira polls are deliberately NOT inside this
+                # outer with-block — see BUG-684 fix below.
 
         except Exception as e:
             logger.error(f"Error in poll_and_execute: {e}", exc_info=True)
+
+        # BUG-684 fix: open a fresh short-lived session per slow trigger poll
+        # (each can hold a Gmail/Jira HTTP round-trip for seconds). Keeping
+        # them in the parent get_session() block above caused the parent
+        # connection to be held open across many external API calls, which
+        # under load drained the SQLAlchemy QueuePool and stalled
+        # /api/health & /api/readiness probes (BUG-684, BUG-689 root cause).
+        try:
+            from channels.email.trigger import EmailTrigger
+            from db import session_scope
+
+            with session_scope() as email_db:
+                email_results = asyncio.run(EmailTrigger.poll_active(email_db))
+            logger.info(
+                "Email trigger poll completed with %s active trigger(s)",
+                len(email_results),
+            )
+        except Exception as e:
+            logger.error(f"Failed to poll email triggers: {e}", exc_info=True)
+
+        try:
+            from channels.jira.trigger import JiraTrigger
+            from db import session_scope
+
+            with session_scope() as jira_db:
+                jira_results = asyncio.run(JiraTrigger.poll_active(jira_db))
+            logger.info(
+                "Jira trigger poll completed with %s active trigger(s)",
+                len(jira_results),
+            )
+        except Exception as e:
+            logger.error(f"Failed to poll Jira triggers: {e}", exc_info=True)
 
     def force_poll(self):
         """
