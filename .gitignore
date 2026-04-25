@@ -296,6 +296,9 @@ backend/tests/*
 !backend/tests/test_unauth_rate_limit.py
 !backend/tests/test_provider_audit.py
 !backend/tests/test_429_logged.py
+!backend/tests/test_followup_detector.py
+!backend/tests/test_scratchpad_preservation.py
+!backend/tests/test_agent_update_pydantic.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
