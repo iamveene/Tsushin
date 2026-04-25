@@ -575,6 +575,10 @@ def list_agents(
             "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
             "vector_store_mode": getattr(agent, 'vector_store_mode', None),
 
+            # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in list response
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
         }
@@ -709,6 +713,10 @@ def get_agent(
         "slack_integration_id": agent.slack_integration_id,
         "discord_integration_id": agent.discord_integration_id,
         "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+
+        # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in GET response
+        "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+        "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
