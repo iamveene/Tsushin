@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Release 0.7.0 — RC sweep (2026-04-24)
+### Release 0.7.0 — RC sweep + WS-6 ASR fix (2026-04-24)
+
+**Fixed (WS-6 ASR):**
+- ASR voice-note pipeline was returning "couldn't process your message" because the `audio_transcript` skill was not seeded onto conversational agents. Added `audio_transcript` and `audio_tts` to the default skill list in `services/agent_seeding.py` for the `Tsushin` and `CustomerService` system agents (Shellboy stays unchanged — security-only). Backfilled the existing `acme2-dev` seeded agents (227/228/229) with both skills. Re-tested live with `tester-mcp` → bot round-trip:
+  - English fixture (`asr_test_en.ogg`, 19,699 bytes): bot transcribed `"test recording for Tsushin Release 0.7"` and replied "Hello Vini! I've received your test recording for Tsushin Release 0.7. The English speech recognition appears to be working perfectly." Reply landed back at the tester.
+  - Portuguese fixture (`asr_test_pt.ogg`, 24,524 bytes): bot transcribed and replied in Portuguese ("Olá, Vini! Recebido. ...") — multilingual flow works.
+
+
 
 **Added:**
 - WS-1: Continuous-agent CRUD — `POST/PATCH/DELETE /api/continuous-agents` and nested `/{id}/subscriptions/...` plus `GET /api/continuous-agents/{id}/subscriptions`. New permission scope `agents.write`. New Pydantic schemas `ContinuousAgentCreate/Update`, `ContinuousSubscriptionCreate/Update/Read`. System-owned rows are protected from delete and disable. Pending wake events block delete unless `?force=true` (which sets them to `filtered`).
