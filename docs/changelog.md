@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agentic-loop bundle (2026-04-25)
+
+Closed four related agentic-loop bugs surfaced by the v0.7.0 deep-regression
+sweep. The four are tightly coupled — BUG-706 alone is masked by BUG-707 and
+unobservable in the UI without BUG-710/BUG-716 — so they ship together.
+
+- **BUG-706 (High)** — `backend/agent/followup_detector.py` `FOLLOWUP_PATTERNS`
+  extended with EN interrogatives (`what`, `which`, `who`, `whom`, `whose`,
+  `where`, `when`, `why`, `how`), pronoun phrasings (`that one`, `the
+  first/last/previous one`, `the one (that|which|with)`), and PT/ES
+  equivalents. PT/ES regression cases preserved. The "what was the IP you
+  found?" follow-up no longer re-fires `dig`.
+- **BUG-707 (High)** — `agentic_scratchpad` is no longer wiped on no-tool
+  turns. `agent_service.process_message()` now seeds the scratchpad from a
+  prior-state config key and emits a `tool_was_called` flag. Both
+  `agent/router.py` (WhatsApp) and `services/playground_service.py` gate
+  persistence on `tool_was_called or tool_used` so a follow-up that answers
+  purely from the prior DATA block keeps the trace intact for the next round.
+- **BUG-710 (High)** — `AgentUpdate` and `AgentCreate` Pydantic models
+  declare `max_agentic_rounds` (1-8) and `max_agentic_loop_bytes` (512-131072).
+  `UPDATABLE_AGENT_FIELDS` allowlist updated. `AgentResponse` exposes both
+  fields. `PUT /api/agents/{id}` now round-trips the values that the column
+  has always supported.
+- **BUG-716 (Medium)** — Studio agent-edit page gains an **Advanced** tab
+  (`AgentAdvancedManager` component) with a `max_agentic_rounds`
+  slider+number input clamped to platform bounds and a `max_agentic_loop_bytes`
+  number input. Settings → AI Configuration page gains a "Platform AI —
+  Agentic Loop Bounds" card with min/max number inputs that save through the
+  existing `PUT /api/config` endpoint.
+
+**Validated:**
+- 62/62 pytest pass on `tests/test_followup_detector.py`,
+  `tests/test_scratchpad_preservation.py`,
+  `tests/test_agent_update_pydantic.py`, plus the existing
+  `tests/test_track_f_agentic_loop_core.py` regression suite.
+- TypeScript noEmit check on the four touched frontend files reports no new
+  errors (pre-existing repo-wide errors unchanged).
+
 ### Release 0.7.0 — Post-review remediation (2026-04-25)
 
 Applied review-team findings before final tag:

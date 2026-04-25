@@ -3452,7 +3452,14 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 original_query=message_content
             )
 
-            if result.get("agentic_scratchpad") is not None:
+            # BUG-707: Only persist the scratchpad when a tool actually fired
+            # this turn. A no-tool turn (e.g. follow-up question that answers
+            # purely from the prior DATA block) used to overwrite the column
+            # with [], wiping the trace from the earlier round and forcing the
+            # next follow-up to re-fetch.
+            if result.get("agentic_scratchpad") is not None and (
+                result.get("tool_was_called") or result.get("tool_used")
+            ):
                 thread.agentic_scratchpad = result.get("agentic_scratchpad")
 
             ai_reply = result.get("answer", "")

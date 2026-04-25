@@ -164,6 +164,10 @@ class AgentResponse(BaseModel):
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
 
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-716 — surface in UI)
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
+
     is_active: bool
     is_default: bool
     skills_count: Optional[int] = 0  # Number of enabled skills
@@ -230,6 +234,10 @@ class AgentCreate(BaseModel):
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
     webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
 
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
+
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
 
@@ -278,6 +286,10 @@ class AgentUpdate(BaseModel):
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
     webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -951,6 +963,8 @@ def update_agent(
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "provider_instance_id",
         "vector_store_instance_id", "vector_store_mode",
+        # BUG-710: bounded agentic loop knobs (column existed; PUT path was dropping them).
+        "max_agentic_rounds", "max_agentic_loop_bytes",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)
