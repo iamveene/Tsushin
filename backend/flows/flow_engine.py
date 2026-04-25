@@ -1531,8 +1531,15 @@ class SummarizationStepHandler(FlowStepHandler):
             # If still no thread_id, try to get raw text from source step
             # Check multiple field names since different step types use different keys:
             #   tool steps → raw_output, skill steps → output, slash_command → output/message
+            # BUG-711: preserve a previously-populated `source_text` (e.g. from
+            # the BUG-590 trigger-context path or from inline text/content in
+            # config_json). Without this guard, `input_data.get("trigger", {})`
+            # returns `{}` for templates that source from "trigger" and the
+            # unconditional re-assignment below clobbers the populated value
+            # with None — breaking the new_contact_welcome template on its
+            # very first step.
             if not thread_id and isinstance(source_data, dict):
-                source_text = (
+                source_text = source_text or (
                     source_data.get("raw_output")
                     or source_data.get("output")
                     or source_data.get("message")
@@ -3268,6 +3275,19 @@ class FlowEngine:
             # Phase 13.1: Track completed step runs for context building
             completed_step_runs: List[FlowNodeRun] = []
 
+            # BUG-713: Track step counters in local variables instead of
+            # mutating `flow_run.completed_steps` directly inside the loop.
+            # The per-iteration `self.db.refresh(flow_run)` (cancellation
+            # check, line below) reloads `flow_run` from the DB and silently
+            # discards any uncommitted in-memory increments — so the prior
+            # implementation only ever recorded the *last* iteration's
+            # increment, leaving `completed_steps` undercounted vs the actual
+            # number of successful step_runs in the DB (which `final_report`
+            # sums independently). Counting locally and assigning once after
+            # the loop guarantees the two fields stay in lock-step.
+            local_completed_steps = 0
+            local_failed_steps = 0
+
             for step in steps:
                 # BUG-LOG-011: Check for cancellation between steps
                 self.db.refresh(flow_run)
@@ -3301,7 +3321,7 @@ class FlowEngine:
                     # Check on_failure action
                     if step.on_failure == "continue":
                         logger.warning(f"Step {step.position} failed but continuing (on_failure=continue)")
-                        flow_run.failed_steps += 1
+                        local_failed_steps += 1
                     elif step.on_failure == "skip":
                         logger.warning(f"Step {step.position} failed, skipping remaining steps")
                         break
@@ -3309,11 +3329,17 @@ class FlowEngine:
                         # Default: stop execution on failure
                         logger.error(f"Step {step.position} failed, stopping flow")
                         flow_run.status = "failed"
-                        flow_run.failed_steps += 1
+                        local_failed_steps += 1
                         flow_run.error_text = f"Step {step.position} ({step.type}) failed: {step_run.error_text}"
                         break
                 else:
-                    flow_run.completed_steps += 1
+                    local_completed_steps += 1
+
+            # BUG-713: Persist the loop's accumulated counters onto flow_run
+            # before status decisions that depend on them (and before final
+            # report generation reconciles them against the DB).
+            flow_run.completed_steps = local_completed_steps
+            flow_run.failed_steps = local_failed_steps
 
             # Mark as completed if not already failed/cancelled
             if flow_run.status not in ("failed", "cancelled"):
@@ -3342,6 +3368,16 @@ class FlowEngine:
             # Generate final report
             final_report = self.generate_final_report(flow_run)
             flow_run.final_report_json = json.dumps(final_report)
+
+            # BUG-713: Reconcile the persisted counters with what the final
+            # report actually sums from FlowNodeRun rows. `generate_final_report`
+            # is the single source of truth for "how many steps succeeded /
+            # failed", so we copy its numbers onto the flow_run columns.
+            # This guarantees `flow_run.completed_steps == final_report["steps_successful"]`
+            # and `flow_run.failed_steps == final_report["steps_failed"]` at
+            # run completion, regardless of the loop's bookkeeping path.
+            flow_run.completed_steps = final_report.get("steps_successful", flow_run.completed_steps)
+            flow_run.failed_steps = final_report.get("steps_failed", flow_run.failed_steps)
 
             try:
                 self.db.commit()

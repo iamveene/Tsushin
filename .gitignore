@@ -288,6 +288,8 @@ backend/tests/*
 !backend/tests/test_phase0_5_fixtures.py
 !backend/tests/test_agent_knowledge_metadata.py
 !backend/tests/test_track_e_shell_audit_hardening.py
+!backend/tests/test_new_contact_welcome_template.py
+!backend/tests/test_flow_completed_steps_counter.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
