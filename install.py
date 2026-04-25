@@ -1091,12 +1091,21 @@ class TsushinInstaller:
 
         # Reusable snippet — imported by both the main HTTPS site and the
         # HTTP :80 site used by the Cloudflare Tunnel (v0.6.0 Remote Access).
+        # BUG-712: /metrics is served by the backend, but the catch-all
+        # `handle` below proxies everything else to the frontend (Next.js),
+        # whose auth middleware 307s unmatched paths to /auth/login. Add an
+        # explicit `/metrics` handler that bypasses Next.js — bearer-token
+        # auth is enforced inside the backend itself when
+        # TSN_METRICS_SCRAPE_TOKEN is set on the backend container.
         snippet_block = f"""(tsushin_routes) {{
     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
     handle /api/* {{
         reverse_proxy {backend_host}
     }}
     handle /ws/* {{
+        reverse_proxy {backend_host}
+    }}
+    handle /metrics {{
         reverse_proxy {backend_host}
     }}
     handle {{

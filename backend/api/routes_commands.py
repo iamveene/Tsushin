@@ -233,11 +233,23 @@ async def execute_command(
         except Exception as e:
             logger.warning(f"Failed to store slash command in memory: {e}")
 
+    # BUG-714: surface every non-status/action/message field on `data` so the
+    # frontend can read shell `command_id`, `exit_code`, etc. without us having
+    # to wrap each handler's return shape. If the handler already populated a
+    # `data` dict, prefer it; otherwise materialize the rest of the result.
+    extra_data = result.get("data")
+    if extra_data is None:
+        extra_data = {
+            k: v
+            for k, v in result.items()
+            if k not in ("status", "action", "message", "data")
+        } or None
+
     response = CommandExecuteResponse(
         status=result.get("status", "unknown"),
         action=result.get("action"),
         message=result.get("message"),
-        data=result.get("data")
+        data=extra_data,
     )
 
     # Debug logging for project commands
