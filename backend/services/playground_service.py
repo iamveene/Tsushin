@@ -1013,6 +1013,9 @@ class PlaygroundService:
 
                 if thread and result.get("agentic_scratchpad") is not None:
                     next_scratchpad = result.get("agentic_scratchpad")
+                    tool_was_called = bool(
+                        result.get("tool_was_called") or result.get("tool_used")
+                    )
                     if (
                         suppress_direct_skill_processing
                         and not next_scratchpad
@@ -1020,6 +1023,13 @@ class PlaygroundService:
                     ):
                         self.logger.info(
                             "Preserving structured tool DATA scratchpad after follow-up reuse"
+                        )
+                    elif not tool_was_called and thread.agentic_scratchpad:
+                        # BUG-707: a no-tool turn (e.g. follow-up answered from
+                        # the prior DATA block) must not overwrite the
+                        # scratchpad and erase the previous tool trace.
+                        self.logger.info(
+                            "Preserving agentic scratchpad: no tool fired this turn"
                         )
                     else:
                         thread.agentic_scratchpad = next_scratchpad

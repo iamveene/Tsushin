@@ -287,6 +287,9 @@ backend/tests/*
 !backend/tests/test_phase0_5_fixtures.py
 !backend/tests/test_agent_knowledge_metadata.py
 !backend/tests/test_track_e_shell_audit_hardening.py
+!backend/tests/test_followup_detector.py
+!backend/tests/test_scratchpad_preservation.py
+!backend/tests/test_agent_update_pydantic.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
