@@ -235,6 +235,7 @@ class TriggerDispatchService:
         self.db.flush()
 
         run_ids: list[int] = []
+        runs_to_enqueue: list[tuple[ContinuousRun, ContinuousSubscription, ContinuousAgent]] = []
         for subscription in subscriptions:
             continuous_agent = subscription.continuous_agent
             run = ContinuousRun(
@@ -248,6 +249,7 @@ class TriggerDispatchService:
             self.db.add(run)
             self.db.flush()
             run_ids.append(run.id)
+            runs_to_enqueue.append((run, subscription, continuous_agent))
 
         try:
             self.db.commit()
@@ -260,6 +262,20 @@ class TriggerDispatchService:
                 matched_agent_id=agent_id,
             )
 
+        # BUG-702: Enqueue a ``continuous_task`` MessageQueue row for each
+        # tenant-owned subscription so QueueRouter._dispatch_continuous_task
+        # can drive the run. System-owned subscriptions (Email triage,
+        # Jira-to-WhatsApp, etc.) are dispatched inline by their channel
+        # adapter and must NOT be re-enqueued here.
+        self._enqueue_continuous_tasks(
+            tenant_id=tenant_id,
+            trigger_type=trigger_type,
+            wake_event=wake_event,
+            event=event,
+            payload_ref=payload_ref,
+            runs=runs_to_enqueue,
+        )
+
         return TriggerDispatchResult(
             status=TriggerDispatchStatus.DISPATCHED.value,
             tenant_id=tenant_id,
@@ -270,6 +286,55 @@ class TriggerDispatchService:
             continuous_subscription_ids=[subscription.id for subscription in subscriptions],
             payload_ref=payload_ref,
         )
+
+    def _enqueue_continuous_tasks(
+        self,
+        *,
+        tenant_id: str,
+        trigger_type: str,
+        wake_event: WakeEvent,
+        event: TriggerDispatchInput,
+        payload_ref: Optional[str],
+        runs: list[tuple[ContinuousRun, ContinuousSubscription, ContinuousAgent]],
+    ) -> None:
+        """BUG-702: enqueue ``continuous_task`` MessageQueue rows for runs.
+
+        System-owned subscriptions are skipped — they are dispatched inline
+        by the channel adapter (e.g. ``_process_managed_actions``).
+        """
+        if not runs:
+            return
+        try:
+            from services.message_queue_service import MessageQueueService
+
+            mqs = MessageQueueService(self.db)
+            sender_key = event.sender_key or f"{trigger_type}:{event.instance_id}"
+            for run, subscription, continuous_agent in runs:
+                if getattr(subscription, "is_system_owned", False):
+                    continue
+                payload = {
+                    "continuous_run_id": run.id,
+                    "wake_event_id": wake_event.id,
+                    "continuous_agent_id": continuous_agent.id,
+                    "continuous_subscription_id": subscription.id,
+                    "channel_type": trigger_type,
+                    "channel_instance_id": event.instance_id,
+                    "event_type": event.event_type,
+                    "importance": self._normalize_importance(event.importance),
+                    "payload_ref": payload_ref,
+                }
+                mqs.enqueue(
+                    channel="continuous",
+                    tenant_id=tenant_id,
+                    agent_id=continuous_agent.agent_id,
+                    sender_key=sender_key,
+                    payload=payload,
+                    message_type="continuous_task",
+                )
+        except Exception:  # pragma: no cover — never abort dispatch on enqueue errors
+            # The run row is already persisted; a separate sweep can re-drive
+            # the queue if enqueue fails (rare). We deliberately don't raise.
+            self.db.rollback()
 
     def _load_instance(self, trigger_type: str, instance_id: int) -> Any | None:
         model = self._INSTANCE_MODELS[trigger_type]

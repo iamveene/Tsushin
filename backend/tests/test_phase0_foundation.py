@@ -238,14 +238,14 @@ def test_queue_router_routes_webhook_trigger_events_through_current_webhook_path
     asyncio.run(run())
 
 
-def test_queue_router_rejects_unknown_channel_and_reserved_continuous_task():
+def test_queue_router_rejects_unknown_channel():
+    """BUG-702: continuous_task is now consumed by ``_dispatch_continuous_task``;
+    only inbound_message with an unknown channel still raises ValueError."""
     async def run():
         router = QueueRouter()
         worker = _FakeWorker()
         with pytest.raises(ValueError):
             await router.dispatch(worker, None, SimpleNamespace(id=1, channel="bogus", message_type="inbound_message"))
-        with pytest.raises(NotImplementedError):
-            await router.dispatch(worker, None, SimpleNamespace(id=2, channel="api", message_type="continuous_task"))
     asyncio.run(run())
 
 
