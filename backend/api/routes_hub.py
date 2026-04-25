@@ -39,11 +39,13 @@ def set_engine(engine):
     global _engine
     _engine = engine
 
-# Dependency to get database session
+# Dependency to get database session.
+# BUG-684 fix (part 1): use the shared module-level sessionmaker rather than
+# constructing a new one per request. The shared factory honours
+# expire_on_commit=False (set in db.py) and reuses the connection pool.
 def get_db():
-    from sqlalchemy.orm import sessionmaker
-    SessionLocal = sessionmaker(bind=_engine)
-    db = SessionLocal()
+    from db import get_session_factory
+    db = get_session_factory()()
     try:
         yield db
     finally:
@@ -52,6 +54,19 @@ def get_db():
         except Exception:
             pass
         db.close()
+
+
+def _open_probe_session():
+    """Open a short-lived ORM session for one external health probe.
+
+    BUG-684 fix (part 2): per-integration health checks are slow async httpx
+    calls. Each probe owns its own session so the parent request session can
+    be released back to the pool before iterating, capping per-request
+    connection occupancy at the lifetime of the per-integration timeout
+    (~8 s) instead of N integrations * 8 s.
+    """
+    from db import get_session_factory
+    return get_session_factory()()
 
 
 # ============================================================================

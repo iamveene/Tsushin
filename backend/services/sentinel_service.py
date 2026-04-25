@@ -1190,7 +1190,11 @@ class SentinelService:
         """
         Call LLM for security analysis.
 
-        Uses AIClient from agent module.
+        Uses AIClient from agent module. BUG-689 fix: AIClient.__init__ resolves
+        the provider key/instance synchronously; after construction, drop the
+        DB reference so the SQLAlchemy connection is not held during the slow
+        LLM await. Under high concurrency (e.g. the Sentinel benchmark) this
+        previously exhausted the QueuePool and stalled /api/health.
         """
         from agent.ai_client import AIClient
 
@@ -1203,6 +1207,10 @@ class SentinelService:
             tenant_id=self.tenant_id,
             token_tracker=self.token_tracker,
         )
+        # Release the session reference before the external HTTP round-trip.
+        # AIClient.generate() does not re-read self.db (token tracking writes
+        # go through token_tracker which manages its own short-lived session).
+        client.db = None
 
         result = await client.generate(
             system_prompt=system_prompt,

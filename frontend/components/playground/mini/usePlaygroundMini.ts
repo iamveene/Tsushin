@@ -36,6 +36,9 @@ export interface UsePlaygroundMiniResult {
   selectedAgentId: number | null
   selectedProjectId: number | null
   activeThreadId: number | null
+  /** BUG-692 ref-backed mirror so async consumers (e.g. expand handler)
+   * can read the latest thread id synchronously without a setState lag. */
+  activeThreadIdRef: { readonly current: number | null }
   activeThread: PlaygroundThread | null
 
   messages: PlaygroundMessage[]
@@ -79,6 +82,13 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
   // `isSending` in its `useCallback` deps — otherwise the callback identity
   // flips on every in-flight transition and ripples through to every consumer.
   const sendingRef = useRef(false)
+  // BUG-692: ref-backed mirror of activeThreadId so MiniHeader's expand
+  // handler can read the latest value synchronously even when React hasn't
+  // yet flushed the setState from a freshly-created thread inside sendMessage.
+  // Without this, the expand URL omitted ?thread= and the full Playground
+  // fell back to localStorage's lastThreadId (the OLD thread), not the
+  // freshly-created Mini thread the user was just chatting in.
+  const activeThreadIdRef = useRef<number | null>(null)
 
   // --- Hydrate from sessionStorage on mount (client-only) ---------------------
   useEffect(() => {
@@ -91,8 +101,15 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
     setSelectedAgentId(persisted.selectedAgentId)
     setSelectedProjectId(persisted.selectedProjectId)
     setActiveThreadId(persisted.activeThreadId)
+    activeThreadIdRef.current = persisted.activeThreadId
     setHydrated(true)
   }, [userId])
+
+  // BUG-692: keep the ref in sync with state so async consumers (like
+  // MiniHeader's expand handler) can read the latest value synchronously.
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId
+  }, [activeThreadId])
 
   // --- Persist selection state ------------------------------------------------
   useEffect(() => {
@@ -269,6 +286,7 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
   }, [])
 
   const selectThread = useCallback(async (threadId: number) => {
+    activeThreadIdRef.current = threadId  // BUG-692: sync mirror
     setActiveThreadId(threadId)
     setSendError(null)
   }, [])
@@ -283,6 +301,7 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
         folder,
       })
       setThreads(prev => [created, ...prev.filter(t => t.id !== created.id)])
+      activeThreadIdRef.current = created.id  // BUG-692: sync mirror
       setActiveThreadId(created.id)
       setActiveThread(created)
       setMessages([])
@@ -334,6 +353,7 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
             })
             threadId = created.id
             setThreads(prev => [created, ...prev.filter(t => t.id !== created.id)])
+            activeThreadIdRef.current = created.id  // BUG-692: sync mirror
             setActiveThreadId(created.id)
             setActiveThread(created)
           } catch (err) {
@@ -412,6 +432,7 @@ export function usePlaygroundMini(options: UsePlaygroundMiniOptions): UsePlaygro
     selectedAgentId,
     selectedProjectId,
     activeThreadId,
+    activeThreadIdRef,
     activeThread,
 
     messages,
