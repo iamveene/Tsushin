@@ -6433,7 +6433,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-criteria`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ criteria, sample_payload: samplePayload ?? null }),
+      body: JSON.stringify({ criteria, payload: samplePayload ?? {} }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
     return res.json()
@@ -6443,7 +6443,7 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${triggerId}/test-criteria`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sample_payload: samplePayload ?? null }),
+      body: JSON.stringify({ payload: samplePayload ?? {} }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
     return res.json()
