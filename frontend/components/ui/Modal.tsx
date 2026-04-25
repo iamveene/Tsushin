@@ -66,11 +66,19 @@ export default function Modal({
         className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full ${autoHeight ? 'max-h-[calc(100vh-2rem)]' : 'max-h-[85vh]'} flex flex-col shadow-elevated animate-scale-in`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header — only render when there is a title to display or a close
+        * button to host. BUG-FIX-AUDIT 2026-04-25: previously this block always
+        * rendered, leaving an empty `<h2>` and dead vertical space when callers
+        * (e.g. OnboardingWizard after BUG-690) intentionally omitted `title`. */}
+        {(title || showCloseButton) && (
         <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
-          <h2 className="text-xl font-bold text-white">
-            {title}
-          </h2>
+          {title ? (
+            <h2 className="text-xl font-bold text-white">
+              {title}
+            </h2>
+          ) : (
+            <span aria-hidden="true" />
+          )}
           {showCloseButton && (
             <button
               onClick={onClose}
@@ -83,6 +91,7 @@ export default function Modal({
             </button>
           )}
         </div>
+        )}
 
         {/* Body - Scrollable */}
         <div className="flex-1 overflow-y-auto p-6">

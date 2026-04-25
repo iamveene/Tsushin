@@ -56,17 +56,13 @@ def get_db():
         db.close()
 
 
-def _open_probe_session():
-    """Open a short-lived ORM session for one external health probe.
-
-    BUG-684 fix (part 2): per-integration health checks are slow async httpx
-    calls. Each probe owns its own session so the parent request session can
-    be released back to the pool before iterating, capping per-request
-    connection occupancy at the lifetime of the per-integration timeout
-    (~8 s) instead of N integrations * 8 s.
-    """
-    from db import get_session_factory
-    return get_session_factory()()
+# NOTE on BUG-684: the worker.py session_scope refactor + the 8 s wait_for cap
+# on per-integration health checks bound the dominant pool-exhaustion path
+# already. The full per-probe-session handoff inside `list_integrations`
+# (release the request-scoped `db` before iterating, open a short-lived
+# session per probe) is left as a v0.7.x architectural follow-up; a previous
+# `_open_probe_session()` helper was added in this branch but never wired in,
+# so it has been removed to keep the code honest about what actually ships.
 
 
 # ============================================================================
