@@ -122,12 +122,23 @@ export default function SourceSection({
   // v0.7.0: When the saved criteria envelope is a PR Submitted envelope,
   // render it as a read-only structured panel so operators can scan the
   // matching rules at a glance instead of decoding raw JSON.
+  // Canonical envelope (per backend/channels/github/criteria.py) — fields
+  // live nested under `filters`, the discriminator key is `event` (not
+  // `event_type` which was the pre-release-finishing legacy shape).
   const rawCriteria = github.trigger_criteria as Record<string, unknown> | null | undefined
-  const isPRCriteria = !!rawCriteria && rawCriteria.event_type === 'pull_request'
+  const isPRCriteria = !!rawCriteria && rawCriteria.event === 'pull_request'
+  const prFilters = isPRCriteria && rawCriteria!.filters && typeof rawCriteria!.filters === 'object'
+    ? (rawCriteria!.filters as Record<string, unknown>)
+    : {}
   const prActions = isPRCriteria && Array.isArray(rawCriteria!.actions) ? (rawCriteria!.actions as string[]) : []
-  const prDraftOnly = isPRCriteria ? Boolean(rawCriteria!.draft_only) : false
-  const prTitleContains = isPRCriteria ? (rawCriteria!.title_contains as string | null | undefined) : null
-  const prBodyContains = isPRCriteria ? (rawCriteria!.body_contains as string | null | undefined) : null
+  const prDraftOnly = isPRCriteria ? Boolean(prFilters.exclude_drafts) : false
+  const prTitleContains = isPRCriteria ? (prFilters.title_contains as string | null | undefined) : null
+  const prBodyContains = isPRCriteria ? (prFilters.body_contains as string | null | undefined) : null
+  const prBranchFilter = isPRCriteria ? (prFilters.branch_filter as string | null | undefined) : null
+  const prAuthorFilter = isPRCriteria ? (prFilters.author_filter as string | null | undefined) : null
+  const prPathFilters = isPRCriteria && Array.isArray(prFilters.path_filters)
+    ? (prFilters.path_filters as string[])
+    : []
 
   return (
     <div className="space-y-4">
@@ -153,9 +164,9 @@ export default function SourceSection({
             <DetailRow label="Only non-draft PRs">{prDraftOnly ? 'Yes' : 'No'}</DetailRow>
             <DetailRow label="Title contains">{prTitleContains || 'Any title'}</DetailRow>
             <DetailRow label="Body contains">{prBodyContains || 'Any body'}</DetailRow>
-            <DetailRow label="Branch filter">{github.branch_filter || 'Any branch'}</DetailRow>
-            <DetailRow label="Author filter">{github.author_filter || 'Any author'}</DetailRow>
-            <DetailRow label="Path filters">{(github.path_filters || []).length > 0 ? (github.path_filters || []).join(', ') : 'Any path'}</DetailRow>
+            <DetailRow label="Branch filter">{prBranchFilter || github.branch_filter || 'Any branch'}</DetailRow>
+            <DetailRow label="Author filter">{prAuthorFilter || github.author_filter || 'Any author'}</DetailRow>
+            <DetailRow label="Path filters">{prPathFilters.length > 0 ? prPathFilters.join(', ') : ((github.path_filters || []).length > 0 ? (github.path_filters || []).join(', ') : 'Any path')}</DetailRow>
           </div>
         </div>
       )}
