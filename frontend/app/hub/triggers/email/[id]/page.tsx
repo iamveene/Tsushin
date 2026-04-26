@@ -16,6 +16,7 @@ import CriteriaBuilder, {
   parseCriteriaText,
   type CriteriaSourceValues,
 } from '@/components/triggers/CriteriaBuilder'
+import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
 
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
@@ -512,12 +513,37 @@ export default function EmailTriggerDetailPage() {
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger)}`}>{statusLabel(trigger)}</span>} />
             <Field label="Health" value={trigger.health_status || 'unknown'} />
-            <Field label="Gmail scope" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${gmailScopeClass(gmailIntegration)}`}>{gmailScopeLabel(gmailIntegration)}</span>} />
+            <Field
+              label="Routing"
+              value={
+                <DefaultAgentChip
+                  triggerKind="email"
+                  triggerId={trigger.id}
+                  agent={{ id: trigger.default_agent_id ?? null, name: trigger.default_agent_name ?? null }}
+                  canEdit={canWriteHub}
+                  onUpdate={(next) =>
+                    setTrigger((current) => (current ? { ...current, ...next } : current))
+                  }
+                />
+              }
+            />
             <Field label="Last activity" value={trigger.last_activity_at ? formatRelative(trigger.last_activity_at) : 'No activity'} />
           </div>
 
+          {/*
+            Gmail scope was previously the 3rd KPI cell. Wave 1 of the
+            Triggers↔Flows unification standardizes that slot to "Routing"
+            across all 5 trigger kinds, so the scope indicator is moved
+            inline into the existing scope-message banner. Wave 3 will
+            relocate it as a sub-pill inside the new Source section.
+          */}
           <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-            {gmailScopeMessage(gmailIntegration)}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full border px-2.5 py-1 text-xs ${gmailScopeClass(gmailIntegration)}`}>
+                Gmail scope: {gmailScopeLabel(gmailIntegration)}
+              </span>
+              <span className="text-red-100/90">{gmailScopeMessage(gmailIntegration)}</span>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2 border-b border-tsushin-border pb-2">
