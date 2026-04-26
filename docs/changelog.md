@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Wave 4/5 finishing fixes: dispatch fork agent_id + message_queue check constraint + suppress-flip script + rollback script (2026-04-26)
+
+End-to-end env-var-gated path testing surfaced four real bugs that the release-as-shipped (with all gates default-off) would have hidden. Each surfaces only after an operator flips the env vars on.
+
+- **HIGH — `trigger_dispatch_service._enqueue_bound_flows` passed `agent_id=None`** to `MessageQueueService.enqueue`, but `message_queue.agent_id` is `nullable=False, ForeignKey('agent.id')`. Every bound-flow fan-out attempt failed with `psycopg2.errors.NotNullViolation`. The dispatcher's outer try/except swallowed it, so the legacy ContinuousAgent path kept firing while the bound-flow fan-out silently broke. Fix: pass the resolved trigger `agent_id` (already in scope from `_resolve_agent_id`) into the queue row. The actual flow execution still uses `flow_definition_id` from the payload — the queue's `agent_id` is bookkeeping for per-agent rate limiters and watcher dashboards.
+- **HIGH — `message_queue.message_type` CHECK constraint** added in alembic `0045_add_phase0_foundation.py` only allows `(inbound_message, trigger_event, continuous_task)`. Wave 3 introduced `flow_run_triggered`, but the constraint was never widened. Even after fixing the agent_id bug, every fan-out still 22001's with `CheckViolation: violates check constraint "ck_message_queue_message_type"`. Fix: new migration `0070_message_queue_flow_run_triggered.py` drops the constraint and re-adds it with `flow_run_triggered` included. Idempotent + downgrade-safe.
+- **MEDIUM — `0069_backfill_managed_notifications` suppress-only re-run was unreachable** by re-running `alembic upgrade head` with `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=true`, because alembic skips already-applied revisions. The migration body only runs once. Fix: replaced with a dedicated ops script `backend/scripts/flip_backfill_suppress.py` that operators run when ready to silence the legacy ContinuousAgent path on every backfilled binding (`--unset` flag re-enables). Idempotent. The 0069 migration retains its no-op-when-flags-off behavior for the deploy ladder.
+- **MEDIUM — `rollback_managed_flow_backfill.py` raw SQL DELETE bypassed ORM cascades** and 23503'd against `flow_node_flow_definition_id_fkey` because the FK doesn't `ON DELETE CASCADE` in PostgreSQL — only the SQLAlchemy ORM `cascade='all, delete-orphan'` covers it, and the raw `DELETE FROM flow_definition` skips that path. Fix: explicit child-first delete order — null out `conversation_thread.flow_step_run_id`, then delete `flow_node_run`, `flow_run`, `flow_trigger_binding`, `flow_node`, finally `flow_definition`.
+- **`docker-compose.yml`** — added the four `TSN_FLOWS_*` env vars to the backend service block with `:-false` defaults so operators can flip them via `.env` without editing compose.
+
+**Verified live (2026-04-26):**
+- E2E test 1 (auto-flow generation): creating a schedule trigger via `ensure_system_managed_flow_for_trigger` produces a `FlowDefinition` with `is_system_owned=true, deletable_by_tenant=false, execution_method='triggered'`, 4 nodes (`source/gate/conversation/notification` at positions 1-4), and a binding with `is_system_managed=true`. PASS.
+- E2E test 2 (suppress-default semantics): `has_active_suppress_default_binding` returns False initially, True after toggle. PASS.
+- E2E test 3 (notification write-through): `update_auto_flow_notification` flips `enabled=true` and sets `recipient_phone` in the Notification node `config_json`. PASS.
+- E2E dispatch test 1 (suppress=False, parallel-run): `TriggerDispatchService.dispatch` produces both a `ContinuousRun` AND a `flow_run_triggered` `MessageQueue` item. PASS after agent_id + check-constraint fixes.
+- E2E dispatch test 2 (suppress=True, bound-flow takeover): zero `ContinuousRun` rows added; `flow_run_triggered` queue grows by 1. Legacy path correctly suppressed. PASS.
+- Backfill (TSN_FLOWS_BACKFILL_ENABLED=true on alembic upgrade): `0069 backfill complete: created=2 skipped=0 failed=0`. Backfilled 2 system-managed flows for the existing tenant's Email#15 + Jira#4 Managed Notifications. `recipient_phone` correctly carried from `action_config` into the Notification node `config_json`. PASS.
+- `flip_backfill_suppress.py`: 4 system-managed bindings flipped to `suppress=true`; `--unset` re-enabled. PASS.
+- `rollback_managed_flow_backfill.py`: removed 2 flow_definition + 8 flow_node + 2 flow_trigger_binding rows. State clean. PASS.
+- Default-off restore: all three `flows_*_enabled()` helpers return False after .env cleanup. Release ships byte-identical to 0.6.x.
+
 ### Release 0.7.0 — Wave 5 finishing fix: GitHub trigger wizard criteria envelope (2026-04-26)
 
 GitHub trigger wizard sent a legacy flat `{event_type:'pull_request', branch_filter, path_filters, ...}` shape to `POST /api/triggers/github`. The backend's `@field_validator("trigger_criteria")` routes on `event=='pull_request'` (singular `event`, NOT `event_type`) and falls through to the generic envelope validator when the discriminator key doesn't match — which then 422s with `"trigger criteria missing required fields: ['criteria_version', 'filters', 'ordering', 'window']"`. Net effect: **GitHub triggers couldn't be created from the UI at all.** Caught by the release-finishing wizard QA pass.

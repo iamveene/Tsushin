@@ -311,6 +311,9 @@ class TriggerDispatchService:
                     event=event,
                     payload_ref=payload_ref,
                     bindings=bindings,
+                    agent_id=agent_id,  # v0.7.0 fix: required for the
+                    # message_queue.agent_id NOT NULL column. Caught by
+                    # release-finishing dispatch E2E test.
                 )
             except Exception:  # pragma: no cover — never abort dispatch on fan-out errors
                 logger.exception(
@@ -424,6 +427,7 @@ class TriggerDispatchService:
         event: TriggerDispatchInput,
         payload_ref: Optional[str],
         bindings: list[FlowTriggerBinding],
+        agent_id: int,
     ) -> list[int]:
         """v0.7.0 Wave 3 — fan a wake event out to every bound Flow.
 
@@ -478,7 +482,13 @@ class TriggerDispatchService:
             mqs.enqueue(
                 channel="flow",
                 tenant_id=tenant_id,
-                agent_id=None,  # flow runs aren't agent-scoped at the queue layer
+                # v0.7.0 fix: message_queue.agent_id is NOT NULL (FK to
+                # agent.id). Pass the resolved trigger agent_id so the
+                # row inserts cleanly. The actual flow execution uses
+                # flow_definition_id from the payload — agent_id here is
+                # bookkeeping for the queue layer (lets per-agent rate
+                # limiters and watcher dashboards group queue items).
+                agent_id=agent_id,
                 sender_key=f"{sender_key_root}:flow:{binding.flow_definition_id}",
                 payload=queue_payload,
                 message_type="flow_run_triggered",
