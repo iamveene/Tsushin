@@ -12,14 +12,18 @@ from datetime import datetime
 from enum import Enum
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from channels.trigger_criteria import evaluate_payload_criteria
+from config.feature_flags import flows_trigger_binding_enabled
 from models import (
     Agent,
     ChannelEventDedupe,
@@ -27,6 +31,7 @@ from models import (
     ContinuousRun,
     ContinuousSubscription,
     EmailChannelInstance,
+    FlowTriggerBinding,
     GitHubChannelInstance,
     JiraChannelInstance,
     ScheduleChannelInstance,
@@ -35,6 +40,10 @@ from models import (
     WebhookIntegration,
 )
 from services.default_agent_service import get_default_agent
+from services.flow_binding_service import (
+    has_active_suppress_default_binding,
+    list_active_bindings_for_trigger,
+)
 
 
 Importance = Literal["low", "normal", "high"]
@@ -189,7 +198,30 @@ class TriggerDispatchService:
             event_type=event.event_type,
             agent_id=agent_id,
         )
-        if not subscriptions:
+
+        # v0.7.0 Wave 3 — Triggers↔Flows Unification.
+        # If any active flow_trigger_binding for this (kind, instance) has
+        # ``suppress_default_agent=True``, the bound flow takes over fully
+        # for this dispatch — drop subscriptions so no ContinuousRun is
+        # created. We still proceed to ``_enqueue_bound_flows`` below to
+        # produce FlowRuns. Gated by TSN_FLOWS_TRIGGER_BINDING_ENABLED.
+        bindings: list[FlowTriggerBinding] = []
+        if flows_trigger_binding_enabled():
+            bindings = list_active_bindings_for_trigger(
+                self.db,
+                tenant_id=tenant_id,
+                trigger_kind=trigger_type,
+                trigger_instance_id=event.instance_id,
+            )
+            if subscriptions and any(b.suppress_default_agent for b in bindings):
+                logger.info(
+                    "Suppressing legacy ContinuousRun path for %s/%s — bound flow has suppress_default_agent=True",
+                    trigger_type,
+                    event.instance_id,
+                )
+                subscriptions = []
+
+        if not subscriptions and not bindings:
             return self._record_terminal_outcome(
                 event=event,
                 tenant_id=tenant_id,
@@ -261,6 +293,32 @@ class TriggerDispatchService:
                 tenant_id=tenant_id,
                 matched_agent_id=agent_id,
             )
+
+        # v0.7.0 Wave 3 — fan out to bound Flows alongside the legacy path.
+        # Reads ``flow_trigger_binding`` for (kind, instance), enqueues one
+        # ``flow_run_triggered`` MessageQueue item per active binding. The
+        # bindings list was loaded above; we re-use it here. Failures in the
+        # bound-flow fan-out NEVER abort dispatch — the ContinuousRun path
+        # is the source of truth for backward compatibility.
+        bound_flow_run_ids: list[int] = []
+        if bindings:
+            try:
+                bound_flow_run_ids = self._enqueue_bound_flows(
+                    tenant_id=tenant_id,
+                    trigger_type=trigger_type,
+                    instance_id=event.instance_id,
+                    wake_event=wake_event,
+                    event=event,
+                    payload_ref=payload_ref,
+                    bindings=bindings,
+                )
+            except Exception:  # pragma: no cover — never abort dispatch on fan-out errors
+                logger.exception(
+                    "Bound-flow fan-out failed for %s/%s wake_event=%s",
+                    trigger_type,
+                    event.instance_id,
+                    wake_event.id,
+                )
 
         # BUG #26: emit continuous_run activity events to the Watcher Graph
         # View WS so the agent node + run banner glow when a trigger fires.
@@ -355,6 +413,108 @@ class TriggerDispatchService:
             # The run row is already persisted; a separate sweep can re-drive
             # the queue if enqueue fails (rare). We deliberately don't raise.
             self.db.rollback()
+
+    def _enqueue_bound_flows(
+        self,
+        *,
+        tenant_id: str,
+        trigger_type: str,
+        instance_id: int,
+        wake_event: WakeEvent,
+        event: TriggerDispatchInput,
+        payload_ref: Optional[str],
+        bindings: list[FlowTriggerBinding],
+    ) -> list[int]:
+        """v0.7.0 Wave 3 — fan a wake event out to every bound Flow.
+
+        For each ``flow_trigger_binding`` row pointing at this trigger,
+        enqueue ONE ``flow_run_triggered`` MessageQueue item that the
+        QueueRouter consumes by calling ``FlowEngine.run_flow`` with the
+        wake event payload nested under ``trigger_context["source"]``.
+
+        Returns the list of binding IDs that were enqueued (audit only;
+        the actual FlowRun rows are created by the worker, not here).
+
+        Failures NEVER abort dispatch — the legacy ContinuousRun path is
+        the source of truth for backward compatibility. Caller wraps
+        this in a try/except.
+        """
+        if not bindings:
+            return []
+
+        from services.message_queue_service import MessageQueueService
+
+        # Read the redacted payload once and reuse for all bindings.
+        source_payload = self._read_payload_ref(payload_ref) or event.payload
+
+        mqs = MessageQueueService(self.db)
+        sender_key_root = event.sender_key or f"{trigger_type}:{instance_id}"
+        enqueued_binding_ids: list[int] = []
+
+        for binding in bindings:
+            queue_payload = {
+                "flow_definition_id": binding.flow_definition_id,
+                "binding_id": binding.id,
+                "trigger_event_id": wake_event.id,
+                "tenant_id": tenant_id,
+                "trigger_kind": trigger_type,
+                "trigger_instance_id": instance_id,
+                # Nested under "source" so SourceStepHandler + the variable
+                # resolver can expose {{source.payload.*}}, {{source.trigger_kind}},
+                # etc. Schema must match what flow_engine.SourceStepHandler reads.
+                "trigger_context": {
+                    "source": {
+                        "trigger_kind": trigger_type,
+                        "instance_id": instance_id,
+                        "event_type": event.event_type,
+                        "dedupe_key": event.dedupe_key,
+                        "occurred_at": event.occurred_at.isoformat() + "Z",
+                        "wake_event_id": wake_event.id,
+                        "binding_id": binding.id,
+                        "payload": source_payload,
+                    }
+                },
+            }
+            mqs.enqueue(
+                channel="flow",
+                tenant_id=tenant_id,
+                agent_id=None,  # flow runs aren't agent-scoped at the queue layer
+                sender_key=f"{sender_key_root}:flow:{binding.flow_definition_id}",
+                payload=queue_payload,
+                message_type="flow_run_triggered",
+            )
+            enqueued_binding_ids.append(binding.id)
+            logger.info(
+                "Enqueued bound flow run: flow=%s binding=%s wake_event=%s",
+                binding.flow_definition_id,
+                binding.id,
+                wake_event.id,
+            )
+
+        return enqueued_binding_ids
+
+    def _read_payload_ref(self, payload_ref: Optional[str]) -> Optional[dict]:
+        """Read the redacted payload JSON written to disk by ``_write_payload_ref``.
+
+        Returns None on missing file / parse error so callers can fall
+        back to the in-memory event.payload (which is the un-redacted
+        original — only used as a last resort when the on-disk redacted
+        file is unavailable).
+        """
+        if not payload_ref:
+            return None
+        try:
+            path = Path(payload_ref)
+            if not path.is_absolute():
+                # Stored as a basename — relative to the configured payload_dir.
+                path = self._payload_dir / path
+            if not path.exists():
+                return None
+            with path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            logger.exception("Failed to re-read payload_ref %s", payload_ref)
+            return None
 
     def _load_instance(self, trigger_type: str, instance_id: int) -> Any | None:
         model = self._INSTANCE_MODELS[trigger_type]

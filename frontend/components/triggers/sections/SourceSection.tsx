@@ -4,24 +4,38 @@
  * SourceSection
  *
  * Per-kind input field grid for the Trigger Overview tab. Wave 2 of the
- * Triggers ↔ Flows unification — handles `jira`, `github`, and `schedule`
- * only. Email + webhook branches are added in Wave 3.
+ * Triggers ↔ Flows unification — handles `jira`, `github`, and `schedule`.
+ * Wave 3 adds `email` and `webhook` branches, retiring the standalone fork
+ * pages.
  *
- * Lifted from `TriggerDetailShell.renderSourceSummary` (lines 415-426 jira,
- * 500-509 schedule, 521-550 github of pre-Wave-2 file).
+ * Lifted from `TriggerDetailShell.renderSourceSummary` (jira/schedule/github
+ * branches), and from the Inbox Binding (email) / Inbound Endpoint (webhook)
+ * cards of the pre-Wave-3 fork pages.
  */
 
 import type { ReactNode } from 'react'
 import Link from 'next/link'
-import type { GitHubTrigger, JiraTrigger, ScheduleTrigger } from '@/lib/client'
+import type { EmailTrigger, GitHubTrigger, JiraTrigger, PublicIngressInfo, ScheduleTrigger, WebhookIntegration } from '@/lib/client'
 import { formatDateTime } from '@/lib/dateUtils'
+import EmailSourceCard, { type EmailGmailIntegrationSummary } from './EmailSourceCard'
+import WebhookSourceCard from './WebhookSourceCard'
 
-type SourceKind = 'jira' | 'github' | 'schedule'
-type SourceTrigger = JiraTrigger | GitHubTrigger | ScheduleTrigger
+type SourceKind = 'jira' | 'github' | 'schedule' | 'email' | 'webhook'
+type SourceTrigger = JiraTrigger | GitHubTrigger | ScheduleTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: SourceKind
   trigger: SourceTrigger
+  // Email-specific props
+  gmailIntegration?: EmailGmailIntegrationSummary | null
+  // Webhook-specific props
+  publicIngress?: PublicIngressInfo | null
+  absoluteInboundUrl?: string
+  copied?: boolean
+  onCopyInboundUrl?: () => void
+  rotatingSecret?: boolean
+  onRotateWebhookSecret?: () => void
+  canWriteHub?: boolean
 }
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
@@ -42,7 +56,37 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
-export default function SourceSection({ kind, trigger }: Props) {
+export default function SourceSection({
+  kind,
+  trigger,
+  gmailIntegration,
+  publicIngress,
+  absoluteInboundUrl,
+  copied = false,
+  onCopyInboundUrl,
+  rotatingSecret = false,
+  onRotateWebhookSecret,
+  canWriteHub = false,
+}: Props) {
+  if (kind === 'email') {
+    return <EmailSourceCard trigger={trigger as EmailTrigger} gmailIntegration={gmailIntegration} />
+  }
+
+  if (kind === 'webhook') {
+    return (
+      <WebhookSourceCard
+        trigger={trigger as WebhookIntegration}
+        publicIngress={publicIngress}
+        absoluteInboundUrl={absoluteInboundUrl || ''}
+        copied={copied}
+        onCopy={onCopyInboundUrl ?? (() => undefined)}
+        rotating={rotatingSecret}
+        onRotateSecret={onRotateWebhookSecret}
+        canWriteHub={canWriteHub}
+      />
+    )
+  }
+
   if (kind === 'jira') {
     const jira = trigger as JiraTrigger
     return (
