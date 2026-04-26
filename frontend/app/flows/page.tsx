@@ -43,6 +43,7 @@ import {
   MessageIcon,
   BellIcon,
   LightningIcon,
+  ZapIcon,
   WrenchIcon,
   PlayIcon,
   CalendarIcon,
@@ -87,9 +88,14 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'scheduled', label: 'Scheduled', Icon: CalendarIcon },
   { value: 'recurring', label: 'Recurring', Icon: RefreshIcon },
   { value: 'keyword', label: 'Keyword', Icon: HashIcon },  // BUG-336
+  { value: 'triggered', label: 'Triggered', Icon: ZapIcon },  // v0.7.0 Wave 2: Triggers \u2194 Flows unification
 ]
 
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
+  // v0.7.0 Wave 2: 'source' step is locked at position 0, max 1 per flow.
+  // The dropdown filters this out when a source step already exists; the
+  // step row hides Delete + reorder buttons when type === 'source'.
+  { value: 'source', label: 'Source', Icon: ZapIcon, description: 'Trigger event that wakes this flow' },
   { value: 'conversation', label: 'Conversation', Icon: MessageIcon, description: 'Multi-turn dialogue step' },
   { value: 'message', label: 'Message', Icon: EnvelopeIcon, description: 'Send a single message' },
   { value: 'notification', label: 'Notification', Icon: BellIcon, description: 'Send a notification' },
@@ -1669,6 +1675,24 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function addStep(stepType: StepType) {
+    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    if (stepType === 'source') {
+      if (steps.some((s) => s.type === 'source')) return
+      const newStep: CreateFlowStepData = {
+        name: 'Source',
+        type: 'source',
+        position: 1,
+        config: {},
+        allow_multi_turn: false,
+        max_turns: undefined,
+      }
+      // Insert at the front and renumber.
+      const next = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
+      onChange(next)
+      setEditingIndex(0)
+      setShowAddStep(false)
+      return
+    }
     const newStep: CreateFlowStepData = {
       name: `Step ${steps.length + 1}`,
       type: stepType,
@@ -1689,6 +1713,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function removeStep(index: number) {
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (steps[index]?.type === 'source') return
     const newSteps = steps.filter((_, i) => i !== index)
     // Update positions
     newSteps.forEach((step, i) => step.position = i + 1)
@@ -1698,9 +1724,14 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
 
   function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
 
     const newSteps = [...steps]
-    const targetIndex = direction === 'up' ? index - 1 : index + 1
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
     // Update positions and auto-rename "Step N" names to match new position
     newSteps.forEach((step, i) => {
@@ -1731,26 +1762,31 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 onClick={() => setEditingIndex(editingIndex === index ? null : index)}
               >
                 <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <div className="w-10 h-10 rounded-lg bg-slate-600 flex items-center justify-center text-slate-300">
@@ -1767,6 +1803,11 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -1793,15 +1834,18 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* v0.7.0 Wave 2: source step is non-removable while present; hide Delete. */}
+                {step.type !== 'source' && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); removeStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1835,7 +1879,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
+            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -2252,6 +2297,17 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      {/* v0.7.0 Wave 2: Source step config placeholder. Wave 4 wires this to
+          the bound trigger summary + `{{source.*}}` variable preview. */}
+      {step.type === 'source' && (
+        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+          <div className="text-sm font-medium text-white">Source step</div>
+          <p className="mt-1 text-sm text-tsushin-slate">
+            Source step config — wired in Wave 4.
+          </p>
+        </div>
+      )}
 
       {/* Channel Selector - for message/notification/conversation */}
       {['message', 'notification', 'conversation'].includes(step.type) && (
@@ -3125,6 +3181,38 @@ function EditableStepBuilder({
 
   // Add a new step
   async function addStep(stepType: StepType) {
+    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    if (stepType === 'source') {
+      if (steps.some((s) => s.type === 'source')) return
+      const newStep: EditableStepData = {
+        name: 'Source',
+        type: 'source',
+        position: 1,
+        config: {},
+        allow_multi_turn: false,
+        max_turns: undefined,
+        _saving: true,
+      }
+      const tempSteps = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
+      onStepsChange(tempSteps)
+      setShowAddStep(false)
+      try {
+        const created = await api.createFlowStep(flowId, editableToCreatePayload(newStep) as any)
+        // Replace temp source step (now at index 0) with the real one and
+        // re-emit the rest with bumped positions.
+        const finalSteps = tempSteps.map((s, i) =>
+          i === 0 ? flowNodeToEditable(created) : s
+        )
+        onStepsChange(finalSteps)
+        setEditingIndex(0)
+      } catch (error) {
+        console.error('Failed to create source step:', error)
+        onStepsChange(steps)
+        toast.error('Step Error', 'Failed to create source step')
+      }
+      return
+    }
+
     const newPosition = steps.length + 1
     const newStep: EditableStepData = {
       name: `Step ${newPosition}`,
@@ -3195,6 +3283,8 @@ function EditableStepBuilder({
   // Delete a step
   async function deleteStep(index: number) {
     const step = steps[index]
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (step?.type === 'source') return
     if (!step.id) {
       // Just remove unsaved step
       const newSteps = steps.filter((_, i) => i !== index)
@@ -3233,7 +3323,13 @@ function EditableStepBuilder({
   async function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
 
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
     const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
+
     const newSteps = [...steps]
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
 
@@ -3292,24 +3388,29 @@ function EditableStepBuilder({
               >
                 {/* Reorder buttons */}
                 <div className="flex flex-col gap-1">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 {/* Step icon */}
@@ -3328,6 +3429,11 @@ function EditableStepBuilder({
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -3360,15 +3466,17 @@ function EditableStepBuilder({
                   </div>
                 </div>
 
-                {/* Delete button */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* Delete button (v0.7.0 Wave 2: hide for source step) */}
+                {step.type !== 'source' && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 {/* Expand/collapse indicator */}
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3402,7 +3510,8 @@ function EditableStepBuilder({
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
+            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -3560,6 +3669,17 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      {/* v0.7.0 Wave 2: Source step config placeholder. Wave 4 wires this to
+          the bound trigger summary + `{{source.*}}` variable preview. */}
+      {step.type === 'source' && (
+        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+          <div className="text-sm font-medium text-white">Source step</div>
+          <p className="mt-1 text-sm text-tsushin-slate">
+            Source step config — wired in Wave 4.
+          </p>
+        </div>
+      )}
 
       {/* Channel Selector - for message/notification/conversation */}
       {['message', 'notification', 'conversation'].includes(step.type) && (

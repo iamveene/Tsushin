@@ -7,10 +7,15 @@ import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { api, type GitHubTrigger, type JiraIssuePreview, type JiraManagedNotificationStatus, type JiraNotificationSubscriptionResponse, type JiraPollNowResponse, type JiraTrigger, type PageResponse, type ScheduleTrigger, type TriggerKind, type WakeEvent } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, RefreshIcon, SparklesIcon, TrashIcon, WhatsAppIcon, type IconProps } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, RefreshIcon, TrashIcon, type IconProps } from '@/components/ui/icons'
 import CriteriaBuilder, { formatCriteriaText, parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
+import SectionHeader from '@/components/triggers/SectionHeader'
+import Divider from '@/components/triggers/Divider'
+import SourceSection from '@/components/triggers/sections/SourceSection'
+import RoutingSection from '@/components/triggers/sections/RoutingSection'
+import OutputsSection from '@/components/triggers/sections/OutputsSection'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -141,14 +146,6 @@ function jiraManagedNotificationFromTrigger(trigger: JiraTrigger): JiraManagedNo
     continuous_agent_id: trigger.managed_notification_continuous_agent_id,
     continuous_subscription_id: trigger.managed_notification_subscription_id,
   }
-}
-
-function notificationStatusLabel(status?: JiraManagedNotificationStatus | null): string {
-  return status?.status || 'Not enabled'
-}
-
-function notificationRecipientPreview(status?: JiraManagedNotificationStatus | null): string {
-  return status?.recipient_preview || 'Not configured'
 }
 
 function pollResultSummary(result: JiraPollNowResponse): string {
@@ -406,149 +403,50 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
-  const renderSourceSummary = () => {
+  // Wave 2 of the Triggers ↔ Flows unification: Overview tab renders three
+  // explicit sections (Source / Routing / Outputs) for jira, github, schedule.
+  // Email + webhook still use their own forks until Wave 3.
+  const renderOverview = () => {
     if (!trigger) return null
-    if (kind === 'jira') {
-      const jira = trigger as JiraTrigger
-      const status = jiraNotificationStatus || jiraManagedNotificationFromTrigger(jira)
-      return (
-        <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Field
-              label="Jira connection"
-              value={jira.jira_integration_name
-                ? <Link href="/hub?tab=tool-apis" className="text-cyan-200 hover:text-white">{jira.jira_integration_name}</Link>
-                : <Link href="/hub?tab=tool-apis" className="text-yellow-200 hover:text-white">Legacy trigger credentials</Link>}
-            />
-            <Field label="Site" value={jira.site_url} />
-            <Field label="Project" value={jira.project_key || 'Any project in JQL'} />
-            <Field label="Poll interval" value={`${jira.poll_interval_seconds}s`} />
-            <Field label="Auth email" value={jira.auth_email || 'Not reported'} />
-          </div>
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                <WhatsAppIcon size={18} /> Managed WhatsApp Notification
-              </h2>
-              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                <DetailRow label="Status">{notificationStatusLabel(status)}</DetailRow>
-                <DetailRow label="Recipient">{notificationRecipientPreview(status)}</DetailRow>
-                <DetailRow label="Agent">{status?.agent_name || jira.default_agent_name || (jira.default_agent_id ? `Agent #${jira.default_agent_id}` : 'No default agent')}</DetailRow>
-                <DetailRow label="Subscription">{status?.continuous_subscription_id ? `#${status.continuous_subscription_id}` : 'Not reported'}</DetailRow>
-              </div>
-              {!jira.default_agent_id && (
-                <p className="mt-4 text-sm text-yellow-200">No default agent is selected; enabling creates or reuses the managed Jira agent.</p>
-              )}
-              {canWriteHub && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                  <input
-                    type="tel"
-                    value={jiraNotificationRecipient}
-                    onChange={(event) => setJiraNotificationRecipient(event.target.value)}
-                    placeholder="+15551234567"
-                    className="w-full rounded-lg border border-tsushin-border bg-black/25 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleEnableJiraNotification}
-                    disabled={jiraNotificationLoading || !jiraNotificationRecipient.trim()}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <SparklesIcon size={16} />
-                    {jiraNotificationLoading ? 'Enabling...' : status?.status ? 'Update Notification' : 'Enable Notification'}
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
-                <RefreshIcon size={18} /> Manual Poll
-              </h2>
-              <p className="mt-2 text-sm text-tsushin-slate">
-                Run the saved JQL now and dispatch matching wake events through the managed route.
-              </p>
-              {canWriteHub && (
-                <button
-                  type="button"
-                  onClick={handleJiraPollNow}
-                  disabled={jiraPolling || !jira.is_active}
-                  className="mt-4 inline-flex items-center gap-2 rounded-lg border border-blue-400/40 bg-blue-500/10 px-4 py-2 text-sm text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <PlayIcon size={16} />
-                  {jiraPolling ? 'Polling...' : 'Poll Now'}
-                </button>
-              )}
-              {jiraPollResult && (
-                <div className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
-                  jiraPollResult.success !== false
-                    ? 'border-green-500/30 bg-green-500/10 text-green-200'
-                    : 'border-red-500/30 bg-red-500/10 text-red-200'
-                }`}>
-                  {pollResultSummary(jiraPollResult)}
-                  {(jiraPollResult.completed_at || jiraPollResult.status) && (
-                    <div className="mt-1 text-xs opacity-80">
-                      {jiraPollResult.status ? `Status: ${jiraPollResult.status}` : ''}
-                      {jiraPollResult.completed_at ? ` Completed: ${formatDateTime(jiraPollResult.completed_at)}` : ''}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )
-    }
-    if (kind === 'schedule') {
-      const schedule = trigger as ScheduleTrigger
-      return (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="Cron" value={<code className="text-amber-200">{schedule.cron_expression}</code>} />
-          <Field label="Timezone" value={schedule.timezone} />
-          <Field label="Next fire" value={schedule.next_fire_at ? formatDateTime(schedule.next_fire_at) : 'Not scheduled'} />
-          <Field label="Last fire" value={schedule.last_fire_at ? formatDateTime(schedule.last_fire_at) : 'No fires recorded'} />
-        </div>
-      )
-    }
-    const github = trigger as GitHubTrigger
-    // v0.7.0: When the saved criteria envelope is a PR Submitted envelope,
-    // render it as a read-only structured panel so operators can scan the
-    // matching rules at a glance instead of decoding raw JSON.
-    const rawCriteria = github.trigger_criteria as Record<string, unknown> | null | undefined
-    const isPRCriteria = !!rawCriteria && rawCriteria.event_type === 'pull_request'
-    const prActions = isPRCriteria && Array.isArray(rawCriteria!.actions) ? (rawCriteria!.actions as string[]) : []
-    const prDraftOnly = isPRCriteria ? Boolean(rawCriteria!.draft_only) : false
-    const prTitleContains = isPRCriteria ? (rawCriteria!.title_contains as string | null | undefined) : null
-    const prBodyContains = isPRCriteria ? (rawCriteria!.body_contains as string | null | undefined) : null
+    const status = kind === 'jira'
+      ? jiraNotificationStatus || jiraManagedNotificationFromTrigger(trigger as JiraTrigger)
+      : null
     return (
-      <div className="space-y-4">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="Repository" value={`${github.repo_owner}/${github.repo_name}`} />
-          <Field label="Auth method" value={github.auth_method} />
-          <Field label="Events" value={(github.events || []).length > 0 ? github.events!.join(', ') : 'Default'} />
-          <Field label="Branch" value={github.branch_filter || 'Any branch'} />
-        </div>
-        {isPRCriteria && (
-          <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-white">PR Submitted criteria</div>
-                <p className="text-xs text-tsushin-slate">Structured envelope used by the dispatcher to decide which webhooks wake an agent.</p>
-              </div>
-              <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-violet-200">
-                pull_request
-              </span>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <DetailRow label="Actions">{prActions.length > 0 ? prActions.join(', ') : 'Any action'}</DetailRow>
-              <DetailRow label="Only non-draft PRs">{prDraftOnly ? 'Yes' : 'No'}</DetailRow>
-              <DetailRow label="Title contains">{prTitleContains || 'Any title'}</DetailRow>
-              <DetailRow label="Body contains">{prBodyContains || 'Any body'}</DetailRow>
-              <DetailRow label="Branch filter">{github.branch_filter || 'Any branch'}</DetailRow>
-              <DetailRow label="Author filter">{github.author_filter || 'Any author'}</DetailRow>
-              <DetailRow label="Path filters">{(github.path_filters || []).length > 0 ? (github.path_filters || []).join(', ') : 'Any path'}</DetailRow>
-            </div>
-          </div>
-        )}
+      <div className="space-y-6">
+        <SectionHeader title="Source" subtitle="Where events come from." />
+        <SourceSection kind={kind} trigger={trigger} />
+
+        <Divider />
+
+        <SectionHeader
+          title="Routing"
+          subtitle="Which agent handles events when no Flow is bound."
+        />
+        <RoutingSection
+          kind={kind}
+          trigger={trigger}
+          canEdit={canWriteHub}
+          onUpdate={(next) =>
+            setTrigger((current) => (current ? { ...current, ...next } as BreadthTrigger : current))
+          }
+        />
+
+        <Divider />
+
+        <SectionHeader title="Outputs" subtitle="What happens when this trigger fires." />
+        <OutputsSection
+          kind={kind}
+          trigger={trigger}
+          canWriteHub={canWriteHub}
+          jiraNotificationStatus={status}
+          jiraPhoneInput={jiraNotificationRecipient}
+          onJiraPhoneChange={setJiraNotificationRecipient}
+          onEnableJiraNotification={handleEnableJiraNotification}
+          jiraNotificationLoading={jiraNotificationLoading}
+          jiraPollResult={jiraPollResult}
+          onJiraPollNow={handleJiraPollNow}
+          jiraPolling={jiraPolling}
+        />
       </div>
     )
   }
@@ -827,7 +725,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
           {activeTab === 'overview' && (
             <div className="space-y-6">
-              {renderSourceSummary()}
+              {renderOverview()}
             </div>
           )}
           {activeTab === 'criteria' && renderCriteriaTab()}
