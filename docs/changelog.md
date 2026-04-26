@@ -30,9 +30,8 @@ Second merge wave. Lands the canonical `source` step type at the engine + step-p
   - Test 3 (source step palette + Locked-at-top pill + Add-Step filter + neighbor-disable) PASS.
   - Test 4 (Triggered method tile in modal + flows index filter dropdown) PASS.
   - Test 5 (Source-step config placeholder doesn't crash editor) PASS.
-  - Test 7 (triggered without source) **inconclusive on async path** — validator code confirmed at `flow_engine.py:2993`; the existing `POST /api/flows/{id}/execute` async path does not propagate validation failures back onto the API-created FlowRun (validator inside `run_flow` creates a separate failed FlowRun). Pre-existing pattern (affects all validation failures, not just `triggered`); follow-up filed for a future polish wave.
+  - Test 7 (triggered without source) — **fixed during Wave 2 finishing**. Initial QA pass found that the API endpoint `POST /api/flows/{id}/execute` calls a separate `validate_flow_structure` helper (`backend/api/routes_flows.py:251`) — not `FlowEngine.validate_flow_structure` — so the new triggered + source rules I added in Wave 2 to the engine validator never fired on the API path, and a flow with `execution_method='triggered'` and no source step would 202-accept and stall in `pending` forever. Mirrored the same rules into the API-side helper: triggered without a source step now rejects synchronously with `400 Invalid flow structure: Flow with execution_method='triggered' must declare a Source step at position 1`. Verified live against the QA-created flow 83 in tenant Tsushin QA.
 - Screenshots `/Users/vinicios/code/tsushin/.playwright-mcp/wave2-test{1,3,4,5}-*.png`. Zero console errors on trigger / flows page render or modal interaction.
-- Test data left in tenant: flow id 83 + flow_run id 108 (intentional, harmless).
 
 ### Release 0.7.0 — Triggers↔Flows Unification, Wave 1 foundations (2026-04-26)
 

@@ -279,6 +279,26 @@ def validate_flow_structure(db: Session, flow_id: int, strict: bool = False) -> 
     if min(positions) < 1:
         return False, "Step positions must be >= 1"
 
+    # v0.7.0 Wave 2 — source step rules (parity with FlowEngine.validate_flow_structure).
+    # The API path calls *this* helper synchronously inside POST /flows/{id}/execute
+    # (line ~2228) so triggered-without-source must reject HERE, not just inside
+    # FlowEngine.run_flow where the failure spawns a separate failed FlowRun and
+    # leaves the API-created FlowRun stuck in 'pending' forever.
+    source_nodes = [n for n in nodes if n.type in ("source", "Source")]
+    if len(source_nodes) > 1:
+        return False, (
+            f"Flow can have at most one Source step "
+            f"(found {len(source_nodes)} at positions {[n.position for n in source_nodes]})"
+        )
+    for src in source_nodes:
+        if src.position != 1:
+            return False, f"Source step must be at position 1 (found at position {src.position})"
+
+    flow = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id).first()
+    if flow is not None and flow.execution_method == "triggered":
+        if not source_nodes:
+            return False, "Flow with execution_method='triggered' must declare a Source step at position 1"
+
     return True, None
 
 
