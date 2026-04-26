@@ -1679,6 +1679,13 @@ class FlowDefinition(Base):
     # Relationships
     steps = relationship("FlowNode", back_populates="flow", cascade="all, delete-orphan", order_by="FlowNode.position")
     runs = relationship("FlowRun", back_populates="flow", cascade="all, delete-orphan")
+    # v0.7.0: Triggers↔Flows Unification — bindings to one or more triggers.
+    bindings = relationship(
+        "FlowTriggerBinding",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("idx_flow_execution_method", "execution_method"),
@@ -1774,6 +1781,17 @@ class FlowRun(Base):
     trigger_context_json = Column(Text)  # Initial trigger data / input variables
     final_report_json = Column(Text)  # Aggregated summary / output
     error_text = Column(Text)
+
+    # v0.7.0: Triggers↔Flows Unification — correlation back to the
+    # WakeEvent that woke this flow (for triggered flows). NULL for
+    # manual / scheduled / API-driven runs. SET NULL on wake_event
+    # delete (audit retention boundary).
+    trigger_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -3167,6 +3185,127 @@ class WebhookIntegration(Base):
     __table_args__ = (
         Index("idx_webhook_integration_tenant", "tenant_id"),
         Index("idx_webhook_integration_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Triggers↔Flows Unification — flow_trigger_binding + webhook payload capture
+# ============================================================================
+
+
+class FlowTriggerBinding(Base):
+    """
+    v0.7.0: Edge between a trigger (channel instance) and a Flow.
+
+    One Flow can listen to N triggers (fan-in across kinds). One trigger
+    can wake N Flows (fan-out). Combined with the new ``source`` step
+    type, this is what lets ``trigger_dispatch_service`` enqueue
+    FlowRuns alongside the legacy ContinuousRuns.
+
+    ``trigger_instance_id`` is a *semantic* FK into one of the per-kind
+    channel-instance tables (jira_trigger / email_trigger /
+    github_trigger / schedule_trigger / webhook_integration). It is NOT
+    declared as a SQL FK because there is no single target table —
+    binding cleanup on trigger DELETE is handled application-side by
+    ``flow_binding_service.delete_bindings_for_trigger``.
+
+    Phase A auto-generation (Wave 4) creates a binding row for every
+    new trigger with ``is_system_managed=True`` so the auto-flow can be
+    distinguished from user-authored bindings.
+
+    Whole feature is gated by ``TSN_FLOWS_TRIGGER_BINDING_ENABLED``
+    (default false in 0.7.0).
+    """
+    __tablename__ = "flow_trigger_binding"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    flow_definition_id = Column(
+        Integer,
+        ForeignKey("flow_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    # Pointer to the FlowNode of type 'source' inside the bound flow.
+    # SET NULL on flow_node delete so a Source-step deletion doesn't
+    # orphan the binding row; FlowEngine recreates it lazily.
+    source_node_id = Column(
+        Integer,
+        ForeignKey("flow_node.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # When True: dispatch skips the legacy ContinuousRun for this
+    # (kind, instance_id), letting the bound Flow take over fully.
+    # Default False on backfilled rows for parallel-run safety; new
+    # user-authored bindings default True (clean ownership).
+    suppress_default_agent = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    # Marks the auto-generated 1-flow-per-trigger row created by Phase A.
+    is_system_managed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    flow = relationship("FlowDefinition", back_populates="bindings")
+    source_node = relationship("FlowNode")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "flow_definition_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_flow_trigger_binding_unique",
+        ),
+        Index(
+            "ix_flow_trigger_binding_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id", "is_active",
+        ),
+        Index("ix_flow_trigger_binding_flow", "flow_definition_id"),
+    )
+
+
+class WebhookPayloadCapture(Base):
+    """
+    v0.7.0: Last-N (default 5) inbound payloads per webhook integration.
+
+    Used by Wave 5's frontend autocomplete to infer
+    ``{{source.payload.*}}`` paths in the Flow editor. The ringbuffer
+    is enforced application-side in ``routes_webhook_inbound.py`` after
+    a successful dispatch — older rows are deleted to keep at most the
+    5 most recent for each ``(tenant_id, webhook_id)``.
+
+    Payload is stored as text (truncated to ~64KB at write time).
+    Headers are minimally redacted (auth/cookie stripped). Both fields
+    are JSON.parse'd at read time.
+    """
+    __tablename__ = "webhook_payload_capture"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    webhook_id = Column(
+        Integer,
+        ForeignKey("webhook_integration.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    captured_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    headers_json = Column(Text, nullable=True)
+    dedupe_key = Column(String(512), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_payload_capture_recent",
+            "tenant_id", "webhook_id", "captured_at",
+        ),
     )
 
 

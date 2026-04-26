@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { AlertTriangleIcon, BellIcon, ClockIcon, CopyIcon, RefreshIcon, TrashIcon, WebhookIcon } from '@/components/ui/icons'
 import CriteriaBuilder, { formatCriteriaText, parseCriteriaText } from '@/components/triggers/CriteriaBuilder'
+import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
 
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
@@ -211,9 +212,38 @@ export default function WebhookTriggerDetailPage() {
 
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger)}`}>{trigger.is_active ? trigger.status : 'paused'}</span>} />
-            <Field label="Circuit breaker" value={trigger.circuit_breaker_state} />
-            <Field label="Rate limit" value={`${trigger.rate_limit_rpm} req/min`} />
+            <Field label="Health" value={trigger.health_status || 'unknown'} />
+            <Field
+              label="Routing"
+              value={
+                <DefaultAgentChip
+                  triggerKind="webhook"
+                  triggerId={trigger.id}
+                  agent={{ id: trigger.default_agent_id ?? null, name: trigger.default_agent_name ?? null }}
+                  canEdit={canWriteHub}
+                  onUpdate={(next) =>
+                    setTrigger((current) => (current ? { ...current, ...next } : current))
+                  }
+                />
+              }
+            />
             <Field label="Last activity" value={trigger.last_activity_at ? formatRelative(trigger.last_activity_at) : 'No activity'} />
+          </div>
+
+          {/*
+            Circuit breaker + Rate limit used to live in the KPI strip;
+            Wave 1 moves them into a secondary pill row so the standardized
+            Status / Health / Routing / Last Activity layout is consistent
+            across all 5 trigger kinds. Wave 3 will fold these into the
+            Source section as proper sub-pills.
+          */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full border border-tsushin-border bg-black/20 px-2.5 py-1 text-tsushin-fog">
+              Circuit breaker: <span className="text-white">{trigger.circuit_breaker_state}</span>
+            </span>
+            <span className="rounded-full border border-tsushin-border bg-black/20 px-2.5 py-1 text-tsushin-fog">
+              Rate limit: <span className="text-white">{trigger.rate_limit_rpm} req/min</span>
+            </span>
           </div>
 
           <div className="flex flex-wrap gap-2 border-b border-tsushin-border pb-2">

@@ -10,6 +10,7 @@ import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, RefreshIcon, SparklesIcon, TrashIcon, WhatsAppIcon, type IconProps } from '@/components/ui/icons'
 import CriteriaBuilder, { formatCriteriaText, parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
+import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
 
 type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
 type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
@@ -784,7 +785,20 @@ export default function TriggerDetailShell({ kind }: Props) {
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="Status" value={<span className={`rounded-full border px-2.5 py-1 text-xs ${statusClass(trigger)}`}>{statusLabel(trigger)}</span>} />
             <Field label="Health" value={trigger.health_status || 'unknown'} />
-            <Field label="Default agent" value={trigger.default_agent_name || (trigger.default_agent_id ? `Agent #${trigger.default_agent_id}` : 'None')} />
+            <Field
+              label="Routing"
+              value={
+                <DefaultAgentChip
+                  triggerKind={kind}
+                  triggerId={trigger.id}
+                  agent={{ id: trigger.default_agent_id ?? null, name: trigger.default_agent_name ?? null }}
+                  canEdit={canWriteHub}
+                  onUpdate={(next) =>
+                    setTrigger((current) => (current ? { ...current, ...next } as BreadthTrigger : current))
+                  }
+                />
+              }
+            />
             <Field label="Last activity" value={trigger.last_activity_at ? formatRelative(trigger.last_activity_at) : 'No activity'} />
           </div>
 
