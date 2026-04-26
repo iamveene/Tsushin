@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Graph View glow on trigger fires (2026-04-25)
+
+The Watcher → Graph View was not glowing when v0.7.0 triggers (Email/Jira/GitHub/Schedule/Webhook) fired. Root cause: the dispatcher and the system-owned inline executors built `ContinuousRun` rows directly via the ORM, bypassing the `create_continuous_run()` helper that contained the only `emit_continuous_run_async` call. The wake-worker also called `AgentService.process_message` directly, skipping `agent/router.py` (the only path emitting `agent_processing`). Net effect: zero activity events on the watcher WS, no banner, no node glow.
+
+- **`backend/services/trigger_dispatch_service.py`** — emit `continuous_run queued` for every newly-created `ContinuousRun` after the dispatch commit, so the run banner lights up the moment a wake event is dispatched (covers Email, Jira, GitHub, Schedule, Webhook).
+- **`backend/services/queue_router.py:_dispatch_continuous_task`** — emit `agent_processing start/end` and a terminal `continuous_run` for tenant-owned queue-driven runs.
+- **`backend/channels/email/trigger.py`** — emit `continuous_run running`, `agent_processing start/end`, and a terminal `continuous_run succeeded|failed` for system-owned inline runs (`notify_only` / triage). Keeps the agent node pulsing for the duration of the inline action.
+
+Verified live with the existing email trigger #15 (keyword `XYZCODEX20260424T195215`): sent message id `19dc72f4e7f3a0c0`, captured 7-event sequence on the Watcher WebSocket (`queued → running → agent_processing start → agent_processing end → succeeded`), and DOM-observed 32 glow markers on `agent-225` (`agent-node-processing` × 20, `agent-node-fading` × 12). Banner shows `#19 CONTINUOUS succeeded email wake #21`.
+
 ### Release 0.7.0 — UI bug fixes from full regression (2026-04-25)
 
 Two frontend bugs surfaced by the v0.7.0 full-platform UI regression. Both were silently hiding shipped functionality from the user.
