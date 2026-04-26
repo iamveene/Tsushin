@@ -5,10 +5,48 @@ import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
-import { api, type GitHubTrigger, type JiraIssuePreview, type JiraManagedNotificationStatus, type JiraNotificationSubscriptionResponse, type JiraPollNowResponse, type JiraTrigger, type PageResponse, type ScheduleTrigger, type TriggerKind, type WakeEvent } from '@/lib/client'
+import {
+  api,
+  authenticatedFetch,
+  type EmailMessagePreview,
+  type EmailPollNowResponse,
+  type EmailTestQueryResponse,
+  type EmailTrigger,
+  type GitHubTrigger,
+  type JiraIssuePreview,
+  type JiraManagedNotificationStatus,
+  type JiraNotificationSubscriptionResponse,
+  type JiraPollNowResponse,
+  type JiraTrigger,
+  type PageResponse,
+  type PublicIngressInfo,
+  type ScheduleTrigger,
+  type TriggerKind,
+  type WakeEvent,
+  type WebhookIntegration,
+} from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, GitHubIcon, PlayIcon, RefreshIcon, TrashIcon, type IconProps } from '@/components/ui/icons'
-import CriteriaBuilder, { formatCriteriaText, parseCriteriaText, type CriteriaSourceValues } from '@/components/triggers/CriteriaBuilder'
+import {
+  AlertTriangleIcon,
+  BellIcon,
+  CalendarDaysIcon,
+  CodeIcon,
+  EnvelopeIcon,
+  GitHubIcon,
+  PlayIcon,
+  RefreshIcon,
+  TrashIcon,
+  WebhookIcon,
+  type IconProps,
+} from '@/components/ui/icons'
+import CriteriaBuilder, {
+  buildCriteriaTemplate,
+  buildEmailSearchQuery,
+  emailSourceFromSearchQuery,
+  formatCriteriaText,
+  parseCriteriaText,
+  type CriteriaSourceValues,
+} from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
 import SectionHeader from '@/components/triggers/SectionHeader'
@@ -16,9 +54,13 @@ import Divider from '@/components/triggers/Divider'
 import SourceSection from '@/components/triggers/sections/SourceSection'
 import RoutingSection from '@/components/triggers/sections/RoutingSection'
 import OutputsSection from '@/components/triggers/sections/OutputsSection'
+import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
 
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
-type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
+// Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
+// handles `email` and `webhook` kinds. The standalone fork pages are
+// reduced to one-line wrappers around `<TriggerDetailShell kind=...>`.
+type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github' | 'email' | 'webhook'>
+type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
 interface Props {
@@ -53,6 +95,20 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
     iconClass: 'text-violet-300',
     accentClass: 'border-violet-500/30 bg-violet-500/10 text-violet-100',
   },
+  email: {
+    label: 'Email Trigger',
+    description: 'Gmail-backed wake source with managed notification + triage outputs.',
+    Icon: EnvelopeIcon,
+    iconClass: 'text-emerald-300',
+    accentClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+  },
+  webhook: {
+    label: 'Webhook Trigger',
+    description: 'Signed HTTP wake source — pair with a Flow to define behavior.',
+    Icon: WebhookIcon,
+    iconClass: 'text-cyan-300',
+    accentClass: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-100',
+  },
 }
 
 const TABS: Array<{ id: TabId; label: string }> = [
@@ -68,6 +124,9 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function statusClass(trigger: BreadthTrigger): string {
   if (!trigger.is_active || trigger.status === 'paused') return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  // Webhook-specific: open circuit-breaker is also a hard error state
+  const cb = (trigger as WebhookIntegration).circuit_breaker_state
+  if (cb === 'open') return 'bg-red-500/10 text-red-300 border-red-500/30'
   if (trigger.status === 'error' || trigger.health_status === 'unhealthy') return 'bg-red-500/10 text-red-300 border-red-500/30'
   if (trigger.health_status === 'healthy') return 'bg-green-500/10 text-green-300 border-green-500/30'
   return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
@@ -159,6 +218,71 @@ function pollResultSummary(result: JiraPollNowResponse): string {
   return result.message || result.reason || 'Poll completed.'
 }
 
+function emailPollSummary(result: EmailPollNowResponse): string {
+  const fetched = result.fetched_count ?? 0
+  const dispatched = result.dispatched_count ?? 0
+  const processed = result.processed_count ?? 0
+  const duplicates = result.duplicate_count ?? 0
+  const failed = result.failed_count ?? 0
+  return `Poll ${result.status || 'finished'}: ${fetched} fetched, ${dispatched} dispatched, ${processed} processed, ${duplicates} duplicate, ${failed} failed.`
+}
+
+function emailSamplesFromResult(result?: EmailTestQueryResponse | null): EmailMessagePreview[] {
+  return result?.sample_messages || result?.messages || []
+}
+
+function gmailScopeLabel(integration?: EmailGmailIntegrationSummary | null): string {
+  if (!integration) return 'Scope unknown'
+  if (integration.can_send && integration.can_draft) return 'Read + send/draft'
+  if (integration.can_send) return 'Read + send/reply'
+  return 'Read-only'
+}
+
+function gmailScopeClass(integration?: EmailGmailIntegrationSummary | null): string {
+  if (!integration) return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  if (integration.can_send && integration.can_draft) return 'bg-green-500/10 text-green-300 border-green-500/30'
+  if (integration.can_send) return 'bg-yellow-500/10 text-yellow-200 border-yellow-500/30'
+  return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+}
+
+function gmailScopeMessage(integration?: EmailGmailIntegrationSummary | null): string {
+  if (!integration) {
+    return 'This trigger can still monitor Gmail. Open the Gmail integration details in Hub to confirm outbound send and draft access.'
+  }
+  if (integration.can_send && integration.can_draft) {
+    return 'This trigger only watches Gmail. The reused account also has outbound send and compose access for agents that use it.'
+  }
+  if (integration.can_send) {
+    return 'This trigger can monitor Gmail. Agents using this account can send and reply, but draft creation needs gmail.compose reauthorization.'
+  }
+  return 'This trigger can monitor Gmail with read access. Agents using this account need outbound reauthorization before they can send or create drafts.'
+}
+
+async function fetchGmailIntegrations(): Promise<EmailGmailIntegrationSummary[]> {
+  const response = await authenticatedFetch('/api/hub/google/gmail/integrations')
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  const data = await response.json()
+  return Array.isArray(data.integrations) ? data.integrations : []
+}
+
+function emailCriteriaSourceFrom(trigger: EmailTrigger): CriteriaSourceValues {
+  const source = emailSourceFromSearchQuery(trigger.search_query)
+  const criteria = trigger.trigger_criteria
+  const filters = criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+    ? (criteria.filters as Record<string, unknown> | undefined)
+    : undefined
+  const email = filters && typeof filters.email === 'object' && !Array.isArray(filters.email)
+    ? filters.email as Record<string, unknown>
+    : undefined
+  const bodyKeyword = typeof email?.body_contains === 'string' ? email.body_contains : ''
+  return {
+    ...source,
+    emailBodyKeyword: bodyKeyword,
+  }
+}
+
 function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): CriteriaSourceValues {
   if (kind === 'jira') {
     const jira = trigger as JiraTrigger
@@ -175,13 +299,20 @@ function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): C
       payloadTemplateText: formatJsonText(schedule.payload_template),
     }
   }
-  const github = trigger as GitHubTrigger
-  return {
-    githubEventsText: (github.events || []).join(', '),
-    githubBranchFilter: github.branch_filter || '',
-    githubPathFiltersText: (github.path_filters || []).join('\n'),
-    githubAuthorFilter: github.author_filter || '',
+  if (kind === 'github') {
+    const github = trigger as GitHubTrigger
+    return {
+      githubEventsText: (github.events || []).join(', '),
+      githubBranchFilter: github.branch_filter || '',
+      githubPathFiltersText: (github.path_filters || []).join('\n'),
+      githubAuthorFilter: github.author_filter || '',
+    }
   }
+  if (kind === 'email') {
+    return emailCriteriaSourceFrom(trigger as EmailTrigger)
+  }
+  // webhook has no per-source draft fields; the criteria builder handles its own state
+  return {}
 }
 
 export default function TriggerDetailShell({ kind }: Props) {
@@ -203,6 +334,8 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [success, setSuccess] = useState<string | null>(null)
   const [criteriaText, setCriteriaText] = useState('')
   const [sourceDraft, setSourceDraft] = useState<CriteriaSourceValues>({})
+
+  // Jira-specific state
   const [jiraTesting, setJiraTesting] = useState(false)
   const [jiraTestMessage, setJiraTestMessage] = useState<string | null>(null)
   const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
@@ -212,14 +345,35 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [jiraNotificationStatus, setJiraNotificationStatus] = useState<JiraManagedNotificationStatus | null>(null)
   const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
+  // Email-specific state
+  const [gmailIntegrations, setGmailIntegrations] = useState<EmailGmailIntegrationSummary[]>([])
+  const [emailNotificationRecipient, setEmailNotificationRecipient] = useState('')
+  const [emailNotificationLoading, setEmailNotificationLoading] = useState(false)
+  const [emailTriageLoading, setEmailTriageLoading] = useState(false)
+  const [emailPolling, setEmailPolling] = useState(false)
+  const [emailPollResult, setEmailPollResult] = useState<EmailPollNowResponse | null>(null)
+  const [emailQueryTesting, setEmailQueryTesting] = useState(false)
+  const [emailQueryResult, setEmailQueryResult] = useState<EmailTestQueryResponse | null>(null)
+
+  // Webhook-specific state
+  const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
+  const [webhookCopied, setWebhookCopied] = useState(false)
+  const [webhookRotating, setWebhookRotating] = useState(false)
+
   const loadData = useCallback(async () => {
     if (!hasValidId) return
     setLoading(true)
     setError(null)
     try {
-      const [triggerData, wakeEvents] = await Promise.all([
-        api.getTriggerDetail(kind, triggerId),
-        api.getWakeEvents({ limit: 50, channel_type: kind, channel_instance_id: triggerId }).catch(() => null),
+      const triggerPromise = api.getTriggerDetail(kind, triggerId)
+      const eventsPromise = api.getWakeEvents({ limit: 50, channel_type: kind, channel_instance_id: triggerId }).catch(() => null)
+      const gmailPromise = kind === 'email' ? fetchGmailIntegrations().catch(() => []) : Promise.resolve([] as EmailGmailIntegrationSummary[])
+      const ingressPromise = kind === 'webhook' ? api.getMyPublicIngress().catch(() => null) : Promise.resolve(null)
+      const [triggerData, wakeEvents, integrations, ingressData] = await Promise.all([
+        triggerPromise,
+        eventsPromise,
+        gmailPromise,
+        ingressPromise,
       ])
       const nextTrigger = triggerData as BreadthTrigger
       setTrigger(nextTrigger)
@@ -227,6 +381,8 @@ export default function TriggerDetailShell({ kind }: Props) {
       setCriteriaText(formatCriteriaText(nextTrigger.trigger_criteria))
       setSourceDraft(sourceFromTrigger(kind, nextTrigger))
       setEventsPage(wakeEvents)
+      setGmailIntegrations(integrations)
+      setPublicIngress(ingressData)
     } catch (err: unknown) {
       setError(getErrorMessage(err, `Failed to load ${kind} trigger`))
     } finally {
@@ -247,17 +403,35 @@ export default function TriggerDetailShell({ kind }: Props) {
     [eventsPage, triggerId],
   )
 
+  const gmailIntegration = useMemo(() => {
+    if (kind !== 'email' || !trigger) return null
+    const email = trigger as EmailTrigger
+    return (
+      gmailIntegrations.find((integration) => integration.id === email.gmail_integration_id) ||
+      gmailIntegrations.find((integration) => integration.email_address === email.gmail_account_email) ||
+      null
+    )
+  }, [gmailIntegrations, kind, trigger])
+
+  const absoluteInboundUrl = useMemo(() => {
+    if (kind !== 'webhook' || !trigger) return ''
+    const webhook = trigger as WebhookIntegration
+    const base = publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')
+    return `${base}${webhook.inbound_url}`
+  }, [kind, publicIngress, trigger])
+
   const updateActive = async () => {
     if (!trigger) return
     setSaving(true)
     setError(null)
     try {
       const next = !trigger.is_active
-      const updated = kind === 'jira'
-        ? await api.updateJiraTrigger(trigger.id, { is_active: next })
-        : kind === 'schedule'
-        ? await api.updateScheduleTrigger(trigger.id, { is_active: next })
-        : await api.updateGitHubTrigger(trigger.id, { is_active: next })
+      let updated: BreadthTrigger
+      if (kind === 'jira') updated = await api.updateJiraTrigger(trigger.id, { is_active: next })
+      else if (kind === 'schedule') updated = await api.updateScheduleTrigger(trigger.id, { is_active: next })
+      else if (kind === 'github') updated = await api.updateGitHubTrigger(trigger.id, { is_active: next })
+      else if (kind === 'email') updated = await api.updateEmailTrigger(trigger.id, { is_active: next })
+      else updated = await api.updateWebhookIntegration(trigger.id, { is_active: next })
       setTrigger(updated)
       setSuccess(next ? 'Trigger resumed' : 'Trigger paused')
       setTimeout(() => setSuccess(null), 3000)
@@ -345,32 +519,158 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
+  const handleEnableEmailNotification = async () => {
+    if (!trigger || kind !== 'email') return
+    const recipient = emailNotificationRecipient.trim()
+    if (!recipient) {
+      setError('WhatsApp recipient is required to enable email notifications')
+      return
+    }
+    setEmailNotificationLoading(true)
+    setError(null)
+    try {
+      const result = await api.createEmailNotificationSubscription(trigger.id, { recipient_phone: recipient })
+      setSuccess(result.created_subscription ? 'Email WhatsApp notification enabled' : 'Email WhatsApp notification is already active')
+      setEmailNotificationRecipient('')
+      const refreshed = await api.getEmailTrigger(trigger.id)
+      setTrigger(refreshed)
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to enable email WhatsApp notification'))
+    } finally {
+      setEmailNotificationLoading(false)
+    }
+  }
+
+  const handleEnableEmailTriage = async () => {
+    if (!trigger || kind !== 'email') return
+    setEmailTriageLoading(true)
+    setError(null)
+    try {
+      const result = await api.createEmailTriageSubscription(trigger.id)
+      setSuccess(result.created_subscription ? 'Email triage flow enabled' : 'Email triage flow is already active')
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to enable email triage'))
+    } finally {
+      setEmailTriageLoading(false)
+    }
+  }
+
+  const handleEmailPollNow = async () => {
+    if (!trigger || kind !== 'email') return
+    setEmailPolling(true)
+    setError(null)
+    try {
+      const result = await api.pollEmailTriggerNow(trigger.id)
+      setEmailPollResult(result)
+      if (result.success === false) {
+        setError(result.error || result.message || 'Email poll failed')
+      } else {
+        setSuccess(emailPollSummary(result))
+        setTimeout(() => setSuccess(null), 5000)
+      }
+      await loadData()
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to poll email trigger'))
+    } finally {
+      setEmailPolling(false)
+    }
+  }
+
+  const handleEmailTestQuery = async () => {
+    if (!trigger || kind !== 'email') return
+    setEmailQueryTesting(true)
+    setError(null)
+    try {
+      const email = trigger as EmailTrigger
+      const searchQuery = buildEmailSearchQuery(sourceDraft) || email.search_query || null
+      const triggerCriteria = parseCriteriaText(criteriaText) || buildCriteriaTemplate('email', sourceDraft)
+      const result = await api.testSavedEmailTriggerQuery(email.id, {
+        search_query: searchQuery,
+        trigger_criteria: triggerCriteria,
+        max_results: 3,
+      })
+      setEmailQueryResult(result)
+      setSuccess(result.message || `Query returned ${result.message_count ?? 0} message(s)`)
+      setTimeout(() => setSuccess(null), 3000)
+    } catch (err: unknown) {
+      setEmailQueryResult(null)
+      setError(getErrorMessage(err, 'Failed to test email query'))
+    } finally {
+      setEmailQueryTesting(false)
+    }
+  }
+
+  const handleCopyInboundUrl = async () => {
+    if (!absoluteInboundUrl) return
+    try {
+      await navigator.clipboard.writeText(absoluteInboundUrl)
+      setWebhookCopied(true)
+      setTimeout(() => setWebhookCopied(false), 2000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to copy inbound URL'))
+    }
+  }
+
+  const handleRotateWebhookSecret = async () => {
+    if (!trigger || kind !== 'webhook') return
+    if (!confirm('Rotate the webhook signing secret? Any callers using the previous secret will start failing immediately.')) return
+    setWebhookRotating(true)
+    setError(null)
+    try {
+      const result = await api.rotateWebhookSecret(trigger.id)
+      setSuccess(`New secret: ${result.api_secret} — copy it now; it will not be shown again.`)
+      // Refresh trigger to update preview
+      const refreshed = await api.getWebhookIntegration(trigger.id)
+      setTrigger(refreshed)
+      setTimeout(() => setSuccess(null), 12000)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to rotate webhook secret'))
+    } finally {
+      setWebhookRotating(false)
+    }
+  }
+
   const saveCriteria = async () => {
     if (!trigger) return
     setSaving(true)
     setError(null)
     try {
       const triggerCriteria = parseCriteriaText(criteriaText)
-      const updated = kind === 'jira'
-        ? await api.updateJiraTrigger(trigger.id, {
+      let updated: BreadthTrigger
+      if (kind === 'jira') {
+        updated = await api.updateJiraTrigger(trigger.id, {
           trigger_criteria: triggerCriteria,
           project_key: sourceDraft.jiraProjectKey?.trim() || null,
           jql: sourceDraft.jiraJql?.trim() || (trigger as JiraTrigger).jql,
         })
-        : kind === 'schedule'
-        ? await api.updateScheduleTrigger(trigger.id, {
+      } else if (kind === 'schedule') {
+        updated = await api.updateScheduleTrigger(trigger.id, {
           trigger_criteria: triggerCriteria,
           cron_expression: sourceDraft.cronExpression?.trim() || (trigger as ScheduleTrigger).cron_expression,
           timezone: sourceDraft.timezone?.trim() || (trigger as ScheduleTrigger).timezone,
           payload_template: parseJsonObjectText(sourceDraft.payloadTemplateText || '', 'Payload template'),
         })
-        : await api.updateGitHubTrigger(trigger.id, {
+      } else if (kind === 'github') {
+        updated = await api.updateGitHubTrigger(trigger.id, {
           trigger_criteria: triggerCriteria,
           events: splitList(sourceDraft.githubEventsText),
           branch_filter: sourceDraft.githubBranchFilter?.trim() || null,
           path_filters: splitList(sourceDraft.githubPathFiltersText),
           author_filter: sourceDraft.githubAuthorFilter?.trim() || null,
         })
+      } else if (kind === 'email') {
+        const nextSearchQuery = buildEmailSearchQuery(sourceDraft) || null
+        updated = await api.updateEmailTrigger(trigger.id, {
+          search_query: nextSearchQuery,
+          trigger_criteria: triggerCriteria,
+        })
+      } else {
+        updated = await api.updateWebhookIntegration(trigger.id, {
+          trigger_criteria: triggerCriteria,
+        })
+      }
       setTrigger(updated)
       setCriteriaText(formatCriteriaText(updated.trigger_criteria))
       setSourceDraft(sourceFromTrigger(kind, updated as BreadthTrigger))
@@ -393,8 +693,12 @@ export default function TriggerDetailShell({ kind }: Props) {
         await api.deleteJiraTrigger(trigger.id)
       } else if (kind === 'schedule') {
         await api.deleteScheduleTrigger(trigger.id)
-      } else {
+      } else if (kind === 'github') {
         await api.deleteGitHubTrigger(trigger.id)
+      } else if (kind === 'email') {
+        await api.deleteEmailTrigger(trigger.id)
+      } else {
+        await api.deleteWebhookIntegration(trigger.id)
       }
       router.push('/hub?tab=communication')
     } catch (err: unknown) {
@@ -403,9 +707,21 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
-  // Wave 2 of the Triggers ↔ Flows unification: Overview tab renders three
-  // explicit sections (Source / Routing / Outputs) for jira, github, schedule.
-  // Email + webhook still use their own forks until Wave 3.
+  // Email's CriteriaBuilder regenerates the criteria text whenever the
+  // structured source patch changes — preserving the pre-Wave-3 behavior.
+  const handleSourceChange = (patch: Partial<CriteriaSourceValues>) => {
+    setSourceDraft((current) => {
+      const next = { ...current, ...patch }
+      if (kind === 'email') {
+        setCriteriaText(formatCriteriaText(buildCriteriaTemplate('email', next)))
+      }
+      return next
+    })
+  }
+
+  // Wave 3 of the Triggers ↔ Flows unification: Overview tab renders three
+  // explicit sections (Source / Routing / Outputs) for jira, github, schedule,
+  // email, and webhook.
   const renderOverview = () => {
     if (!trigger) return null
     const status = kind === 'jira'
@@ -414,7 +730,18 @@ export default function TriggerDetailShell({ kind }: Props) {
     return (
       <div className="space-y-6">
         <SectionHeader title="Source" subtitle="Where events come from." />
-        <SourceSection kind={kind} trigger={trigger} />
+        <SourceSection
+          kind={kind}
+          trigger={trigger}
+          gmailIntegration={kind === 'email' ? gmailIntegration : null}
+          publicIngress={kind === 'webhook' ? publicIngress : null}
+          absoluteInboundUrl={kind === 'webhook' ? absoluteInboundUrl : ''}
+          copied={webhookCopied}
+          onCopyInboundUrl={handleCopyInboundUrl}
+          rotatingSecret={webhookRotating}
+          onRotateWebhookSecret={kind === 'webhook' ? handleRotateWebhookSecret : undefined}
+          canWriteHub={canWriteHub}
+        />
 
         <Divider />
 
@@ -446,6 +773,16 @@ export default function TriggerDetailShell({ kind }: Props) {
           jiraPollResult={jiraPollResult}
           onJiraPollNow={handleJiraPollNow}
           jiraPolling={jiraPolling}
+          emailGmailIntegration={kind === 'email' ? gmailIntegration : null}
+          emailPhoneInput={emailNotificationRecipient}
+          onEmailPhoneChange={setEmailNotificationRecipient}
+          onEnableEmailNotification={handleEnableEmailNotification}
+          emailNotificationLoading={emailNotificationLoading}
+          emailPollResult={emailPollResult}
+          onEmailPollNow={handleEmailPollNow}
+          emailPolling={emailPolling}
+          onEnableEmailTriage={handleEnableEmailTriage}
+          emailTriageLoading={emailTriageLoading}
         />
       </div>
     )
@@ -453,8 +790,10 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const renderCriteriaTab = () => {
     if (!trigger) return null
+    const showSidePanel = kind === 'jira' || kind === 'schedule' || kind === 'github'
+    const webhookId = trigger.id
     return (
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className={showSidePanel ? 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]' : 'space-y-3'}>
         <div>
           <CriteriaBuilder
             kind={kind}
@@ -462,65 +801,117 @@ export default function TriggerDetailShell({ kind }: Props) {
             onChange={setCriteriaText}
             disabled={!canWriteHub || saving}
             source={sourceDraft}
-            onSourceChange={(patch) => setSourceDraft((current) => ({ ...current, ...patch }))}
+            onSourceChange={handleSourceChange}
             readOnlyReason={!canWriteHub ? 'Read-only view. Your role can view criteria but cannot change it.' : null}
+            onTest={kind === 'webhook'
+              ? (triggerCriteria, payload) =>
+                  api.testWebhookCriteria(webhookId, { payload, trigger_criteria: triggerCriteria })
+              : undefined}
           />
           {canWriteHub && (
-            <button
-              type="button"
-              onClick={saveCriteria}
-              disabled={saving}
-              className="mt-3 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Criteria'}
-            </button>
-          )}
-        </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
-          <h2 className="text-lg font-semibold text-white">Source filters</h2>
-          <div className="mt-4 space-y-4">
-            {kind === 'jira' && (
-              <>
-                <DetailRow label="JQL">{(trigger as JiraTrigger).jql}</DetailRow>
-                <DetailRow label="Project key">{(trigger as JiraTrigger).project_key || 'JQL controls scope'}</DetailRow>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={saveCriteria}
+                disabled={saving}
+                className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save Criteria'}
+              </button>
+              {kind === 'email' && (
                 <button
                   type="button"
-                  onClick={handleJiraTestQuery}
-                  disabled={jiraTesting}
-                  className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:text-white disabled:opacity-50"
+                  onClick={handleEmailTestQuery}
+                  disabled={emailQueryTesting}
+                  className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
                 >
-                  <PlayIcon size={14} />
-                  {jiraTesting ? 'Testing...' : 'Test Query'}
+                  <PlayIcon size={16} />
+                  {emailQueryTesting ? 'Testing...' : 'Test Query'}
                 </button>
-                {jiraTestMessage && (
-                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
-                    {jiraTestMessage}
-                  </div>
-                )}
-                <JiraIssuePreviewList
-                  issues={jiraSampleIssues}
-                  siteUrl={(trigger as JiraTrigger).site_url}
-                  emptyLabel="Run the saved JQL to preview matching issues."
-                />
-              </>
-            )}
-            {kind === 'schedule' && (
-              <>
-                <DetailRow label="Cron">{(trigger as ScheduleTrigger).cron_expression}</DetailRow>
-                <DetailRow label="Payload template">
-                  <JsonBlock value={(trigger as ScheduleTrigger).payload_template} emptyLabel="No payload template saved." />
-                </DetailRow>
-              </>
-            )}
-            {kind === 'github' && (
-              <>
-                <DetailRow label="Events">{((trigger as GitHubTrigger).events || []).join(', ') || 'Default events'}</DetailRow>
-                <DetailRow label="Path filters">{((trigger as GitHubTrigger).path_filters || []).join(', ') || 'Any path'}</DetailRow>
-                <DetailRow label="Author">{(trigger as GitHubTrigger).author_filter || 'Any author'}</DetailRow>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          )}
+          {kind === 'email' && emailQueryResult && (
+            <div className="mt-3 rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+              <div className="mb-3 text-sm font-semibold text-white">
+                Sample messages ({emailQueryResult.message_count ?? emailSamplesFromResult(emailQueryResult).length})
+              </div>
+              {emailSamplesFromResult(emailQueryResult).length === 0 ? (
+                <div className="rounded-lg border border-dashed border-tsushin-border p-5 text-center text-sm text-tsushin-slate">
+                  No sample messages matched this query.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {emailSamplesFromResult(emailQueryResult).map((message) => (
+                    <div key={message.id} className="rounded-lg border border-tsushin-border/70 bg-black/20 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="break-words text-sm font-medium text-white">{message.subject}</div>
+                          <div className="mt-1 text-xs text-tsushin-slate">{message.from_address || 'Unknown sender'}</div>
+                        </div>
+                        {message.link && (
+                          <a href={message.link} target="_blank" rel="noreferrer" className="text-xs text-cyan-200 hover:text-white">
+                            Open
+                          </a>
+                        )}
+                      </div>
+                      {message.description_preview && (
+                        <p className="mt-2 line-clamp-3 text-xs text-tsushin-slate">{message.description_preview}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
+        {showSidePanel && (
+          <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
+            <h2 className="text-lg font-semibold text-white">Source filters</h2>
+            <div className="mt-4 space-y-4">
+              {kind === 'jira' && (
+                <>
+                  <DetailRow label="JQL">{(trigger as JiraTrigger).jql}</DetailRow>
+                  <DetailRow label="Project key">{(trigger as JiraTrigger).project_key || 'JQL controls scope'}</DetailRow>
+                  <button
+                    type="button"
+                    onClick={handleJiraTestQuery}
+                    disabled={jiraTesting}
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-100 hover:text-white disabled:opacity-50"
+                  >
+                    <PlayIcon size={14} />
+                    {jiraTesting ? 'Testing...' : 'Test Query'}
+                  </button>
+                  {jiraTestMessage && (
+                    <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+                      {jiraTestMessage}
+                    </div>
+                  )}
+                  <JiraIssuePreviewList
+                    issues={jiraSampleIssues}
+                    siteUrl={(trigger as JiraTrigger).site_url}
+                    emptyLabel="Run the saved JQL to preview matching issues."
+                  />
+                </>
+              )}
+              {kind === 'schedule' && (
+                <>
+                  <DetailRow label="Cron">{(trigger as ScheduleTrigger).cron_expression}</DetailRow>
+                  <DetailRow label="Payload template">
+                    <JsonBlock value={(trigger as ScheduleTrigger).payload_template} emptyLabel="No payload template saved." />
+                  </DetailRow>
+                </>
+              )}
+              {kind === 'github' && (
+                <>
+                  <DetailRow label="Events">{((trigger as GitHubTrigger).events || []).join(', ') || 'Default events'}</DetailRow>
+                  <DetailRow label="Path filters">{((trigger as GitHubTrigger).path_filters || []).join(', ') || 'Any path'}</DetailRow>
+                  <DetailRow label="Author">{(trigger as GitHubTrigger).author_filter || 'Any author'}</DetailRow>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -700,10 +1091,43 @@ export default function TriggerDetailShell({ kind }: Props) {
             <Field label="Last activity" value={trigger.last_activity_at ? formatRelative(trigger.last_activity_at) : 'No activity'} />
           </div>
 
+          {/*
+            Email Gmail-scope banner (Wave 1 relocated this from a 5th KPI cell
+            into this banner to keep the KPI grid 4-wide for all kinds).
+          */}
+          {kind === 'email' && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full border px-2.5 py-1 text-xs ${gmailScopeClass(gmailIntegration)}`}>
+                  Gmail scope: {gmailScopeLabel(gmailIntegration)}
+                </span>
+                <span className="text-red-100/90">{gmailScopeMessage(gmailIntegration)}</span>
+              </div>
+            </div>
+          )}
+
+          {/*
+            Webhook circuit-breaker + rate-limit sub-pills (Wave 1 relocation
+            so the standardized 4-cell KPI grid stays consistent across all
+            5 trigger kinds).
+          */}
+          {kind === 'webhook' && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-tsushin-border bg-black/20 px-2.5 py-1 text-tsushin-fog">
+                Circuit breaker: <span className="text-white">{(trigger as WebhookIntegration).circuit_breaker_state}</span>
+              </span>
+              <span className="rounded-full border border-tsushin-border bg-black/20 px-2.5 py-1 text-tsushin-fog">
+                Rate limit: <span className="text-white">{(trigger as WebhookIntegration).rate_limit_rpm} req/min</span>
+              </span>
+            </div>
+          )}
+
           <div className={`rounded-xl border px-4 py-3 text-sm ${config.accentClass}`}>
             Created {formatDateTime(trigger.created_at)}
             {trigger.updated_at ? `; updated ${formatRelative(trigger.updated_at)}` : ''}
-            {trigger.health_status_reason ? `; health note: ${trigger.health_status_reason}` : ''}
+            {(trigger as { health_status_reason?: string | null }).health_status_reason
+              ? `; health note: ${(trigger as { health_status_reason?: string | null }).health_status_reason}`
+              : ''}
           </div>
 
           <div className="flex flex-wrap gap-2 border-b border-tsushin-border pb-2">

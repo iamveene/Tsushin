@@ -28,6 +28,9 @@ class QueueRouter:
             return await self._dispatch_trigger_event(worker, db, item)
         if message_type == "continuous_task":
             return await self._dispatch_continuous_task(worker, db, item)
+        if message_type == "flow_run_triggered":
+            # v0.7.0 Wave 3 — Triggers↔Flows Unification.
+            return await self._dispatch_flow_run_triggered(worker, db, item)
         raise ValueError(f"Unknown message_type: {message_type}")
 
     async def _dispatch_inbound_message(self, worker: Any, db: Any, item: Any) -> Any:
@@ -326,6 +329,68 @@ class QueueRouter:
             "answer": (run.outcome_state or {}).get("answer"),
             "budget_decision": budget_decision.value if budget_decision else None,
         }
+
+    async def _dispatch_flow_run_triggered(self, worker: Any, db: Any, item: Any) -> Any:
+        """v0.7.0 Wave 3 — consume a ``flow_run_triggered`` queue row.
+
+        Reads the binding + flow + trigger context from ``item.payload``
+        and calls ``FlowEngine.run_flow`` with the new
+        ``trigger_event_id`` and ``binding_id`` correlation params. The
+        SourceStepHandler exposes ``{{source.payload.*}}`` etc. to
+        downstream steps via the trigger_context root merge in
+        ``_build_step_context``.
+
+        Failures here are logged but do not bubble; the legacy
+        ContinuousRun path is the source of truth and will already have
+        been driven by ``_dispatch_continuous_task`` for tenant-owned
+        subscriptions.
+        """
+        from flows.flow_engine import FlowEngine
+
+        payload = item.payload or {}
+        flow_definition_id: Optional[int] = payload.get("flow_definition_id")
+        binding_id: Optional[int] = payload.get("binding_id")
+        trigger_event_id: Optional[int] = payload.get("trigger_event_id")
+        trigger_context = payload.get("trigger_context") or {}
+        tenant_id: Optional[str] = payload.get("tenant_id") or item.tenant_id
+
+        if flow_definition_id is None:
+            logger.warning(
+                "flow_run_triggered queue item %s missing 'flow_definition_id'; skipping",
+                getattr(item, "id", None),
+            )
+            return {"status": "skipped", "reason": "missing_flow_definition_id"}
+
+        try:
+            flow_engine = FlowEngine(db)
+            flow_run = await flow_engine.run_flow(
+                flow_definition_id=flow_definition_id,
+                trigger_context=trigger_context,
+                initiator="trigger",
+                trigger_type="triggered",
+                tenant_id=tenant_id,
+                trigger_event_id=trigger_event_id,
+                binding_id=binding_id,
+            )
+            return {
+                "status": flow_run.status,
+                "flow_run_id": flow_run.id,
+                "flow_definition_id": flow_definition_id,
+                "binding_id": binding_id,
+            }
+        except Exception:
+            logger.exception(
+                "flow_run_triggered dispatch failed: flow=%s binding=%s wake_event=%s",
+                flow_definition_id,
+                binding_id,
+                trigger_event_id,
+            )
+            return {
+                "status": "failed",
+                "flow_definition_id": flow_definition_id,
+                "binding_id": binding_id,
+                "reason": "flow_engine_error",
+            }
 
 
 def self_fail_run(db: Any, run: Any, reason: str) -> None:

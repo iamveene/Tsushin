@@ -4521,6 +4521,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
   onSuccess: () => void
 }) {
   const toast = useToast()
+  // v0.7.0 Wave 3 — derive canWriteFlows locally. The variable existed only in
+  // FlowsPage scope, so the existing references at lines 4690-4696 inside
+  // this modal threw `ReferenceError: canWriteFlows is not defined` whenever
+  // a user opened a flow for editing. Caught by Wave 3 QA. Self-contained
+  // useAuth() avoids prop-drilling through every place EditFlowModal is rendered.
+  const { hasPermission } = useAuth()
+  const canWriteFlows = hasPermission('flows.write')
   const [flow, setFlow] = useState<FlowDefinition | null>(null)
   const [steps, setSteps] = useState<EditableStepData[]>([])
   const stepsRef = useRef<EditableStepData[]>([])
