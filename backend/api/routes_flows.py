@@ -871,7 +871,44 @@ def get_run_nodes(
 # ============= FLOW DEFINITION ENDPOINTS =============
 
 VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
-VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword"}  # BUG-336: added keyword
+VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword", "triggered"}  # v0.7.0 Wave 2: added 'triggered' for source-step-driven flows
+
+
+def _ensure_flow_editable(flow: "FlowDefinition") -> None:
+    """v0.7.0 Wave 2 — enforce ``editable_by_tenant`` on system-owned flows.
+
+    System-owned auto-generated flows (Wave 4) carry ``is_system_owned=True``
+    and may also carry ``editable_by_tenant=False`` to lock structural edits.
+    Without this enforcement Phase A's protection promise is hollow — any
+    tenant admin could mutate the auto-flow's steps and break the binding.
+
+    Most system-owned auto-flows ship with ``editable_by_tenant=True`` so
+    the casual-user "Enable Notification" toggle still works (it flips a
+    flag inside the Notification node's config_json). Only flows marked
+    explicitly non-editable hit this 403.
+    """
+    from fastapi import HTTPException
+    if bool(getattr(flow, "is_system_owned", False)) and not bool(getattr(flow, "editable_by_tenant", True)):
+        raise HTTPException(
+            status_code=403,
+            detail="System-owned flow is not editable by tenant",
+        )
+
+
+def _ensure_flow_deletable(flow: "FlowDefinition") -> None:
+    """v0.7.0 Wave 2 — enforce ``deletable_by_tenant`` on system-owned flows.
+
+    Auto-generated flows that wrap a trigger (Wave 4) ship with
+    ``deletable_by_tenant=False`` to keep the binding intact for the
+    lifetime of the trigger. Tenant deletion of the trigger itself
+    cleans both up via ``flow_binding_service.delete_bindings_for_trigger``.
+    """
+    from fastapi import HTTPException
+    if bool(getattr(flow, "is_system_owned", False)) and not bool(getattr(flow, "deletable_by_tenant", True)):
+        raise HTTPException(
+            status_code=403,
+            detail="System-owned flow is not deletable by tenant",
+        )
 
 
 @router.post("", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))], include_in_schema=False)
@@ -1578,6 +1615,8 @@ def update_flow(
         if not db_flow:
             raise HTTPException(status_code=404, detail="Flow not found")
 
+        _ensure_flow_editable(db_flow)
+
         if flow.name is not None:
             db_flow.name = flow.name
         if flow.description is not None:
@@ -1647,6 +1686,8 @@ def patch_flow(
         db_flow = query.first()
         if not db_flow:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(db_flow)
 
         if flow.name is not None:
             db_flow.name = flow.name
@@ -1730,6 +1771,8 @@ def delete_flow(
         flow = query.first()
         if not flow:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_deletable(flow)
 
         run_count = db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).count()
         if run_count > 0 and not force:
@@ -1907,8 +1950,11 @@ def update_step(
     try:
         flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
         flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
-        if not flow_query.first():
+        flow_obj = flow_query.first()
+        if not flow_obj:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(flow_obj)
 
         db_step = db.query(FlowNode).filter(
             FlowNode.id == step_id,
@@ -1917,6 +1963,21 @@ def update_step(
 
         if not db_step:
             raise HTTPException(status_code=404, detail="Step not found")
+
+        # v0.7.0 Wave 2 — block changing the type of a Source step or
+        # moving it off position 1. The auto-flow created in Wave 4 relies
+        # on the source node staying put for the lifetime of the binding.
+        if db_step.type in ("source", "Source"):
+            if step.type is not None and step.type not in ("source", "Source"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot change the type of a Source step",
+                )
+            if step.position is not None and step.position != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Source step must remain at position 1",
+                )
 
         if step.type is not None:
             db_step.type = step.type
@@ -2050,8 +2111,11 @@ def delete_step(
     try:
         flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
         flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
-        if not flow_query.first():
+        flow_obj = flow_query.first()
+        if not flow_obj:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(flow_obj)
 
         step = db.query(FlowNode).filter(
             FlowNode.id == step_id,
@@ -2060,6 +2124,18 @@ def delete_step(
 
         if not step:
             raise HTTPException(status_code=404, detail="Step not found")
+
+        # v0.7.0 Wave 2 — Source steps are the canonical entry node for
+        # a triggered flow; deleting one would orphan the flow_trigger_binding
+        # that points to it (binding.source_node_id becomes NULL via
+        # ON DELETE SET NULL, and the flow can no longer wake from its
+        # trigger). The trigger-page UX deletes the binding (and the
+        # auto-flow when system-managed) — never the source node alone.
+        if step.type in ("source", "Source"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the Source step. Delete the trigger binding or the entire flow instead.",
+            )
 
         db.delete(step)
         db.commit()

@@ -2400,6 +2400,65 @@ class GateStepHandler(FlowStepHandler):
         return serialized
 
 
+class SourceStepHandler(FlowStepHandler):
+    """
+    v0.7.0 Triggers↔Flows Unification — Wave 2.
+
+    The ``source`` step is the canonical entry point for a flow woken by a
+    trigger. At runtime it is essentially a no-op: the dispatch path
+    (Wave 3) writes the wake event's payload + metadata into
+    ``flow_run.trigger_context_json`` under the ``"source"`` key BEFORE
+    the engine starts iterating steps. ``_build_step_context`` then
+    re-merges that dict at the context root so downstream Conversation /
+    Gate / Notification steps can reference variables like:
+
+        {{source.payload.issue.key}}
+        {{source.trigger_kind}}
+        {{source.event_type}}
+        {{source.dedupe_key}}
+        {{source.occurred_at}}
+        {{source.wake_event_id}}
+
+    The handler echoes the most useful identifiers back as its own
+    ``output_json`` so authors who prefer the ``{{step_1.trigger_kind}}``
+    style also work. Payload is intentionally NOT echoed to keep step
+    output compact — it remains addressable through ``{{source.payload.*}}``.
+
+    Position invariant: ``source`` MUST sit at position 1 (1-based) in
+    the flow. Enforced by ``FlowEngine.validate_flow_structure``.
+    """
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+        trigger_context = json.loads(flow_run.trigger_context_json) if flow_run.trigger_context_json else {}
+        source_payload = trigger_context.get("source") or {}
+
+        logger.info(
+            f"Source step executed for flow_run={flow_run.id} "
+            f"trigger_kind={source_payload.get('trigger_kind') or config.get('trigger_kind')} "
+            f"instance_id={source_payload.get('instance_id') or config.get('trigger_instance_id')}"
+        )
+
+        # Echo the lightweight identifiers; full payload stays referenceable
+        # via {{source.payload.*}} from the trigger_context root merge.
+        return {
+            "trigger_kind": source_payload.get("trigger_kind") or config.get("trigger_kind"),
+            "instance_id": source_payload.get("instance_id") or config.get("trigger_instance_id"),
+            "event_type": source_payload.get("event_type"),
+            "dedupe_key": source_payload.get("dedupe_key"),
+            "occurred_at": source_payload.get("occurred_at"),
+            "wake_event_id": source_payload.get("wake_event_id"),
+            "binding_id": source_payload.get("binding_id"),
+            "status": "completed",
+        }
+
+
 # Legacy handler for backward compatibility
 class TriggerNodeHandler(FlowStepHandler):
     """
@@ -2684,7 +2743,9 @@ class FlowEngine:
             "summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Agentic summarization
             "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
+            "source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: Triggers↔Flows source entry node
             # Legacy types (backward compatibility)
+            "Source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: legacy casing alias
             "Trigger": TriggerNodeHandler(db, self.mcp_sender, self.token_tracker),
             "Message": MessageStepHandler(db, self.mcp_sender, self.token_tracker),
             "Tool": ToolStepHandler(db, self.mcp_sender, self.token_tracker),
@@ -2911,6 +2972,29 @@ class FlowEngine:
                     ).count()
                     if target_subflows > 0:
                         raise FlowValidationError("Subflow depth limited to 1")
+
+        # v0.7.0 Triggers↔Flows Unification — source step rules.
+        # Source nodes are the canonical entry point for triggered flows
+        # (and only valid step type at position 1 when execution_method='triggered').
+        source_steps = [s for s in steps if s.type in ("source", "Source")]
+        if len(source_steps) > 1:
+            raise FlowValidationError(
+                "Flow can have at most one Source step "
+                f"(found {len(source_steps)} at positions {[s.position for s in source_steps]})"
+            )
+        for src in source_steps:
+            if src.position != 1:
+                raise FlowValidationError(
+                    f"Source step must be at position 1 (found at position {src.position})"
+                )
+
+        # If the flow declares execution_method='triggered', it MUST have a source step.
+        flow_def = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_id).first()
+        if flow_def is not None and flow_def.execution_method == "triggered":
+            if not source_steps:
+                raise FlowValidationError(
+                    "Flow with execution_method='triggered' must declare a Source step at position 1"
+                )
 
     def generate_idempotency_key(self, flow_run_id: int, step_id: int, retry: int = 0) -> str:
         """Generate idempotency key for step run."""
@@ -3180,18 +3264,26 @@ class FlowEngine:
         triggered_by: Optional[str] = None,
         parent_run_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
-        resume_run_id: Optional[int] = None
+        resume_run_id: Optional[int] = None,
+        trigger_event_id: Optional[int] = None,  # v0.7.0: WakeEvent.id for correlation
+        binding_id: Optional[int] = None,         # v0.7.0: flow_trigger_binding.id (audit)
     ) -> FlowRun:
         """
         Main execution entry point.
 
         Args:
             flow_definition_id: ID of FlowDefinition to execute
-            trigger_context: Initial trigger data / input variables
+            trigger_context: Initial trigger data / input variables. For
+                triggered flows, the dispatch path nests the wake event
+                payload under the "source" key so SourceStepHandler can
+                expose ``{{source.payload.*}}`` and friends.
             initiator: Who/what started this run ('api', 'agent', 'system', 'subflow', 'scheduler')
-            trigger_type: Execution method ('immediate', 'scheduled', 'recurring', 'manual')
+            trigger_type: Execution method ('immediate', 'scheduled', 'recurring', 'manual', 'triggered')
             triggered_by: User/system identifier
             parent_run_id: If this is a subflow, ID of parent FlowRun
+            trigger_event_id: v0.7.0 — FK to wake_event for correlation
+                between the trigger that fired and the FlowRun that handled it.
+            binding_id: v0.7.0 — FK to flow_trigger_binding (audit-only).
 
         Returns:
             Completed FlowRun
@@ -3264,7 +3356,8 @@ class FlowEngine:
                 total_steps=len(steps),
                 completed_steps=0,
                 failed_steps=0,
-                trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+                trigger_context_json=json.dumps(trigger_context) if trigger_context else None,
+                trigger_event_id=trigger_event_id,  # v0.7.0: correlation to WakeEvent
             )
             self.db.add(flow_run)
             self.db.commit()

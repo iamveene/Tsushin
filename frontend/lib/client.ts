@@ -2331,9 +2331,11 @@ export interface ConversationThread {
 }
 
 // Phase 8.0: Flow creation types
-export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword'  // BUG-336: added keyword
+// v0.7.0 Wave 2: added 'triggered' execution method (Triggers ↔ Flows unification)
+export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword' | 'triggered'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate'
+// v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'

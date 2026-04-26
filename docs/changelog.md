@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Triggers↔Flows Unification, Wave 2 (Source step + flow protection + 3-section UI) (2026-04-26)
+
+Second merge wave. Lands the canonical `source` step type at the engine + step-palette level, the `triggered` execution method, the flow-protection enforcement (`editable_by_tenant`/`deletable_by_tenant`), and the three-section Source/Routing/Outputs refactor of the trigger detail page Overview tab. Behavior is still byte-identical for existing flows — the new step type is callable but unused until Wave 4's auto-Flow creation lands.
+
+- **`backend/flows/flow_engine.py`** — `SourceStepHandler` class (no-op handler that echoes `trigger_kind`/`instance_id`/`event_type`/`dedupe_key`/`occurred_at`/`wake_event_id`/`binding_id` as `output_json` while letting `{{source.payload.*}}` resolve through the trigger_context root merge). Registered as `"source"` (canonical) + `"Source"` (legacy alias) next to `TriggerNodeHandler`. `validate_flow_structure` now rejects: more than one source step, source step at position ≠ 1, and `execution_method='triggered'` without a source step. `FlowEngine.run_flow` signature gains optional `trigger_event_id` and `binding_id` params; `trigger_event_id` is persisted to the new FlowRun row for WakeEvent correlation.
+- **`backend/api/routes_flows.py`** — `'triggered'` added to `VALID_EXECUTION_METHODS`. Two new helpers `_ensure_flow_editable` / `_ensure_flow_deletable` enforce `is_system_owned + !editable_by_tenant → 403` and `is_system_owned + !deletable_by_tenant → 403` in PUT (`update_flow`), PATCH (`patch_flow`), DELETE (`delete_flow`), step-PUT (`update_step`), step-DELETE (`delete_step`). `update_step` additionally rejects changing the `type` of a Source step or moving it off position 1; `delete_step` blocks deleting Source steps entirely (binding cleanup is the canonical path).
+- **`frontend/components/triggers/TriggerDetailShell.tsx`** — Overview body refactored from a single `renderSourceSummary` (~145 lines of mixed input/output) into three explicit sections rendered in fixed order with section headers and dividers between them. Old helpers `notificationStatusLabel` + `notificationRecipientPreview` removed (relocated into `JiraManagedNotificationCard`).
+- **`frontend/components/triggers/SectionHeader.tsx`**, **`Divider.tsx`** — new layout primitives.
+- **`frontend/components/triggers/sections/SourceSection.tsx`** — kind-specific input grid (jira / github / schedule). Email + webhook still on standalone fork pages until Wave 3.
+- **`frontend/components/triggers/sections/RoutingSection.tsx`** — single card with prose "Events go to {DefaultAgentChip} when no Flow is wired below." Outer div has `id="routing-card"` so the KPI Routing slot can scroll-target it in a future polish pass.
+- **`frontend/components/triggers/sections/OutputsSection.tsx`** — Jira branch renders `JiraManagedNotificationCard` + `JiraManualPollCard` in a 2-col grid; GitHub + Schedule render the empty-state copy verbatim ("This channel has no managed outputs. Use Flows to define what happens when this trigger fires.") with a disabled "+ Wire a custom Flow" CTA stub (wired live in Wave 4).
+- **`frontend/components/triggers/sections/JiraManagedNotificationCard.tsx`** — extracted from the shell; the redundant "Agent" DetailRow is removed (the canonical default-agent home is now the Routing section). Also surfaces the empty-state copy "Notification not configured. Add a recipient phone to enable, or wire a custom Flow." when the notification status is unset.
+- **`frontend/components/triggers/sections/JiraManualPollCard.tsx`** — extracted from the shell.
+- **`frontend/app/flows/page.tsx`** — `STEP_TYPES` gains `source` (locked at position 0, non-removable, hidden from the second Add-Step palette once present); `EXECUTION_METHODS` gains `triggered`. Source-step guards applied to BOTH the sync `StepBuilder` AND the async `EditableStepBuilder` (`addStep` injects at top, `removeStep` rejects, `moveStep` rejects + neighbors-of-source disable their up-arrow). Source-step config form renders a styled placeholder card ("Source step config — wired in Wave 4.").
+- **`frontend/lib/client.ts`** — `ExecutionMethod` extended with `'triggered'`; `StepType` extended with `'source'`.
+
+**Verified live (2026-04-26):**
+- Backend smoke: `FlowEngine.run_flow` exposes `trigger_event_id` + `binding_id` params; `SourceStepHandler` importable; `VALID_EXECUTION_METHODS = {immediate, keyword, recurring, scheduled, triggered}`.
+- QA report: 4/7 PASS, 2/7 SKIP (no github/schedule trigger instances seeded for the test tenant; system-owned protection unreachable from public API), 1/7 INCONCLUSIVE.
+  - Test 1 (3-section Overview on Jira /5) PASS.
+  - Test 3 (source step palette + Locked-at-top pill + Add-Step filter + neighbor-disable) PASS.
+  - Test 4 (Triggered method tile in modal + flows index filter dropdown) PASS.
+  - Test 5 (Source-step config placeholder doesn't crash editor) PASS.
+  - Test 7 (triggered without source) **inconclusive on async path** — validator code confirmed at `flow_engine.py:2993`; the existing `POST /api/flows/{id}/execute` async path does not propagate validation failures back onto the API-created FlowRun (validator inside `run_flow` creates a separate failed FlowRun). Pre-existing pattern (affects all validation failures, not just `triggered`); follow-up filed for a future polish wave.
+- Screenshots `/Users/vinicios/code/tsushin/.playwright-mcp/wave2-test{1,3,4,5}-*.png`. Zero console errors on trigger / flows page render or modal interaction.
+- Test data left in tenant: flow id 83 + flow_run id 108 (intentional, harmless).
+
 ### Release 0.7.0 — Triggers↔Flows Unification, Wave 1 foundations (2026-04-26)
 
 First merge wave of the cross-cutting Triggers↔Flows Unification (full plan at `.private/triggers-flows-unification-brainstorm-2026-04-26.md`). Lands the schema, the env-var gates, the permission-registry fix, and the inline-edit Routing chip. Behavior is byte-identical to 0.6.x until the env-var gates are flipped in later waves — schema is dormant, dispatch is unchanged, every trigger detail page just gains a clickable Routing chip and a Status/Health/**Routing**/Last activity KPI strip.
