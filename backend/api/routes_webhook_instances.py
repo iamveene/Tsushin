@@ -398,6 +398,27 @@ async def create_webhook_integration(
     logger.info(
         f"Created webhook integration {integration.id} (slug={slug}) for tenant {context.tenant_id}"
     )
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=context.tenant_id,
+                trigger_kind="webhook",
+                trigger_instance_id=integration.id,
+                default_agent_id=integration.default_agent_id,
+            )
+            db.commit()
+    except Exception:
+        logger.exception(
+            "Auto-flow generation failed for webhook integration %s; integration persists", integration.id
+        )
+        db.rollback()
+
     return WebhookIntegrationCreateResponse(
         integration=_to_read(db, integration),
         api_secret=plaintext,

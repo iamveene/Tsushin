@@ -292,6 +292,29 @@ def create_schedule_trigger(
     db.add(instance)
     db.commit()
     db.refresh(instance)
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        import logging
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=ctx.tenant_id,
+                trigger_kind="schedule",
+                trigger_instance_id=instance.id,
+                default_agent_id=instance.default_agent_id,
+            )
+            db.commit()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Auto-flow generation failed for schedule trigger %s; trigger persists", instance.id
+        )
+        db.rollback()
+
     return _to_read(db, instance)
 
 

@@ -73,6 +73,7 @@ from api.routes_scheduler import router as scheduler_router, set_engine as set_s
 from scheduler.worker import start_scheduler_worker, stop_scheduler_worker
 # Phase 6.6 Multi-Step Flows
 from api.routes_flows import router as flows_router, set_engine as set_flows_engine
+from api.routes_flow_trigger_bindings import router as flow_trigger_bindings_router  # v0.7.0 Wave 4
 # Phase 6.11 Scheduled Flow Executor
 # Phase 6.11.2 WebSocket Manager
 from websocket_manager import manager as ws_manager
@@ -1330,6 +1331,7 @@ app.include_router(shell_ws_router)  # Shell Skill WebSocket (Phase 18.4: WebSoc
 app.include_router(watcher_activity_ws_router)  # Watcher Activity WebSocket (Phase 8: Graph View)
 app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, Calendar)
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
+app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
 app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication

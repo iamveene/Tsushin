@@ -512,6 +512,25 @@ def create_email_trigger(
     db.add(instance)
     db.commit()
     db.refresh(instance)
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=ctx.tenant_id,
+                trigger_kind="email",
+                trigger_instance_id=instance.id,
+                default_agent_id=instance.default_agent_id,
+            )
+            db.commit()
+    except Exception:
+        logger.exception("Auto-flow generation failed for email trigger %s; trigger persists", instance.id)
+        db.rollback()
+
     return _to_read(db, instance)
 
 
@@ -598,6 +617,26 @@ def create_email_notification_subscription(
         instance.default_agent_id = payload.agent_id
         db.add(instance)
         db.flush()
+    # v0.7.0 Wave 4 — auto-flow notification write-through.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import update_auto_flow_notification
+
+        if flows_auto_generation_enabled():
+            update_auto_flow_notification(
+                db,
+                tenant_id=ctx.tenant_id,
+                trigger_kind="email",
+                trigger_instance_id=trigger_id,
+                enabled=True,
+                recipient_phone=recipient,
+            )
+    except Exception:
+        logger.exception(
+            "Auto-flow notification write-through failed for email trigger %s; legacy path proceeds",
+            trigger_id,
+        )
+
     try:
         result = ensure_email_notification_subscription(
             db,

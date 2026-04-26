@@ -518,6 +518,25 @@ def create_github_trigger(
     db.commit()
     db.refresh(instance)
     logger.info("Created GitHub trigger %s for tenant %s", instance.id, tenant_id)
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=tenant_id,
+                trigger_kind="github",
+                trigger_instance_id=instance.id,
+                default_agent_id=instance.default_agent_id,
+            )
+            db.commit()
+    except Exception:
+        logger.exception("Auto-flow generation failed for github trigger %s; trigger persists", instance.id)
+        db.rollback()
+
     return _to_read(db, instance)
 
 

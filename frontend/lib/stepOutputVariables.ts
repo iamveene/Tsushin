@@ -97,6 +97,17 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
     { field: 'status', label: 'Status', description: 'Execution status (completed or failed)', type: 'string' },
     { field: 'fail_action_taken', label: 'Fail Action Taken', description: 'Action taken on gate failure (skip or notify)', type: 'string' },
   ],
+  // v0.7.0 Wave 4: Source step exposes the wake event payload + trigger metadata.
+  // Reference downstream as `{{source.payload.your_field}}`, `{{source.trigger_kind}}`, etc.
+  source: [
+    { field: 'payload', label: 'Payload', description: 'Raw event payload object', type: 'object' },
+    { field: 'trigger_kind', label: 'Trigger Kind', description: 'jira|email|github|schedule|webhook', type: 'string' },
+    { field: 'instance_id', label: 'Instance ID', description: 'Which trigger fired (DB id)', type: 'number' },
+    { field: 'event_type', label: 'Event Type', description: 'Underlying event type', type: 'string' },
+    { field: 'dedupe_key', label: 'Dedupe Key', description: 'Source-provided idempotency key', type: 'string' },
+    { field: 'occurred_at', label: 'Occurred At', description: 'ISO timestamp when event was emitted', type: 'string' },
+    { field: 'wake_event_id', label: 'Wake Event ID', description: 'Backend correlation ID', type: 'number' },
+  ],
 }
 
 // ============================================================

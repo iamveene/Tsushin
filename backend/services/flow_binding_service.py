@@ -1,32 +1,355 @@
 """Flow ↔ Trigger binding service helpers (v0.7.0 Triggers↔Flows Unification).
 
-Wave 3 of the unification. ``flow_trigger_binding`` is the boundary edge
-between a trigger (channel instance) and a Flow. This module owns the
-small set of read-side helpers that ``trigger_dispatch_service`` uses
-to fan a wake event out to bound flows, plus the cleanup hook that
-trigger DELETE handlers call (because the binding's
-``trigger_instance_id`` is a *semantic* FK across five per-kind tables
-and cannot be expressed as a SQL CASCADE).
+Wave 3 of the unification added the read-side helpers that
+``trigger_dispatch_service`` uses to fan a wake event out to bound
+flows, plus the cleanup hook that trigger DELETE handlers call.
+
+Wave 4 adds ``ensure_system_managed_flow_for_trigger`` — Phase A's
+auto-Flow generator. When a new trigger is created (any of jira /
+email / github / schedule / webhook), this function creates a
+system-managed FlowDefinition with the canonical
+Source → Gate → Conversation → Notification chain plus a
+``flow_trigger_binding`` row, so every trigger arrives with its own
+default flow already wired. Casual users still see the same
+"Enable Notification" toggle on the trigger page; the toggle now
+flips the auto-flow's Notification node ``enabled`` flag instead of
+mutating the legacy ContinuousAgent / ContinuousSubscription pair.
 
 All read paths are gated by ``flows_trigger_binding_enabled()``;
-mutation paths are not gated (binding rows can always be created /
-updated / deleted, just won't be acted on by the dispatcher until the
-env var flips).
-
-Wave 4 will add ``ensure_system_managed_flow_for_trigger`` here for
-the Phase A auto-Flow generation on trigger create.
+all auto-generation is gated by ``flows_auto_generation_enabled()``;
+mutation paths on ``flow_trigger_binding`` rows are not gated.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Iterable, Optional
+from datetime import datetime
+from typing import Any, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
-from models import FlowTriggerBinding
+from models import FlowDefinition, FlowNode, FlowTriggerBinding
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Wave 4 — Auto-Flow generation (Phase A)
+# ============================================================================
+
+
+# Trigger kind → DB instance table → field that holds the human-readable name
+# used to title the auto-generated flow.
+_KIND_NAME_FIELDS: dict[str, str] = {
+    "jira": "integration_name",
+    "email": "integration_name",
+    "github": "integration_name",
+    "schedule": "name",
+    "webhook": "integration_name",
+}
+
+# Default Conversation step objective per kind (one-line system prompt seed).
+_KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
+    "jira": "Process the inbound Jira event and surface the actionable insight.",
+    "email": "Process the inbound email and surface the actionable insight.",
+    "github": "Process the inbound GitHub event and surface the actionable insight.",
+    "schedule": "Process the scheduled fire and execute its routine.",
+    "webhook": "Process the inbound webhook payload and surface the actionable insight.",
+}
+
+
+def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_id: int) -> str:
+    """Look up the human-readable name for a trigger instance.
+
+    Returns a fallback like ``"Jira #5"`` when the instance row can't be
+    located (rare — should be impossible if called from an auto-generation
+    path right after the create commits).
+    """
+    from models import (
+        EmailChannelInstance,
+        GitHubChannelInstance,
+        JiraChannelInstance,
+        ScheduleChannelInstance,
+        WebhookIntegration,
+    )
+
+    table = {
+        "jira": JiraChannelInstance,
+        "email": EmailChannelInstance,
+        "github": GitHubChannelInstance,
+        "schedule": ScheduleChannelInstance,
+        "webhook": WebhookIntegration,
+    }.get(trigger_kind)
+    if table is None:
+        return f"{trigger_kind.capitalize()} #{trigger_instance_id}"
+
+    row = db.query(table).filter(table.id == trigger_instance_id).first()
+    if row is None:
+        return f"{trigger_kind.capitalize()} #{trigger_instance_id}"
+
+    name_field = _KIND_NAME_FIELDS.get(trigger_kind, "name")
+    name = getattr(row, name_field, None)
+    return name or f"{trigger_kind.capitalize()} #{trigger_instance_id}"
+
+
+def find_system_managed_flow_for_trigger(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+) -> Optional[FlowDefinition]:
+    """Return the system-managed FlowDefinition for a trigger if one exists.
+
+    Idempotency anchor for ``ensure_system_managed_flow_for_trigger`` and
+    for the Wave 4 notification-toggle write-through (it locates the
+    auto-flow whose Notification node it should mutate).
+    """
+    binding = (
+        db.query(FlowTriggerBinding)
+        .filter(
+            FlowTriggerBinding.tenant_id == tenant_id,
+            FlowTriggerBinding.trigger_kind == trigger_kind,
+            FlowTriggerBinding.trigger_instance_id == trigger_instance_id,
+            FlowTriggerBinding.is_system_managed.is_(True),
+        )
+        .first()
+    )
+    if binding is None:
+        return None
+    return db.query(FlowDefinition).filter(FlowDefinition.id == binding.flow_definition_id).first()
+
+
+def ensure_system_managed_flow_for_trigger(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+    default_agent_id: Optional[int] = None,
+    notification_recipient: Optional[str] = None,
+    notification_enabled: bool = False,
+) -> tuple[FlowDefinition, FlowTriggerBinding, bool]:
+    """v0.7.0 Wave 4 — Phase A auto-Flow generation.
+
+    Idempotently creates (or re-uses) a system-managed FlowDefinition for
+    a trigger. The flow has 4 nodes:
+
+      1. ``source`` — config: ``{trigger_kind, trigger_instance_id}``.
+      2. ``gate`` — config: ``{mode: "programmatic", rules: []}`` (pass-all;
+         the trigger's own ``trigger_criteria`` is the canonical filter).
+      3. ``conversation`` — ``agent_id=default_agent_id``, kind-specific
+         objective string. Acts as the "default agent" entry point.
+      4. ``notification`` — ``enabled=False`` initially; the casual-user
+         "Enable Notification" toggle flips this and sets ``recipient_phone``.
+
+    Returns ``(flow, binding, created)`` where ``created`` is True iff a
+    new flow was just inserted (False on idempotent re-runs).
+
+    Caller is responsible for committing the session — this function
+    flushes between inserts so foreign keys resolve, but the final
+    transaction commit is the caller's call (so trigger create + auto-flow
+    create can land in a single transaction or get rolled back together).
+    """
+    existing = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    if existing is not None:
+        binding = (
+            db.query(FlowTriggerBinding)
+            .filter(
+                FlowTriggerBinding.tenant_id == tenant_id,
+                FlowTriggerBinding.trigger_kind == trigger_kind,
+                FlowTriggerBinding.trigger_instance_id == trigger_instance_id,
+                FlowTriggerBinding.is_system_managed.is_(True),
+            )
+            .first()
+        )
+        return existing, binding, False
+
+    instance_name = _trigger_instance_name(
+        db,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    objective = _KIND_DEFAULT_OBJECTIVE.get(trigger_kind, "Process the inbound event.")
+
+    flow = FlowDefinition(
+        tenant_id=tenant_id,
+        name=f"{trigger_kind.capitalize()}: {instance_name}",
+        description=f"Auto-generated default flow for the {trigger_kind} trigger '{instance_name}'.",
+        execution_method="triggered",
+        default_agent_id=default_agent_id,
+        flow_type="workflow",
+        is_active=True,
+        is_system_owned=True,
+        editable_by_tenant=True,
+        deletable_by_tenant=False,
+        initiator_type="programmatic",
+        initiator_metadata={"reason": "trigger_auto_generated"},
+    )
+    db.add(flow)
+    db.flush()  # populate flow.id
+
+    source_node = FlowNode(
+        flow_definition_id=flow.id,
+        type="source",
+        position=1,
+        name="Source",
+        config_json=json.dumps({
+            "trigger_kind": trigger_kind,
+            "trigger_instance_id": trigger_instance_id,
+        }),
+    )
+    db.add(source_node)
+    db.flush()
+
+    gate_node = FlowNode(
+        flow_definition_id=flow.id,
+        type="gate",
+        position=2,
+        name="Criteria gate",
+        config_json=json.dumps({
+            "mode": "programmatic",
+            "rules": [],  # empty = pass-all; trigger-side criteria is canonical
+            "logic": "all",
+        }),
+    )
+    db.add(gate_node)
+
+    conversation_node = FlowNode(
+        flow_definition_id=flow.id,
+        type="conversation",
+        position=3,
+        name="Default agent",
+        agent_id=default_agent_id,
+        conversation_objective=objective,
+        config_json=json.dumps({
+            "objective": objective,
+            "allow_multi_turn": False,
+        }),
+    )
+    db.add(conversation_node)
+
+    notification_node = FlowNode(
+        flow_definition_id=flow.id,
+        type="notification",
+        position=4,
+        name="Notification",
+        config_json=json.dumps({
+            "enabled": bool(notification_enabled and notification_recipient),
+            "channel": "whatsapp",
+            "recipient_phone": notification_recipient,
+        }),
+    )
+    db.add(notification_node)
+    db.flush()
+
+    binding = FlowTriggerBinding(
+        tenant_id=tenant_id,
+        flow_definition_id=flow.id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+        source_node_id=source_node.id,
+        suppress_default_agent=False,  # parallel-run safety: legacy path stays alive until backfill flips it
+        is_active=True,
+        is_system_managed=True,
+    )
+    db.add(binding)
+    db.flush()
+
+    logger.info(
+        "Auto-generated system-managed flow %s for %s/%s (binding=%s, default_agent=%s)",
+        flow.id,
+        trigger_kind,
+        trigger_instance_id,
+        binding.id,
+        default_agent_id,
+    )
+    return flow, binding, True
+
+
+def update_auto_flow_notification(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+    enabled: bool,
+    recipient_phone: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """v0.7.0 Wave 4 — write-through helper for the casual-user notification toggle.
+
+    Locates the system-managed auto-flow for a trigger and flips its
+    Notification node ``enabled`` + ``recipient_phone``. Returns a dict
+    describing the resulting node config, or None when no auto-flow
+    exists (e.g. trigger pre-dates the auto-gen rollout — fallback to
+    the legacy ContinuousAgent path).
+
+    Mirrors the API contract of the existing
+    ``ensure_jira_notification_subscription`` so the
+    notification-subscription endpoints can shim cleanly.
+    """
+    flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    if flow is None:
+        return None
+
+    notification_node = (
+        db.query(FlowNode)
+        .filter(
+            FlowNode.flow_definition_id == flow.id,
+            FlowNode.type == "notification",
+        )
+        .order_by(FlowNode.position)
+        .first()
+    )
+    if notification_node is None:
+        # Auto-flow shape drift — fix it lazily by adding a notification node.
+        next_position = (
+            db.query(FlowNode.position)
+            .filter(FlowNode.flow_definition_id == flow.id)
+            .order_by(FlowNode.position.desc())
+            .first()
+        )
+        notification_node = FlowNode(
+            flow_definition_id=flow.id,
+            type="notification",
+            position=(next_position[0] if next_position else 3) + 1,
+            name="Notification",
+            config_json=json.dumps({"enabled": False, "channel": "whatsapp"}),
+        )
+        db.add(notification_node)
+        db.flush()
+
+    config: dict[str, Any]
+    try:
+        config = json.loads(notification_node.config_json) if notification_node.config_json else {}
+    except json.JSONDecodeError:
+        config = {}
+
+    config["enabled"] = bool(enabled)
+    config["channel"] = config.get("channel", "whatsapp")
+    if recipient_phone is not None:
+        config["recipient_phone"] = recipient_phone
+    notification_node.config_json = json.dumps(config)
+    notification_node.updated_at = datetime.utcnow()
+
+    return {
+        "flow_definition_id": flow.id,
+        "notification_node_id": notification_node.id,
+        "enabled": config["enabled"],
+        "recipient_phone": config.get("recipient_phone"),
+        "channel": config.get("channel"),
+    }
 
 
 def list_active_bindings_for_trigger(

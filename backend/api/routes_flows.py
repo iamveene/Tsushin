@@ -1367,12 +1367,21 @@ def list_flows(
     flow_type: Optional[str] = None,
     execution_method: Optional[str] = None,
     search: Optional[str] = None,
+    bound_trigger_kind: Optional[str] = None,  # v0.7.0 Wave 4
+    bound_trigger_id: Optional[int] = None,    # v0.7.0 Wave 4
     limit: int = 25,
     offset: int = 0,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
-    """List all flow definitions with optional filtering and pagination."""
+    """List all flow definitions with optional filtering and pagination.
+
+    v0.7.0 Wave 4: ``bound_trigger_kind`` + ``bound_trigger_id`` join into
+    ``flow_trigger_binding`` so the trigger detail page's "Wired Flows"
+    card can fetch only the flows actually wired to the current trigger.
+    Both must be supplied together (a kind without an id, or vice versa,
+    is treated as no filter).
+    """
     try:
         query = db.query(FlowDefinition)
 
@@ -1389,6 +1398,16 @@ def list_flows(
 
         if search:
             query = query.filter(FlowDefinition.name.ilike(f"%{search}%"))
+
+        if bound_trigger_kind is not None and bound_trigger_id is not None:
+            from models import FlowTriggerBinding
+            query = query.join(
+                FlowTriggerBinding,
+                FlowTriggerBinding.flow_definition_id == FlowDefinition.id,
+            ).filter(
+                FlowTriggerBinding.trigger_kind == bound_trigger_kind,
+                FlowTriggerBinding.trigger_instance_id == bound_trigger_id,
+            )
 
         total = query.count()
         flows = query.order_by(FlowDefinition.created_at.desc()).offset(offset).limit(limit).all()
