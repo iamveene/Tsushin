@@ -148,6 +148,13 @@ class ExecutionMethod(str, Enum):
     SCHEDULED = "scheduled"
     RECURRING = "recurring"
     KEYWORD = "keyword"  # BUG-336: Fired when a message matches trigger_keywords
+    # v0.7.0 Wave 2/4: Triggers↔Flows Unification — flow is woken by a trigger
+    # event (jira/email/github/schedule/webhook) via flow_trigger_binding.
+    # Wave 2 already added 'triggered' to the legacy VALID_EXECUTION_METHODS set
+    # used by the BUG-342 path, but the Pydantic enum used by POST /api/flows/create
+    # was missed — caught by Wave 4 deep-link prefill QA when the modal silently
+    # 422'd.
+    TRIGGERED = "triggered"
 
 
 class FlowType(str, Enum):
@@ -171,6 +178,12 @@ class StepType(str, Enum):
     # safe — no DB migration required.
     CUSTOM_SKILL = "custom_skill"  # Phase 22: Custom skill (alias for skill)
     BROWSER_AUTOMATION = "browser_automation"  # Phase 14.5: Browser automation
+    # v0.7.0 Wave 2/4: Triggers↔Flows Unification — Source step is the
+    # canonical entry point for triggered flows. Wave 4 deep-link prefill
+    # (Create flow from this trigger) sends a Source step with config
+    # {trigger_kind, trigger_instance_id} via POST /api/flows/create. Without
+    # this enum value the v2 endpoint silently 422s and the modal stays open.
+    SOURCE = "source"
 
 
 class FlowStatus(str, Enum):
@@ -241,6 +254,19 @@ class FlowStepConfig(BaseModel):
     # Slash command-specific
     command: Optional[str] = None  # e.g. "/scheduler list week"
     command_id: Optional[Union[str, int]] = None  # For tool commands
+
+    # v0.7.0 Wave 2/4: Source step config carries the trigger binding info.
+    # Used both at create-time (deep-link prefill from /hub/triggers/{kind}/{id})
+    # and at runtime (SourceStepHandler reads these as a fallback when
+    # trigger_context['source'] is absent).
+    trigger_kind: Optional[str] = Field(
+        default=None,
+        description="Source-step: 'jira'|'email'|'github'|'schedule'|'webhook'",
+    )
+    trigger_instance_id: Optional[int] = Field(
+        default=None,
+        description="Source-step: per-kind channel instance id this flow is bound to",
+    )
 
     # Gate-specific (conditional flow control)
     gate_mode: Optional[str] = Field(default=None, description="'programmatic' (zero LLM cost) or 'agentic' (AI-driven)")

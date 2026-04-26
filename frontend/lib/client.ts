@@ -2147,6 +2147,44 @@ export type ChannelRoutingRuleListParams = PageParams
 export type TriggerDetailKind = TriggerKind
 export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | ScheduleTrigger | GitHubTrigger
 
+// v0.7.0 Wave 4: Triggers ↔ Flows binding model
+export interface FlowTriggerBinding {
+  id: number
+  tenant_id: string
+  flow_definition_id: number
+  flow_name?: string
+  trigger_kind: TriggerKind
+  trigger_instance_id: number
+  source_node_id: number | null
+  suppress_default_agent: boolean
+  is_active: boolean
+  is_system_managed: boolean
+  created_at: string
+  updated_at: string
+  last_run_status?: string | null
+  last_run_at?: string | null
+}
+
+export interface FlowTriggerBindingCreate {
+  // v0.7.0 Wave 4 — must mirror the backend Pydantic model
+  // (FlowTriggerBindingCreate in routes_flow_trigger_bindings.py).
+  // Initial Wave 4 frontend agent used `flow_id` but the backend
+  // accepts `flow_definition_id`; the deep-link prefill flow's
+  // post-create binding call silently 422'd and the modal's catch
+  // block swallowed the error.
+  flow_definition_id: number
+  trigger_kind: TriggerKind
+  trigger_instance_id: number
+  suppress_default_agent?: boolean
+  source_node_id?: number | null
+  is_active?: boolean
+}
+
+export interface FlowTriggerBindingUpdate {
+  is_active?: boolean
+  suppress_default_agent?: boolean
+}
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -2267,7 +2305,7 @@ export interface FlowDefinition {
   updated_at: string
   node_count?: number
   // Phase 8.0 fields
-  execution_method?: 'immediate' | 'scheduled' | 'recurring' | 'keyword'
+  execution_method?: ExecutionMethod
   scheduled_at?: string | null
   recurrence_rule?: Record<string, any> | null
   flow_type?: 'notification' | 'conversation' | 'workflow' | 'task'
@@ -2368,6 +2406,17 @@ export interface FlowStepConfig {
   gate_source_step?: string
   gate_on_fail?: 'skip' | 'notify' | 'alternative'
   gate_fail_notification?: {channel?: string; recipient?: string; message_template?: string}
+  // v0.7.0 Wave 4: Source step config (trigger binding)
+  trigger_kind?: TriggerKind
+  trigger_instance_id?: number
+  // Pre-existing fields the editor already touches but were never typed.
+  // Hoisted into the interface so future edits stay type-checked.
+  output_alias?: string
+  tool_type?: 'built_in' | 'custom' | string
+  tool_id?: string
+  command_id?: string
+  skill_type?: string
+  prompt?: string
 }
 
 export interface CreateFlowStepData {
@@ -5324,7 +5373,17 @@ export const api = {
   },
 
   // Phase 6.6-6.7: Multi-Step Flows API
-  async getFlows(params?: { limit?: number; offset?: number; search?: string; active?: boolean; flow_type?: string; execution_method?: string }): Promise<{ items: FlowDefinition[]; total: number; limit: number; offset: number }> {
+  async getFlows(params?: {
+    limit?: number
+    offset?: number
+    search?: string
+    active?: boolean
+    flow_type?: string
+    execution_method?: string
+    // v0.7.0 Wave 4: filter flows bound to a specific trigger instance
+    bound_trigger_kind?: TriggerKind
+    bound_trigger_id?: number
+  }): Promise<{ items: FlowDefinition[]; total: number; limit: number; offset: number }> {
     const searchParams = new URLSearchParams()
     if (params?.limit) searchParams.set('limit', String(params.limit))
     if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
@@ -5332,6 +5391,8 @@ export const api = {
     if (params?.active !== undefined) searchParams.set('active', String(params.active))
     if (params?.flow_type) searchParams.set('flow_type', params.flow_type)
     if (params?.execution_method) searchParams.set('execution_method', params.execution_method)
+    if (params?.bound_trigger_kind) searchParams.set('bound_trigger_kind', params.bound_trigger_kind)
+    if (params?.bound_trigger_id !== undefined) searchParams.set('bound_trigger_id', String(params.bound_trigger_id))
     const qs = searchParams.toString()
     const res = await authenticatedFetch(`${API_URL}/api/flows/${qs ? '?' + qs : ''}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch flows')
@@ -5376,6 +5437,61 @@ export const api = {
       const errorMessage = errorData.detail || 'Failed to delete flow'
       throw new Error(errorMessage)
     }
+  },
+
+  // v0.7.0 Wave 4: Flow ↔ Trigger Bindings
+  async listFlowTriggerBindings(params?: {
+    trigger_kind?: TriggerKind
+    trigger_id?: number
+    flow_id?: number
+  }): Promise<FlowTriggerBinding[]> {
+    const search = new URLSearchParams()
+    if (params?.trigger_kind) search.set('trigger_kind', params.trigger_kind)
+    if (params?.trigger_id !== undefined) search.set('trigger_id', String(params.trigger_id))
+    if (params?.flow_id !== undefined) search.set('flow_id', String(params.flow_id))
+    const qs = search.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings${qs ? '?' + qs : ''}`)
+    if (!res.ok) {
+      // Backend endpoint may not be merged yet — degrade gracefully so the UI still renders.
+      if (res.status === 404) return []
+      await handleApiError(res, 'Failed to load flow trigger bindings')
+    }
+    const data = await res.json()
+    if (Array.isArray(data)) return data
+    if (Array.isArray((data as { items?: unknown }).items)) {
+      return (data as { items: FlowTriggerBinding[] }).items
+    }
+    return []
+  },
+
+  async createFlowTriggerBinding(data: FlowTriggerBindingCreate): Promise<FlowTriggerBinding> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create flow trigger binding')
+    return res.json()
+  },
+
+  async updateFlowTriggerBinding(
+    id: number,
+    update: FlowTriggerBindingUpdate,
+  ): Promise<FlowTriggerBinding> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update flow trigger binding')
+    return res.json()
+  },
+
+  async deleteFlowTriggerBinding(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete flow trigger binding')
   },
 
   async getFlowNodes(flowId: number): Promise<FlowNode[]> {

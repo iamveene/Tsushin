@@ -5,24 +5,27 @@
  *
  * Vertical stack of per-kind managed output cards. Wave 2 supports jira /
  * github / schedule. Wave 3 adds email (Notification + Triage + Manual
- * Poll) and webhook (no managed outputs — empty state).
+ * Poll) and webhook (no managed outputs — empty state). Wave 4 adds the
+ * shared `WiredFlowsCard` to every kind, replacing the inert "Wire a
+ * custom Flow" CTA with the live binding list + Create-from-this-trigger
+ * deep link.
  *
  * Jira renders the Managed WhatsApp Notification + Manual Poll cards.
  * Email renders the Managed WhatsApp Notification + Manual Poll cards
  * (matching Jira's grid layout — visual smell #5 fix) plus the Managed
- * Triage card. github / schedule / webhook render an empty state pointing
- * operators at the Flows editor.
+ * Triage card. github / schedule / webhook render the WiredFlowsCard
+ * (which carries empty-state messaging when no flows are bound).
  *
- * The "Wire a custom Flow" CTA is visually present but inert in Wave 2;
- * Wave 4 wires it to the Flow editor deep-link with `?source_trigger_kind`
- * + `?source_trigger_id`.
- *
- * Wave 3 of the Triggers ↔ Flows unification.
+ * Wave 4 also propagates a `suppressedByBinding` prop into the Managed
+ * Notification cards so they can render a "disabled — flow X has taken
+ * over" banner when an active binding suppresses the default agent.
  */
 
+import { useState } from 'react'
 import type {
   EmailPollNowResponse,
   EmailTrigger,
+  FlowTriggerBinding,
   GitHubTrigger,
   JiraManagedNotificationStatus,
   JiraPollNowResponse,
@@ -35,7 +38,12 @@ import JiraManualPollCard from '@/components/triggers/sections/JiraManualPollCar
 import EmailManagedNotificationCard from '@/components/triggers/sections/EmailManagedNotificationCard'
 import EmailManagedTriageCard from '@/components/triggers/sections/EmailManagedTriageCard'
 import EmailManualPollCard from '@/components/triggers/sections/EmailManualPollCard'
+import WiredFlowsCard from '@/components/triggers/sections/WiredFlowsCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
+
+function pickSuppressor(bindings: FlowTriggerBinding[]): FlowTriggerBinding | null {
+  return bindings.find((b) => b.is_active && b.suppress_default_agent) || null
+}
 
 type OutputsKind = 'jira' | 'github' | 'schedule' | 'email' | 'webhook'
 type OutputsTrigger = JiraTrigger | GitHubTrigger | ScheduleTrigger | EmailTrigger | WebhookIntegration
@@ -89,25 +97,38 @@ export default function OutputsSection({
   onEnableEmailTriage,
   emailTriageLoading = false,
 }: Props) {
+  // Wave 4: track active bindings so the Managed Notification cards know
+  // whether a Flow has taken over routing for this trigger.
+  const [bindings, setBindings] = useState<FlowTriggerBinding[]>([])
+  const suppressor = pickSuppressor(bindings)
+
   if (kind === 'jira') {
     const jira = trigger as JiraTrigger
     return (
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <JiraManagedNotificationCard
-          trigger={jira}
-          notificationStatus={jiraNotificationStatus}
-          phoneInput={jiraPhoneInput}
-          onPhoneChange={onJiraPhoneChange ?? (() => undefined)}
-          onEnable={onEnableJiraNotification ?? (() => undefined)}
-          enabling={jiraNotificationLoading}
-          canWriteHub={canWriteHub}
-        />
-        <JiraManualPollCard
-          trigger={jira}
-          pollResult={jiraPollResult}
-          onPollNow={onJiraPollNow ?? (() => undefined)}
-          polling={jiraPolling}
-          canWriteHub={canWriteHub}
+      <div className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <JiraManagedNotificationCard
+            trigger={jira}
+            notificationStatus={jiraNotificationStatus}
+            phoneInput={jiraPhoneInput}
+            onPhoneChange={onJiraPhoneChange ?? (() => undefined)}
+            onEnable={onEnableJiraNotification ?? (() => undefined)}
+            enabling={jiraNotificationLoading}
+            canWriteHub={canWriteHub}
+            suppressedByBinding={suppressor}
+          />
+          <JiraManualPollCard
+            trigger={jira}
+            pollResult={jiraPollResult}
+            onPollNow={onJiraPollNow ?? (() => undefined)}
+            polling={jiraPolling}
+            canWriteHub={canWriteHub}
+          />
+        </div>
+        <WiredFlowsCard
+          triggerKind="jira"
+          triggerId={jira.id}
+          onBindingsChange={setBindings}
         />
       </div>
     )
@@ -125,6 +146,7 @@ export default function OutputsSection({
             onEnable={onEnableEmailNotification ?? (() => undefined)}
             enabling={emailNotificationLoading}
             canWriteHub={canWriteHub}
+            suppressedByBinding={suppressor}
           />
           <EmailManualPollCard
             trigger={email}
@@ -141,24 +163,24 @@ export default function OutputsSection({
           enabling={emailTriageLoading}
           canWriteHub={canWriteHub}
         />
+        <WiredFlowsCard
+          triggerKind="email"
+          triggerId={email.id}
+          onBindingsChange={setBindings}
+        />
       </div>
     )
   }
 
-  // github + schedule + webhook: no managed outputs in Wave 3
+  // github + schedule + webhook: no managed outputs — Wired Flows IS the
+  // outputs surface. The card carries its own empty-state copy.
   return (
-    <div className="rounded-xl border border-dashed border-tsushin-border bg-tsushin-surface/40 p-6">
-      <p className="text-sm text-tsushin-slate">
-        This channel has no managed outputs. Use Flows to define what happens when this trigger fires.
-      </p>
-      <button
-        type="button"
-        disabled
-        title="Coming in Wave 4 — wire a Flow from this trigger"
-        className="mt-4 inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface/60 px-3 py-1.5 text-xs text-tsushin-slate opacity-60"
-      >
-        + Wire a custom Flow
-      </button>
+    <div className="space-y-4">
+      <WiredFlowsCard
+        triggerKind={kind}
+        triggerId={(trigger as { id: number }).id}
+        onBindingsChange={setBindings}
+      />
     </div>
   )
 }

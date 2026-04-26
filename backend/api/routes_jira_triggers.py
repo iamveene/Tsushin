@@ -633,6 +633,28 @@ def create_jira_trigger(
     db.add(instance)
     db.commit()
     db.refresh(instance)
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    # Gated by TSN_FLOWS_AUTO_GENERATION_ENABLED. Failure here NEVER aborts
+    # trigger creation — the trigger row is the source of truth and a
+    # reconciliation script can sweep for orphan triggers later.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=ctx.tenant_id,
+                trigger_kind="jira",
+                trigger_instance_id=instance.id,
+                default_agent_id=instance.default_agent_id,
+            )
+            db.commit()
+    except Exception:
+        logger.exception("Auto-flow generation failed for jira trigger %s; trigger persists", instance.id)
+        db.rollback()
+
     return _to_read(db, instance)
 
 
@@ -711,6 +733,31 @@ def create_jira_notification_subscription(
         instance.default_agent_id = payload.agent_id
         db.add(instance)
         db.flush()
+    # v0.7.0 Wave 4 — auto-flow notification write-through.
+    # When TSN_FLOWS_AUTO_GENERATION_ENABLED, also flip the system-managed
+    # auto-flow's Notification node so the bound flow path produces the
+    # same WhatsApp send. Backward-compatible: the legacy ContinuousAgent
+    # path STILL runs (parallel-run safety) until Wave 5 backfill flips
+    # suppress_default_agent on the binding. API contract unchanged.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import update_auto_flow_notification
+
+        if flows_auto_generation_enabled():
+            update_auto_flow_notification(
+                db,
+                tenant_id=ctx.tenant_id,
+                trigger_kind="jira",
+                trigger_instance_id=trigger_id,
+                enabled=True,
+                recipient_phone=recipient,
+            )
+    except Exception:
+        logger.exception(
+            "Auto-flow notification write-through failed for jira trigger %s; legacy path proceeds",
+            trigger_id,
+        )
+
     try:
         result = ensure_jira_notification_subscription(
             db,

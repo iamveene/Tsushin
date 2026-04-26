@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -33,12 +33,14 @@ import {
   type CustomTool,
   type EditableStepData,
   type FlowStepConfig,
+  type TriggerKind,
   flowNodeToEditable,
   editableToUpdatePayload,
   editableToCreatePayload
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
+import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import {
   MessageIcon,
   BellIcon,
@@ -155,6 +157,7 @@ type SortDirection = 'asc' | 'desc'
 export default function FlowsPage() {
   const toast = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   // BUG-610 FIX: Gate every write control (Create, From Template, Edit,
   // Run, Delete, Bulk actions) on flows.write so a read-only user gets
   // a clean list view instead of buttons that 403 on click.
@@ -197,6 +200,88 @@ export default function FlowsPage() {
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
   const [bulkActionLoading, setBulkActionLoading] = useState(false)
+
+  // v0.7.0 Wave 4: deep-link prefill for "Create flow from this trigger".
+  // The trigger detail page lives at /hub/triggers/{kind}/{id} and CTAs link to
+  //   /flows?source_trigger_kind={kind}&source_trigger_id={id}
+  // When both params are present and valid we auto-open the Create modal,
+  // pre-fill execution_method='triggered', and insert a Source step at
+  // position 0 with the trigger binding baked into config_json.
+  const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
+  const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
+  const prefillKind: TriggerKind | null =
+    prefillKindParam && ['jira', 'email', 'github', 'schedule', 'webhook'].includes(prefillKindParam)
+      ? prefillKindParam
+      : null
+  const prefillTriggerId =
+    Number.isFinite(prefillTriggerIdParam) && prefillTriggerIdParam > 0 ? prefillTriggerIdParam : 0
+  const prefillReady = Boolean(prefillKind && prefillTriggerId > 0)
+
+  const [prefillTriggerName, setPrefillTriggerName] = useState<string>('')
+  const [prefillTriggerLoaded, setPrefillTriggerLoaded] = useState(false)
+  const prefillConsumedRef = useRef(false)
+
+  // ?edit={flow_id} deep link from Wired Flows rows: open the EditFlowModal
+  const editParamRaw = searchParams?.get('edit') || ''
+  const editParam = Number(editParamRaw)
+  const editParamValid = Number.isFinite(editParam) && editParam > 0
+  const editConsumedRef = useRef(false)
+
+  useEffect(() => {
+    if (!editParamValid) return
+    if (editConsumedRef.current) return
+    editConsumedRef.current = true
+    setEditingFlowId(editParam)
+    // Strip ?edit= so back/forward + refresh don't re-trigger the modal.
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('edit')
+      window.history.replaceState(null, '', url.toString())
+    }
+  }, [editParamValid, editParam])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!prefillReady || !prefillKind) return
+    setPrefillTriggerLoaded(false)
+    api.getTriggerDetail(prefillKind, prefillTriggerId)
+      .then((d) => {
+        if (cancelled) return
+        const name = (d as { integration_name?: string }).integration_name || ''
+        setPrefillTriggerName(name)
+        setPrefillTriggerLoaded(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPrefillTriggerName('')
+        setPrefillTriggerLoaded(true)
+      })
+    return () => { cancelled = true }
+  }, [prefillReady, prefillKind, prefillTriggerId])
+
+  useEffect(() => {
+    if (!prefillReady) return
+    if (prefillConsumedRef.current) return
+    if (!canWriteFlows) {
+      // Read-only users can't create flows; surface a toast and clear the params.
+      toast.warning('Insufficient permissions', 'You need flows.write to create flows from a trigger.')
+      prefillConsumedRef.current = true
+      return
+    }
+    // Wait for trigger name to resolve so the auto-filled flow name carries
+    // the integration label rather than `${Kind} #${id}`.
+    if (!prefillTriggerLoaded) return
+    prefillConsumedRef.current = true
+    setShowCreateFlow(true)
+  }, [prefillReady, canWriteFlows, prefillTriggerLoaded, toast])
+
+  function clearPrefillParams() {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('source_trigger_kind')
+    url.searchParams.delete('source_trigger_id')
+    window.history.replaceState(null, '', url.toString())
+  }
 
   useEffect(() => {
     loadData()
@@ -1081,9 +1166,17 @@ export default function FlowsPage() {
           personas={personas}
           customTools={customTools}
           customSkills={customSkills}
-          onClose={() => setShowCreateFlow(false)}
+          // v0.7.0 Wave 4: Trigger prefill from deep link
+          prefillTriggerKind={prefillReady ? prefillKind : null}
+          prefillTriggerId={prefillReady ? prefillTriggerId : 0}
+          prefillTriggerName={prefillTriggerName}
+          onClose={() => {
+            setShowCreateFlow(false)
+            clearPrefillParams()
+          }}
           onSuccess={() => {
             setShowCreateFlow(false)
+            clearPrefillParams()
             loadData()
           }}
         />
@@ -1374,7 +1467,7 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
 // ==================== CREATE FLOW MODAL ====================
 
-function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
+function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess, prefillTriggerKind = null, prefillTriggerId = 0, prefillTriggerName = '' }: {
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
@@ -1382,16 +1475,50 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
   customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
+  // v0.7.0 Wave 4: when invoked from a trigger detail page, pre-build a
+  // Source-only flow draft and auto-bind on success.
+  prefillTriggerKind?: TriggerKind | null
+  prefillTriggerId?: number
+  prefillTriggerName?: string
 }) {
   const toast = useToast()
   const [step, setStep] = useState<'config' | 'steps'>('config')
-  const [flowData, setFlowData] = useState<CreateFlowData>({
-    name: '',
-    description: '',
-    flow_type: 'workflow',
-    execution_method: 'immediate',
-    steps: []
-  })
+  const initialFlowData: CreateFlowData = useMemo(() => {
+    if (prefillTriggerKind && prefillTriggerId > 0) {
+      const kindLabel = prefillTriggerKind.charAt(0).toUpperCase() + prefillTriggerKind.slice(1)
+      const namePart = prefillTriggerName ? `: ${prefillTriggerName}` : ` #${prefillTriggerId}`
+      const sourceStep: CreateFlowStepData = {
+        name: 'Source',
+        type: 'source',
+        // v0.7.0 Wave 2 invariant: positions are 1-based and source must
+        // sit at position 1. Wave 4 prefill originally used position 0 and
+        // POST /api/flows/create silently 422'd because the backend
+        // validator rejects positions < 1 (helper at routes_flows.py:280)
+        // — modal stayed open with no toast (caught by Wave 4 QA).
+        position: 1,
+        config: {
+          trigger_kind: prefillTriggerKind,
+          trigger_instance_id: prefillTriggerId,
+        } as FlowStepConfig,
+      }
+      return {
+        name: `${kindLabel}${namePart}`,
+        description: `Auto-prefilled from ${kindLabel} trigger ${prefillTriggerId}.`,
+        flow_type: 'workflow',
+        execution_method: 'triggered',
+        steps: [sourceStep],
+      }
+    }
+    return {
+      name: '',
+      description: '',
+      flow_type: 'workflow',
+      execution_method: 'immediate',
+      steps: [],
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const [flowData, setFlowData] = useState<CreateFlowData>(initialFlowData)
   const [submitting, setSubmitting] = useState(false)
   const flowDataRef = useRef(flowData)
   flowDataRef.current = flowData
@@ -1419,7 +1546,25 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
     setSubmitting(true)
     try {
       const payload = flowDataRef.current
-      await api.createFlowV2(payload)
+      const created = await api.createFlowV2(payload)
+      // v0.7.0 Wave 4: when the modal was opened from a trigger deep-link,
+      // also create the flow_trigger_binding row so the new flow is wired
+      // immediately. If binding fails, surface a toast but still close —
+      // the user can retry from the trigger page's WiredFlowsCard.
+      if (prefillTriggerKind && prefillTriggerId > 0 && created?.id) {
+        try {
+          await api.createFlowTriggerBinding({
+            flow_definition_id: created.id,
+            trigger_kind: prefillTriggerKind,
+            trigger_instance_id: prefillTriggerId,
+            suppress_default_agent: true,
+          })
+          toast.success('Flow created', 'Flow is wired to the trigger and will run when it fires.')
+        } catch (bindErr: unknown) {
+          const msg = bindErr instanceof Error ? bindErr.message : 'Could not create binding'
+          toast.warning('Flow created — binding failed', `${msg}. You can wire it from the trigger page.`)
+        }
+      }
       onSuccess()
     } catch (error) {
       // BUG-686 fix: surface the real error message instead of a generic one.
@@ -2298,15 +2443,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         />
       </div>
 
-      {/* v0.7.0 Wave 2: Source step config placeholder. Wave 4 wires this to
-          the bound trigger summary + `{{source.*}}` variable preview. */}
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
       {step.type === 'source' && (
-        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
-          <div className="text-sm font-medium text-white">Source step</div>
-          <p className="mt-1 text-sm text-tsushin-slate">
-            Source step config — wired in Wave 4.
-          </p>
-        </div>
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
       )}
 
       {/* Channel Selector - for message/notification/conversation */}
@@ -3670,15 +3809,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         />
       </div>
 
-      {/* v0.7.0 Wave 2: Source step config placeholder. Wave 4 wires this to
-          the bound trigger summary + `{{source.*}}` variable preview. */}
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
       {step.type === 'source' && (
-        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
-          <div className="text-sm font-medium text-white">Source step</div>
-          <p className="mt-1 text-sm text-tsushin-slate">
-            Source step config — wired in Wave 4.
-          </p>
-        </div>
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
       )}
 
       {/* Channel Selector - for message/notification/conversation */}
