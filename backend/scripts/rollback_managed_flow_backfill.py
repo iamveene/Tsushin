@@ -59,20 +59,59 @@ def main() -> int:
             return 0
 
         ids_csv = ",".join(str(fid) for fid in flow_ids)
-        # CASCADE handles flow_node + flow_trigger_binding via ORM relationships.
-        # We also defensively delete from flow_trigger_binding first in case the
-        # CASCADE isn't honored on this engine.
+        # The DB FKs from flow_node/flow_run -> flow_definition do NOT
+        # cascade in PostgreSQL (only the ORM relationship's
+        # cascade='all, delete-orphan' covers it, and that path needs
+        # the ORM session to load the parent first). Raw SQL delete
+        # must explicitly remove child rows in the right order. Also
+        # cover flow_node_run (children of flow_run) and any
+        # conversation_thread.flow_step_run_id references that block
+        # the cascade.
+        # 1. Find run + node_run ids.
+        run_ids_rows = db.execute(
+            text(f"SELECT id FROM flow_run WHERE flow_definition_id IN ({ids_csv})")
+        ).fetchall()
+        run_ids = [r.id for r in run_ids_rows]
+        node_run_ids: list[int] = []
+        if run_ids:
+            run_ids_csv = ",".join(str(r) for r in run_ids)
+            node_run_ids = [
+                r.id for r in db.execute(
+                    text(f"SELECT id FROM flow_node_run WHERE flow_run_id IN ({run_ids_csv})")
+                ).fetchall()
+            ]
+        # 2. Null out conversation_thread.flow_step_run_id (FK with no CASCADE).
+        if node_run_ids:
+            node_run_csv = ",".join(str(r) for r in node_run_ids)
+            db.execute(
+                text(
+                    f"UPDATE conversation_thread SET flow_step_run_id = NULL "
+                    f"WHERE flow_step_run_id IN ({node_run_csv})"
+                )
+            )
+        # 3. Delete child tables in dependency order.
+        node_run_count = (
+            db.execute(text(f"DELETE FROM flow_node_run WHERE flow_run_id IN ({','.join(str(r) for r in run_ids)})")).rowcount
+            if run_ids else 0
+        )
+        run_count = (
+            db.execute(text(f"DELETE FROM flow_run WHERE flow_definition_id IN ({ids_csv})")).rowcount
+        )
         binding_count = db.execute(
             text(f"DELETE FROM flow_trigger_binding WHERE flow_definition_id IN ({ids_csv})")
         ).rowcount
+        node_count = db.execute(
+            text(f"DELETE FROM flow_node WHERE flow_definition_id IN ({ids_csv})")
+        ).rowcount
+        # 4. Now the parent.
         flow_count = db.execute(
             text(f"DELETE FROM flow_definition WHERE id IN ({ids_csv})")
         ).rowcount
         db.commit()
 
         logger.info(
-            "Rolled back: removed %d flow_definition rows and %d flow_trigger_binding rows",
-            flow_count, binding_count,
+            "Rolled back: removed %d flow_definition + %d flow_node + %d flow_trigger_binding + %d flow_run + %d flow_node_run rows",
+            flow_count, node_count, binding_count, run_count, node_run_count,
         )
         return 0
     finally:
