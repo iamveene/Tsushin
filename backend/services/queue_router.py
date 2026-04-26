@@ -237,13 +237,36 @@ class QueueRouter:
             importance=payload.get("importance"),
         )
 
+        # BUG #26: emit Watcher Graph View activity around the wake-driven
+        # invocation. AgentService.process_message bypasses agent/router.py
+        # (which is the only path that emits agent_processing for chat-driven
+        # runs), so without these calls the agent node never glows when a
+        # trigger fires.
+        wake_channel_type = payload.get("channel_type") or "trigger"
+        sender_key = item.sender_key or f"continuous:{continuous_agent.id}"
+        try:
+            from services.watcher_activity_service import (
+                emit_agent_processing_async,
+                emit_continuous_run_async,
+            )
+
+            emit_agent_processing_async(
+                tenant_id=run.tenant_id,
+                agent_id=agent.id,
+                status="start",
+                sender_key=sender_key,
+                channel=wake_channel_type,
+            )
+        except Exception:
+            pass
+
         try:
             result = await _invoke_agent_for_continuous_run(
                 db=db,
                 agent=agent,
                 continuous_agent=continuous_agent,
                 run=run,
-                sender_key=item.sender_key or f"continuous:{continuous_agent.id}",
+                sender_key=sender_key,
                 message_text=user_message,
             )
             answer = (result or {}).get("answer") or ""
@@ -278,6 +301,24 @@ class QueueRouter:
             run.finished_at = datetime.utcnow()
             db.add(run)
             db.commit()
+            try:
+                emit_agent_processing_async(
+                    tenant_id=run.tenant_id,
+                    agent_id=agent.id,
+                    status="end",
+                    sender_key=sender_key,
+                    channel=wake_channel_type,
+                )
+                emit_continuous_run_async(
+                    tenant_id=run.tenant_id,
+                    continuous_run_id=run.id,
+                    continuous_agent_id=continuous_agent.id,
+                    status=run.status,
+                    wake_event_ids=run.wake_event_ids or [],
+                    channel_type=wake_channel_type,
+                )
+            except Exception:
+                pass
 
         return {
             "status": "completed" if run.status == "succeeded" else run.status,

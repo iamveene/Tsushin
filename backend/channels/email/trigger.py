@@ -22,6 +22,10 @@ from services.trigger_dispatch_service import (
     TriggerDispatchResult,
     TriggerDispatchService,
 )
+from services.watcher_activity_service import (
+    emit_agent_processing_async,
+    emit_continuous_run_async,
+)
 
 
 EMAIL_EVENT_TYPE = "email.message.received"
@@ -775,6 +779,29 @@ class EmailTrigger(Trigger):
             db.add(run)
             db.commit()
 
+            # BUG #26: emit Watcher Graph View activity for system-owned
+            # Email-trigger runs (notify_only / triage). The trigger dispatcher
+            # already emitted the queued event; here we light up the agent
+            # node + advance the run banner as the inline executor runs.
+            try:
+                emit_continuous_run_async(
+                    tenant_id=instance.tenant_id,
+                    continuous_run_id=run.id,
+                    continuous_agent_id=continuous_agent.id,
+                    status=run.status,
+                    wake_event_ids=run.wake_event_ids or [],
+                    channel_type="email",
+                )
+                emit_agent_processing_async(
+                    tenant_id=instance.tenant_id,
+                    agent_id=continuous_agent.agent_id,
+                    status="start",
+                    sender_key=sender_key,
+                    channel="email",
+                )
+            except Exception:
+                pass
+
             try:
                 if action_type == EMAIL_NOTIFICATION_ACTION_TYPE:
                     action_result = await send_email_whatsapp_notification(
@@ -819,6 +846,25 @@ class EmailTrigger(Trigger):
                 run.finished_at = _now_utc_naive()
                 db.add(run)
                 db.commit()
+                # BUG #26: emit terminal Graph View activity events.
+                try:
+                    emit_agent_processing_async(
+                        tenant_id=instance.tenant_id,
+                        agent_id=continuous_agent.agent_id,
+                        status="end",
+                        sender_key=sender_key,
+                        channel="email",
+                    )
+                    emit_continuous_run_async(
+                        tenant_id=instance.tenant_id,
+                        continuous_run_id=run.id,
+                        continuous_agent_id=continuous_agent.id,
+                        status=run.status,
+                        wake_event_ids=run.wake_event_ids or [],
+                        channel_type="email",
+                    )
+                except Exception:
+                    pass
         return outcomes
 
     @staticmethod

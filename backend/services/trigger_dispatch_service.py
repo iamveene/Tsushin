@@ -262,6 +262,26 @@ class TriggerDispatchService:
                 matched_agent_id=agent_id,
             )
 
+        # BUG #26: emit continuous_run activity events to the Watcher Graph
+        # View WS so the agent node + run banner glow when a trigger fires.
+        # The legacy create_continuous_run() helper at
+        # services/continuous_agent_service.py emits this, but the dispatcher
+        # builds ContinuousRun rows directly via the ORM so that emit never ran.
+        try:
+            from services.watcher_activity_service import emit_continuous_run_async
+
+            for run, subscription, _continuous_agent in runs_to_enqueue:
+                emit_continuous_run_async(
+                    tenant_id=tenant_id,
+                    continuous_run_id=run.id,
+                    continuous_agent_id=subscription.continuous_agent_id,
+                    status=run.status,
+                    wake_event_ids=run.wake_event_ids or [],
+                    channel_type=trigger_type,
+                )
+        except Exception:
+            pass
+
         # BUG-702: Enqueue a ``continuous_task`` MessageQueue row for each
         # tenant-owned subscription so QueueRouter._dispatch_continuous_task
         # can drive the run. System-owned subscriptions (Email triage,
