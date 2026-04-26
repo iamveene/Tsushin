@@ -277,14 +277,22 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
   }, [cronExpression, githubEvents.length, integrationName, jiraIntegrationId, jiraJql, jiraPollInterval, prSelectedActions.length, repoName, repoOwner, saving, timezone, triggerType])
 
   const buildPRSubmittedCriteria = (): PRSubmittedCriteria => ({
-    event_type: 'pull_request',
+    // v0.7.0 release-finishing fix: canonical envelope shape per
+    // backend/channels/github/criteria.py validate_pr_criteria. Was using
+    // legacy flat-with-event_type shape which made the validator fall
+    // through to the generic envelope and 422 on every wizard create.
+    criteria_version: 1,
+    event: 'pull_request',
     actions: [...prSelectedActions],
-    branch_filter: branchFilter.trim() || null,
-    path_filters: splitList(pathFiltersText),
-    author_filter: authorFilter.trim() || null,
-    exclude_drafts: prDraftOnly,
-    title_contains: prTitleContains.trim() || null,
-    body_contains: prBodyContains.trim() || null,
+    filters: {
+      branch_filter: branchFilter.trim() || null,
+      path_filters: splitList(pathFiltersText),
+      author_filter: authorFilter.trim() || null,
+      exclude_drafts: prDraftOnly,
+      title_contains: prTitleContains.trim() || null,
+      body_contains: prBodyContains.trim() || null,
+    },
+    ordering: 'oldest_first',
   })
 
   const runValidation = () => {

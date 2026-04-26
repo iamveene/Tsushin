@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Wave 5 finishing fix: GitHub trigger wizard criteria envelope (2026-04-26)
+
+GitHub trigger wizard sent a legacy flat `{event_type:'pull_request', branch_filter, path_filters, ...}` shape to `POST /api/triggers/github`. The backend's `@field_validator("trigger_criteria")` routes on `event=='pull_request'` (singular `event`, NOT `event_type`) and falls through to the generic envelope validator when the discriminator key doesn't match — which then 422s with `"trigger criteria missing required fields: ['criteria_version', 'filters', 'ordering', 'window']"`. Net effect: **GitHub triggers couldn't be created from the UI at all.** Caught by the release-finishing wizard QA pass.
+
+- **`frontend/lib/client.ts`** — `PRSubmittedCriteria` interface restructured to mirror `backend/channels/github/criteria.py` exactly: top-level `event` (was `event_type`), nested `filters` object (was flat fields), explicit `criteria_version` and `ordering` defaults.
+- **`frontend/components/triggers/TriggerSetupModal.tsx`** — `buildPRSubmittedCriteria` rewritten to emit the canonical envelope `{criteria_version: 1, event: 'pull_request', actions, filters: {branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering: 'oldest_first'}`. Used by both the create flow and the test-criteria dry-run.
+- **`frontend/components/triggers/sections/SourceSection.tsx`** — the read-only PR-Submitted display panel rewritten to read from the new envelope shape (`event` + nested `filters.*`) so existing GitHub triggers continue to render correctly.
+
+**Verified live (2026-04-26):**
+- GitHub wizard E2E retest: name "QA Wizard GitHub Retest", PAT, repo, events=`['pull_request']`, actions=`['opened','reopened']`. POST /api/triggers/github → 201. Trigger #6 appeared in /hub/triggers index. Cleaned up via DELETE → 204.
+- All 5 kinds now wizard-reachable (Jira, Schedule, GitHub via TriggerBreadthCards in /hub Communication tab; Email and Webhook via per-tab integration setup paths).
+
 ### Release 0.7.0 — Triggers↔Flows Unification, Wave 5 (backfill migration + payload capture + final polish) (2026-04-26)
 
 Fifth and final merge wave of the cross-cutting Triggers↔Flows Unification. Lands the data backfill migration that converts every existing system-owned `notify_only` ContinuousAgent (Jira/Email Managed Notifications) into a system-managed FlowDefinition + flow_trigger_binding row, wires webhook payload capture into the inbound route + a new GET endpoint, ships reconcile + rollback ops scripts, and finishes the SourceStepConfig autocomplete with real JSON-path inference from recent webhook deliveries.

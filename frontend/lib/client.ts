@@ -1863,15 +1863,28 @@ export type PRSubmittedAction =
   | 'edited'
   | 'ready_for_review'
 
+// v0.7.0 — must mirror backend ``validate_pr_criteria`` in
+// ``backend/channels/github/criteria.py``. Earlier shape used
+// ``event_type`` and flat filter fields; that mismatched the backend's
+// ``event`` + nested ``filters`` envelope and caused POST /api/triggers/github
+// to silently 422 ("trigger criteria missing required fields:
+// ['criteria_version', 'filters', 'ordering', 'window']") because the
+// validator routed on ``event=='pull_request'`` and fell through to the
+// generic envelope when the key didn't match. Caught by the v0.7.0
+// release-finishing wizard E2E QA pass.
 export interface PRSubmittedCriteria {
-  event_type: 'pull_request'
+  criteria_version?: number  // defaults to 1 server-side
+  event: 'pull_request'
   actions: PRSubmittedAction[]
-  branch_filter?: string | null
-  path_filters?: string[] | null
-  author_filter?: string | null
-  exclude_drafts?: boolean
-  title_contains?: string | null
-  body_contains?: string | null
+  filters: {
+    branch_filter?: string | null
+    path_filters?: string[] | null
+    author_filter?: string | null
+    exclude_drafts?: boolean
+    title_contains?: string | null
+    body_contains?: string | null
+  }
+  ordering?: 'oldest_first' | 'newest_first'  // defaults to 'oldest_first'
 }
 
 export interface GitHubPRCriteriaTestRequest {
