@@ -449,6 +449,49 @@ async def get_webhook_integration(
     return _to_read(db, integration)
 
 
+@router.get("/{integration_id}/payload-captures")
+async def list_webhook_payload_captures(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """v0.7.0 Wave 5 — return the last 5 captured inbound payloads.
+
+    Used by the Flow editor's SourceStepConfig component to populate the
+    ``{{source.payload.*}}`` autocomplete with JSON paths inferred from
+    actual recent deliveries. Permission-gated on
+    ``integrations.webhook.read``.
+    """
+    from models import WebhookPayloadCapture
+
+    integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
+    if integration is None or not context.can_access_resource(integration.tenant_id):
+        raise HTTPException(status_code=404, detail="Webhook integration not found")
+
+    captures = (
+        db.query(WebhookPayloadCapture)
+        .filter(
+            WebhookPayloadCapture.tenant_id == integration.tenant_id,
+            WebhookPayloadCapture.webhook_id == integration_id,
+        )
+        .order_by(WebhookPayloadCapture.captured_at.desc())
+        .limit(5)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "webhook_id": c.webhook_id,
+            "captured_at": c.captured_at.isoformat() + "Z" if c.captured_at else None,
+            "payload_json": c.payload_json,
+            "headers_json": c.headers_json,
+            "dedupe_key": c.dedupe_key,
+        }
+        for c in captures
+    ]
+
+
 @router.patch("/{integration_id}", response_model=WebhookIntegrationRead)
 async def update_webhook_integration(
     integration_id: int,

@@ -2805,6 +2805,19 @@ export interface WebhookSlugAvailability {
   reason: string | null
 }
 
+// v0.7.0 Wave 5: ringbuffer of last-N inbound payload captures for a webhook.
+// Used by the SourceStepConfig autocomplete to infer `{{source.payload.*}}`
+// JSON paths in the Flow editor. payload_json / headers_json are RAW JSON
+// strings — callers should JSON.parse() at read time.
+export interface WebhookPayloadCapture {
+  id: number
+  webhook_id: number
+  captured_at: string
+  payload_json: string
+  headers_json: string | null
+  dedupe_key: string | null
+}
+
 // v0.6.0: Slack Integration
 export interface SlackIntegration {
   id: number
@@ -6655,6 +6668,20 @@ export const api = {
     if (!res.ok) {
       return { available: false, reason: 'Unable to check availability' }
     }
+    return res.json()
+  },
+
+  // v0.7.0 Wave 5: last-5 inbound payload captures for a webhook. Powers
+  // the Flow editor's SourceStepConfig autocomplete so authors can browse
+  // recent payloads and click an inferred JSON path to copy
+  // `{{source.payload.<path>}}` to the clipboard. Returns [] (not throws)
+  // when the integration has no captures yet OR the endpoint is missing
+  // (older backend without Wave 5).
+  async getWebhookPayloadCaptures(webhookId: number): Promise<WebhookPayloadCapture[]> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/webhook-integrations/${webhookId}/payload-captures`
+    )
+    if (!res.ok) return []
     return res.json()
   },
 

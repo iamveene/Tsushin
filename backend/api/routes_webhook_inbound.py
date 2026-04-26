@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -382,6 +383,41 @@ async def receive_webhook(
         "raw_event": body,
     }
     sender_key = f"webhook_{webhook_id}_{sender_id}"[:255]
+
+    # v0.7.0 Wave 5 — capture the inbound payload into the last-N ringbuffer
+    # so the Flow editor's Source-step autocomplete (SourceStepConfig.tsx)
+    # can infer JSON paths like {{source.payload.X.Y}} from real recent
+    # deliveries. Best-effort: failure here NEVER aborts dispatch.
+    try:
+        from models import WebhookPayloadCapture
+        capture = WebhookPayloadCapture(
+            tenant_id=integration.tenant_id,
+            webhook_id=integration.id,
+            payload_json=_json.dumps(body)[:65536],  # hard cap ~64KB
+            headers_json=_json.dumps({
+                k: v for k, v in request.headers.items()
+                if k.lower() not in ("authorization", "cookie", "x-tsushin-signature")
+            })[:8192],
+            dedupe_key=source_id[:512],
+        )
+        db.add(capture)
+        db.flush()
+        # Trim to last 5 per (tenant, webhook) — best-effort.
+        db.execute(
+            text(
+                "DELETE FROM webhook_payload_capture WHERE webhook_id = :wid "
+                "AND id NOT IN (SELECT id FROM webhook_payload_capture WHERE webhook_id = :wid "
+                "ORDER BY captured_at DESC LIMIT 5)"
+            ),
+            {"wid": integration.id},
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Webhook %s: payload capture failed (non-fatal); dispatch proceeds", webhook_id
+        )
+        db.rollback()
+
     dispatch_response = await _maybe_dispatch_trigger_event(
         db=db,
         integration=integration,
