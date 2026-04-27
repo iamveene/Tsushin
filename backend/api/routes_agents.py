@@ -164,17 +164,21 @@ class AgentResponse(BaseModel):
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
 
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-716 — surface in UI)
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
+
     is_active: bool
     is_default: bool
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
     discord_integration_id: Optional[int] = None  # Discord bot integration
-    webhook_integration_id: Optional[int] = None  # v0.6.0: Webhook integration
+    webhook_integration_id: Optional[int] = None  # Legacy v0.6.0 binding; webhook is a Trigger in v0.7.0
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -223,12 +227,16 @@ class AgentCreate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -272,12 +280,16 @@ class AgentUpdate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -563,6 +575,10 @@ def list_agents(
             "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
             "vector_store_mode": getattr(agent, 'vector_store_mode', None),
 
+            # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in list response
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
         }
@@ -697,6 +713,10 @@ def get_agent(
         "slack_integration_id": agent.slack_integration_id,
         "discord_integration_id": agent.discord_integration_id,
         "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+
+        # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in GET response
+        "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+        "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -951,6 +971,8 @@ def update_agent(
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "provider_instance_id",
         "vector_store_instance_id", "vector_store_mode",
+        # BUG-710: bounded agentic loop knobs (column existed; PUT path was dropping them).
+        "max_agentic_rounds", "max_agentic_loop_bytes",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)

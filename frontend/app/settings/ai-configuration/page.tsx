@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { authenticatedFetch, ProviderInstance } from '@/lib/client'
+import { authenticatedFetch, ProviderInstance, api as apiClient, Config } from '@/lib/client'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -103,6 +103,15 @@ export default function AIConfigurationPage() {
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
+  // BUG-716: platform-wide bounds for the agentic loop. Lives on the global
+  // Config row and is exposed via PUT /api/config (already wired in schemas).
+  const [platformConfig, setPlatformConfig] = useState<Config | null>(null)
+  const [platformMinRounds, setPlatformMinRounds] = useState<number>(1)
+  const [platformMaxRounds, setPlatformMaxRounds] = useState<number>(8)
+  const [savingPlatform, setSavingPlatform] = useState(false)
+  const [platformSuccess, setPlatformSuccess] = useState<string | null>(null)
+  const [platformError, setPlatformError] = useState<string | null>(null)
+
   const apiUrl = ''
 
   const fetchData = useCallback(async () => {
@@ -128,6 +137,16 @@ export default function AIConfigurationPage() {
         const instancesData: ProviderInstance[] = await instancesRes.json()
         // Only show active instances
         setInstances(instancesData.filter(i => i.is_active))
+      }
+
+      // Platform-wide agentic-loop bounds (BUG-716)
+      try {
+        const fullConfig = await apiClient.getConfig()
+        setPlatformConfig(fullConfig)
+        setPlatformMinRounds(fullConfig.platform_min_agentic_rounds ?? 1)
+        setPlatformMaxRounds(fullConfig.platform_max_agentic_rounds ?? 8)
+      } catch (cfgErr) {
+        console.warn('Failed to load platform agentic bounds:', cfgErr)
       }
     } catch (err) {
       console.error('Error fetching AI config:', err)
@@ -241,6 +260,43 @@ export default function AIConfigurationPage() {
   const hasChanges =
     config &&
     (selectedInstanceId !== config.provider_instance_id || selectedModel !== config.model_name)
+
+  const handleSavePlatformBounds = async () => {
+    setSavingPlatform(true)
+    setPlatformError(null)
+    setPlatformSuccess(null)
+    try {
+      // Clamp + sanity-check before sending. Backend Field validators also
+      // enforce 1..8 but we surface the message to the user up front.
+      let minRounds = Math.round(platformMinRounds)
+      let maxRounds = Math.round(platformMaxRounds)
+      if (!Number.isFinite(minRounds) || minRounds < 1) minRounds = 1
+      if (!Number.isFinite(maxRounds) || maxRounds > 8) maxRounds = 8
+      if (maxRounds < minRounds) {
+        setPlatformError('Max rounds must be greater than or equal to min rounds.')
+        return
+      }
+
+      const updated = await apiClient.updateConfig({
+        platform_min_agentic_rounds: minRounds,
+        platform_max_agentic_rounds: maxRounds,
+      } as Partial<Config>)
+      setPlatformConfig(updated)
+      setPlatformMinRounds(updated.platform_min_agentic_rounds ?? minRounds)
+      setPlatformMaxRounds(updated.platform_max_agentic_rounds ?? maxRounds)
+      setPlatformSuccess('Platform agentic-loop bounds saved.')
+    } catch (err: any) {
+      console.error('Failed to save platform bounds:', err)
+      setPlatformError(err?.message || 'Failed to save platform bounds')
+    } finally {
+      setSavingPlatform(false)
+    }
+  }
+
+  const platformBoundsChanged =
+    platformConfig != null &&
+    ((platformConfig.platform_min_agentic_rounds ?? 1) !== platformMinRounds ||
+      (platformConfig.platform_max_agentic_rounds ?? 8) !== platformMaxRounds)
 
   const healthDot = (status: string) => {
     switch (status) {
@@ -572,9 +628,91 @@ export default function AIConfigurationPage() {
           </>
         )}
 
+        {/* Platform AI — Agentic Loop Bounds (BUG-716) */}
+        <div className="glass-card rounded-xl p-6 mt-8">
+          <div className="flex items-start gap-4 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
+              <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-white font-medium mb-1">Platform AI — Agentic Loop Bounds</h3>
+              <p className="text-sm text-tsushin-slate">
+                Hard upper/lower bounds for the bounded agentic loop. Per-agent
+                <code className="mx-1 px-1.5 py-0.5 text-xs rounded bg-white/5 border border-white/10">max_agentic_rounds</code>
+                values are clamped into this range at runtime, regardless of what an agent owner saved.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-2">
+                Minimum rounds
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                disabled={!canEdit}
+                value={platformMinRounds}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  setPlatformMinRounds(Number.isFinite(n) ? n : 1)
+                }}
+                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-2">
+                Maximum rounds
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                disabled={!canEdit}
+                value={platformMaxRounds}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  setPlatformMaxRounds(Number.isFinite(n) ? n : 8)
+                }}
+                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+              />
+            </div>
+          </div>
+
+          {platformError && (
+            <div className="p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              {platformError}
+            </div>
+          )}
+          {platformSuccess && (
+            <div className="p-3 mb-4 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm">
+              {platformSuccess}
+            </div>
+          )}
+
+          {canEdit && (
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-tsushin-slate">
+                {platformBoundsChanged ? 'Unsaved changes' : 'Range 1 – 8.'}
+              </p>
+              <button
+                onClick={handleSavePlatformBounds}
+                disabled={savingPlatform || !platformBoundsChanged}
+                className="px-4 py-2 text-sm bg-purple-500 hover:bg-purple-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingPlatform ? 'Saving...' : 'Save Platform Bounds'}
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Read-only notice */}
         {!canEdit && (
-          <div className="glass-card rounded-xl p-6 text-center">
+          <div className="glass-card rounded-xl p-6 text-center mt-8">
             <p className="text-tsushin-slate">
               You don&apos;t have permission to modify system AI configuration.
               Contact your organization admin to make changes.

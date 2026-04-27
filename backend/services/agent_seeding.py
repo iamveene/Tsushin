@@ -114,7 +114,7 @@ Communication style:
 - Professional but approachable
 - Ask clarifying questions when needed
 - Provide actionable information""",
-            "skills": ["web_search", "knowledge_sharing", "image", "automation"],
+            "skills": ["web_search", "knowledge_sharing", "image", "automation", "audio_transcript", "audio_tts"],
             "channels": ["playground", "whatsapp", "telegram"],
             "trigger_dm_enabled": True,
             "trigger_group_filters": [],
@@ -173,7 +173,7 @@ Best practices:
 - Provide step-by-step solutions
 - Follow up to ensure resolution
 - Thank customers for their patience""",
-            "skills": ["web_search", "knowledge_sharing"],
+            "skills": ["web_search", "knowledge_sharing", "audio_transcript", "audio_tts"],
             "channels": ["playground", "whatsapp", "telegram"],
             "trigger_dm_enabled": True,
             "trigger_group_filters": [],

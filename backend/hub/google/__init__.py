@@ -2,7 +2,7 @@
 Google Hub Integration
 
 Provides OAuth and service integrations for:
-- Gmail (read-only email access)
+- Gmail (read, send, reply, and draft email access)
 - Google Calendar (event management)
 
 Features:

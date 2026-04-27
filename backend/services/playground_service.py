@@ -11,6 +11,7 @@ from sqlalchemy import text
 from datetime import datetime
 
 from agent.utils import summarize_tool_result
+from agent.followup_detector import build_data_block, is_followup_to_prior_skill
 from agent.memory.tool_output_buffer import get_tool_output_buffer
 # Phase 8: Watcher Activity Events
 from services.watcher_activity_service import emit_agent_processing_async
@@ -101,6 +102,85 @@ class PlaygroundService:
         except Exception as e:
             self.logger.error(f"Error resolving user identity for user {user_id}: {e}", exc_info=True)
             return f"playground_user_{user_id}"
+
+    def _build_structured_tool_data_context(
+        self,
+        *,
+        agent_id: int,
+        message_text: str,
+        thread,
+    ) -> Optional[Dict[str, str]]:
+        """Build a bounded DATA block from recent structured tool results."""
+        if not thread:
+            return None
+
+        try:
+            from models import AgentSkill
+            from services.playground_thread_service import PlaygroundThreadService
+
+            thread_service = PlaygroundThreadService(self.db)
+            history = thread_service._get_thread_messages_from_memory(thread)
+            scratchpad_history: List[Dict[str, Any]] = []
+            for entry in getattr(thread, "agentic_scratchpad", None) or []:
+                if not isinstance(entry, dict):
+                    continue
+                tool_result = entry.get("tool_result")
+                if isinstance(tool_result, dict):
+                    scratchpad_history.append({
+                        "role": "assistant",
+                        "tool_result": tool_result,
+                    })
+            if scratchpad_history:
+                history = list(history or []) + scratchpad_history
+
+            skill_type = is_followup_to_prior_skill(message_text, history)
+            if not skill_type:
+                return None
+
+            skill = self.db.query(AgentSkill).filter(
+                AgentSkill.agent_id == agent_id,
+                AgentSkill.skill_type == skill_type,
+            ).first()
+            if skill and skill.auto_inject_results is False:
+                return None
+
+            max_bytes = int(getattr(skill, "max_result_bytes", None) or 2048)
+            max_retained = int(getattr(skill, "max_results_retained", None) or 2)
+            max_lookback = int(getattr(skill, "max_turns_lookback", None) or 6)
+            candidates = history[-max(1, max_lookback * 2 + 2):]
+            results: List[Dict[str, Any]] = []
+
+            for msg in reversed(candidates):
+                if not isinstance(msg, dict):
+                    continue
+                tool_result = msg.get("tool_result")
+                if not isinstance(tool_result, dict):
+                    metadata = msg.get("metadata")
+                    if isinstance(metadata, dict):
+                        tool_result = metadata.get("tool_result")
+                if not isinstance(tool_result, dict):
+                    continue
+                if tool_result.get("skill_type") != skill_type:
+                    continue
+                results.append(tool_result)
+                if len(results) >= max_retained:
+                    break
+
+            if not results:
+                return None
+
+            data_block = build_data_block(list(reversed(results)), max_bytes)
+            return {
+                "context": (
+                    f"{data_block}\n\n"
+                    "Use the DATA block above to answer this follow-up. "
+                    "Do not call the same data-fetch tool again unless the user asked for fresh data."
+                ),
+                "skill_type": skill_type,
+            }
+        except Exception as exc:
+            self.logger.warning(f"Structured tool DATA injection failed: {exc}")
+            return None
 
     def _should_use_contact_mapping(self, sender_key: Optional[str]) -> bool:
         """Synthetic thread/channel sender keys should bypass contact resolution."""
@@ -341,10 +421,21 @@ class PlaygroundService:
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
                 # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
                 "provider_instance_id": agent.provider_instance_id,
+                "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+                "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
                 # Fact extraction configuration (auto-enabled for all conversations)
                 "auto_extract_facts": True,
                 "fact_extraction_threshold": 3,  # Lower threshold for playground (faster testing)
             }
+            try:
+                from models import Config
+
+                platform_config = self.db.query(Config).first()
+                if platform_config:
+                    config_dict["platform_min_agentic_rounds"] = getattr(platform_config, "platform_min_agentic_rounds", None)
+                    config_dict["platform_max_agentic_rounds"] = getattr(platform_config, "platform_max_agentic_rounds", None)
+            except Exception as config_err:
+                self.logger.warning(f"Failed to load platform agentic bounds: {config_err}")
 
             # Initialize memory manager
             memory_manager = MultiAgentMemoryManager(self.db, config_dict)
@@ -563,6 +654,21 @@ class PlaygroundService:
                 full_message = f"{tool_context}\n\n{full_message}"
                 self.logger.info(f"Injected Layer 5 tool context ({len(tool_context)} chars)")
 
+            structured_tool_data = self._build_structured_tool_data_context(
+                agent_id=agent_id,
+                message_text=message_text,
+                thread=thread,
+            )
+            suppress_direct_skill_processing = False
+            if structured_tool_data:
+                structured_tool_context = structured_tool_data["context"]
+                full_message = f"{structured_tool_context}\n\n{full_message}"
+                config_dict["suppress_followup_tool_skill_type"] = structured_tool_data["skill_type"]
+                suppress_direct_skill_processing = True
+                self.logger.info(
+                    f"Injected structured tool DATA context ({len(structured_tool_context)} chars)"
+                )
+
             # STEP 2.5: BUG-336 — Check keyword-triggered flows BEFORE skill/AI processing
             # If the message matches a keyword for an active keyword-triggered flow,
             # execute that flow and return its result instead of passing to AI.
@@ -605,11 +711,18 @@ class PlaygroundService:
             from agent.skills.skill_manager import get_skill_manager
             skill_manager = get_skill_manager()
             try:
-                skill_result = await skill_manager.process_message_with_skills(
-                    self.db,
-                    agent_id,
-                    inbound_msg
-                )
+                if suppress_direct_skill_processing:
+                    self.logger.info(
+                        "Skipping direct skill processing for follow-up DATA reuse; "
+                        "delegating to AgentService"
+                    )
+                    skill_result = None
+                else:
+                    skill_result = await skill_manager.process_message_with_skills(
+                        self.db,
+                        agent_id,
+                        inbound_msg
+                    )
 
                 if skill_result and skill_result.success:
                     self.logger.info(f"Message processed by skill, output: {skill_result.output[:100]}...")
@@ -852,6 +965,8 @@ class PlaygroundService:
                 if result.get('tool_used'):
                     memory_metadata['is_tool_output'] = True
                     memory_metadata['tool_used'] = result.get('tool_used')
+                    if result.get('tool_result_structured'):
+                        memory_metadata['tool_result'] = result.get('tool_result_structured')
 
                     # Layer 5: Store FULL tool output in ephemeral buffer for follow-up interactions
                     # This enables agentic analysis of tool results without polluting long-term memory
@@ -895,6 +1010,30 @@ class PlaygroundService:
                     metadata=memory_metadata,  # Include tool metadata and KB usage
                     use_contact_mapping=use_contact_mapping,
                 )
+
+                if thread and result.get("agentic_scratchpad") is not None:
+                    next_scratchpad = result.get("agentic_scratchpad")
+                    tool_was_called = bool(
+                        result.get("tool_was_called") or result.get("tool_used")
+                    )
+                    if (
+                        suppress_direct_skill_processing
+                        and not next_scratchpad
+                        and thread.agentic_scratchpad
+                    ):
+                        self.logger.info(
+                            "Preserving structured tool DATA scratchpad after follow-up reuse"
+                        )
+                    elif not tool_was_called and thread.agentic_scratchpad:
+                        # BUG-707: a no-tool turn (e.g. follow-up answered from
+                        # the prior DATA block) must not overwrite the
+                        # scratchpad and erase the previous tool trace.
+                        self.logger.info(
+                            "Preserving agentic scratchpad: no tool fired this turn"
+                        )
+                    else:
+                        thread.agentic_scratchpad = next_scratchpad
+                        self.db.commit()
 
                 # Phase 14.5: Index agent response in FTS5 for conversation search
                 try:
@@ -970,6 +1109,7 @@ class PlaygroundService:
                 "tokens": result.get("tokens"),  # Token usage from AI provider
                 "agent_name": agent_name,
                 "kb_used": result.get("kb_used", []),  # KB usage tracking
+                "agentic_scratchpad": result.get("agentic_scratchpad"),
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "image_url": image_url,
                 "image_urls": image_urls if image_urls else None,
@@ -1708,6 +1848,9 @@ class PlaygroundService:
                     entry["image_url"] = image_url
                 if image_urls:
                     entry["image_urls"] = image_urls
+                tool_result = msg.get("tool_result") or (msg_meta.get("tool_result") if msg_meta else None)
+                if isinstance(tool_result, dict):
+                    entry["tool_result"] = tool_result
                 messages.append(entry)
 
             return messages

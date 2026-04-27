@@ -93,10 +93,25 @@ export default function StepReview() {
               )}
               {s.key === 'audio' && state.draft.audio && (
                 <>
-                  <div className="capitalize">{state.draft.audio.capability} · {state.draft.audio.provider}</div>
-                  <div className="text-xs text-gray-400">{state.draft.audio.language} · {state.draft.audio.voice}</div>
-                  {state.draft.audio.model && (
+                  <div className="capitalize">
+                    {state.draft.audio.capability}
+                    {(state.draft.audio.capability === 'voice' || state.draft.audio.capability === 'hybrid') && ` · ${state.draft.audio.provider}`}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {state.draft.audio.language}
+                    {(state.draft.audio.capability === 'voice' || state.draft.audio.capability === 'hybrid') && ` · ${state.draft.audio.voice}`}
+                  </div>
+                  {(state.draft.audio.capability === 'voice' || state.draft.audio.capability === 'hybrid') && state.draft.audio.model && (
                     <div className="text-xs text-gray-400 font-mono">model: {state.draft.audio.model}</div>
+                  )}
+                  {(state.draft.audio.capability === 'transcript' || state.draft.audio.capability === 'hybrid') && (
+                    <div className="text-xs text-gray-400">
+                      ASR: {state.draft.audio.asrMode === 'tenant_default'
+                        ? 'tenant default'
+                        : state.draft.audio.asrMode === 'instance'
+                          ? `local instance #${state.draft.audio.asrInstanceId ?? '—'}`
+                          : 'OpenAI Whisper'}
+                    </div>
                   )}
                 </>
               )}

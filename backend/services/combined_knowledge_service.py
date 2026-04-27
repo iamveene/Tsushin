@@ -32,17 +32,13 @@ class CombinedKnowledgeService:
         self._chroma_client = None
 
     def _get_chroma_client(self):
-        """Lazy-load ChromaDB client."""
+        """Lazy-load ChromaDB client (cached process-wide via factory — BUG-695)."""
         if self._chroma_client is None:
             try:
-                import chromadb
-                from chromadb.config import Settings
+                from chroma_client_factory import get_chroma_client
 
                 chroma_dir = os.environ.get("TSN_CHROMA_DIR", "/app/data/chroma")
-                self._chroma_client = chromadb.PersistentClient(
-                    path=chroma_dir,
-                    settings=Settings(anonymized_telemetry=False)
-                )
+                self._chroma_client = get_chroma_client(chroma_dir)
             except Exception as e:
                 self.logger.error(f"Failed to initialize ChromaDB: {e}")
                 raise
@@ -253,10 +249,8 @@ class CombinedKnowledgeService:
 
             self.logger.info(f"[KB BADGE] Agent KB path: {knowledge_dir}")
 
-            knowledge_client = chromadb.PersistentClient(
-                path=knowledge_dir,
-                settings=Settings(anonymized_telemetry=False)
-            )
+            from chroma_client_factory import get_chroma_client
+            knowledge_client = get_chroma_client(knowledge_dir)
 
             # Agent KB uses knowledge_agent_{agent_id} format (from knowledge_service.py)
             collection_name = f"knowledge_agent_{agent_id}"
