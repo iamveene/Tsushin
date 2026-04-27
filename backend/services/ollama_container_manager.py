@@ -22,7 +22,9 @@ import requests
 from sqlalchemy.orm import Session, sessionmaker
 
 from services.container_runtime import (
+    PORT_RANGES,
     get_container_runtime,
+    iter_port_range,
     ContainerRuntime,
     ContainerNotFoundError,
     ContainerRuntimeError,
@@ -41,8 +43,7 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-PORT_RANGE_START = 6700
-PORT_RANGE_END = 6799
+PORT_RANGE_START, PORT_RANGE_END = PORT_RANGES["ollama"]
 HEALTH_CHECK_TIMEOUT = 120  # Ollama takes longer to start than Qdrant
 HEALTH_CHECK_INTERVAL = 5
 
@@ -99,7 +100,7 @@ class OllamaContainerManager:
     def _allocate_port(self, db: Session) -> int:
         import socket
         used = self._get_used_ports(db)
-        for port in range(PORT_RANGE_START, PORT_RANGE_END):
+        for port in iter_port_range("ollama"):
             if port in used:
                 continue
             try:

@@ -23,6 +23,24 @@ export interface ChainResult {
   agentId: number | null
 }
 
+type CreateAgentPayload = Parameters<typeof api.createAgent>[0] & {
+  provider_instance_id?: number
+  persona_id?: number
+}
+type UpdateAgentPayload = Parameters<typeof api.updateAgent>[1]
+
+interface TranscriptSkillPayload {
+  response_mode: 'conversational' | 'transcript_only'
+  language: string
+  model: string
+  asr_mode: AudioConfig['asrMode']
+  asr_instance_id?: number
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 const STAGE_MESSAGES: Record<ChainStage, string> = {
   idle: '',
   contact: 'Resolving contact…',
@@ -50,7 +68,7 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
         response_format: audio.format,
       })
     } else {
-      const cfg: Record<string, any> = {
+      const cfg: Record<string, string | number> = {
         provider: audio.provider,
         voice: audio.voice,
         language: audio.language,
@@ -66,12 +84,18 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
   }
 
   if (wantsTranscript) {
+    const transcriptConfig: TranscriptSkillPayload = {
+      response_mode: audio.capability === 'transcript' ? 'transcript_only' : 'conversational',
+      language: audio.language,
+      model: audio.transcriptModel || 'whisper-1',
+      asr_mode: audio.asrMode,
+    }
+    if (audio.asrMode === 'instance' && audio.asrInstanceId) {
+      transcriptConfig.asr_instance_id = audio.asrInstanceId
+    }
     await api.updateAgentSkill(agentId, 'audio_transcript', {
       is_enabled: true,
-      config: {
-        response_mode: audio.capability === 'transcript' ? 'transcript_only' : 'conversational',
-        language: audio.language,
-      },
+      config: transcriptConfig,
     })
   }
 }
@@ -114,8 +138,8 @@ export function useCreateAgentChain() {
         })
         contactId = created.id
       }
-    } catch (e: any) {
-      wiz.setProgress({ status: 'error', failedStep: 'contact', message: e?.message || 'Failed to create/find contact' })
+    } catch (e) {
+      wiz.setProgress({ status: 'error', failedStep: 'contact', message: errorMessage(e, 'Failed to create/find contact') })
       return { agentId: null }
     }
 
@@ -125,7 +149,7 @@ export function useCreateAgentChain() {
       setStage('create_agent')
       wiz.setProgress({ message: STAGE_MESSAGES.create_agent })
       const personality = draft.personality
-      const payload: any = {
+      const payload: CreateAgentPayload = {
         contact_id: contactId,
         system_prompt: personality.system_prompt || 'You are a helpful assistant.',
         keywords: [],
@@ -153,8 +177,8 @@ export function useCreateAgentChain() {
       newAgentId = agent.id
       setAgentId(agent.id)
       wiz.setCreatedAgent(agent.id)
-    } catch (e: any) {
-      wiz.setProgress({ status: 'error', failedStep: 'create_agent', message: e?.message || 'Failed to create agent' })
+    } catch (e) {
+      wiz.setProgress({ status: 'error', failedStep: 'create_agent', message: errorMessage(e, 'Failed to create agent') })
       return { agentId: null }
     }
 
@@ -163,7 +187,7 @@ export function useCreateAgentChain() {
     try {
       setStage('update_agent')
       wiz.setProgress({ message: STAGE_MESSAGES.update_agent })
-      const update: any = {
+      const update: UpdateAgentPayload = {
         memory_size: draft.memory.memory_size,
         memory_isolation_mode: draft.memory.memory_isolation_mode,
         enable_semantic_search: draft.memory.enable_semantic_search,
@@ -177,8 +201,8 @@ export function useCreateAgentChain() {
         update.vector_store_mode = draft.memory.vector_store_mode
       }
       await api.updateAgent(newAgentId, update)
-    } catch (e: any) {
-      wiz.setProgress({ status: 'error', failedStep: 'update_agent', message: e?.message || 'Agent created, but applying extended config failed.' })
+    } catch (e) {
+      wiz.setProgress({ status: 'error', failedStep: 'update_agent', message: errorMessage(e, 'Agent created, but applying extended config failed.') })
       return { agentId: newAgentId }
     }
 
@@ -191,7 +215,7 @@ export function useCreateAgentChain() {
       // would set `enable_semantic_search` on the draft but never actually
       // flip the AgentSkill row, so the feature silently stayed off.
       const memoryWantsSemantic = draft.memory.mode === 'semantic' || draft.memory.mode === 'vector'
-      const skillMap: Record<string, { is_enabled: boolean; config: Record<string, any> }> = {
+      const skillMap: Record<string, { is_enabled: boolean; config: Record<string, unknown> }> = {
         ...draft.skills.builtIns,
       }
       if (memoryWantsSemantic) {
@@ -206,8 +230,8 @@ export function useCreateAgentChain() {
         if (skillType === 'audio_tts' || skillType === 'audio_transcript' || skillType === 'audio_response') continue
         await api.updateAgentSkill(newAgentId, skillType, { is_enabled: true, config: cfg.config || {} })
       }
-    } catch (e: any) {
-      wiz.setProgress({ status: 'error', failedStep: 'skills', message: e?.message || 'Agent created, but attaching a built-in skill failed.' })
+    } catch (e) {
+      wiz.setProgress({ status: 'error', failedStep: 'skills', message: errorMessage(e, 'Agent created, but attaching a built-in skill failed.') })
       return { agentId: newAgentId }
     }
 
@@ -218,8 +242,8 @@ export function useCreateAgentChain() {
       for (const cid of draft.skills.customIds) {
         await api.assignCustomSkillToAgent(newAgentId, cid)
       }
-    } catch (e: any) {
-      wiz.setProgress({ status: 'error', failedStep: 'custom_skills', message: e?.message || 'Agent created, but attaching a custom skill failed.' })
+    } catch (e) {
+      wiz.setProgress({ status: 'error', failedStep: 'custom_skills', message: errorMessage(e, 'Agent created, but attaching a custom skill failed.') })
       return { agentId: newAgentId }
     }
 
@@ -269,9 +293,9 @@ export function useCreateAgentChain() {
         setStage('tts_assign')
         wiz.setProgress({ message: STAGE_MESSAGES.tts_assign })
         await wireAudioSkills(newAgentId, draft.audio, ttsInstanceId)
-      } catch (e: any) {
+      } catch (e) {
         cancelKokoroPolling()
-        wiz.setProgress({ status: 'error', failedStep: 'audio', message: e?.message || 'Audio wiring failed.' })
+        wiz.setProgress({ status: 'error', failedStep: 'audio', message: errorMessage(e, 'Audio wiring failed.') })
         return { agentId: newAgentId }
       }
     }

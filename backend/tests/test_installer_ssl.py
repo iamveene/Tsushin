@@ -27,8 +27,19 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+# `install.py` lives at the host repo root, not inside the backend container.
+# When pytest runs inside the container (REPO_ROOT resolves to "/"), the file
+# isn't present — skip the whole module cleanly instead of crashing collection.
+_INSTALL_PATH = REPO_ROOT / "install.py"
+if not _INSTALL_PATH.is_file():
+    pytest.skip(
+        f"install.py not found at {_INSTALL_PATH}; this test runs only at the host "
+        "repo root, not inside the backend container.",
+        allow_module_level=True,
+    )
+
 # platform_utils is a sibling of install.py and is imported at module load.
-_spec = importlib.util.spec_from_file_location("install", REPO_ROOT / "install.py")
+_spec = importlib.util.spec_from_file_location("install", _INSTALL_PATH)
 install = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(install)  # type: ignore[union-attr]
 

@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -33,16 +33,19 @@ import {
   type CustomTool,
   type EditableStepData,
   type FlowStepConfig,
+  type TriggerKind,
   flowNodeToEditable,
   editableToUpdatePayload,
   editableToCreatePayload
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
+import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import {
   MessageIcon,
   BellIcon,
   LightningIcon,
+  ZapIcon,
   WrenchIcon,
   PlayIcon,
   CalendarIcon,
@@ -87,9 +90,14 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'scheduled', label: 'Scheduled', Icon: CalendarIcon },
   { value: 'recurring', label: 'Recurring', Icon: RefreshIcon },
   { value: 'keyword', label: 'Keyword', Icon: HashIcon },  // BUG-336
+  { value: 'triggered', label: 'Triggered', Icon: ZapIcon },  // v0.7.0 Wave 2: Triggers \u2194 Flows unification
 ]
 
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
+  // v0.7.0 Wave 2: 'source' step is locked at position 0, max 1 per flow.
+  // The dropdown filters this out when a source step already exists; the
+  // step row hides Delete + reorder buttons when type === 'source'.
+  { value: 'source', label: 'Source', Icon: ZapIcon, description: 'Trigger event that wakes this flow' },
   { value: 'conversation', label: 'Conversation', Icon: MessageIcon, description: 'Multi-turn dialogue step' },
   { value: 'message', label: 'Message', Icon: EnvelopeIcon, description: 'Send a single message' },
   { value: 'notification', label: 'Notification', Icon: BellIcon, description: 'Send a notification' },
@@ -149,6 +157,7 @@ type SortDirection = 'asc' | 'desc'
 export default function FlowsPage() {
   const toast = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   // BUG-610 FIX: Gate every write control (Create, From Template, Edit,
   // Run, Delete, Bulk actions) on flows.write so a read-only user gets
   // a clean list view instead of buttons that 403 on click.
@@ -191,6 +200,88 @@ export default function FlowsPage() {
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
   const [bulkActionLoading, setBulkActionLoading] = useState(false)
+
+  // v0.7.0 Wave 4: deep-link prefill for "Create flow from this trigger".
+  // The trigger detail page lives at /hub/triggers/{kind}/{id} and CTAs link to
+  //   /flows?source_trigger_kind={kind}&source_trigger_id={id}
+  // When both params are present and valid we auto-open the Create modal,
+  // pre-fill execution_method='triggered', and insert a Source step at
+  // position 0 with the trigger binding baked into config_json.
+  const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
+  const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
+  const prefillKind: TriggerKind | null =
+    prefillKindParam && ['jira', 'email', 'github', 'schedule', 'webhook'].includes(prefillKindParam)
+      ? prefillKindParam
+      : null
+  const prefillTriggerId =
+    Number.isFinite(prefillTriggerIdParam) && prefillTriggerIdParam > 0 ? prefillTriggerIdParam : 0
+  const prefillReady = Boolean(prefillKind && prefillTriggerId > 0)
+
+  const [prefillTriggerName, setPrefillTriggerName] = useState<string>('')
+  const [prefillTriggerLoaded, setPrefillTriggerLoaded] = useState(false)
+  const prefillConsumedRef = useRef(false)
+
+  // ?edit={flow_id} deep link from Wired Flows rows: open the EditFlowModal
+  const editParamRaw = searchParams?.get('edit') || ''
+  const editParam = Number(editParamRaw)
+  const editParamValid = Number.isFinite(editParam) && editParam > 0
+  const editConsumedRef = useRef(false)
+
+  useEffect(() => {
+    if (!editParamValid) return
+    if (editConsumedRef.current) return
+    editConsumedRef.current = true
+    setEditingFlowId(editParam)
+    // Strip ?edit= so back/forward + refresh don't re-trigger the modal.
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('edit')
+      window.history.replaceState(null, '', url.toString())
+    }
+  }, [editParamValid, editParam])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!prefillReady || !prefillKind) return
+    setPrefillTriggerLoaded(false)
+    api.getTriggerDetail(prefillKind, prefillTriggerId)
+      .then((d) => {
+        if (cancelled) return
+        const name = (d as { integration_name?: string }).integration_name || ''
+        setPrefillTriggerName(name)
+        setPrefillTriggerLoaded(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPrefillTriggerName('')
+        setPrefillTriggerLoaded(true)
+      })
+    return () => { cancelled = true }
+  }, [prefillReady, prefillKind, prefillTriggerId])
+
+  useEffect(() => {
+    if (!prefillReady) return
+    if (prefillConsumedRef.current) return
+    if (!canWriteFlows) {
+      // Read-only users can't create flows; surface a toast and clear the params.
+      toast.warning('Insufficient permissions', 'You need flows.write to create flows from a trigger.')
+      prefillConsumedRef.current = true
+      return
+    }
+    // Wait for trigger name to resolve so the auto-filled flow name carries
+    // the integration label rather than `${Kind} #${id}`.
+    if (!prefillTriggerLoaded) return
+    prefillConsumedRef.current = true
+    setShowCreateFlow(true)
+  }, [prefillReady, canWriteFlows, prefillTriggerLoaded, toast])
+
+  function clearPrefillParams() {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('source_trigger_kind')
+    url.searchParams.delete('source_trigger_id')
+    window.history.replaceState(null, '', url.toString())
+  }
 
   useEffect(() => {
     loadData()
@@ -1075,9 +1166,17 @@ export default function FlowsPage() {
           personas={personas}
           customTools={customTools}
           customSkills={customSkills}
-          onClose={() => setShowCreateFlow(false)}
+          // v0.7.0 Wave 4: Trigger prefill from deep link
+          prefillTriggerKind={prefillReady ? prefillKind : null}
+          prefillTriggerId={prefillReady ? prefillTriggerId : 0}
+          prefillTriggerName={prefillTriggerName}
+          onClose={() => {
+            setShowCreateFlow(false)
+            clearPrefillParams()
+          }}
           onSuccess={() => {
             setShowCreateFlow(false)
+            clearPrefillParams()
             loadData()
           }}
         />
@@ -1368,7 +1467,7 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
 // ==================== CREATE FLOW MODAL ====================
 
-function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
+function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess, prefillTriggerKind = null, prefillTriggerId = 0, prefillTriggerName = '' }: {
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
@@ -1376,16 +1475,50 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
   customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
+  // v0.7.0 Wave 4: when invoked from a trigger detail page, pre-build a
+  // Source-only flow draft and auto-bind on success.
+  prefillTriggerKind?: TriggerKind | null
+  prefillTriggerId?: number
+  prefillTriggerName?: string
 }) {
   const toast = useToast()
   const [step, setStep] = useState<'config' | 'steps'>('config')
-  const [flowData, setFlowData] = useState<CreateFlowData>({
-    name: '',
-    description: '',
-    flow_type: 'workflow',
-    execution_method: 'immediate',
-    steps: []
-  })
+  const initialFlowData: CreateFlowData = useMemo(() => {
+    if (prefillTriggerKind && prefillTriggerId > 0) {
+      const kindLabel = prefillTriggerKind.charAt(0).toUpperCase() + prefillTriggerKind.slice(1)
+      const namePart = prefillTriggerName ? `: ${prefillTriggerName}` : ` #${prefillTriggerId}`
+      const sourceStep: CreateFlowStepData = {
+        name: 'Source',
+        type: 'source',
+        // v0.7.0 Wave 2 invariant: positions are 1-based and source must
+        // sit at position 1. Wave 4 prefill originally used position 0 and
+        // POST /api/flows/create silently 422'd because the backend
+        // validator rejects positions < 1 (helper at routes_flows.py:280)
+        // — modal stayed open with no toast (caught by Wave 4 QA).
+        position: 1,
+        config: {
+          trigger_kind: prefillTriggerKind,
+          trigger_instance_id: prefillTriggerId,
+        } as FlowStepConfig,
+      }
+      return {
+        name: `${kindLabel}${namePart}`,
+        description: `Auto-prefilled from ${kindLabel} trigger ${prefillTriggerId}.`,
+        flow_type: 'workflow',
+        execution_method: 'triggered',
+        steps: [sourceStep],
+      }
+    }
+    return {
+      name: '',
+      description: '',
+      flow_type: 'workflow',
+      execution_method: 'immediate',
+      steps: [],
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const [flowData, setFlowData] = useState<CreateFlowData>(initialFlowData)
   const [submitting, setSubmitting] = useState(false)
   const flowDataRef = useRef(flowData)
   flowDataRef.current = flowData
@@ -1402,17 +1535,44 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
       return
     }
 
-    // Flush all pending step config form changes before submitting
+    // BUG-686 fix: flush callbacks may call setFlowData() which is async; the
+    // single setTimeout(0) await wasn't enough for the React reconciler to
+    // commit, leading to stale ref reads and "Create Flow" appearing to do
+    // nothing. Flush, await two microtasks, then read the ref freshly.
     createFlushRef.current.forEach(flush => flush())
+    await Promise.resolve()
     await new Promise(r => setTimeout(r, 0))
 
     setSubmitting(true)
     try {
-      await api.createFlowV2(flowDataRef.current)
+      const payload = flowDataRef.current
+      const created = await api.createFlowV2(payload)
+      // v0.7.0 Wave 4: when the modal was opened from a trigger deep-link,
+      // also create the flow_trigger_binding row so the new flow is wired
+      // immediately. If binding fails, surface a toast but still close —
+      // the user can retry from the trigger page's WiredFlowsCard.
+      if (prefillTriggerKind && prefillTriggerId > 0 && created?.id) {
+        try {
+          await api.createFlowTriggerBinding({
+            flow_definition_id: created.id,
+            trigger_kind: prefillTriggerKind,
+            trigger_instance_id: prefillTriggerId,
+            suppress_default_agent: true,
+          })
+          toast.success('Flow created', 'Flow is wired to the trigger and will run when it fires.')
+        } catch (bindErr: unknown) {
+          const msg = bindErr instanceof Error ? bindErr.message : 'Could not create binding'
+          toast.warning('Flow created — binding failed', `${msg}. You can wire it from the trigger page.`)
+        }
+      }
       onSuccess()
     } catch (error) {
+      // BUG-686 fix: surface the real error message instead of a generic one.
       console.error('Failed to create flow:', error)
-      toast.error('Creation Failed', 'Failed to create flow')
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to create flow'
+      toast.error('Creation Failed', message)
     } finally {
       setSubmitting(false)
     }
@@ -1660,6 +1820,24 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function addStep(stepType: StepType) {
+    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    if (stepType === 'source') {
+      if (steps.some((s) => s.type === 'source')) return
+      const newStep: CreateFlowStepData = {
+        name: 'Source',
+        type: 'source',
+        position: 1,
+        config: {},
+        allow_multi_turn: false,
+        max_turns: undefined,
+      }
+      // Insert at the front and renumber.
+      const next = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
+      onChange(next)
+      setEditingIndex(0)
+      setShowAddStep(false)
+      return
+    }
     const newStep: CreateFlowStepData = {
       name: `Step ${steps.length + 1}`,
       type: stepType,
@@ -1680,6 +1858,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function removeStep(index: number) {
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (steps[index]?.type === 'source') return
     const newSteps = steps.filter((_, i) => i !== index)
     // Update positions
     newSteps.forEach((step, i) => step.position = i + 1)
@@ -1689,9 +1869,14 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
 
   function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
 
     const newSteps = [...steps]
-    const targetIndex = direction === 'up' ? index - 1 : index + 1
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
     // Update positions and auto-rename "Step N" names to match new position
     newSteps.forEach((step, i) => {
@@ -1722,26 +1907,31 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 onClick={() => setEditingIndex(editingIndex === index ? null : index)}
               >
                 <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <div className="w-10 h-10 rounded-lg bg-slate-600 flex items-center justify-center text-slate-300">
@@ -1758,6 +1948,11 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -1784,15 +1979,18 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* v0.7.0 Wave 2: source step is non-removable while present; hide Delete. */}
+                {step.type !== 'source' && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); removeStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1826,7 +2024,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
+            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -2243,6 +2442,11 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
+      {step.type === 'source' && (
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
+      )}
 
       {/* Channel Selector - for message/notification/conversation */}
       {['message', 'notification', 'conversation'].includes(step.type) && (
@@ -3116,6 +3320,38 @@ function EditableStepBuilder({
 
   // Add a new step
   async function addStep(stepType: StepType) {
+    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    if (stepType === 'source') {
+      if (steps.some((s) => s.type === 'source')) return
+      const newStep: EditableStepData = {
+        name: 'Source',
+        type: 'source',
+        position: 1,
+        config: {},
+        allow_multi_turn: false,
+        max_turns: undefined,
+        _saving: true,
+      }
+      const tempSteps = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
+      onStepsChange(tempSteps)
+      setShowAddStep(false)
+      try {
+        const created = await api.createFlowStep(flowId, editableToCreatePayload(newStep) as any)
+        // Replace temp source step (now at index 0) with the real one and
+        // re-emit the rest with bumped positions.
+        const finalSteps = tempSteps.map((s, i) =>
+          i === 0 ? flowNodeToEditable(created) : s
+        )
+        onStepsChange(finalSteps)
+        setEditingIndex(0)
+      } catch (error) {
+        console.error('Failed to create source step:', error)
+        onStepsChange(steps)
+        toast.error('Step Error', 'Failed to create source step')
+      }
+      return
+    }
+
     const newPosition = steps.length + 1
     const newStep: EditableStepData = {
       name: `Step ${newPosition}`,
@@ -3186,6 +3422,8 @@ function EditableStepBuilder({
   // Delete a step
   async function deleteStep(index: number) {
     const step = steps[index]
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (step?.type === 'source') return
     if (!step.id) {
       // Just remove unsaved step
       const newSteps = steps.filter((_, i) => i !== index)
@@ -3224,7 +3462,13 @@ function EditableStepBuilder({
   async function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
 
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
     const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
+
     const newSteps = [...steps]
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
 
@@ -3283,24 +3527,29 @@ function EditableStepBuilder({
               >
                 {/* Reorder buttons */}
                 <div className="flex flex-col gap-1">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 {/* Step icon */}
@@ -3319,6 +3568,11 @@ function EditableStepBuilder({
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -3351,15 +3605,17 @@ function EditableStepBuilder({
                   </div>
                 </div>
 
-                {/* Delete button */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* Delete button (v0.7.0 Wave 2: hide for source step) */}
+                {step.type !== 'source' && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 {/* Expand/collapse indicator */}
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3393,7 +3649,8 @@ function EditableStepBuilder({
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
+            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -3551,6 +3808,11 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
+      {step.type === 'source' && (
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
+      )}
 
       {/* Channel Selector - for message/notification/conversation */}
       {['message', 'notification', 'conversation'].includes(step.type) && (
@@ -4392,6 +4654,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
   onSuccess: () => void
 }) {
   const toast = useToast()
+  // v0.7.0 Wave 3 — derive canWriteFlows locally. The variable existed only in
+  // FlowsPage scope, so the existing references at lines 4690-4696 inside
+  // this modal threw `ReferenceError: canWriteFlows is not defined` whenever
+  // a user opened a flow for editing. Caught by Wave 3 QA. Self-contained
+  // useAuth() avoids prop-drilling through every place EditFlowModal is rendered.
+  const { hasPermission } = useAuth()
+  const canWriteFlows = hasPermission('flows.write')
   const [flow, setFlow] = useState<FlowDefinition | null>(null)
   const [steps, setSteps] = useState<EditableStepData[]>([])
   const stepsRef = useRef<EditableStepData[]>([])

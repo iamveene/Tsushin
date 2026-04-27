@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Modal from '@/components/ui/Modal'
+import Wizard, { type WizardStep } from '@/components/ui/Wizard'
 import { api, Agent, CustomSkill, CustomSkillCreate } from '@/lib/client'
 
 interface MCPServerWizardProps {
@@ -17,9 +17,17 @@ interface MCPTool {
   tool_name: string
   namespaced_name: string
   description?: string | null
-  input_schema: Record<string, any>
+  input_schema: Record<string, unknown>
   is_enabled: boolean
 }
+
+type MCPToolsResponse = MCPTool[] | { tools?: MCPTool[] }
+
+const WIZARD_STEPS: WizardStep[] = [
+  { id: 'tools', label: 'Tools', description: 'Discovery' },
+  { id: 'skill', label: 'Create Skill', description: 'Tool wrapper' },
+  { id: 'agents', label: 'Assign Agents', description: 'Availability' },
+]
 
 export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete }: MCPServerWizardProps) {
   const [currentStep, setCurrentStep] = useState(1)
@@ -49,8 +57,8 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
 
     setToolsLoading(true)
     api.getMCPServerTools(mcpServer.id)
-      .then((data: any) => {
-        const toolList = Array.isArray(data) ? data : data?.tools || []
+      .then((data: MCPToolsResponse) => {
+        const toolList = Array.isArray(data) ? data : data.tools || []
         setTools(toolList)
         if (toolList.length > 0) {
           setSelectedTool(toolList[0].tool_name)
@@ -69,7 +77,16 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
       .then(setAgents)
       .catch(() => {})
       .finally(() => setAgentsLoading(false))
-  }, [currentStep])
+  }, [agents.length, currentStep])
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error && err.message) return err.message
+    if (err && typeof err === 'object' && 'message' in err) {
+      const message = (err as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+    }
+    return fallback
+  }
 
   const handleSelectTool = (toolName: string) => {
     setSelectedTool(toolName)
@@ -98,8 +115,8 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
       const skill = await api.createCustomSkill(data)
       setCreatedSkill(skill)
       setCurrentStep(3)
-    } catch (err: any) {
-      setError(err.message || 'Failed to create custom skill')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to create custom skill'))
     } finally {
       setSaving(false)
     }
@@ -115,8 +132,8 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
       }
       onComplete?.()
       onClose()
-    } catch (err: any) {
-      setError(err.message || 'Failed to assign skill to agents')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to assign skill to agents'))
     } finally {
       setSaving(false)
     }
@@ -139,23 +156,6 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
 
   if (!mcpServer) return null
 
-  const stepIndicator = (
-    <div className="flex items-center justify-center gap-2 mb-5">
-      {[1, 2, 3].map(step => (
-        <div key={step} className="flex items-center gap-2">
-          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium ${
-            step === currentStep ? 'bg-emerald-500 text-white' :
-            step < currentStep ? 'bg-emerald-500/20 text-emerald-400' :
-            'bg-white/5 text-gray-500'
-          }`}>
-            {step < currentStep ? '✓' : step}
-          </div>
-          {step < 3 && <div className={`w-8 h-0.5 ${step < currentStep ? 'bg-emerald-500/40' : 'bg-white/5'}`} />}
-        </div>
-      ))}
-    </div>
-  )
-
   // Step 1: Success + Tools
   if (currentStep === 1) {
     const footer = (
@@ -174,10 +174,18 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
     )
 
     return (
-      <Modal isOpen={isOpen} onClose={handleClose} title="MCP Server Created" footer={footer} size="lg">
+      <Wizard
+        isOpen={isOpen}
+        onClose={handleClose}
+        title="MCP Server Setup"
+        steps={WIZARD_STEPS}
+        currentStep={1}
+        footer={footer}
+        size="lg"
+        showProgress
+        tone="mcp"
+      >
         <div className="space-y-5">
-          {stepIndicator}
-
           <div className="text-center">
             <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-3">
               <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -217,7 +225,7 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
             Create a custom skill to make these tools available to your agents.
           </div>
         </div>
-      </Modal>
+      </Wizard>
     )
   }
 
@@ -244,10 +252,18 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
     )
 
     return (
-      <Modal isOpen={isOpen} onClose={handleClose} title="Create Custom Skill" footer={footer} size="lg">
+      <Wizard
+        isOpen={isOpen}
+        onClose={handleClose}
+        title="MCP Server Setup"
+        steps={WIZARD_STEPS}
+        currentStep={2}
+        footer={footer}
+        size="lg"
+        showProgress
+        tone="mcp"
+      >
         <div className="space-y-5">
-          {stepIndicator}
-
           {error && (
             <div className="px-3 py-2 bg-red-400/10 border border-red-400/20 rounded-lg text-red-400 text-sm">
               {error}
@@ -308,7 +324,7 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
             This creates a custom skill linked to <span className="text-emerald-400">{mcpServer.server_name}</span> → <span className="font-mono text-gray-400">{selectedTool}</span>
           </div>
         </div>
-      </Modal>
+      </Wizard>
     )
   }
 
@@ -334,10 +350,18 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
   )
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Assign to Agents" footer={footer} size="lg">
+    <Wizard
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="MCP Server Setup"
+      steps={WIZARD_STEPS}
+      currentStep={3}
+      footer={footer}
+      size="lg"
+      showProgress
+      tone="mcp"
+    >
       <div className="space-y-5">
-        {stepIndicator}
-
         {error && (
           <div className="px-3 py-2 bg-red-400/10 border border-red-400/20 rounded-lg text-red-400 text-sm">
             {error}
@@ -390,6 +414,6 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
           You can also assign skills later in Studio &gt; Agent &gt; Custom Skills.
         </div>
       </div>
-    </Modal>
+    </Wizard>
   )
 }

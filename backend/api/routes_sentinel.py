@@ -78,6 +78,7 @@ class SentinelConfigResponse(BaseModel):
     detect_memory_poisoning: bool
     detect_browser_ssrf: bool
     detect_vector_store_poisoning: bool
+    detect_continuous_agent_action_approval: bool
     aggressiveness_level: int
     llm_provider: str
     llm_model: str
@@ -125,6 +126,7 @@ class SentinelConfigUpdate(BaseModel):
     detect_memory_poisoning: Optional[bool] = None
     detect_browser_ssrf: Optional[bool] = None
     detect_vector_store_poisoning: Optional[bool] = None
+    detect_continuous_agent_action_approval: Optional[bool] = None
     aggressiveness_level: Optional[int] = Field(None, ge=0, le=3)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -155,6 +157,7 @@ class SentinelAgentConfigResponse(BaseModel):
     enable_tool_analysis: Optional[bool]
     enable_shell_analysis: Optional[bool]
     aggressiveness_level: Optional[int]
+    detect_continuous_agent_action_approval: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
 
@@ -175,6 +178,7 @@ class SentinelAgentConfigUpdate(BaseModel):
     enable_tool_analysis: Optional[bool] = None
     enable_shell_analysis: Optional[bool] = None
     aggressiveness_level: Optional[int] = Field(None, ge=0, le=3)
+    detect_continuous_agent_action_approval: Optional[bool] = None
 
 
 class SentinelLogResponse(BaseModel):
@@ -307,6 +311,7 @@ async def get_sentinel_config(
         getattr(config, 'memory_poisoning_prompt', None),
         getattr(config, 'browser_ssrf_prompt', None),
         getattr(config, 'vector_store_poisoning_prompt', None),
+        getattr(config, 'continuous_agent_action_approval_prompt', None),
     ])
 
     return SentinelConfigResponse(
@@ -324,6 +329,7 @@ async def get_sentinel_config(
         detect_memory_poisoning=config.detect_memory_poisoning,
         detect_browser_ssrf=getattr(config, 'detect_browser_ssrf', True),
         detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
+        detect_continuous_agent_action_approval=getattr(config, 'detect_continuous_agent_action_approval', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -387,6 +393,7 @@ async def update_sentinel_config(
             detect_memory_poisoning=system_config.detect_memory_poisoning,
             detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
             detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
+            detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -431,6 +438,7 @@ async def update_sentinel_config(
         getattr(config, 'memory_poisoning_prompt', None),
         getattr(config, 'browser_ssrf_prompt', None),
         getattr(config, 'vector_store_poisoning_prompt', None),
+        getattr(config, 'continuous_agent_action_approval_prompt', None),
     ])
 
     return SentinelConfigResponse(
@@ -448,6 +456,7 @@ async def update_sentinel_config(
         detect_memory_poisoning=config.detect_memory_poisoning,
         detect_browser_ssrf=getattr(config, 'detect_browser_ssrf', True),
         detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
+        detect_continuous_agent_action_approval=getattr(config, 'detect_continuous_agent_action_approval', True),
         aggressiveness_level=config.aggressiveness_level,
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
@@ -506,6 +515,7 @@ async def get_agent_sentinel_config(
         enable_tool_analysis=override.enable_tool_analysis,
         enable_shell_analysis=override.enable_shell_analysis,
         aggressiveness_level=override.aggressiveness_level,
+        detect_continuous_agent_action_approval=getattr(override, 'detect_continuous_agent_action_approval', None),
         created_at=override.created_at,
         updated_at=override.updated_at,
     )
@@ -556,6 +566,7 @@ async def update_agent_sentinel_config(
         enable_tool_analysis=override.enable_tool_analysis,
         enable_shell_analysis=override.enable_shell_analysis,
         aggressiveness_level=override.aggressiveness_level,
+        detect_continuous_agent_action_approval=getattr(override, 'detect_continuous_agent_action_approval', None),
         created_at=override.created_at,
         updated_at=override.updated_at,
     )
@@ -752,6 +763,7 @@ async def get_sentinel_prompts(
                 "browser_ssrf": getattr(config, 'browser_ssrf_prompt', None),
                 "agent_escalation": getattr(config, 'agent_escalation_prompt', None),
                 "vector_store_poisoning": getattr(config, 'vector_store_poisoning_prompt', None),
+                "continuous_agent_action_approval": getattr(config, 'continuous_agent_action_approval_prompt', None),
             }
             custom_prompt = prompt_map.get(detection_type)
 
@@ -809,6 +821,7 @@ async def update_sentinel_prompt(
             detect_memory_poisoning=system_config.detect_memory_poisoning,
             detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
             detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
+            detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -826,6 +839,7 @@ async def update_sentinel_prompt(
         "browser_ssrf": "browser_ssrf_prompt",
         "agent_escalation": "agent_escalation_prompt",
         "vector_store_poisoning": "vector_store_poisoning_prompt",
+        "continuous_agent_action_approval": "continuous_agent_action_approval_prompt",
     }
 
     field_name = prompt_field_map.get(detection_type)
@@ -861,12 +875,12 @@ LLM_MODELS = {
         "gemini-2.0-flash-lite",
     ],
     "anthropic": [
+        # Retired claude-3.5-sonnet / claude-3-opus removed from selectable
+        # list (BUG-697). Pricing rows preserved in analytics/token_tracker.py.
         "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
     ],
     "openai": [
         "gpt-4o",
@@ -878,9 +892,8 @@ LLM_MODELS = {
         "google/gemini-2.5-flash",
         "google/gemini-2.5-pro",
         "google/gemini-2.0-flash-thinking-exp",
+        "anthropic/claude-sonnet-4-6",
         "anthropic/claude-sonnet-4-5",
-        "anthropic/claude-3.5-sonnet",
-        "anthropic/claude-3-opus",
         "openai/gpt-4o",
         "openai/gpt-4-turbo",
         "meta-llama/llama-3.1-8b-instruct",

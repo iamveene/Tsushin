@@ -36,15 +36,10 @@ class VectorStore:
         self.embedding_service = embedding_service
         self.logger = logging.getLogger(__name__)
 
-        # Initialize ChromaDB client with persistence
+        # Initialize ChromaDB client via process-wide factory (BUG-695).
         self.logger.info(f"Initializing ChromaDB at {persist_directory}")
-        self.client = chromadb.PersistentClient(
-            path=persist_directory,
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
-        )
+        from chroma_client_factory import get_chroma_client
+        self.client = get_chroma_client(persist_directory)
 
         # Get or create collection for messages
         self.collection = self.client.get_or_create_collection(

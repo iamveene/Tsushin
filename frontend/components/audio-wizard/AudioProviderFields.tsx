@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
-import type { TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
+import type { ASRInstance, TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
@@ -430,6 +430,216 @@ export function AudioVoiceFields({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+export type ASRUsageMode = 'openai' | 'tenant_default' | 'instance'
+
+export interface AudioTranscriptFieldsValue {
+  responseMode?: 'conversational' | 'transcript_only'
+  language: string
+  model: string
+  asrMode: ASRUsageMode
+  asrInstanceId: number | null
+}
+
+export interface AudioTranscriptFieldsProps {
+  value: AudioTranscriptFieldsValue
+  onChange: (patch: Partial<AudioTranscriptFieldsValue>) => void
+  showResponseMode?: boolean
+}
+
+export function AudioTranscriptFields({
+  value,
+  onChange,
+  showResponseMode = true,
+}: AudioTranscriptFieldsProps) {
+  const [instances, setInstances] = useState<ASRInstance[]>([])
+  const [defaultAsr, setDefaultAsr] = useState<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.getASRInstances().catch(() => []),
+      api.getDefaultASRInstance().catch(() => ({ default_asr_instance_id: null, provider: 'openai', instance: null })),
+    ]).then(([loadedInstances, loadedDefault]) => {
+      if (cancelled) return
+      setInstances(loadedInstances)
+      setDefaultAsr(loadedDefault)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const selectedInstance = useMemo(
+    () => instances.find(inst => inst.id === value.asrInstanceId) || null,
+    [instances, value.asrInstanceId],
+  )
+
+  const chooseMode = (mode: ASRUsageMode) => {
+    if (mode === 'instance') {
+      const nextId = value.asrInstanceId ?? instances[0]?.id ?? null
+      onChange({ asrMode: mode, asrInstanceId: nextId })
+      return
+    }
+    onChange({ asrMode: mode, asrInstanceId: null })
+  }
+
+  return (
+    <div className="space-y-4">
+      {showResponseMode && (
+        <div>
+          <label className="block text-sm font-medium mb-3">Response mode</label>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'conversational' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                (value.responseMode || 'conversational') === 'conversational'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Conversational</div>
+              <div className="text-xs text-gray-400 mt-1">Transcribe audio, then let the agent respond normally.</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'transcript_only' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                value.responseMode === 'transcript_only'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Transcript only</div>
+              <div className="text-xs text-gray-400 mt-1">Return the raw transcript without generating an AI reply.</div>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className="block text-sm font-medium mb-3">ASR backend</label>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => chooseMode('openai')}
+            className={`w-full text-left p-4 rounded-xl border transition-colors ${
+              value.asrMode === 'openai'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">OpenAI Whisper</div>
+            <div className="text-xs text-gray-400 mt-1">Cloud transcription path. Requires OpenAI credentials in Hub.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => chooseMode('tenant_default')}
+            className={`w-full text-left p-4 rounded-xl border transition-colors ${
+              value.asrMode === 'tenant_default'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">Use tenant default</div>
+            <div className="text-xs text-gray-400 mt-1">
+              {defaultAsr?.instance
+                ? `Currently resolves to ${defaultAsr.instance.instance_name}.`
+                : 'No local default is set yet, so this falls back to OpenAI Whisper.'}
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => chooseMode('instance')}
+            disabled={instances.length === 0}
+            className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              value.asrMode === 'instance'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">Pin a specific local instance</div>
+            <div className="text-xs text-gray-400 mt-1">
+              {instances.length > 0
+                ? 'Useful when this agent should stay on one dedicated Whisper/Speaches node.'
+                : 'No local ASR instances available yet. Create one in Settings → ASR.'}
+            </div>
+          </button>
+        </div>
+      </div>
+
+      {value.asrMode === 'instance' && instances.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium mb-2">Local instance</label>
+          <select
+            value={value.asrInstanceId ?? ''}
+            onChange={(e) => onChange({ asrInstanceId: e.target.value ? Number(e.target.value) : null })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            {instances.map(inst => (
+              <option key={inst.id} value={inst.id}>
+                {inst.instance_name} ({inst.container_status || 'none'})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-sm font-medium mb-2">Language detection</label>
+          <select
+            value={value.language || 'auto'}
+            onChange={(e) => onChange({ language: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="pt">Portuguese</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-2">OpenAI model</label>
+          <select
+            value={value.model || 'whisper-1'}
+            onChange={(e) => onChange({ model: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="whisper-1">whisper-1</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
+        {value.asrMode === 'openai' && (
+          <div>Uses OpenAI Whisper directly. This is the current default behavior for existing agents.</div>
+        )}
+        {value.asrMode === 'tenant_default' && (
+          <div>
+            {defaultAsr?.instance
+              ? `Uses the tenant default ASR instance (${defaultAsr.instance.instance_name}). If that default is cleared later, this agent falls back to OpenAI Whisper.`
+              : 'No tenant default local ASR is set yet, so this mode currently behaves the same as OpenAI Whisper.'}
+          </div>
+        )}
+        {value.asrMode === 'instance' && (
+          <div>
+            {selectedInstance
+              ? `Pins this agent to ${selectedInstance.instance_name}. Tenant default changes will not affect it.`
+              : 'Select a local ASR instance to pin this agent.'}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

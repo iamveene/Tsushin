@@ -33,6 +33,9 @@ class SenderMemory:
 
         # Include metadata if provided (for tool output tracking, etc.)
         if metadata:
+            tool_result = metadata.get("tool_result")
+            if isinstance(tool_result, dict):
+                message["tool_result"] = tool_result
             message["metadata"] = metadata
 
         self.memories[sender_key].append(message)

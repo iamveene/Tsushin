@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -62,6 +62,10 @@ class Config(Base):
 
     # Conversation delay (global, WhatsApp-only)
     whatsapp_conversation_delay_seconds = Column(Float, default=5.0)
+
+    # Agentic loop platform bounds (Track F / v0.7.0)
+    platform_min_agentic_rounds = Column(Integer, nullable=True, default=1)
+    platform_max_agentic_rounds = Column(Integer, nullable=True, default=8)
 
     # Group Message Context
     context_message_count = Column(Integer, default=10)  # Updated from 5 to 10
@@ -393,6 +397,10 @@ class Agent(Base):
     memory_decay_archive_threshold = Column(Float, default=0.05)  # Auto-archive below this effective score
     memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
 
+    # v0.7.0 Track F: bounded outer agentic loop configuration
+    max_agentic_rounds = Column(Integer, nullable=True, default=1)
+    max_agentic_loop_bytes = Column(Integer, nullable=True, default=8192)
+
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
     enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook
@@ -440,6 +448,23 @@ class ContactAgentMapping(Base):
     tenant_id = Column(String(100), nullable=True, index=True)  # BUG-LOG-012: Tenant isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserChannelDefaultAgent(Base):
+    """Per-user default agent override for a channel within a tenant."""
+
+    __tablename__ = "user_channel_default_agent"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False, index=True)
+    user_identifier = Column(String(256), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "user_identifier", name="uq_user_channel_default_agent"),
+    )
 
 
 class ApiKey(Base):
@@ -775,6 +800,11 @@ class AgentSkill(Base):
     skill_type = Column(String(50), nullable=False)  # "audio_transcript" | "audio_response"
     is_enabled = Column(Boolean, default=True)
     config = Column(JSON, default=dict)  # Skill-specific configuration
+    auto_inject_results = Column(Boolean, nullable=True, default=True)
+    skip_ai_on_data_fetch = Column(Boolean, nullable=True, default=False)
+    max_result_bytes = Column(Integer, nullable=True, default=2048)
+    max_results_retained = Column(Integer, nullable=True, default=2)
+    max_turns_lookback = Column(Integer, nullable=True, default=6)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -810,6 +840,9 @@ class CustomSkill(Base):
     sentinel_profile_id = Column(Integer, nullable=True)
     timeout_seconds = Column(Integer, nullable=False, default=30)
     is_enabled = Column(Boolean, nullable=False, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     scan_status = Column(String(20), default='pending')  # pending|clean|rejected
     last_scan_result = Column(JSON, nullable=True)
     version = Column(String(20), nullable=False, default='1.0.0')
@@ -1631,6 +1664,9 @@ class FlowDefinition(Base):
 
     # Existing fields
     is_active = Column(Boolean, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     version = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1643,6 +1679,13 @@ class FlowDefinition(Base):
     # Relationships
     steps = relationship("FlowNode", back_populates="flow", cascade="all, delete-orphan", order_by="FlowNode.position")
     runs = relationship("FlowRun", back_populates="flow", cascade="all, delete-orphan")
+    # v0.7.0: Triggers↔Flows Unification — bindings to one or more triggers.
+    bindings = relationship(
+        "FlowTriggerBinding",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("idx_flow_execution_method", "execution_method"),
@@ -1738,6 +1781,17 @@ class FlowRun(Base):
     trigger_context_json = Column(Text)  # Initial trigger data / input variables
     final_report_json = Column(Text)  # Aggregated summary / output
     error_text = Column(Text)
+
+    # v0.7.0: Triggers↔Flows Unification — correlation back to the
+    # WakeEvent that woke this flow (for triggered flows). NULL for
+    # manual / scheduled / API-driven runs. SET NULL on wake_event
+    # delete (audit retention boundary).
+    trigger_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1838,6 +1892,7 @@ class ConversationThread(Base):
     # State Persistence
     conversation_history = Column(JSON, default=list)  # [{role: 'agent'|'user', content: str, timestamp: str}]
     context_data = Column(JSON, default=dict)  # Extracted data from conversation (for use in subsequent steps)
+    agentic_scratchpad = Column(JSON, nullable=True)  # Bounded multi-round agentic loop trace
 
     # Goal tracking
     goal_achieved = Column(Boolean, default=False)
@@ -1980,6 +2035,76 @@ class AmadeusIntegration(HubIntegration):
     __mapper_args__ = {
         'polymorphic_identity': 'amadeus',
     }
+
+
+class JiraIntegration(HubIntegration):
+    """
+    Jira Tool API Integration.
+    Stores tenant-scoped Jira Cloud connection settings for Jira triggers.
+    """
+    __tablename__ = "jira_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+    # 'programmatic' = REST API + token (shipped); 'agentic' = Atlassian Remote
+    # MCP (OAuth 2.1) — UI exposes the option as "coming soon" but backend
+    # rejects this value with 400 until the agentic transport ships.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'jira',
+    }
+
+    __table_args__ = (
+        Index("idx_jira_integration_site_url", "site_url"),
+        Index("idx_jira_integration_auth_email", "auth_email"),
+    )
+
+
+class GitHubIntegration(HubIntegration):
+    """
+    GitHub Hub Integration.
+
+    Stores tenant-scoped GitHub connection settings used by the
+    ``code_repository`` skill. The ``provider`` column is currently always
+    ``github`` but is reserved so the table can host other repository
+    providers (Bitbucket, GitLab) in the future.
+
+    Auth today: Personal Access Token (PAT). ``auth_method`` reserves space
+    for ``app`` (GitHub App installation) when that ships.
+
+    Mirrors the shape of :class:`JiraIntegration` exactly (polymorphic
+    single-table-inheritance subclass of ``HubIntegration``).
+    """
+    __tablename__ = "github_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    # Reserved for future providers (bitbucket, gitlab). Always 'github' today.
+    provider = Column(String(32), nullable=False, server_default="github")
+    # 'pat' (shipped) | 'app' (reserved — GitHub App installation flow)
+    auth_method = Column(String(20), nullable=False, server_default="pat")
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    # Optional default repo owner / name surfaced in the UI as a convenience
+    # so callers don't have to specify both each request.
+    default_owner = Column(String(100), nullable=True)
+    default_repo = Column(String(100), nullable=True)
+    # 'programmatic' = REST API + PAT (shipped); 'agentic' reserved for a
+    # future GitHub MCP transport. Backend rejects 'agentic' until shipped.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'github',
+    }
+
+    __table_args__ = (
+        Index("idx_github_integration_provider", "provider"),
+        Index("idx_github_integration_default_owner", "default_owner"),
+    )
 
 
 # ============================================================================
@@ -2240,6 +2365,7 @@ class SentinelConfig(Base):
     detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
     detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
     detect_vector_store_poisoning = Column(Boolean, default=True, nullable=False)
+    detect_continuous_agent_action_approval = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
@@ -2258,6 +2384,7 @@ class SentinelConfig(Base):
     memory_poisoning_prompt = Column(Text, nullable=True)
     browser_ssrf_prompt = Column(Text, nullable=True)
     vector_store_poisoning_prompt = Column(Text, nullable=True)
+    continuous_agent_action_approval_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache
@@ -2327,6 +2454,7 @@ class SentinelAgentConfig(Base):
     # Vector store access controls (Item 5)
     vector_store_access_enabled = Column(Boolean, nullable=True)  # NULL = inherit
     vector_store_allowed_configs = Column(JSON, nullable=True)  # List of allowed VectorStoreInstance IDs
+    detect_continuous_agent_action_approval = Column(Boolean, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -2357,7 +2485,7 @@ class SentinelAnalysisLog(Base):
 
     # Analysis classification
     analysis_type = Column(String(30), nullable=False)  # 'prompt', 'tool', 'shell'
-    detection_type = Column(String(30), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
+    detection_type = Column(String(64), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
 
     # Input data (truncated for storage)
     input_content = Column(Text, nullable=False)  # First 500 chars of input
@@ -2410,7 +2538,7 @@ class SentinelAnalysisCache(Base):
     # Cache key components
     input_hash = Column(String(64), nullable=False)  # SHA-256 of input
     analysis_type = Column(String(30), nullable=False)
-    detection_type = Column(String(30), nullable=False)
+    detection_type = Column(String(64), nullable=False)
     aggressiveness_level = Column(Integer, nullable=False)
 
     # Cached results
@@ -2835,6 +2963,7 @@ class WhatsAppMCPInstance(Base):
     # Token-based auth to prevent cross-tenant MCP access
     api_secret = Column(String(64), nullable=True)  # 32-byte hex-encoded secret
     api_secret_created_at = Column(DateTime, nullable=True)  # For rotation tracking
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Relationships
     # tenant = relationship("Tenant")  # Requires models_rbac import
@@ -2889,6 +3018,7 @@ class TelegramBotInstance(Base):
 
     # Metadata
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -2931,6 +3061,7 @@ class SlackIntegration(Base):
     last_health_check = Column(DateTime, nullable=True)      # v0.6.0 Item 38
     dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
     allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -2970,6 +3101,7 @@ class DiscordIntegration(Base):
     dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
     allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
     guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -3042,6 +3174,8 @@ class WebhookIntegration(Base):
     # Retry config
     max_retry_attempts = Column(Integer, default=3)
     retry_timeout_seconds = Column(Integer, default=300)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    trigger_criteria = Column(JSON, nullable=True)
 
     # Audit
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
@@ -3051,6 +3185,504 @@ class WebhookIntegration(Base):
     __table_args__ = (
         Index("idx_webhook_integration_tenant", "tenant_id"),
         Index("idx_webhook_integration_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Triggers↔Flows Unification — flow_trigger_binding + webhook payload capture
+# ============================================================================
+
+
+class FlowTriggerBinding(Base):
+    """
+    v0.7.0: Edge between a trigger (channel instance) and a Flow.
+
+    One Flow can listen to N triggers (fan-in across kinds). One trigger
+    can wake N Flows (fan-out). Combined with the new ``source`` step
+    type, this is what lets ``trigger_dispatch_service`` enqueue
+    FlowRuns alongside the legacy ContinuousRuns.
+
+    ``trigger_instance_id`` is a *semantic* FK into one of the per-kind
+    channel-instance tables (jira_trigger / email_trigger /
+    github_trigger / schedule_trigger / webhook_integration). It is NOT
+    declared as a SQL FK because there is no single target table —
+    binding cleanup on trigger DELETE is handled application-side by
+    ``flow_binding_service.delete_bindings_for_trigger``.
+
+    Phase A auto-generation (Wave 4) creates a binding row for every
+    new trigger with ``is_system_managed=True`` so the auto-flow can be
+    distinguished from user-authored bindings.
+
+    Whole feature is gated by ``TSN_FLOWS_TRIGGER_BINDING_ENABLED``
+    (default false in 0.7.0).
+    """
+    __tablename__ = "flow_trigger_binding"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    flow_definition_id = Column(
+        Integer,
+        ForeignKey("flow_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    # Pointer to the FlowNode of type 'source' inside the bound flow.
+    # SET NULL on flow_node delete so a Source-step deletion doesn't
+    # orphan the binding row; FlowEngine recreates it lazily.
+    source_node_id = Column(
+        Integer,
+        ForeignKey("flow_node.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # When True: dispatch skips the legacy ContinuousRun for this
+    # (kind, instance_id), letting the bound Flow take over fully.
+    # Default False on backfilled rows for parallel-run safety; new
+    # user-authored bindings default True (clean ownership).
+    suppress_default_agent = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    # Marks the auto-generated 1-flow-per-trigger row created by Phase A.
+    is_system_managed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    flow = relationship("FlowDefinition", back_populates="bindings")
+    source_node = relationship("FlowNode")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "flow_definition_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_flow_trigger_binding_unique",
+        ),
+        Index(
+            "ix_flow_trigger_binding_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id", "is_active",
+        ),
+        Index("ix_flow_trigger_binding_flow", "flow_definition_id"),
+    )
+
+
+class WebhookPayloadCapture(Base):
+    """
+    v0.7.0: Last-N (default 5) inbound payloads per webhook integration.
+
+    Used by Wave 5's frontend autocomplete to infer
+    ``{{source.payload.*}}`` paths in the Flow editor. The ringbuffer
+    is enforced application-side in ``routes_webhook_inbound.py`` after
+    a successful dispatch — older rows are deleted to keep at most the
+    5 most recent for each ``(tenant_id, webhook_id)``.
+
+    Payload is stored as text (truncated to ~64KB at write time).
+    Headers are minimally redacted (auth/cookie stripped). Both fields
+    are JSON.parse'd at read time.
+    """
+    __tablename__ = "webhook_payload_capture"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    webhook_id = Column(
+        Integer,
+        ForeignKey("webhook_integration.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    captured_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    headers_json = Column(Text, nullable=True)
+    dedupe_key = Column(String(512), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_payload_capture_recent",
+            "tenant_id", "webhook_id", "captured_at",
+        ),
+    )
+
+
+# ============================================================================
+# v0.7.0: Email Trigger Instances
+# ============================================================================
+
+class EmailChannelInstance(Base):
+    """
+    v0.7.0: Persisted email trigger configuration.
+
+    Phase 1 stores the control-plane row only: which Gmail integration to
+    watch, which agent should receive wakeups by default, and the basic
+    query/poll metadata the later EmailTrigger adapter will consume.
+    """
+    __tablename__ = "email_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    provider = Column(String(32), default="gmail", nullable=False)
+    gmail_integration_id = Column(Integer, ForeignKey("gmail_integration.id", ondelete="CASCADE"), nullable=True, index=True)
+    search_query = Column(String(500), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=60, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)  # active | paused | error
+    health_status = Column(String(20), default="unknown", nullable=False)  # unknown | healthy | unhealthy
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_email_channel_instance_tenant", "tenant_id"),
+        Index("idx_email_channel_instance_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Jira, Schedule, and GitHub Trigger Instances
+# ============================================================================
+
+class JiraChannelInstance(Base):
+    """Persisted Jira trigger configuration for JQL-polled wake events."""
+
+    __tablename__ = "jira_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    jql = Column(Text, nullable=False)
+    jira_integration_id = Column(Integer, ForeignKey("jira_integration.id", ondelete="SET NULL"), nullable=True, index=True)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=300, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    jira_integration = relationship("JiraIntegration")
+
+    __table_args__ = (
+        Index("idx_jira_channel_instance_tenant", "tenant_id"),
+        Index("idx_jira_channel_instance_status", "status"),
+        Index("idx_jira_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_jira_channel_instance_jira_integration_id", "jira_integration_id"),
+    )
+
+
+class ScheduleChannelInstance(Base):
+    """Persisted cron-style trigger configuration for scheduled wake events."""
+
+    __tablename__ = "schedule_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    cron_expression = Column(String(120), nullable=False)
+    timezone = Column(String(64), default="UTC", nullable=False)
+    payload_template = Column(JSON, nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    next_fire_at = Column(DateTime, nullable=True, index=True)
+    last_fire_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_schedule_channel_instance_tenant", "tenant_id"),
+        Index("idx_schedule_channel_instance_status", "status"),
+        Index("idx_schedule_channel_instance_next_fire_at", "next_fire_at"),
+        Index("idx_schedule_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+class GitHubChannelInstance(Base):
+    """Persisted GitHub trigger configuration for signed webhook deliveries."""
+
+    __tablename__ = "github_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    auth_method = Column(String(20), default="pat", nullable=False)  # pat | app
+    repo_owner = Column(String(100), nullable=False)
+    repo_name = Column(String(100), nullable=False)
+    installation_id = Column(String(64), nullable=True)
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    webhook_secret_encrypted = Column(Text, nullable=True)
+    webhook_secret_preview = Column(String(32), nullable=True)
+    events = Column(JSON, nullable=True)
+    branch_filter = Column(String(255), nullable=True)
+    path_filters = Column(JSON, nullable=True)
+    author_filter = Column(String(255), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    last_delivery_id = Column(String(128), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_github_channel_instance_tenant", "tenant_id"),
+        Index("idx_github_channel_instance_status", "status"),
+        Index("idx_github_channel_instance_repo", "tenant_id", "repo_owner", "repo_name"),
+        Index("idx_github_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+# ============================================================================
+# v0.7.0 Phase 2: Continuous-Agent Control Plane
+# ============================================================================
+
+class DeliveryPolicy(Base):
+    """
+    Tenant-owned policy controlling wake-event batching, dedupe, and delivery
+    timing for continuous agents.
+    """
+    __tablename__ = "delivery_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    batch_window_seconds = Column(Integer, default=0, nullable=False)
+    dedupe_window_seconds = Column(Integer, default=300, nullable=False)
+    quiet_hours = Column(JSON, nullable=True)
+    importance_threshold = Column(String(16), default="normal", nullable=False)
+    cooldown_seconds = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_delivery_policy_tenant_name"),
+        Index("ix_delivery_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class BudgetPolicy(Base):
+    """
+    Tenant-owned budget/rate policy for continuous-agent execution.
+    on_exhaustion: pause | degrade_to_hybrid | notify_only.
+    """
+    __tablename__ = "budget_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    max_runs_per_day = Column(Integer, nullable=True)
+    max_agentic_runs_per_day = Column(Integer, nullable=True)
+    max_tokens_per_day = Column(BigInteger, nullable=True)
+    max_tool_invocations_per_day = Column(Integer, nullable=True)
+    on_exhaustion = Column(String(32), default="pause", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_budget_policy_tenant_name"),
+        Index("ix_budget_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class ContinuousAgent(Base):
+    """Always-on wrapper around an Agent. CRUD exposed via routes_continuous."""
+    __tablename__ = "continuous_agent"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=True)
+    execution_mode = Column(String(16), default="hybrid", nullable=False)  # autonomous | hybrid | notify_only
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    budget_policy_id = Column(Integer, ForeignKey("budget_policy.id", ondelete="SET NULL"), nullable=True)
+    approval_policy_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent", foreign_keys=[agent_id])
+    delivery_policy = relationship("DeliveryPolicy")
+    budget_policy = relationship("BudgetPolicy")
+    subscriptions = relationship(
+        "ContinuousSubscription",
+        primaryjoin="ContinuousAgent.id == ContinuousSubscription.continuous_agent_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_continuous_agent_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_agent_agent", "agent_id"),
+    )
+
+
+class ContinuousSubscription(Base):
+    """
+    Links a continuous agent to a trigger/channel instance that can emit wakes.
+    channel_instance_id is validated by service/API code because the instance
+    table varies by channel_type.
+    """
+    __tablename__ = "continuous_subscription"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    action_config = Column(JSON, nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent", overlaps="subscriptions")
+    delivery_policy = relationship("DeliveryPolicy")
+
+    __table_args__ = (
+        Index("ix_continuous_subscription_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_subscription_instance", "tenant_id", "channel_type", "channel_instance_id"),
+    )
+
+
+class WakeEvent(Base):
+    """
+    Audit-style event emitted by a trigger and consumed by a continuous run.
+    Payload content is not stored inline in v0.7.0 A2; payload_ref points to an
+    opaque local file path or future blob key after upstream redaction.
+    """
+    __tablename__ = "wake_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    continuous_subscription_id = Column(Integer, ForeignKey("continuous_subscription.id", ondelete="SET NULL"), nullable=True, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=False)
+    occurred_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    dedupe_key = Column(String(512), nullable=False)
+    importance = Column(String(16), default="normal", nullable=False)  # low | normal | high
+    payload_ref = Column(String(512), nullable=True)
+    status = Column(String(16), default="pending", nullable=False)  # pending | claimed | processed | filtered | failed
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    continuous_agent = relationship("ContinuousAgent")
+    continuous_subscription = relationship("ContinuousSubscription")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "channel_instance_id", "dedupe_key", name="uq_wake_event_dedupe"),
+        Index("ix_wake_event_tenant_occurred", "tenant_id", "occurred_at"),
+        Index("ix_wake_event_continuous_agent", "continuous_agent_id", "occurred_at"),
+        Index("ix_wake_event_subscription", "continuous_subscription_id", "occurred_at"),
+    )
+
+
+class ContinuousRun(Base):
+    """
+    Execution history for a continuous-agent wake. It is retained with
+    RESTRICT tenant semantics for audit/incident review.
+    """
+    __tablename__ = "continuous_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    wake_event_ids = Column(JSON, nullable=True)
+    execution_mode = Column(String(16), nullable=True)
+    status = Column(String(16), default="queued", nullable=False)  # queued | running | succeeded | failed | cancelled | skipped
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    watcher_run_ref = Column(String(128), nullable=True)
+    memory_refs = Column(JSON, nullable=True)
+    run_threat_signals = Column(JSON, nullable=True)
+    outcome_state = Column(JSON, nullable=True)
+    agentic_scratchpad = Column(JSON, nullable=True)
+    run_type = Column(String(32), default="continuous", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent")
+
+    __table_args__ = (
+        Index("ix_continuous_run_tenant_status", "tenant_id", "status", "started_at"),
+        Index("ix_continuous_run_agent_started", "continuous_agent_id", "started_at"),
+    )
+
+
+class ChannelEventRule(Base):
+    """
+    Per-channel routing rule evaluated before default-agent fallback. Trigger
+    details remain per-type APIs in A2; this table is the generic channel rule
+    contract for later UI/adapter work.
+    """
+    __tablename__ = "channel_event_rule"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    criteria = Column(JSON, nullable=False, default=dict)
+    priority = Column(Integer, default=100, nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "channel_instance_id",
+            "priority",
+            name="uq_channel_event_rule_priority",
+        ),
+        Index("ix_channel_event_rule_instance", "tenant_id", "channel_type", "channel_instance_id", "is_active"),
+        Index("ix_channel_event_rule_agent", "agent_id"),
     )
 
 
@@ -3411,6 +4043,7 @@ class MessageQueue(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
     channel = Column(String(20), nullable=False, index=True)  # "playground"|"whatsapp"|"telegram"|"api"
+    message_type = Column(String(32), nullable=False, default="inbound_message", index=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
     # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
@@ -3436,6 +4069,40 @@ class MessageQueue(Base):
     __table_args__ = (
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
+    )
+
+
+class ChannelEventDedupe(Base):
+    """
+    v0.7.0 Phase 0: durable dedupe/outcome ledger for trigger events.
+    Instance ownership is validated in service code because trigger instance
+    tables vary by channel type.
+    """
+    __tablename__ = "channel_event_dedupe"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    channel_type = Column(String(32), nullable=False)
+    instance_id = Column(Integer, nullable=False)
+    dedupe_key = Column(String(512), nullable=False)
+    outcome = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "instance_id",
+            "dedupe_key",
+            name="uq_channel_event_dedupe",
+        ),
+        Index("ix_channel_event_dedupe_tenant_created", "tenant_id", "created_at"),
+        Index("ix_channel_event_dedupe_instance", "tenant_id", "instance_id", "created_at"),
     )
 
 
@@ -3795,6 +4462,73 @@ class TTSInstance(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "instance_name", name="uq_tts_instance_tenant_name"),
         Index("idx_tsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+# ============================================================================
+# v0.7.0 Track D: ASR Instance (Auto-Provisioned Whisper/Speaches Containers)
+# Per-tenant speech-to-text container lifecycle — mirrors the Kokoro/SearXNG pattern.
+# ============================================================================
+
+class ASRInstance(Base):
+    """Per-tenant ASR provider instance with optional auto-provisioned container.
+
+    Track D starts with vendor='speaches', an OpenAI-compatible Whisper/faster-
+    whisper server that Tsushin provisions per tenant. The row stores the
+    runtime URL plus the encrypted per-instance API token used by the backend
+    provider and warm-up path.
+    """
+    __tablename__ = "asr_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    vendor = Column(String(20), nullable=False, default="speaches")
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection — base_url populated post-provision with DNS alias URL, or
+    # set directly for externally hosted OpenAI-compatible Whisper endpoints.
+    base_url = Column(String(500), nullable=True)
+
+    # Per-instance auth. The token is encrypted at rest using the same
+    # tenant-scoped TokenEncryption conventions as provider API keys.
+    auth_username = Column(String(50), nullable=True, default="tsushin")
+    api_token_encrypted = Column(Text, nullable=True)
+
+    # Default model used for warm-up and as the provider fallback when the
+    # skill config doesn't specify a concrete model id.
+    default_model = Column(
+        String(200),
+        nullable=True,
+        default="Systran/faster-distil-whisper-small.en",
+    )
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+
+    # Auto-provisioning (Docker-managed containers)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_asr_instance_tenant_name"),
+        Index("idx_asri_tenant_vendor", "tenant_id", "vendor"),
     )
 
 
