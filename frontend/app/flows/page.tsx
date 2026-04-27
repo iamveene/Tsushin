@@ -40,6 +40,7 @@ import {
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
+import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import {
   MessageIcon,
@@ -70,6 +71,8 @@ import {
   FileTextIcon,
   ClipboardIcon,
   ShieldCheckIcon,
+  CodeIcon,
+  GitHubIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
@@ -881,10 +884,11 @@ export default function FlowsPage() {
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-medium text-white group-hover:text-teal-400 transition-colors">
                                   {flow.name}
                                 </span>
+                                <TriggerOriginBadge flow={flow} />
                                 {threadCount > 0 && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                     <span className="relative flex h-1.5 w-1.5">
@@ -974,15 +978,29 @@ export default function FlowsPage() {
                                     </svg>
                                   )}
                                 </button>
-                                <button
-                                  onClick={() => handleDeleteFlow(flow.id)}
-                                  className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                                  title="Delete"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
+                                {(() => {
+                                  const canDelete = flow.deletable_by_tenant !== false
+                                  return (
+                                    <button
+                                      onClick={() => canDelete && handleDeleteFlow(flow.id)}
+                                      disabled={!canDelete}
+                                      className={`p-2 rounded-lg transition-colors ${
+                                        canDelete
+                                          ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+                                          : 'text-red-400/30 cursor-not-allowed'
+                                      }`}
+                                      title={
+                                        canDelete
+                                          ? 'Delete'
+                                          : 'Auto-generated from a trigger — delete the trigger to remove this flow.'
+                                      }
+                                    >
+                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  )
+                                })()}
                               </>
                             )}
                           </div>
@@ -1267,6 +1285,37 @@ function TypeBadge({ type }: { type: FlowType }) {
   return (
     <span className={`text-xs font-medium ${colorMap[typeInfo.color] || colorMap.sky}`}>
       {typeInfo.label}
+    </span>
+  )
+}
+
+// v0.7.0 release-finishing — system-managed (auto-generated from a trigger)
+// flow badge. Trigger wizards mint a flow with `is_system_owned=true`; this
+// chip surfaces the origin so operators don't mistake it for a hand-built
+// flow. Renders nothing for user-authored flows.
+const TRIGGER_KIND_BADGE: Record<
+  'jira' | 'email' | 'github' | 'schedule' | 'webhook',
+  { label: string; classes: string; Icon: React.FC<IconProps> }
+> = {
+  jira:     { label: 'Jira Trigger',     classes: 'bg-blue-500/10 border-blue-500/30 text-blue-300',         Icon: CodeIcon },
+  email:    { label: 'Email Trigger',    classes: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300', Icon: EnvelopeIcon },
+  github:   { label: 'GitHub Trigger',   classes: 'bg-violet-500/10 border-violet-500/30 text-violet-300',   Icon: GitHubIcon },
+  schedule: { label: 'Schedule Trigger', classes: 'bg-amber-500/10 border-amber-500/30 text-amber-300',     Icon: CalendarDaysIcon },
+  webhook:  { label: 'Webhook Trigger',  classes: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',         Icon: WebhookIcon },
+}
+
+function TriggerOriginBadge({ flow }: { flow: FlowDefinition }) {
+  if (!flow.is_system_owned) return null
+  const kind = (flow.system_trigger_kind || 'webhook') as keyof typeof TRIGGER_KIND_BADGE
+  const cfg = TRIGGER_KIND_BADGE[kind] || TRIGGER_KIND_BADGE.webhook
+  const Icon = cfg.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border ${cfg.classes}`}
+      title={`Auto-generated from ${kind} trigger — editable, but not deletable. Delete the trigger to remove this flow.`}
+    >
+      <Icon size={12} />
+      {cfg.label}
     </span>
   )
 }
@@ -2429,6 +2478,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
 
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
+
   return (
     <div className="space-y-4">
       {/* Step Name */}
@@ -2548,7 +2605,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -2559,7 +2616,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -2568,21 +2625,25 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.initial_prompt || ''}
               onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
-              placeholder="First message to send..."
+              placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -2761,13 +2822,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -2874,7 +2937,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 {step.config?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -2883,6 +2946,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -2917,13 +2982,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -3159,13 +3225,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -3214,21 +3282,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -3238,6 +3307,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -3795,6 +3866,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
 
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
+
   return (
     <div className="space-y-4">
       {/* Step Name */}
@@ -3914,7 +3993,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -3925,7 +4004,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -3934,21 +4013,25 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.initial_prompt || ''}
               onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
-              placeholder="First message to send..."
+              placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -4112,13 +4195,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -4225,7 +4310,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 {currentConfig?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -4234,6 +4319,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -4268,13 +4355,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -4510,13 +4598,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -4565,21 +4655,22 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -4589,6 +4680,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -4773,7 +4866,10 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white">Edit Flow</h2>
-            <p className="text-sm text-slate-400">Flow #{flowId}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-sm text-slate-400">Flow #{flowId}</p>
+              {flow && <TriggerOriginBadge flow={flow} />}
+            </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">

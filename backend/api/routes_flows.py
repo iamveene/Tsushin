@@ -14,7 +14,7 @@ import logging
 import json
 import asyncio
 
-from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent
+from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent, FlowTriggerBinding
 from auth_dependencies import (
     require_permission,
     get_current_user_required,
@@ -129,6 +129,15 @@ class FlowDefinitionResponse(BaseModel):
     default_agent_id: Optional[int] = None
     # BUG-336: Keyword triggers
     trigger_keywords: Optional[List] = None
+
+    # v0.7.0 release-finishing: surface system-managed trigger metadata so the UI
+    # can render a "Jira/GitHub/Email/... Trigger" badge and disable Delete on
+    # auto-generated flows. All four are additive and default to user-authored
+    # behaviour so existing callers keep working unchanged.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None  # 'jira'|'email'|'github'|'schedule'|'webhook'
 
     class Config:
         from_attributes = True
@@ -310,6 +319,22 @@ def count_flow_nodes(db: Session, flow_id: int) -> int:
 def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
     count = count_flow_nodes(db, flow.id)
+    is_system_owned = bool(getattr(flow, "is_system_owned", False))
+
+    # Only look up the trigger kind for system-managed flows so user-authored
+    # flows pay no extra query cost.
+    system_trigger_kind: Optional[str] = None
+    if is_system_owned:
+        binding_row = (
+            db.query(FlowTriggerBinding.trigger_kind)
+            .filter(
+                FlowTriggerBinding.flow_definition_id == flow.id,
+                FlowTriggerBinding.is_system_managed.is_(True),
+            )
+            .first()
+        )
+        system_trigger_kind = binding_row[0] if binding_row else None
+
     return FlowDefinitionResponse(
         id=flow.id,
         name=flow.name,
@@ -325,7 +350,11 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         scheduled_at=flow.scheduled_at,
         flow_type=flow.flow_type or "workflow",
         default_agent_id=flow.default_agent_id,
-        trigger_keywords=flow.trigger_keywords or []  # BUG-336
+        trigger_keywords=flow.trigger_keywords or [],  # BUG-336
+        is_system_owned=is_system_owned,
+        editable_by_tenant=bool(getattr(flow, "editable_by_tenant", True)),
+        deletable_by_tenant=bool(getattr(flow, "deletable_by_tenant", True)),
+        system_trigger_kind=system_trigger_kind,
     )
 
 
