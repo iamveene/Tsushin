@@ -275,37 +275,6 @@ _PATTERNS: List[Tuple[str, int, float, str, re.Pattern]] = [
             re.IGNORECASE,
         ),
     ),
-    # --- continuous_agent_action_approval -----------------------------------
-    (
-        "continuous_agent_action_approval",
-        1,
-        0.94,
-        "Attempt to bypass continuous-agent approval before outbound action.",
-        re.compile(
-            r"\b("
-            r"(skip|bypass|disable|ignore|suppress)\s+"
-            r"(the\s+)?(approval|human\s+approval|review|confirmation|approval\s+gate)"
-            r"|auto[\s_-]?(approve|send|reply|deliver|publish)"
-            r"|send\s+(the\s+)?(reply|email|message|webhook)\s+"
-            r"(without\s+(asking|approval|confirmation)|silently|automatically)"
-            r")\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "continuous_agent_action_approval",
-        2,
-        0.88,
-        "High-impact trigger action should require approval.",
-        re.compile(
-            r"\b("
-            r"(from|after|when)\s+(this\s+)?(trigger|email|webhook|event)\b"
-            r"[^.\n]{0,120}\b(delete|transfer|invite|rotate|publish|notify|send|reply)\b"
-            r"|trigger\s+fires[^.\n]{0,120}\b(delete|transfer|invite|publish|send|reply)\b"
-            r")",
-            re.IGNORECASE,
-        ),
-    ),
 ]
 
 
@@ -318,7 +287,6 @@ _INSTRUCTION_LIKE_FAMILIES = {
     "prompt_injection",
     "agent_takeover",
     "agent_escalation",
-    "continuous_agent_action_approval",
     "memory_poisoning",
     "vector_store_poisoning",
 }

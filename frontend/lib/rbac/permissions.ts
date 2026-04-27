@@ -57,23 +57,6 @@ export const PERMISSIONS = {
   // Audit Logs
   AUDIT_READ: 'audit.read',
   AUDIT_ALL: 'audit.*',
-
-  // Hub (integrations dashboard, channels, triggers)
-  HUB_READ: 'hub.read',
-  HUB_WRITE: 'hub.write',
-  HUB_ALL: 'hub.*',
-
-  // Flows
-  FLOWS_READ: 'flows.read',
-  FLOWS_WRITE: 'flows.write',
-  FLOWS_EXECUTE: 'flows.execute',
-  FLOWS_ALL: 'flows.*',
-
-  // Triggers (jira/email/github/schedule/webhook channels)
-  TRIGGERS_READ: 'triggers.read',
-  TRIGGERS_WRITE: 'triggers.write',
-  TRIGGERS_DELETE: 'triggers.delete',
-  TRIGGERS_ALL: 'triggers.*',
 } as const
 
 export type PermissionKey = keyof typeof PERMISSIONS
@@ -94,9 +77,6 @@ export function getPermissionsForRole(role: string): string[] {
         PERMISSIONS.ORG_ALL,
         PERMISSIONS.BILLING_ALL,
         PERMISSIONS.AUDIT_READ,
-        PERMISSIONS.HUB_ALL,
-        PERMISSIONS.FLOWS_ALL,
-        PERMISSIONS.TRIGGERS_ALL,
       ]
 
     case 'admin':
@@ -109,9 +89,6 @@ export function getPermissionsForRole(role: string): string[] {
         PERMISSIONS.ORG_WRITE,
         PERMISSIONS.ORG_READ,
         PERMISSIONS.AUDIT_READ,
-        PERMISSIONS.HUB_ALL,
-        PERMISSIONS.FLOWS_ALL,
-        PERMISSIONS.TRIGGERS_ALL,
       ]
 
     case 'member':
@@ -126,13 +103,6 @@ export function getPermissionsForRole(role: string): string[] {
         PERMISSIONS.INTEGRATIONS_READ,
         PERMISSIONS.INTEGRATIONS_LINK,
         PERMISSIONS.INTEGRATIONS_CONFIGURE,
-        PERMISSIONS.HUB_READ,
-        PERMISSIONS.HUB_WRITE,
-        PERMISSIONS.FLOWS_READ,
-        PERMISSIONS.FLOWS_WRITE,
-        PERMISSIONS.FLOWS_EXECUTE,
-        PERMISSIONS.TRIGGERS_READ,
-        PERMISSIONS.TRIGGERS_WRITE,
       ]
 
     case 'readonly':
@@ -141,9 +111,6 @@ export function getPermissionsForRole(role: string): string[] {
         PERMISSIONS.CONTACTS_READ,
         PERMISSIONS.MEMORY_READ,
         PERMISSIONS.INTEGRATIONS_READ,
-        PERMISSIONS.HUB_READ,
-        PERMISSIONS.FLOWS_READ,
-        PERMISSIONS.TRIGGERS_READ,
       ]
 
     case 'global_admin':

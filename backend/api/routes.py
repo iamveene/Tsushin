@@ -106,39 +106,6 @@ def health_check():
     }
 
 
-@router.get("/api/system/public-info")
-def public_system_info():
-    """
-    BUG-720: small public-info endpoint that lets client components reason
-    about the install (currently: SSL mode, so the beacon registration UI
-    can emit `curl -k` for self-signed deployments). No tenant data, no
-    secrets — only deployment-level posture flags.
-    """
-    import os
-    import settings
-
-    raw_mode = (
-        os.environ.get("TSN_SSL_MODE")
-        or os.environ.get("SSL_MODE")
-        or ""
-    ).strip().lower()
-    if raw_mode in ("", "off", "none", "disabled"):
-        normalized_mode = "disabled"
-    elif raw_mode in ("self-signed", "selfsigned"):
-        normalized_mode = "selfsigned"
-    elif raw_mode in ("letsencrypt", "le"):
-        normalized_mode = "letsencrypt"
-    elif raw_mode == "manual":
-        normalized_mode = "manual"
-    else:
-        normalized_mode = raw_mode
-
-    return {
-        "ssl_mode": normalized_mode,
-        "version": settings.SERVICE_VERSION,
-    }
-
-
 @router.get("/api/readiness", response_model=ReadinessResponse)
 def readiness_check():
     """
@@ -710,7 +677,6 @@ async def trigger_test(
     """
     from models import Agent, Contact
     import json
-    from services.default_agent_service import get_default_agent
 
     # Load agent configuration with tenant check
     if request.agent_id:
@@ -720,17 +686,12 @@ async def trigger_test(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found or access denied")
     else:
-        resolved_agent_id = get_default_agent(
-            db=db,
-            tenant_id=ctx.tenant_id,
-            channel_type="playground",
-            user_identifier=request.sender_key,
-        )
-        if not resolved_agent_id:
-            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
+        # Use default agent from user's tenant
         agent = ctx.filter_by_tenant(
             db.query(Agent), Agent.tenant_id
-        ).filter(Agent.id == resolved_agent_id).first()
+        ).filter(Agent.is_default == True).first()
+        if not agent:
+            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
 
     # Build config_dict from agent
     # Get agent name from contact relationship

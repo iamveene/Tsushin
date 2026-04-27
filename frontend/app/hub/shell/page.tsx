@@ -147,10 +147,6 @@ export default function ShellDashboardPage() {
   const [sentinelLoading, setSentinelLoading] = useState(false)
   const [savingSentinel, setSavingSentinel] = useState(false)
 
-  // BUG-720: SSL mode drives whether the inline beacon registration `curl`
-  // command needs `-k` (or `--insecure`) for self-signed installs.
-  const [sslMode, setSslMode] = useState<string | null>(null)
-
   const apiUrl = ''
 
   const loadIntegrations = useCallback(async () => {
@@ -224,28 +220,6 @@ export default function ShellDashboardPage() {
     }, 10000)
     return () => clearInterval(interval)
   }, [loadIntegrations, loadCommands, loadApprovals, loadPatterns, loadSentinelData])
-
-  // BUG-720: detect SSL_MODE once so the inline registration curl command
-  // can append `-k` for self-signed installs.
-  useEffect(() => {
-    let cancelled = false
-    const detect = async () => {
-      try {
-        const resp = await authenticatedFetch(`${apiUrl}/api/system/public-info`)
-        if (!resp.ok) return
-        const data = await resp.json()
-        if (!cancelled && typeof data?.ssl_mode === 'string') {
-          setSslMode(data.ssl_mode.toLowerCase())
-        }
-      } catch {
-        // Non-fatal: assume non-self-signed if detection fails.
-      }
-    }
-    detect()
-    return () => {
-      cancelled = true
-    }
-  }, [apiUrl])
 
   // Reload patterns when inactive filter changes
   useEffect(() => {
@@ -1522,15 +1496,13 @@ export default function ShellDashboardPage() {
                     </a>
                   </div>
 
-                  {/* Option 2: One-liner install
-                      BUG-720: emit `curl -k` for SSL_MODE=selfsigned so the
-                      first registration attempt does not fail the self-signed
-                      cert check. Auto / letsencrypt installs do not need it. */}
-                  {(() => {
-                    const isSelfSigned = sslMode === 'selfsigned'
-                    const curlInsecure = isSelfSigned ? ' -k' : ''
-                    const installScript = `# Download and install beacon
-curl -L${curlInsecure} -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
+                  {/* Option 2: One-liner install */}
+                  <div className="mb-4">
+                    <p className="text-sm text-gray-400 mb-2">Option 2: Quick install (copy & paste in target terminal):</p>
+                    <div className="relative">
+                      <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
+{`# Download and install beacon
+curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
 unzip beacon.zip && \\
 cd shell_beacon && \\
 pip install -r requirements.txt
@@ -1539,35 +1511,31 @@ pip install -r requirements.txt
 python run.py \\
   --server "${apiUrl}/api/shell" \\
   --api-key "${newApiKey}" \\
-  --persistence install`
-                    return (
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-400 mb-2">Option 2: Quick install (copy & paste in target terminal):</p>
-                        <div className="relative">
-                          <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
-{installScript}
-                          </pre>
-                          <button
-                            onClick={() => {
-                              copyToClipboard(installScript);
-                              setSuccess('Install script copied!');
-                              setTimeout(() => setSuccess(null), 2000);
-                            }}
-                            className="absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
-                          >
-                            📋 Copy
-                          </button>
-                        </div>
-                        {isSelfSigned && (
-                          <p className="text-xs text-amber-400 mt-2">
-                            <code>-k</code> is required because this install uses a self-signed
-                            certificate. Production installs (<code>auto</code> /{' '}
-                            <code>letsencrypt</code>) do not need this flag.
-                          </p>
-                        )}
-                      </div>
-                    )
-                  })()}
+  --persistence install`}
+                      </pre>
+                      <button
+                        onClick={() => {
+                          const cmd = `# Download and install beacon
+curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
+unzip beacon.zip && \\
+cd shell_beacon && \\
+pip install -r requirements.txt
+
+# Run beacon with auto-start persistence (survives reboots)
+python run.py \\
+  --server "${apiUrl}/api/shell" \\
+  --api-key "${newApiKey}" \\
+  --persistence install`;
+                          copyToClipboard(cmd);
+                          setSuccess('Install script copied!');
+                          setTimeout(() => setSuccess(null), 2000);
+                        }}
+                        className="absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+                      >
+                        📋 Copy
+                      </button>
+                    </div>
+                  </div>
 
                   {/* Option 3: Run command only */}
                   <div className="mb-4">

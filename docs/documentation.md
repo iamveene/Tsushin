@@ -4,7 +4,7 @@
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
-> **Version:** v0.7.0 (`README.md`, `backend/settings.py`).
+> **Version:** v0.6.0 (`README.md`, `backend/settings.py`).
 > **License:** MIT. **Author:** Marcos Vinicios Penha ([@iamveene](https://github.com/iamveene)).
 
 ---
@@ -131,225 +131,6 @@ Tsushin spawns per-tenant containers outside the compose stack, all joining `tsu
 
 Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.py:114`, `backend/services/mcp_container_manager.py:234`.
 
-### 2.4 v0.7.0 Phase 0 foundation
-
-v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent, Whisper/Speaches, and policy tracks build on.
-
-* **Migration slots** — `docs/internal/v0.7.0-migration-slots.md` reserves `0045-0058` so parallel release tracks do not collide; Track D's tenant-default ASR follow-up uses `0059` after the readiness audit found Track F already owns `0049`.
-* **Queue durability** — `message_queue.message_type` distinguishes `inbound_message`, `trigger_event`, and `continuous_task`; Phase 0 keeps `agent_id` and `sender_key` non-null.
-* **Trigger-event dedupe** — `channel_event_dedupe` stores tenant-scoped idempotency outcomes with audit-style retention.
-* **Container ports** — `backend/services/container_runtime.py` owns inclusive `PORT_RANGES` for dynamically managed services, including Whisper/Speaches on `6400-6499` and SearXNG on `6500-6599`.
-* **Track D ASR completion** — `backend/models.py` now includes `ASRInstance`, `backend/models_rbac.py` adds `Tenant.default_asr_instance_id` (migration `0059`, intentionally after Track A `0051` because Track F owns `0049`), and `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` provide the tenant-scoped Whisper/Speaches lifecycle plus `/api/settings/asr/default`. `audio_transcript.py` now resolves `audio_transcript.config.asr_mode` (`openai` / `tenant_default` / `instance`) so agents can stay on OpenAI Whisper, follow the tenant default, or pin a specific local ASR instance. Frontend delivery includes `/settings/asr`, the Audio Agents Wizard, the regular Agent Wizard audio step, and Agent Skills Manager.
-* **Sentinel detection defaults** — `continuous_agent_action_approval` is registered as a first-class detection type and exposed through `/api/sentinel/detection-types`. Alembic `0055` widens Sentinel detection-type log/cache columns to 64 characters so this long detection id can be cached and audited without truncation.
-* **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
-* **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable. Phase 3.1 draft validation later adds the stricter `gmail.compose` requirement because Gmail drafts are not covered by `gmail.send` alone.
-
-### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
-
-The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
-
-* **Entry-point split** — `backend/channels/base.py` now defines `EntryPoint` / `Channel`, `backend/channels/trigger.py` adds `Trigger`, and `backend/channels/registry.py` plus `backend/channels/dispatch.py` distinguish conversational send paths from trigger callbacks.
-* **Webhook is now cataloged as a trigger** — `backend/channels/catalog.py` exposes separate `CHANNEL_CATALOG` and `TRIGGER_CATALOG`; `GET /api/channels` no longer lists webhook while `GET /api/triggers` does, and canonical webhook CRUD lives under `/api/triggers/webhook/*`.
-* **Default-agent v2 foundation** — Alembic `0046` adds per-instance `default_agent_id` columns plus `user_channel_default_agent`, and `backend/services/default_agent_service.py` centralizes channel-vs-trigger resolution while preserving legacy reverse-FK bindings as fallback during the migration window.
-* **Hub communication split** — the Hub Communication page now renders dedicated **Communication Channels** and **Webhook Triggers** sections, and the guided `+ Add Channel` launcher excludes webhook.
-* **Phase 6 prep-only hardening** — `backend/agent/agent_service.py` now routes tool-call parsing through one boundary, and `backend/agent/skills/skill_manager.py` audits reserved config keys ahead of scratchpad / queue metadata work. No agentic-loop schema/API changes have landed yet.
-
-### 2.6 v0.7.0 Wave 1 checkpoint (Track G Gmail send foundation)
-
-The first Gmail-send slice is also merged on `release/0.7.0`, but it is still a checkpoint rather than the full Phase 3 email-trigger flow.
-
-* **Outbound Gmail operations** — `backend/hub/google/gmail_service.py`, `backend/services/email_command_service.py`, and `backend/agent/skills/gmail_skill.py` now support send, reply, and draft actions in addition to read/search/list operations.
-* **Fail-closed outbound scopes** — send/reply now require a Gmail send-compatible scope (`gmail.send`, `gmail.compose`, `gmail.modify`, or `mail.google.com/`), while draft creation requires a draft-compatible scope (`gmail.compose`, `gmail.modify`, or `mail.google.com/`). Older read-only OAuth tokens stay readable but cannot send until the tenant reauthorizes.
-* **Hub/API reauth contract** — Gmail reauthorization surfaces request `include_send_scope=true`, which now adds both `gmail.send` and `gmail.compose`, so the upgrade path for full outbound send + draft support is explicit in both API and UI flows.
-* **User-facing capability copy** — the Gmail setup wizard and `/email info` output now distinguish between "send/reply only" and full "send + draft" readiness instead of assuming `gmail.send` covers every outbound action.
-* **Regression coverage** — `backend/tests/test_gmail_send_phase3_checkpoint.py` covers send, reply, draft, and scope-gating behavior. `backend/tests/test_gmail_send_phase3_live_gate.py` is an opt-in root-only live proof that stays skipped unless `TSN_RUN_GMAIL_PHASE3_LIVE_GATE=1` is set; once enabled, it fails if the fixture lacks a draft-compatible Gmail scope. The fixture was reauthorized with `gmail.compose` for `mv@archsec.io` during the Phase 3 exit gate, and the live proof now covers direct send, direct reply, `GmailSkill` send, and draft creation. The optional agent-chat/API proof still requires `TSN_RUN_GMAIL_AGENT_CHAT_LIVE_GATE=1` plus API endpoint/token/agent env vars.
-
-### 2.7 v0.7.0 Wave 1 checkpoint (Track A Phase 1 control plane)
-
-Track A Phase 1 now has the routing-control surfaces needed before continuous-agent work can stack on top.
-
-* **Persisted email trigger rows** — Alembic `0051` adds `EmailChannelInstance`, and Alembic `0061` adds `trigger_criteria` so Gmail-backed trigger rows persist the same criteria/query/definition envelope used by Jira and the other trigger types. `backend/api/routes_email_triggers.py` exposes CRUD, test-query, poll-now, triage, and managed notification endpoints for rows with a trigger name, Gmail integration, per-trigger `default_agent_id`, optional Gmail search query, poll interval, and active/paused status.
-* **Default-agent control plane** — `backend/api/routes_default_agents.py` plus `/settings/default-agents` expose tenant defaults, per-instance channel defaults, per-instance trigger defaults, and per-user channel overrides while keeping resolution centralized in `backend/services/default_agent_service.py`.
-* **Hub trigger launcher** — `frontend/components/ui/Wizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`, and `frontend/components/triggers/EmailTriggerWizard.tsx` add a real Trigger setup path under Hub → Communication. Email is now trigger-only; Gmail account resources continue to live under Hub → Productivity.
-* **Agent Studio cleanup** — `/agents` no longer edits the tenant default inline. It shows the current default agent as a read-only indicator and links to `/settings/default-agents`.
-* **Drift protection** — `backend/tests/test_wizard_drift.py` now cross-checks the Trigger wizard fallback against `TRIGGER_CATALOG`, in addition to the existing channel/productivity/provider guards.
-
-### 2.8 v0.7.0 Track A2 Continuous-Agent Control Plane
-
-Track A2 is a backend-first contract checkpoint. It adds the schema and read surfaces that later Email/Jira/GitHub/Schedule trigger tracks and Track C UI consume.
-
-* **Migrations** — Alembic `0047_add_continuous_agent_models.py` intentionally revises current release head `0059`, and `0050_add_channel_event_rule.py` revises `0047`, keeping one linear chain while preserving Track A2's allocated revision IDs.
-* **Models** — `delivery_policy`, `budget_policy`, `continuous_agent`, `continuous_subscription`, `wake_event`, `continuous_run`, and `channel_event_rule` are tenant-scoped. `continuous_run.wake_event_ids` and `continuous_run.agentic_scratchpad` are JSONB in `0047`; Track F later adds scratchpad only to `conversation_thread`.
-* **Read-only APIs** — this checkpoint exposes `GET /api/continuous-agents`, `GET /api/continuous-agents/{id}`, `GET /api/continuous-runs`, `GET /api/continuous-runs/{id}`, `GET /api/wake-events`, and `GET /api/wake-events/{id}`. Write endpoints for continuous agents/runs/wake events are intentionally deferred. Pagination shape is `items`, `total`, `limit`, `offset`.
-* **Auth and permissions** — continuous-agent list/detail uses session cookie, UI Bearer JWT, OAuth2 API-client Bearer JWT, or `X-API-Key` via the shared auth stack. `/api/continuous-agents*` requires `agents.read`; `/api/continuous-runs*` and `/api/wake-events*` require `watcher.read`. The standard `api_readonly`, `api_member`, `api_admin`, and `api_owner` client roles include `watcher.read` for these read surfaces. Missing tenant context fails closed with `403`; cross-tenant detail access returns `403`.
-* **Payload contract** — `wake_event` stores no inline payload in A2. Trigger adapters must redact/store payloads separately and set `payload_ref` to an opaque local path under `backend/data/wake_events/` or a future blob key. There is no payload fetch endpoint in A2.
-* **Status enums** — `continuous_agent.status`: `active`, `paused`, `disabled`, `error`; `continuous_subscription.status`: `active`, `paused`, `disabled`, `error`; `wake_event.status`: `pending`, `claimed`, `processed`, `filtered`, `failed`; `continuous_run.status`: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `skipped`; `delivery_policy.importance_threshold`: `low`, `normal`, `high`; `budget_policy.on_exhaustion`: `pause`, `degrade_to_hybrid`, `notify_only`; `continuous_agent.execution_mode`: `autonomous`, `hybrid`, `notify_only`.
-* **Routing rules** — channel routing rules use the generic route shape `/api/channels/{channel_type}/{instance_id}/routing-rules` with list/create/get/update/delete for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). The plan's Slack example maps directly to `POST /api/channels/slack/{id}/routing-rules`. The API validates both channel instance ownership and target-agent ownership before writes. Trigger details remain per-type APIs such as `/api/triggers/email` and `/api/triggers/webhook` in A2.
-* **Budget/Sentinel/Watcher hooks** — `ContinuousBudgetLimiter` extends the shared sliding-window limiter with a `budget_kind` dimension and returns `pause`, `degrade_to_hybrid`, or `notify_only` decisions. Gmail send/reply/draft checks Sentinel's `continuous_agent_action_approval` detection only when an explicit continuous-agent context is present. `WatcherActivityService` now emits `type=continuous_run`, `run_type=continuous` events for later UI badging.
-
-### 2.9 v0.7.0 Wave 3A Track C/F checkpoint
-
-Wave 3A connects the stable A2 read contracts to UI surfaces and lands the first real Track F agentic-loop core without enabling broad write-side continuous-agent workflows yet.
-
-* **Track F migrations** — Alembic `0049` adds `conversation_thread.agentic_scratchpad` and the five `agent_skill` tool-result toggles: `auto_inject_results`, `skip_ai_on_data_fetch`, `max_result_bytes`, `max_results_retained`, and `max_turns_lookback`. Alembic `0057` adds `Config.platform_min_agentic_rounds` / `platform_max_agentic_rounds`; Alembic `0058` adds `Agent.max_agentic_rounds` and `max_agentic_loop_bytes`. The default `max_agentic_rounds` is `1` to preserve single-shot behavior unless a caller opts into additional rounds.
-* **Structured DATA reuse** — tool results can be retained in thread scratchpad form, bounded by per-skill byte/count/lookback controls, and injected into follow-up prompts as structured DATA. The follow-up detector recognizes common English and Portuguese references while fresh-fetch phrases still force a new tool call.
-* **API v1 scratchpad contract** — async queue polling returns a top-level `agentic_scratchpad` only when `GET /api/v1/queue/{queue_id}?include_scratchpad=true` is used. Nested `result.agentic_scratchpad` is redacted regardless of the flag so older clients do not accidentally receive internal loop traces.
-* **Movl follow-up behavior** — the Gmail follow-up path now answers from the prior structured DATA block when the user asks a referential question such as which prior email is most important. The second turn records no fresh Gmail tool call and preserves the prior scratchpad.
-* **Multilingual follow-up coverage (BUG-706)** — `FOLLOWUP_PATTERNS` covers English interrogatives (`what`, `which`, `who`, `whom`, `whose`, `where`, `when`, `why`, `how`), pronoun phrasings (`that one`, `the first/last/previous one`, `the one (that|which|with)`), Portuguese/Spanish interrogatives (`o que`, `quem`, `onde`, `quando`, `por que`, `como`, `qual`), and PT demonstratives (`esse`, `essa`, `aquele`, etc.). Fresh-fetch phrases (`latest`, `recent`, `novos`, `buscar de novo`) still win and force a new tool call.
-* **Scratchpad preservation on no-tool turns (BUG-707)** — `process_message()` emits `tool_was_called` alongside `agentic_scratchpad`. Both `agent/router.py` (WhatsApp) and `services/playground_service.py` only persist the scratchpad to `conversation_thread.agentic_scratchpad` when a tool actually fired this turn (`tool_was_called or tool_used`). A follow-up answered purely from prior DATA no longer wipes the trace, so the next follow-up still has the original tool result available without re-fetching.
-* **Per-agent agentic-loop API surface (BUG-710)** — `AgentCreate` and `AgentUpdate` Pydantic models declare `max_agentic_rounds` (1-8) and `max_agentic_loop_bytes` (512-131072). `PUT /api/agents/{id}` round-trips both fields, the explicit `UPDATABLE_AGENT_FIELDS` allowlist accepts them, and `AgentResponse` exposes them so the Studio Advanced tab can read current values via `GET /api/agents/{id}`.
-* **Studio Advanced tab + Platform AI bounds UI (BUG-716)** — `frontend/components/AgentAdvancedManager.tsx` adds an "Advanced" tab to `/agents/[id]` with a `max_agentic_rounds` slider+number input clamped to `platform_min_agentic_rounds`/`platform_max_agentic_rounds` and a `max_agentic_loop_bytes` number input. `frontend/app/settings/ai-configuration/page.tsx` (System Admin → Platform AI redirect target) adds a "Platform AI — Agentic Loop Bounds" card with min/max number inputs that save through `PUT /api/config`.
-* **Track C read-only pages** — `/continuous-agents`, `/continuous-agents/{id}`, `/hub/wake-events`, `/hub/triggers/email/{id}`, and `/hub/triggers/webhook/{id}` read from existing A2/trigger APIs. Wake-event UI displays payload references and does not expose inline payload JSON.
-* **Hub routing rules** — Hub Communication exposes routing-rule management only for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). Email and webhook remain trigger-detail surfaces, not channel routing-rule surfaces.
-* **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and the 16-step onboarding tour now includes a "Triggers & Continuous Agents" step before the finale with a CTA into Hub Communication's Triggers section.
-
-### 2.10 v0.7.0 Track B Trigger Dispatch Foundation
-
-Track B starts with a no-migration dispatch foundation before Jira, Schedule, and GitHub adapter tables are introduced.
-
-* **Shared dispatch contract** — trigger adapters normalize events into a common dispatch input with `trigger_type`, `instance_id`, `event_type`, `dedupe_key`, `occurred_at`, payload, importance, and optional sender/source metadata. `TriggerEvent.event_type` is explicit while `trigger_type` remains available for existing trigger contracts.
-* **Tenant authority** — dispatch always resolves the tenant from persisted trigger instance rows such as `webhook_integration` or `email_channel_instance`. External payloads never provide tenant authority, and cross-tenant instance or agent references fail closed.
-* **Dedupe ledger** — dispatch records accepted outcomes in `channel_event_dedupe`. A duplicate unique key returns deterministic duplicate behavior without creating a second wake event.
-* **Wake evidence** — matching active `continuous_subscription` rows produce `wake_event` rows and queued `continuous_run` rows. Wake payload content stays out of row; dispatch stores a redacted JSON payload under `backend/data/wake_events/` and exposes only `payload_ref`.
-* **Webhook compatibility** — signed webhook inbound requests keep returning `202` with `{status, queue_id, poll_url}` for the existing direct queue-to-agent path. The dispatch foundation can dual-write wake/run evidence for continuous-agent subscribers without replacing the direct queue behavior.
-* **Breadth handoff** — the dispatch foundation is now consumed by Jira, Schedule, GitHub, and Webhook criteria in Track B breadth. `continuous_task` queue dispatch remains reserved until intentionally implemented.
-
-### 2.11 v0.7.0 Track B Trigger Breadth
-
-Track B breadth turns the dispatch foundation into user-facing trigger adapter rows and Hub UI. It establishes the Jira/Schedule/GitHub CRUD contracts, criteria surfaces, and normalization tests; live Jira polling plus the managed WhatsApp notifier are finalized in the release sign-off slice described below.
-
-* **Migrations** — `0052_add_jira_trigger_and_webhook_criteria.py` revises `0058`, `0053_add_schedule_trigger_instance.py` revises `0052`, and `0054_add_github_trigger_instance.py` revises `0053`.
-* **Trigger rows** — `JiraChannelInstance`, `ScheduleChannelInstance`, and `GitHubChannelInstance` store tenant-scoped source config, encrypted credentials/secrets where applicable, default-agent references, health snapshots, cursors, and active/paused state.
-* **Webhook criteria** — Webhook trigger rows now carry optional `trigger_criteria`. JSONPath matchers are evaluated before subscription matching; failed criteria write `filtered_out` dedupe evidence and do not create wake/run rows.
-* **Runtime adapters** — Jira has the persisted trigger row, JQL test-query, encrypted credential handling, and issue normalization contract; Schedule polls due cron rows without creating legacy `ScheduledEvent` duplicates; GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`.
-* **Hub UI** — Hub → Communication now supports Email, Webhook, Jira, Schedule, and GitHub trigger setup. Jira/Schedule/GitHub have compact creation flows, cards, `/hub/triggers/{type}/{id}` detail pages, criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
-
-### 2.11.1 v0.7.0 Jira Trigger Finalization
-
-The final Jira release contract completes the gap left by Track B breadth: Jira triggers are not just saved and tested in the UI; active rows are polled against Jira Cloud JQL on their configured interval, matching issues are dispatched through `TriggerDispatchService`, and duplicates are suppressed so the same issue creates at most one wake/run.
-
-* **Placement** — Jira credentials are configured under Hub → Tool APIs as tenant-owned Jira connections; Jira trigger rows remain under Hub → Communication → Triggers because Jira is an event trigger, not a conversational channel. WhatsApp remains the outbound communication channel used by the managed notifier.
-* **Credentials** — Jira site URL, auth email, and API token are captured through the Hub → Tool APIs Jira connection flow. Tokens are stored encrypted and API reads return only a masked preview. Documentation, QA artifacts, browser traces, and logs must not include plaintext Jira tokens.
-* **Polling and dedupe** — the poll loop fetches matching JQL results, normalizes issue payloads, dispatches wake evidence, updates cursor/activity state, and records a deterministic dedupe key per issue so repeated polls and later ticket updates do not double-fire.
-* **Managed WhatsApp notifier** — the release includes a managed notifier path for Jira issue events. It sends one WhatsApp notification per deduped Jira issue through a tenant-owned WhatsApp instance to an operator-provided recipient, and fails closed when the recipient is omitted or the selected channel is missing, paused, or not owned by the tenant.
-* **Validation evidence** — release QA includes targeted backend coverage for live Jira polling and once-per-issue dedupe, tenant/credential safety checks, notifier success and failure paths, browser coverage for Hub Jira setup/detail plus wake-event evidence, and a live poll-now duplicate-suppression smoke.
-
-### 2.12 v0.7.0 Phase 3 Email Trigger/Triage Checkpoint
-
-Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release branch. Live Gmail evidence is scoped to the allowed fixture accounts `mv@archsec.io` and `movl2007@gmail.com`; the current committed fixture uses `mv@archsec.io`.
-
-* **Gmail outbound** — `GmailService`, `EmailCommandService`, and `gmail_skill` support send/reply/draft operations with fail-closed scope checks. Send/reply accept Gmail send-compatible scopes; draft creation requires `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
-* **Email trigger control plane** — `EmailChannelInstance` and `/api/triggers/email` CRUD persist Gmail-backed trigger rows with search query, shared trigger criteria, poll interval, active/paused state, and default-agent routing.
-* **Runtime polling** — `backend/channels/email/trigger.py` polls active Gmail-backed Email triggers, fetches message deltas through Gmail list/search APIs, normalizes payloads, advances a stable cursor, rejects missing/foreign/inactive Gmail integrations, and dispatches wake events through `TriggerDispatchService`.
-* **Managed triage and notification actions** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for draft-based triage. `POST /api/triggers/email/{id}/notification-subscription` creates/reuses a system-owned Email WhatsApp notifier with an explicit operator-provided recipient in `continuous_subscription.action_config = { action_type: "whatsapp_notification", channel: "whatsapp", recipient_phone }`; omitted recipients fail closed before subscription creation. Both actions consume the same `email.message.received` wake evidence; triage creates Gmail drafts through `GmailSkill`, while the notifier sends deterministic WhatsApp summaries and marks the `ContinuousRun` plus `WakeEvent` succeeded/failed.
-* **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
-* **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, managed WhatsApp notification setup, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
-* **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
-
-### 2.13.1 v0.7.0 RC sweep — Continuous-Agent CRUD, Analytics, Gmail compose
-
-* **Continuous-agent write surface (WS-1)** — `POST /api/continuous-agents`, `PATCH /api/continuous-agents/{id}`, `DELETE /api/continuous-agents/{id}` (with `?force=true` to filter pending wake events), plus nested `GET/POST/PATCH/DELETE /api/continuous-agents/{id}/subscriptions[/{sub_id}]`. New permission scope `agents.write`. System-owned rows reject delete and `status="disabled"` on PATCH. Creation refuses cross-tenant `agent_id`/policy IDs; subscription creation validates `(channel_type, channel_instance_id)` against the appropriate channel-instance table and enforces `(continuous_agent_id, channel_type, channel_instance_id, event_type)` uniqueness. Deletion explicitly removes child subscriptions before deleting the parent (belt-and-suspenders for the SQLAlchemy ORM cascade).
-* **Continuous-agent UI (WS-1)** — `/continuous-agents` lists agents with create/edit/delete affordances. Single-step setup modal mirrors `TriggerSetupModal`. Detail page renders `SubscriptionEditor` (add/pause/resume/delete) plus header edit/delete actions. The previous read-only banner is removed.
-* **Analytics dashboard (WS-2)** — `/settings/analytics` (permission `analytics.read`) renders summary KPIs (tokens, estimated cost, requests), a daily trend area chart, per-operation/per-model breakdown bar charts, a per-agent table with inline drill-down to skill/model breakdowns, and a recent-transactions table. Date range picker translates preset choices into the backend's `days` query parameter (1–365). Uses `recharts` (already a frontend dependency).
-* **Gmail compose scope (WS-3)** — `gmail.compose` now ships in `DEFAULT_SCOPES["gmail"]` so new connections grant draft creation immediately. Existing connections lazy-upgrade: a draft action raises a typed `InsufficientScopesError` carrying `missing_scopes`. The Gmail integration card in the Hub shows an amber pill "Drafts require gmail.compose" plus a "Reconnect for drafts" button when `can_draft === false`. The hub `IntegrationResponse` exposes new optional `can_send` / `can_draft` flags computed from the granted OAuth scope string.
-
-### 2.13 v0.7.0 Phase 8 UI polish and control-plane UX
-
-Phase 8 finishes the v0.7.0 trigger/control-plane UX pass and keeps user guidance aligned with the channel-vs-trigger split.
-
-* **Trigger criteria registry** — Email, Webhook, Jira, Schedule, and GitHub trigger setup/detail surfaces use trigger-aware helper controls while preserving raw JSON editing. Webhook keeps the JSONPath payload tester on the detail page.
-* **Wake-event API/UI** — `GET /api/wake-events` accepts `occurred_after` and `occurred_before` alongside existing `status`, `channel_type`, and `channel_instance_id` filters. `GET /api/wake-events/{id}/payload` returns only the already-redacted payload behind `payload_ref`, with tenant ownership and safe-path validation. `/hub/wake-events` adds date filters, selectable rows, and a payload/cause drawer.
-* **Routing-rule reorder** — `POST /api/channels/{channel_type}/{instance_id}/routing-rules/reorder` accepts `{ "rule_ids": [...] }`, validates every rule belongs to the current tenant/channel/instance, and returns the refreshed rule page. Hub Communication exposes modal create/edit/delete plus reorder controls for conversational channels only.
-* **Watcher wake polish** — continuous-agent detail/read-only watcher views show wake-event causes, subscription badges, and failure colors for trigger-origin runs.
-* **Wizard retrofit** — Slack, Discord, WhatsApp, and MCP setup flows now share the common `<Wizard>` shell without changing their backend create/test contracts.
-* **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` remains at `TOTAL_STEPS = 16`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and sends the Triggers & Continuous Agents CTA to `/hub?tab=communication`, where the Hub Triggers section is marked with `data-testid="hub-triggers-section"`.
-* **Webhook deprecation** — v0.7.0 intentionally has no Webhook deprecation banner/header path; Webhook moved directly to the Trigger catalog and Hub Triggers UI.
-* **Kokoro successor path** — legacy `/api/services/kokoro/{start,stop,status}` callers receive HTTP 410 and a `Link: </api/tts-instances>; rel="successor-version"` successor header. Hub copy points users to per-tenant Kokoro instances rather than the removed stack-level compose service.
-* **Phase 3 docs reconciliation** — Phase 3.1 docs now distinguish the completed Gmail send/reply/draft and Email poll/triage/MemGuard live gates from the remaining optional API-agent proof and Ubuntu fresh-install sudo handoff.
-* **Evidence** — see `docs/qa/v0.7.0/phase-8-ui-polish-summary.md`. Fresh-install Ubuntu VM validation remains a Phase 9 blocker until sudo access is available.
-
-### 2.18 v0.7.0 Triggers↔Flows Unification — Wave 5 (backfill migration + webhook payload capture + final polish)
-
-Fifth and final merge wave of the cross-cutting Triggers↔Flows Unification. Lands the data backfill migration, webhook payload capture write-through, ops scripts, and the SourceStepConfig autocomplete completion.
-
-* **Alembic 0069 backfill migration** (`backend/alembic/versions/0069_backfill_managed_notifications.py`) — DML-only, idempotent, env-gated. Lands on production hosts as a no-op until the operator sets `TSN_FLOWS_BACKFILL_ENABLED=true`. Reads every `(ContinuousAgent JOIN ContinuousSubscription)` with `execution_mode='notify_only' AND is_system_owned=True AND status='active'` and creates an equivalent system-managed `FlowDefinition` (4 nodes — Source / Gate / Conversation / Notification) + `flow_trigger_binding` row, carrying the existing `recipient_phone` from `action_config` into the Notification node config. Backfilled bindings ship with `suppress_default_agent=False` so the legacy ContinuousAgent path keeps firing (parallel-run safety). Operators flip `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=true` and re-run `alembic upgrade head` to silence the legacy path on every backfilled binding once they've validated the new path. Downgrade only deletes flows whose `initiator_metadata.reason='wave5_backfill'`.
-* **Webhook payload capture write-through** — `backend/api/routes_webhook_inbound.py` now inserts a `WebhookPayloadCapture` row right before dispatching to the trigger service. Payload truncated to ~64KB, headers redacted (auth/cookie/X-Tsushin-Signature stripped) and capped at ~8KB. After insert, the table is pruned to keep only the 5 most recent rows per `(tenant, webhook_id)`. Best-effort — failure NEVER aborts dispatch.
-* **`GET /api/webhook-integrations/{id}/payload-captures`** — permission-gated on `integrations.webhook.read`. Returns the last 5 captures sorted desc by `captured_at`. Consumed by the Flow editor's SourceStepConfig autocomplete.
-* **Reconcile script** (`backend/scripts/reconcile_system_flows.py`) — sweeper that walks every existing trigger across all 5 kinds and ensures each has a matching system-managed binding via `ensure_system_managed_flow_for_trigger` (idempotent). Run it after a deploy where Wave 4's auto-gen gate was off when triggers were created, or to rebuild bindings after a manual deletion.
-* **Rollback script** (`backend/scripts/rollback_managed_flow_backfill.py`) — surgical undo for the 0069 backfill. Deletes only flows whose `initiator_metadata.reason='wave5_backfill'` and their CASCADEd nodes + bindings. The original ContinuousAgent + ContinuousSubscription rows are NEVER touched (the backfill migration runs in parallel mode by default and never deletes them). Re-running is a no-op.
-* **SourceStepConfig autocomplete completion** — webhook branch in `frontend/components/flows/SourceStepConfig.tsx` finished. With captures present: auto-expands the most-recent capture, renders a chip panel of inferred JSON paths via recursive descent (max depth 4, max 50 paths, array indices collapsed so `items[0].name` becomes `items.name`), each chip click copies `{{source.payload.<path>}}` to the clipboard with a toast; below the chips: the full list of 5 captures, each row showing `#id · relative-time · dedupe_key`, expandable to a pretty-printed JSON pre block. Without captures: keeps the existing "Send a test event" copy plus a "How to test" toggle that shows the inbound URL + secret preview + a copy-pasteable curl example. Non-webhook kinds unchanged (still uses `getWakeEvents` + `getWakeEventPayload`).
-
-This wraps the 5-wave Triggers↔Flows Unification. The entire B+C+A scope ships on 0.7.0 as the user originally directed; three env-var gates (`TSN_FLOWS_TRIGGER_BINDING_ENABLED`, `TSN_FLOWS_AUTO_GENERATION_ENABLED`, `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY`) all default-off so the release ships byte-identical to 0.6.x; operators flip them per tenant in staging then production. The deployment ladder lives in the release runbook (still to be authored as `.private/0.7.0_RELEASE_RUNBOOK.md`).
-
-### 2.17 v0.7.0 Triggers↔Flows Unification — Wave 4 (auto-Flow generation + Wired Flows + deep-link prefill)
-
-Fourth merge wave. Phase A's auto-Flow generation finally lands: every new trigger created across all 5 kinds gets a system-managed FlowDefinition (Source → Gate → Conversation → Notification chain) plus a `flow_trigger_binding` row in the same transaction. The notification toggle on the trigger detail page now writes through to the auto-flow's Notification node (in parallel with the legacy ContinuousAgent path until Wave 5 cuts the legacy path). All gated by `TSN_FLOWS_AUTO_GENERATION_ENABLED` (default OFF).
-
-* **`ensure_system_managed_flow_for_trigger`** — `backend/services/flow_binding_service.py`. Idempotent. Builds a 4-step flow: Source(position 1, `{trigger_kind, trigger_instance_id}` config), Gate(programmatic, empty rules — pass-all because trigger criteria is canonical), Conversation(bound to the trigger's `default_agent_id`, with a kind-specific objective string), Notification(disabled until the user flips the toggle). Flow flags: `is_system_owned=True`, `editable_by_tenant=True` (so the casual-user "Enable Notification" toggle can flip the Notification node), `deletable_by_tenant=False` (the auto-flow lives and dies with the trigger). Wired into all 5 trigger CREATE endpoints; failures never abort trigger creation.
-* **`update_auto_flow_notification`** — write-through helper. Locates the system-managed auto-flow, finds its Notification node, flips `enabled=true` and sets `recipient_phone`. Used by `routes_jira_triggers.py:create_jira_notification_subscription` and `routes_email_triggers.py:create_email_notification_subscription` so the existing API contract (`POST /api/triggers/{kind}/{id}/notification-subscription`) keeps the casual-user 1-click toggle but mutates the new flow path under the hood. The legacy ContinuousAgent + ContinuousSubscription is still mutated alongside (parallel-run safety) until Wave 5 flips `suppress_default_agent` on the binding to silence it.
-* **`/api/flow-trigger-bindings` CRUD** — full REST surface in `backend/api/routes_flow_trigger_bindings.py`. List filters: `trigger_kind`, `trigger_id`, `flow_id`, `is_active`. Create returns 409 on duplicate (flow + kind + instance). Patch toggles `is_active` and `suppress_default_agent`. Delete returns 403 on system-managed bindings (those are cleaned up by `flow_binding_service.delete_bindings_for_trigger` when the underlying trigger is deleted). Read responses join flow name + last run status + last run timestamp for the WiredFlowsCard UX.
-* **`list_flows` filter** — `bound_trigger_kind` + `bound_trigger_id` query params on `GET /api/flows` join through `flow_trigger_binding` so the trigger detail page's WiredFlowsCard can ask "which flows are wired to *this* trigger?" with one round-trip.
-* **Pydantic schema gaps closed** — three additions to `backend/schemas.py` that were each surfaced by Wave 4 QA as silent 422s on `POST /api/flows/create`: `ExecutionMethod.TRIGGERED`, `StepType.SOURCE`, and `FlowStepConfig.{trigger_kind, trigger_instance_id}`. Wave 2 had added `triggered` to the legacy `VALID_EXECUTION_METHODS` set used by the BUG-342 path but the Pydantic enum used by the V2 endpoint was missed.
-* **`WiredFlowsCard`** — `frontend/components/triggers/sections/WiredFlowsCard.tsx`. Header + helper text + "+ Create flow from this trigger" CTA that deep-links to `/flows?source_trigger_kind={kind}&source_trigger_id={id}`; per-row flow link, last-run pill, system-managed badge, "Suppress default agent" toggle (calls `PATCH /api/flow-trigger-bindings/{id}`), Unbind action with `confirm()`. System-managed bindings cannot be unbound from the UI (matches the 403 protection). Permission-gated on `flows.read` / `flows.write`. Empty state with the CTA. Lives in `OutputsSection` for ALL 5 kinds, so github / schedule / webhook (which had a static empty Outputs state in Wave 3) now have a usable affordance for wiring custom flows.
-* **`SourceStepConfig`** — `frontend/components/flows/SourceStepConfig.tsx`. Replaces the Wave 2 placeholder. Read-only summary of the bound trigger (kind icon + integration name + "Edit trigger" deep-link to `/hub/triggers/{kind}/{id}`), expandable "Last sample payload" pane fetching the most recent WakeEvent for the trigger via `getWakeEvents` + `getWakeEventPayload` (webhook falls back to "Send a test event to populate samples" until Wave 5 ships `getWebhookPayloadCaptures`), variable hint section with the 5 documented `{{source.*}}` references. Wired into both `StepConfigForm` and `EditableStepConfigForm`.
-* **Suppress-default banner** — JiraManagedNotificationCard and EmailManagedNotificationCard accept a `suppressedByBinding` prop. When at least one active binding for the trigger has `suppress_default_agent=true`, the card renders an amber banner "Disabled — output is handled by Flow #N ({flow_name})" with a Link to the bound flow, and the Enable button + phone input become disabled with the tooltip "Bound flow has taken over routing for this trigger."
-* **Deep-link prefill** — `frontend/app/flows/page.tsx` reads `?source_trigger_kind={kind}&source_trigger_id={id}` via `useSearchParams`, fetches the trigger name, auto-opens the Create modal with `execution_method='triggered'`, name pre-filled as `"Kind: <integration_name>"`, and a Source step at position 1 with `config={trigger_kind, trigger_instance_id}`. On successful flow create, atomically calls `POST /api/flow-trigger-bindings` to wire the binding (binding failure surfaces a toast but doesn't fail the modal). Both `?source_trigger_*` and `?edit={flow_id}` query params strip themselves after consumption so back/forward + refresh don't replay them.
-* **`STEP_OUTPUT_FIELDS.source`** — `frontend/lib/stepOutputVariables.ts`. Adds the `source` namespace with 7 variables (`payload`, `trigger_kind`, `instance_id`, `event_type`, `dedupe_key`, `occurred_at`, `wake_event_id`) so downstream steps' Insert Variable dropdown shows `{{source.*}}` when the flow has a Source step.
-
-### 2.16 v0.7.0 Triggers↔Flows Unification — Wave 3 (dispatch fork + email/webhook fork retirement)
-
-Third merge wave. Lands the additive dispatch fork in `TriggerDispatchService` and the full retirement of the email + webhook standalone trigger detail pages into the shared shell.
-
-* **Dispatch fork** — `backend/services/trigger_dispatch_service.py` now reads `flow_trigger_binding` rows for the (kind, instance_id) of every wake event and enqueues one `flow_run_triggered` MessageQueue item per active binding alongside the existing ContinuousRun enqueue. The wake payload is nested under `trigger_context["source"]` so the Wave 2 `SourceStepHandler` exposes `{{source.payload.*}}` / `{{source.trigger_kind}}` / `{{source.event_type}}` / `{{source.dedupe_key}}` / `{{source.occurred_at}}` / `{{source.wake_event_id}}` to every downstream step. The fan-out happens after the existing ContinuousRun enqueue, never aborts dispatch on errors, and uses a single payload read (`_read_payload_ref`) shared across all bindings to keep webhook reply latency below 100ms p99 even with 10 bindings.
-* **Suppress-default-agent semantics** — when ANY active binding for the (kind, instance) has `suppress_default_agent=True`, the dispatcher drops the matching subscriptions list before creating any ContinuousRun. The bound flow takes over fully — no legacy notify_only WhatsApp send, no duplicate. Gated by `TSN_FLOWS_TRIGGER_BINDING_ENABLED` env var (default OFF).
-* **`flow_binding_service.py`** (new) — five helpers used by the dispatcher and by Wave 4's auto-Flow generation: `list_active_bindings_for_trigger`, `has_active_suppress_default_binding`, `list_bindings_for_flow`, `delete_bindings_for_trigger` (the latter called by per-kind trigger DELETE handlers in Wave 4 because `trigger_instance_id` is a semantic FK that can't CASCADE; also tears down system-managed FlowDefinitions whose only binding pointed at the deleted trigger), `find_source_node_id` (used when a binding write doesn't supply `source_node_id` — the helper finds the one Source node in the bound flow).
-* **`QueueRouter._dispatch_flow_run_triggered`** — new handler in `backend/services/queue_router.py`. Reads `flow_definition_id` + `binding_id` + `trigger_event_id` + `trigger_context` + `tenant_id` from the queue payload and calls `FlowEngine.run_flow(...)` with the Wave 2 `trigger_event_id` + `binding_id` correlation params. Returns the FlowRun status + ID. Failures are logged with a dedicated `flow_run_triggered dispatch failed` line but never bubble — the legacy ContinuousRun path is the source of truth for backward compatibility.
-* **TriggerDetailShell expanded to 5 kinds** — `frontend/components/triggers/TriggerDetailShell.tsx` (738 → 1162 lines): `BreadthTriggerKind` and `BreadthTrigger` unions now include `email` and `webhook`; all kind-conditional branches (`updateActive`, `saveCriteria`, `deleteTrigger`, `sourceFromTrigger`, `KIND_CONFIG`) cover all 5 kinds; email + webhook state and handlers (Gmail integration list, public ingress info, copy URL feedback, secret rotation, notification phone input, triage flag, poll loading, query testing) are lifted into the shell so the email and webhook detail pages can be 16-line wrappers around `<TriggerDetailShell kind="email|webhook" />`.
-* **New section subcomponents** — `frontend/components/triggers/sections/EmailSourceCard.tsx` (Inbox Binding card + Cadence and Health card — the previously-hidden saved Gmail search query is now visible on the overview tab), `EmailManagedNotificationCard.tsx` (4-cell DetailRow grid layout normalized to match Jira — closes the visual smell where Email and Jira used different layouts for the same concept), `EmailManagedTriageCard.tsx` (lifted with same disable conditions: no default agent, missing `gmail.compose`), `EmailManualPollCard.tsx` (parallel to Jira's because `EmailPollNowResponse` shape differs), `WebhookSourceCard.tsx` (full-width Inbound Endpoint with Copy + new Rotate Secret button + Security with secret preview / IP allowlist / max payload / rate limit + Callback URL).
-* **Email fork retired** — `frontend/app/hub/triggers/email/[id]/page.tsx`: 747 → 16 lines. Every functional capability of the standalone fork is preserved through the shared shell: enable notification (with phone validation + recipient clear after success), enable triage (gated by `default_agent` + `can_draft`), poll now (with full count summary), test query (Gmail sample messages with subject/sender/preview/Open link), save criteria (rebuilds `search_query` from source draft), pause/resume, delete. Gmail-scope red banner preserved between KPI strip and accent strip when `kind === 'email'`. Default agent inline edit (KPI Routing slot + Routing section) preserved.
-* **Webhook fork retired** — `frontend/app/hub/triggers/webhook/[id]/page.tsx`: 370 → 16 lines. Copy inbound URL (with 2s "Copied" toast) preserved. Public ingress warning text preserved. Webhook criteria test via `api.testWebhookCriteria` preserved. Save criteria preserved. Pause/resume + delete preserved. Circuit-breaker + rate-limit sub-pill row preserved between KPI strip and accent strip when `kind === 'webhook'`. IP allowlist pills, max payload, callback URL, last health check timestamp preserved.
-* **In-scope defects fixed during the refactor** (per the user's directive that pre-existing problems uncovered by current work must be fixed in the current wave, not punted):
-  - **Webhook secret rotation now reachable from the UI.** `api.rotateWebhookSecret` was implemented in `frontend/lib/client.ts` but had no UI affordance. The Security card on the unified webhook source view now exposes a Rotate Secret button with a confirm() prompt and a 12-second toast that displays the plaintext secret once.
-  - **Webhook status pill turns red when `circuit_breaker_state === 'open'`.** The shared shell's `statusClass` previously did not handle webhook (the standalone fork did). Now wired so an open circuit breaker produces a visual red status pill.
-  - **`EditFlowModal canWriteFlows is not defined`** — the variable was declared inside `FlowsPage` scope only, but `EditFlowModal` (separate component) referenced it at lines 4690-4696. The modal now derives `canWriteFlows` locally via its own `useAuth()` call. (Wave 1 fixed the registry-level bug; Wave 3 catches the remaining scope-level reference.)
-
-### 2.15 v0.7.0 Triggers↔Flows Unification — Wave 2 (Source step + flow protection + 3-section UI)
-
-Second merge wave. Lands the canonical `source` step type, the `triggered` execution method, the flow-protection enforcement, and the three-section refactor of the trigger detail Overview tab.
-
-* **`source` step type** (`backend/flows/flow_engine.py`) — new `SourceStepHandler` class registered alongside `TriggerNodeHandler`. Runtime behavior is a no-op: dispatch (Wave 3) injects the wake event payload + metadata under `trigger_context["source"]`, `_build_step_context` re-merges that at the context root, and downstream Conversation / Gate / Notification steps reference variables like `{{source.payload.issue.key}}` / `{{source.trigger_kind}}` / `{{source.event_type}}` / `{{source.dedupe_key}}` / `{{source.occurred_at}}` / `{{source.wake_event_id}}` directly. The handler also echoes the lightweight identifiers as its own `output_json` so authors who prefer the `{{step_1.trigger_kind}}` style work too.
-* **Position invariants enforced server-side** — `validate_flow_structure` rejects: (a) more than one Source step in a flow, (b) Source step at position ≠ 1, (c) flows with `execution_method='triggered'` that don't declare a Source step.
-* **`'triggered'` execution method** — added to `VALID_EXECUTION_METHODS` in `backend/api/routes_flows.py:874`. The flow editor exposes it as a 5th method tile; selecting it does not yet alter behavior (auto-Source-step injection is Wave 4).
-* **Flow protection enforcement** — `editable_by_tenant` and `deletable_by_tenant` columns existed on `FlowDefinition` but were not honored by any API handler. Wave 2 adds `_ensure_flow_editable` / `_ensure_flow_deletable` helpers and wires them into all 5 mutation sites (`update_flow`, `patch_flow`, `delete_flow`, `update_step`, `delete_step`). System-owned flows that ship with `editable_by_tenant=False` (or `deletable_by_tenant=False`) now reject mutations with `403 System-owned flow is not editable/deletable by tenant`. This is what makes Phase A's auto-Flow protection real — without it any tenant admin could rip out the Notification node of an auto-flow and silently break the binding.
-* **Source-step delete protection** — `delete_step` blocks removal of any node with `type ∈ {'source', 'Source'}` with `400 Cannot delete the Source step. Delete the trigger binding or the entire flow instead.` `update_step` blocks changing a Source's type or moving it off position 1.
-* **`run_flow` correlation** — signature gains optional `trigger_event_id` (FK to `wake_event` for cross-system correlation) and `binding_id` (audit-only) params. When supplied, `trigger_event_id` is persisted on the new FlowRun row.
-* **Three-section Overview tab** (`frontend/components/triggers/TriggerDetailShell.tsx`) — replaces the old kind-mixed `renderSourceSummary` with `renderOverview` that emits exactly three sections in fixed order: **Source** (per-kind input grid), **Routing** (a single card with prose "Events go to {DefaultAgentChip} when no Flow is wired below."), **Outputs** (per-kind cards or empty state). Section headers + dividers between them. Routing card carries `id="routing-card"` for future scroll-targeting. The KPI Routing slot stays as-is for Wave 2 (the inline Routing card duplicates it; the optional KPI-mirror-scrolls-to-card polish is reserved for Wave 4).
-* **New components** — `SectionHeader`, `Divider`, `sections/SourceSection`, `sections/RoutingSection`, `sections/OutputsSection`, `sections/JiraManagedNotificationCard`, `sections/JiraManualPollCard`. Email and webhook detail pages remain on their standalone forks until Wave 3.
-* **Wording normalization** — section headers exactly "Source"/"Routing"/"Outputs"; the redundant "Agent" DetailRow inside the Notification card is removed (Routing is the canonical home for the default agent); empty-state copy templates standardized for "no managed outputs" and "notification not configured" cases.
-* **Source step in the Flow editor** (`frontend/app/flows/page.tsx`) — `STEP_TYPES` palette now includes Source as the first tile. Adding it pins it at the top of the step list with a "Locked at top" pill, hides Move-up / Move-down / Delete buttons, and removes Source from the second Add-Step dropdown (one-per-flow invariant). Neighbors of the Source step disable their Move-up arrow so no step can slip above the Source. Source-step guards are applied to BOTH the sync `StepBuilder` AND the async `EditableStepBuilder`. The Source step config form renders a styled placeholder card ("Source step config — wired in Wave 4.").
-* **Out of scope for Wave 2:** Email and webhook fork retirement (Wave 3), dispatch-side wiring of `flow_trigger_binding` lookups (Wave 3), auto-Flow generation on trigger create (Wave 4), backfill of existing system-owned ContinuousAgents into FlowDefinitions (Wave 5).
-* **API-side validation parity** — there are two `validate_flow_structure` implementations: a method on `FlowEngine` (`backend/flows/flow_engine.py`) and a free helper in `backend/api/routes_flows.py:251`. The Wave 2 source/triggered rules originally landed only on the FlowEngine method, but `POST /api/flows/{id}/execute` calls the free helper synchronously *before* the FlowRun reaches the engine. Wave 2 now mirrors the same source / triggered rules into the helper, so a flow with `execution_method='triggered'` and no source step rejects with `400 Invalid flow structure: Flow with execution_method='triggered' must declare a Source step at position 1` instead of 202-accepting and stalling in `pending`.
-
-### 2.14 v0.7.0 Triggers↔Flows Unification — Wave 1 (foundations)
-
-First merge wave of the cross-cutting Triggers↔Flows Unification (the brainstorm + ground-truth artifacts live at `.private/triggers-flows-unification-brainstorm-2026-04-26.md` and `.private/trigger-pages-visual-evidence-2026-04-26.md`). Wave 1 lands the schema + permissions + inline-edit Routing chip; behavior is byte-identical to 0.6.x until later waves flip the env-var gates.
-
-* **New schema (dormant in 0.7.0 Wave 1, active in Waves 3-5):**
-  * `flow_trigger_binding` (table, migration `0066`) — join between a Flow and one or more triggers (fan-in), the future home for the multi-source / suppress-default-agent UX. Tenant-scoped, with a SQLite `BEFORE INSERT/UPDATE` trigger that rejects cross-tenant rows. Cleanup on trigger delete is application-side because `trigger_instance_id` is a *semantic* FK across five per-kind tables (jira/email/github/schedule/webhook).
-  * `flow_run.trigger_event_id` (column, migration `0067`) — FK to `wake_event` (ON DELETE SET NULL), so any FlowRun woken by a trigger can be traced back to the originating wake event. Partial unique index `uq_flow_run_per_event_per_flow` prevents retry-driven duplicate FlowRuns when the QueueRouter redelivers a `flow_run_triggered` MessageQueue item.
-  * `webhook_payload_capture` (table, migration `0068`) — last-N (default 5) inbound payloads per webhook integration. Wave 5 wires this into the Flow editor's `{{source.payload.*}}` autocomplete so flow authors get JSON-path suggestions inferred from real recent payloads.
-* **Three default-OFF env-var gates** (`backend/config/feature_flags.py`):
-  * `TSN_FLOWS_TRIGGER_BINDING_ENABLED` — Wave 3 dispatch fork: `TriggerDispatchService.dispatch` queries `flow_trigger_binding` and enqueues FlowRuns alongside ContinuousRuns.
-  * `TSN_FLOWS_AUTO_GENERATION_ENABLED` — Wave 4 auto-Flow per trigger and notification-toggle write-through onto the auto-flow's Notification node.
-  * `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY` — Wave 5 cutover: backfilled bindings flip `suppress_default_agent=true`, cutting the legacy ContinuousAgent path off so the bound Flow becomes the sole producer of WhatsApp notifications.
-  * Accepts `1`/`true`/`yes`/`on` (case-insensitive). All three default to `False` so dormant code can land progressively in `release/0.7.0` without changing behavior.
-* **Permission registry fix** — `frontend/lib/rbac/permissions.ts` now declares `HUB_*`, `FLOWS_*`, `TRIGGERS_*` keys and assigns them to the four seeded roles (`owner`/`admin`/`member`/`readonly`). Closes the `canWriteFlows is not defined` console crash on `/flows`. Backend `flows.*` permissions already existed in `db.py:146-149` — the bug was purely a frontend registry gap.
-* **Inline-edit Routing chip** — `frontend/components/triggers/DefaultAgentChip.tsx` (~250 lines). Click opens a search-filterable popover loaded via `api.getAgents(true)`, click selects, optimistic update + refetch-on-error, toast on success. Read-only badge with tooltip when the user lacks `hub.write`. Wired into the KPI strip 3rd slot of `TriggerDetailShell.tsx` (covers jira/github/schedule) and the standalone email + webhook fork pages.
-* **KPI strip standardization** — every trigger detail page (5 kinds × 3 surfaces today) shows `Status / Health / Routing / Last activity` in identical positions. Email's "Gmail Scope" relocates as a sub-pill in the existing red Gmail-send-access banner. Webhook's "Circuit breaker" + "Rate limit" become two small sub-pills directly under the KPI strip. Full 3-section Source/Routing/Outputs refactor + retirement of the email and webhook fork pages comes in Waves 2-3.
-* **`/hub/triggers` index page** — new `frontend/app/hub/triggers/page.tsx` closes the 404 + redirect-loop bug. Fans out parallel fetches to all 5 trigger list endpoints, renders a unified table with Kind / Name / Status / Default agent / Last activity columns plus kind/status/search filters. Permission-gated on `hub.read`.
-* **Out of scope for Wave 1:** the speculative `triggers.*` permission set + a separate `0070_seed_trigger_permissions` migration. Existing `hub.write` / `scheduler.edit` / `integrations.webhook.write` already gate trigger PATCH endpoints; adding parallel `triggers.*` permissions creates dual-gating ambiguity. Frontend chip uses `hub.write` as a coarse gate (matches API-side enforcement for jira/email/github/schedule; webhook is permissive for the chip but still server-validated).
-* **Evidence (2026-04-26):** alembic `head=0068`, all 4 indexes present, feature flags load with default-False values, backend `/api/health` 200. QA report: 5/5 Playwright tests pass after a single `useEffect` deps-array fix on `DefaultAgentChip` (initial release had `loadingAgents` in both deps and the early-return guard, creating a feedback loop that left the popover stuck on "Loading agents..." — guard now uses `agents.length > 0` only). Round-trip PATCH `/api/triggers/jira/5` verified end-to-end with toast, chip update, and reload-persistence.
-
 ---
 
 ## 3. Quick Start
@@ -456,8 +237,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (16 steps) auto-opens. Steps 1 and 6–11 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) Slack / Discord channels plus Webhook Triggers, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Steps 12–15 cover optional voice setup, Playground Mini, Sentinel block mode, and v0.7.0 Triggers & Continuous Agents. Step 16 is the "You're All Set" finale. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
-6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, or Discord) via the Hub to enable agent messaging. Signed HTTP events use the separate Webhook Trigger path in Hub → Communication.
+5. On first login an **onboarding tour** (12 steps) auto-opens. Steps 1 and 6–12 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground → You're All Set). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) the new Slack / Discord / Webhook channels, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
+6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, Discord, or a generic Webhook) via the Hub to enable agent messaging.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
@@ -465,26 +246,6 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 The fresh-install regression checklist used on the Ubuntu VM is maintained as an internal deployment playbook. The current checklist covers 13 first-run cases: infrastructure health, tenant/global-admin login, Watcher, Studio, Playground basic chat, Memory Inspector, Flows, Hub, all 15 Settings routes, the 4 System admin routes, conditional Browser Automation, and final log review.
 
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
-
-#### 3.4.1 Optional dev-only second-tenant seeder (v0.7.0)
-
-For local cross-tenant runtime testing, run `backend/scripts/seed_dev_tenants.py` from inside the backend container:
-
-```bash
-docker exec -e TSN_SEED_ALLOW=true tsushin-backend python scripts/seed_dev_tenants.py
-```
-
-The script is **opt-in** (refuses to run unless `TSN_SEED_ALLOW=true` is set) and **gated** by a 5-tenant ceiling. It is fully **idempotent** — re-running it exits 0 with `"Tenant 'acme2-dev' already exists — nothing to do."` once seeded. Pass `--dry-run` to preview without writing.
-
-Default seed contents:
-* Tenant `acme2-dev` ("Acme #2 Dev")
-* Owner user `test-acme2@example.com` (password `test1234`)
-* Member user `member-acme2@example.com` (password `test1234`)
-* Three default agents (via `services.agent_seeding.seed_default_agents`)
-* One paused `EmailChannelInstance` ("Acme2 Email Watch") with no Gmail integration linked
-* One paused `ScheduleChannelInstance` ("Acme2 Weekly Digest")
-
-After seeding, log in as `test-acme2@example.com` and verify only `acme2-dev` resources are visible. Log back in as `test@example.com` to confirm the original tenant sees zero `acme2-dev` rows. Continuous-agent fixtures are gated behind `--with-continuous` (placeholder until WS-1 CRUD ships).
 
 For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
 
@@ -878,7 +639,7 @@ Step graph (text agents skip step 4):
 | 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
 | 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
 | 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
-| 7 | Channels | playground / whatsapp / telegram / slack / discord — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. Webhook moved to the trigger catalog in the v0.7.0 Wave 1 checkpoint and is created from Hub → Communication → Webhook Triggers instead of the guided channel picker. |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. |
 | 8 | Review | Per-section summary with Edit buttons that jump back |
 | 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
 
@@ -918,8 +679,8 @@ Edit-time fields beyond the modal (surfaced in `AgentConfigurationManager` / Age
 - `avatar` slug — e.g. samurai, robot, ninja (`models.py:376`)
 - `provider_instance_id` — binds to a configured `ProviderInstance` so API keys/base URLs come from the tenant's provider configuration. (`models.py:369`, `models.py:437-458`)
 - `vector_store_instance_id` + `vector_store_mode` (`override|complement|shadow`) — Vector store binding. (`models.py:372-373`)
-- `enabled_channels` JSON — conversational entry points such as `playground, whatsapp, telegram, slack, discord`. The guided wizard no longer offers webhook here because webhook is now modeled as a trigger; some legacy agent-management surfaces still carry the older webhook binding fields during the v0.7.0 transition. (`models.py:363`)
-- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — legacy per-instance bindings on `Agent`. v0.7.0 additionally introduces `*.default_agent_id` on instance rows plus `user_channel_default_agent`, with `default_agent_service.py` preferring the new resolution chain and falling back to these older FKs only when needed. (`models.py:364-368`, `backend/services/default_agent_service.py`)
+- `enabled_channels` JSON — any of `playground, whatsapp, telegram, slack, discord, webhook`. (`models.py:363`)
+- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — per-channel FKs. (`models.py:364-368`)
 
 The agent detail page (`frontend/app/agents/[id]/page.tsx:18-20`) provides six tabs: Configuration, Channels, Memory Management, Skills, Knowledge Base, Shared Knowledge.
 
@@ -1073,7 +834,6 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `okg_term_memory` | OKG Term Memory | hybrid | Store/recall structured term memory with MemGuard validation | `okg_term_memory_skill.py:158-164` |
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
-| `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
@@ -1372,12 +1132,9 @@ Additional endpoints (`routes_knowledge_base.py`):
 - `GET /agents/{id}/knowledge-base` — list documents
 - `GET /agents/{id}/knowledge-base/stats` — stats
 - `GET /agents/{id}/knowledge-base/{knowledge_id}` — detail
-- `PATCH /agents/{id}/knowledge-base/{knowledge_id}` — rename document and update lightweight tags (stored without a DB migration)
 - `GET /agents/{id}/knowledge-base/{knowledge_id}/chunks` — chunks
 - `POST /agents/{id}/knowledge-base/search` — semantic search over KB
 - `POST /agents/{id}/knowledge-base/{knowledge_id}/reprocess` — reprocess
-
-Knowledge-document tags are normalized to lowercase, deduplicated, and stored as sidecar metadata beside the uploaded file so existing databases do not need a schema change just to support document organization.
 
 ### 10.3 OKG (Ontology Knowledge Graph)
 
@@ -1796,7 +1553,7 @@ The **WhatsApp Setup Wizard** (Hub → Communication → Setup Wizard) walks thr
 7. **Bind Agent** — select which AI agent handles this WhatsApp number. Auto-creates ContactAgentMapping for user and bot contacts.
 8. **All Done** — summary of all configured items with green/amber indicators.
 
-The wizard can also be launched manually from the Hub Communication tab or from the onboarding tour's Communication Channels action. It no longer auto-launches after the main onboarding tour completes.
+The wizard can also be launched manually from the Hub Communication tab or auto-launches after the onboarding tour if no WhatsApp instances exist.
 
 **Manual setup (alternative):**
 
@@ -1997,56 +1754,52 @@ Capability flags (`adapter.py:27-33`):
 
 **Why HTTP Interactions, not Gateway:** Tsushin uses Discord's HTTP Interactions endpoint (Ed25519-signed) rather than the Gateway WebSocket because it's stateless, scales horizontally, and doesn't require per-process bot session tracking. Inbound interactions arrive at `/api/channels/discord/{integration_id}/interactions`; the route ACKs Discord with a Type 5 (deferred response) within the 3-second window, then enqueues the interaction into `message_queue` (channel='discord'). `QueueWorker._process_discord_message` routes the message through `AgentRouter` and the agent's reply is sent via `DiscordChannelAdapter` (REST API).
 
-### 15.5 Webhook Trigger
+### 15.5 Webhook
 
-**Source:** `backend/channels/webhook/trigger.py`, `backend/api/routes_webhook_instances.py`, `backend/api/routes_webhook_inbound.py`
+**Source:** `backend/channels/webhook/adapter.py`
 
-Webhook is now a first-class **Trigger**, not a conversational channel. Inbound external systems still POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound responses use `WebhookTrigger.notify_external_system(...)` to POST back to the configured `callback_url`.
+Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
 
 **URI slug modes (v0.7.1):** each integration has a human-readable `slug` used in the inbound path.
 - **Auto** (default on create) — server generates `wh-{6-hex}`.
 - **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
 - Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
 - **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
-- **Live availability check:** `GET /api/triggers/webhook/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
+- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
 
 **Lifecycle: edit / pause / delete.** Each card exposes three actions in addition to Rotate Secret:
 - **Edit** — opens `WebhookEditModal` to change the name, slug, callback URL, rate limit, and IP allowlist. Secret rotation is intentionally separate (Rotate button) to avoid mixing destructive secret operations with non-destructive config edits.
-- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/triggers/webhook/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
+- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/webhook-integrations/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
 - **Delete** — removes the integration row; agent bindings are nulled via `ON DELETE SET NULL`.
 
-Capability flags (`trigger.py:19-27`):
+Capability flags (`adapter.py:39-46`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
 
-**Outbound callback POST** (`trigger.py:74-171`):
-- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the trigger reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
+**Outbound callback POST** (`adapter.py:88-202`):
+- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the adapter reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
 - SSRF-validated via `utils/ssrf_validator.validate_url()` before the POST.
-- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `trigger.py:17`).
-- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `trigger.py:16`).
+- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `adapter.py:33`).
+- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `adapter.py:32`).
 - `follow_redirects=False`.
 
-**HMAC signing** (`trigger.py:108-121`):
+**HMAC signing** (`adapter.py:134-157`):
 - Canonical payload JSON (sorted keys, compact separators) includes: `event`, `webhook_id`, `timestamp`, `text`, `agent_id`, `sender_key`, `source_id`.
 - Signature: `HMAC-SHA256(secret, f"{timestamp}.".bytes + body_bytes)` — replay-protected.
 - Headers emitted: `X-Tsushin-Signature: sha256={hex}`, `X-Tsushin-Timestamp`, `X-Tsushin-Event`, `X-Tsushin-Webhook-Id`, `User-Agent: Tsushin-Webhook/1.0`.
 
-**Secret encryption:** `api_secret_encrypted` is decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`trigger.py:52-68`, `services/encryption_key_service.get_webhook_encryption_key`).
+**Secret encryption:** `api_secret_encrypted` decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`adapter.py:71-86`, `services/encryption_key_service.get_webhook_encryption_key`).
 
-**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`trigger.py:173-190`).
+**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`adapter.py:204-222`).
 
 **Model:** `WebhookIntegration` (`backend/models.py:2918`).
 
-**Criteria filtering:** `WebhookIntegration.trigger_criteria` stores the shared trigger-criteria envelope. Supported payload matchers live in `filters.jsonpath_matchers` with `path`, `operator`, and optional `value`. Supported operators are `exists`, `not_exists`, `equals`, `not_equals`, `contains`, `in`, and `regex`. Criteria are evaluated before wake dispatch; a mismatch returns `204 No Content` from inbound processing and records `filtered_out` in `channel_event_dedupe`.
+**E2E setup — Webhook channel:**
 
-**Canonical management surface:** `GET /api/triggers` lists trigger catalog entries, and `/api/triggers/webhook/*` is the canonical CRUD namespace. Legacy `Agent.webhook_integration_id` bindings still exist during the migration window, but the long-term routing model is instance-level `default_agent_id` plus trigger-aware default resolution.
-
-**E2E setup — Webhook trigger:**
-
-1. Navigate to **Hub → Communication → Webhook Triggers** in the UI.
-2. Click **+ New Webhook Trigger** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
+1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
+2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
 3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard) **plus a ready-to-paste `openssl`+`curl` snippet pre-filled with your secret and inbound URL** — copy the block, paste it into any shell with `openssl` + `curl`, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end without leaving the browser. **Save the secret now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
-5. **Choose the receiving agent** — during the Wave 1 checkpoint, routing can still fall back to the legacy `Agent.webhook_integration_id` binding where present; the v0.7.0 target model is the trigger's own `default_agent_id` plus `/settings/default-agents`.
+5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
 6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
 
 ```bash
@@ -2065,105 +1818,6 @@ curl -X POST https://localhost/api/webhooks/<slug>/inbound \
 
 7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
 8. **Rotate Secret** — the button on each card invalidates the previous secret and opens the same reveal modal showing the fresh plaintext. Update your external system before the next request, or it will start failing with `403`.
-
-#### Email triggers (Gmail-backed control plane)
-
-**Source:** `backend/api/routes_email_triggers.py`, `backend/models.py`, `frontend/components/triggers/EmailTriggerWizard.tsx`
-
-Email triggers are modeled as trigger rows, not communication channels. The Gmail account remains a reusable integration resource, and the trigger stores the control-plane configuration that will later drive inbox polling and wake-event emission.
-
-**Model:** `EmailChannelInstance` stores:
-- trigger display name (`integration_name`)
-- `gmail_integration_id`
-- `default_agent_id`
-- optional Gmail search query (`search_query`)
-- optional shared trigger criteria envelope (`trigger_criteria`) with Gmail query helpers and JSONPath matchers for payload fields such as `$.message.body_text`
-- poll interval (`30-3600` seconds)
-- `is_active`, `status`, and health snapshot fields
-
-**API surface:**
-- `GET /api/triggers/email` — list the tenant's persisted email trigger rows
-- `POST /api/triggers/email` — create a trigger row bound to an existing Gmail integration
-- `POST /api/triggers/email/test-query` — test a Gmail integration and query before saving
-- `GET /api/triggers/email/{id}` — fetch one trigger
-- `PATCH /api/triggers/email/{id}` — rename, rebind the Gmail integration, change the default agent, search query, poll interval, or active state
-- `POST /api/triggers/email/{id}/test-query` — test the saved trigger query and return sample message previews
-- `POST /api/triggers/email/{id}/notification-subscription` — enable/reuse the managed WhatsApp notification action for matching Email wakes
-- `POST /api/triggers/email/{id}/poll-now` — force one immediate Gmail poll for validation or operator checks
-- `POST /api/triggers/email/{id}/triage-subscription` — enable/reuse managed Gmail draft triage
-- `DELETE /api/triggers/email/{id}` — delete one trigger row
-
-**Hub flow:** Hub → Communication → **Triggers** → **+ New Trigger** → **Email**
-- Confirms Google OAuth app credentials
-- Reuses or creates a Gmail account through the existing OAuth popup contract
-- Captures the trigger name, Gmail search query, poll interval, default agent, and active/paused state
-- Saves a persisted trigger row without treating Gmail as a conversational channel
-
-**Runtime notes:**
-- Gmail-backed Email triggers are polled by the scheduler worker through `EmailTrigger.poll_active()`. The poller supports Gmail search queries, persisted criteria evaluation through `TriggerDispatchService`, cursor/dedupe advancement, wake-event dispatch, and system-owned managed triage or WhatsApp notification subscriptions.
-- A keyword flow such as Gmail search query `XYZ` can be saved in `search_query` and mirrored into `trigger_criteria.filters.email.search_query`; optional JSONPath matchers can further require body text such as `$.message.body_text contains "XYZ"` before a wake/run is emitted.
-- Email dedupe remains once per Gmail message id (`gmail:{message_id}`) plus cursor advancement, so polling the same matching message again does not send a second WhatsApp notification or create a second run.
-- Managed triage creates Gmail drafts only when the linked Gmail integration has a draft-compatible scope. Without `gmail.compose`, `gmail.modify`, or `mail.google.com/`, triage runs fail closed with a missing-scope result rather than sending mail.
-- Managed WhatsApp notification requires an active tenant-owned WhatsApp agent instance. Notification messages include subject, sender, Gmail account, optional date, Gmail message id, and a short plain-text preview; email body text is treated as untrusted context.
-- Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
-- If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
-
-#### Jira triggers
-
-**Source:** `backend/api/routes_jira_triggers.py`, `backend/channels/jira/trigger.py`, `frontend/components/triggers/TriggerSetupModal.tsx`
-
-Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue payloads into `TriggerDispatchInput`. Track B introduced the persisted trigger row, JQL test-query, credential encryption, detail UI, and issue-normalization contract; v0.7.0 finalization adds the live poll loop and managed WhatsApp notifier proof.
-
-**API surface:**
-- `GET/POST /api/hub/jira-integrations`
-- `PATCH/DELETE /api/hub/jira-integrations/{id}`
-- `POST /api/hub/jira-integrations/test-query`
-- `POST /api/hub/jira-integrations/{id}/test-query`
-- `GET/POST /api/triggers/jira`
-- `GET/PATCH/DELETE /api/triggers/jira/{id}`
-- `POST /api/triggers/jira/test-query`
-- `POST /api/triggers/jira/{id}/test-query`
-- `POST /api/triggers/jira/{id}/notification-subscription`
-- `POST /api/triggers/jira/{id}/poll-now`
-
-**Stored config:** Jira Tool API rows store site URL, optional project key, auth email, encrypted API token, token preview, active flag, health metadata, and (since v0.7.0) `provider_mode` (`'programmatic' | 'agentic'`, default `'programmatic'` — see §20.5 below). Jira trigger rows store the selected `jira_integration_id`, JQL, optional project override, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps, with legacy trigger-local credential fields retained as a v0.7.0 compatibility fallback.
-
-**Runtime and notifier contract:**
-- Active Jira triggers poll on their configured interval using Jira Cloud's enhanced JQL search endpoint (`/rest/api/3/search/jql`), dispatch matching issues through the shared trigger dispatch path, and persist dedupe evidence so the same issue is processed once.
-- Jira credentials are UI-managed from Hub → Tool APIs and encrypted at rest; API responses expose only `api_token_preview`.
-- The managed WhatsApp notifier is an outbound action for Jira trigger results, not a Jira channel. It requires an operator-provided recipient, must use a tenant-owned WhatsApp instance, and should produce one notification per deduped Jira issue.
-- Jira base URLs are normalized by stripping a trailing `/jira`; issue links and REST calls use the canonical site root.
-- Browser QA covers setup/edit/test-query, detail state, wake-event evidence, and the poll-now manual proof action. Backend QA covers successful polling, duplicate suppression, missing/paused channel failures, and cross-tenant ownership rejection.
-
-#### Schedule triggers
-
-**Source:** `backend/api/routes_schedule_triggers.py`, `backend/channels/schedule/trigger.py`, `backend/scheduler/worker.py`
-
-Schedule triggers use `ScheduleChannelInstance` as their source of truth. The scheduler worker remains the poll-loop driver, but trigger-backed schedules dispatch wake events through `ScheduleTrigger.poll_due()` instead of creating or executing legacy `ScheduledEvent` rows.
-
-**API surface:**
-- `GET/POST /api/triggers/schedule`
-- `GET/PATCH/DELETE /api/triggers/schedule/{id}`
-- `POST /api/triggers/schedule/preview`
-
-**Stored config:** cron expression, IANA timezone, optional payload template, trigger criteria, next/last fire timestamps, default agent, and health/activity fields.
-
-#### GitHub triggers
-
-**Source:** `backend/api/routes_github_triggers.py`, `backend/api/routes_github_inbound.py`, `backend/channels/github/trigger.py`
-
-GitHub triggers receive signed repository webhook deliveries and dispatch matching events to continuous-agent wakeups.
-
-**API surface:**
-- `GET/POST /api/triggers/github`
-- `GET/PATCH/DELETE /api/triggers/github/{id}`
-- `POST /api/triggers/github/test-connection`
-- `POST /api/triggers/github/{id}/check-connection`
-- `POST /api/triggers/github/{id}/inbound`
-
-**Stored config:** auth method (`pat` or `app`), repository owner/name, optional installation id, encrypted PAT preview, encrypted webhook-secret preview, event filters, branch/path/author filters, trigger criteria, default agent, and delivery/activity cursors.
-
-**Inbound contract:** GitHub sends `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. The route validates HMAC using the stored webhook secret, applies repo/event/branch/path/author filters, dedupes on delivery id, and dispatches via `TriggerDispatchService`.
 
 ### 15.6 Playground
 
@@ -2389,7 +2043,7 @@ The page uses `MediaRecorder` to capture voice directly in the browser (`page.ts
 - Preferred MIME types (in order): `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg;codecs=opus`, `audio/mp4` (`:502-510`).
 - Audio capabilities are loaded per selected agent (`:484-490`) — determined by the agent's configured `audio_transcript` skill.
 
-Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using one of three routes: explicit OpenAI Whisper, the tenant default ASR instance, or a specific pinned local Speaches/Whisper instance. When the selected local path is unavailable, the skill falls back to OpenAI Whisper. Skill is `execution_mode="special"` (media-triggered).
+Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using OpenAI Whisper or configured provider. Skill is `execution_mode="special"` (media-triggered).
 
 ### 18.3 Document Uploads
 
@@ -2832,34 +2486,6 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 | Ollama | 6700–6799 | `services/ollama_container_manager.py` |
 | SearXNG | 6500–6599 | `services/searxng_container_manager.py` |
 
-### 20.4.1 Atlassian Jira (programmatic + ticket_management skill)
-
-**Sources:** `backend/hub/jira/jira_ticket_service.py`, `backend/services/jira_integration_service.py`, `backend/api/routes_jira_integrations.py`, `frontend/app/hub/page.tsx` (JiraIntegrationModal), `backend/agent/skills/jira_skill.py`.
-
-A Jira integration row (`jira_integration` — subclass of `hub_integration`) stores the site URL, optional default project key, auth email, encrypted API token, and (since v0.7.0) a `provider_mode` discriminator:
-
-| `provider_mode` | Status | Path |
-|---|---|---|
-| `programmatic` | ✅ shipped | Direct REST API + token (HTTP Basic auth). Used by both Jira triggers and the `ticket_management` skill. |
-| `agentic` | ⏳ Coming soon | OAuth 2.1 to `https://mcp.atlassian.com/v1/mcp` (Atlassian Remote MCP). UI exposes the option as a disabled radio with a "Coming soon" tooltip; backend rejects `provider_mode='agentic'` with `400 agentic_mode_not_yet_supported`. |
-
-**Hub modal flow** (`frontend/app/hub/page.tsx` JiraIntegrationModal): name, site URL, auth email, API token, Connection-mode radio, active checkbox. Editing keeps the existing token unless replaced.
-
-**Ticket Management skill** (§9 row `ticket_management`): the same `JiraIntegration` row is reused on demand by agents. The agent's Skills tab auto-selects a Jira integration when exactly one exists for the tenant. Capability matrix:
-
-| Capability | Default | Endpoint |
-|---|---|---|
-| `search_tickets` | ✅ on | POST `/rest/api/3/search/jql` |
-| `read_ticket` | ✅ on | GET `/rest/api/3/issue/{key}` |
-| `read_comments` | ✅ on | GET `/rest/api/3/issue/{key}/comment` |
-| `update_ticket` | ❌ off | PUT `/rest/api/3/issue/{key}` |
-| `add_comment` | ❌ off | POST `/rest/api/3/issue/{key}/comment` |
-| `transition_ticket` | ❌ off | POST `/rest/api/3/issue/{key}/transitions` |
-
-Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool schema (the LLM never sees actions it cannot run). `JiraSkill.get_mcp_tool_definition` (classmethod) returns the *full* spec so `SkillManager._find_skill_by_tool_name('ticket_operation')` can map the tool name to the class for dispatch; per-agent filtering happens in instance-level `to_openai_tool` / `to_anthropic_tool` helpers that read `AgentSkill.config["capabilities"]`.
-
-**DELETE protection:** `DELETE /api/hub/jira-integrations/{id}` returns `409` if the integration is still referenced by any `JiraChannelInstance` (trigger) or `AgentSkillIntegration` row. The user must detach those references first; the modal's Remove button surfaces the reason.
-
 ### 20.5 Browser Automation (Playwright, CDP)
 
 **Sources:** `backend/hub/providers/browser_automation_provider.py`, `backend/hub/providers/playwright_provider.py`, `backend/hub/providers/cdp_provider.py`, `backend/hub/providers/browser_session_manager.py`, `backend/hub/providers/browser_automation_registry.py`
@@ -2934,29 +2560,17 @@ This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (remove
 
 Five configuration steps + one progress step:
 
-1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*.
+1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
 2. **Provider** — four cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium), Google Gemini TTS (preview, reuses tenant Gemini key). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI / ElevenLabs / Gemini keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
-3. **Voice & transcription settings** — language first (shared between TTS + STT), then:
-   for TTS, the existing provider-specific voice / speed / format controls (plus Kokoro memory-limit + "Set as tenant-default TTS");
-   for transcription, an **ASR backend** selector with *OpenAI Whisper*, *Use tenant default*, and *Pin a specific local instance*. The local-instance options are sourced from `GET /api/asr-instances`, while the tenant-default card reflects `GET /api/settings/asr/default`.
+3. **Voice & credentials** — language first (filters Kokoro voices by language), then (for Gemini only) a **Model** dropdown sourced live from `GET /api/tts-providers/gemini/models` (3 preview models — Balanced default, Fast, Quality), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox. Gemini hides the speed slider and locks format to WAV (model constraints).
 4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
 5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
 
-On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs/Gemini path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format, model?}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called with `{response_mode, language, model, asr_mode, asr_instance_id?}`. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
+On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
 
 **Events.** The provider emits `window.dispatchEvent(new CustomEvent('tsushin:audio-wizard-closed'))` on close so the onboarding tour's step 12 callback can auto-advance to step 13 (mirrors the WhatsApp wizard pattern).
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
-
-### 25.8 `/settings/asr`
-
-`frontend/app/settings/asr/page.tsx` is the tenant-facing ASR control plane for Track D:
-
-1. **Default transcription path** — `GET/PUT /api/settings/asr/default`. `null` means OpenAI Whisper; a concrete `default_asr_instance_id` means "use this tenant's local Speaches/Whisper instance by default".
-2. **Local instance provisioning** — `POST /api/asr-instances` creates a managed or external ASR instance. The page exposes instance name, default model, memory limit, and auto-provision toggle.
-3. **Container lifecycle** — per-instance `start` / `stop` / `restart` / `delete` actions call `/api/asr-instances/{id}/container/*` and `/api/asr-instances/{id}`. Managed Speaches containers mount their Hugging Face cache at `/root/.cache/huggingface`; deactivating, deleting, or discovering a stale inactive default clears `Tenant.default_asr_instance_id` back to OpenAI fallback.
-
-Agent-level audio surfaces (Audio Agents Wizard, Agent Wizard, Agent Skills Manager) can then choose `openai`, `tenant_default`, or `instance` for `audio_transcript.config.asr_mode`.
 
 #### 20.6.2 Ollama Setup Wizard
 
@@ -3055,7 +2669,7 @@ Lists system and tenant-defined roles with display names and permission badges. 
 
 "Coming Soon" section (`:277`) lists planned integrations. Removing Google credentials warns that it will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO (`:79`).
 
-**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** launcher dispatches to. Gmail is no longer offered from the channel picker; inbound email automation now starts from Hub → Communication → Triggers → Email Trigger. The Hub wizards (`frontend/components/integrations/ProductivityWizard.tsx`, `frontend/components/triggers/TriggerWizard.tsx`) run a picker step and then hand off to the per-service sub-wizard — this is the same pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
+**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** and **"+ Add Channel"** launchers dispatch to. The Hub wizards (`frontend/components/integrations/ProductivityWizard.tsx`, `ChannelsWizard.tsx`) run a category/service (or channel) picker step and then hand off to the per-service sub-wizard — this is the same pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
 1. Confirms Google OAuth app credentials are configured.
 2. Opens a popup to `/api/hub/google/{gmail|calendar}/oauth/authorize` and polls `/api/hub/google/{gmail|calendar}/integrations` for the new row.
 3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
@@ -3067,24 +2681,6 @@ Either caller page can subscribe to completion via `useGoogleWizardComplete(kind
 **OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
 
 **Integration type is carried through the callback.** `backend/hub/google/oauth_handler.py::handle_callback` receives `integration_type` as an explicit argument; the outer `backend/api/routes_google.py::oauth_callback` reads it from the `OAuthState.integration_type` prefix (`google_gmail` → `gmail`, `google_calendar` → `calendar`) and passes it in. The legacy fallback that parsed the type from the `redirect_url` query string is still there for the direct-redirect flow, but if neither source yields a valid type the handler raises `ValueError` rather than defaulting to calendar — the popup-driven wizard flow never sets a `redirect_url`, and silently defaulting used to cause gmail OAuth to upsert into the calendar integration tables.
-
-### 21.4.1 Default Agents (`frontend/app/settings/default-agents/page.tsx`)
-
-**Purpose:** central routing control for tenant-wide fallback agent resolution. This page replaces the old inline "set default" affordance in Agent Studio.
-
-**Sections:**
-- **Tenant Default** — last-resort fallback when no more specific match exists
-- **Channel Defaults** — per-instance defaults for conversational channels such as WhatsApp, Telegram, Slack, and Discord
-- **Trigger Defaults** — per-instance defaults for trigger rows such as webhook and email
-- **User Defaults** — per-channel sender identifier overrides for known raw channel IDs before a contact-level mapping exists
-
-**Runtime resolution order** (`backend/services/default_agent_service.py`):
-- Channels: explicit agent -> `ContactAgentMapping` -> `UserChannelDefaultAgent` -> instance `default_agent_id` -> legacy bound agent FK -> tenant default
-- Triggers: explicit agent -> trigger instance `default_agent_id` -> legacy bound agent FK -> tenant default
-
-**Fail-closed trigger behavior:** if no active agent resolves for a trigger, runtime execution is expected to stop with an explicit error/health signal instead of silently queueing work.
-
-**Related UI changes:** `frontend/app/agents/page.tsx` still shows the current tenant default as a read-only stat card, but all edits now route to `/settings/default-agents`.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
@@ -3118,12 +2714,10 @@ Each key field has a show/hide eye toggle and placeholder `"Enter Fernet encrypt
 
 | Filter | Options |
 |---|---|
-| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, Shell, API Clients, Custom Skills, MCP Servers, Team |
+| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, API Clients, Custom Skills, MCP Servers, Team |
 | Severity | All Severities, Info, Warning, Critical |
 | Channel | All Channels, Web, API, WhatsApp, Telegram, System |
 | From / To | Date range |
-
-Date-only filters now expand to full-day bounds on the backend, so selecting `To = 2026-04-23` includes events through `2026-04-23 23:59:59.999999` instead of stopping at midnight.
 
 **Syslog Forwarding Panel** (`audit-logs/page.tsx:416-521`):
 
@@ -3521,7 +3115,7 @@ To restore it later, just click Start — the encrypted token and hostname are p
 
 The audit-logs UI exposes the same three (plus "All Severities") — see §21.7.
 
-**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, shell, api_client, skill, mcp, team.
+**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, api_client, skill, mcp, team.
 
 **Channels**: web, api, whatsapp, telegram, system.
 
@@ -3571,7 +3165,6 @@ app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_sche
 * Enabled by default; disable with `TSN_METRICS_ENABLED=false` (`backend/settings.py:139`).
 * Optional bearer token for scraping: `TSN_METRICS_SCRAPE_TOKEN` (`backend/services/metrics_service.py:109`). When set, scrapers must present `Authorization: Bearer <token>`.
 * Implemented by `backend/services/metrics_service.py`.
-* **Public ingress (BUG-712):** Caddy now has an explicit `handle /metrics { reverse_proxy backend:8081 }` block in both `proxy/Caddyfile` and the `tsushin_routes` snippet generated by `install.py`, so the Next.js auth middleware no longer 307s `/metrics` to `/auth/login` when the proxy is in front. Pre-fix, scrapes against the public hostname silently failed; post-fix, `https://<host>/metrics` proxies straight to the backend (which then enforces the bearer token if `TSN_METRICS_SCRAPE_TOKEN` is set).
 
 ### 24.3 Health & readiness probes
 
@@ -3661,7 +3254,7 @@ Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM;
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v1/agents/{agent_id}/chat` | Send a message. Sync by default; append `?async=true` for queued delivery. SSE streaming supported. |
-| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. Append `?include_scratchpad=true` to include the top-level agentic scratchpad for authorized clients; nested result scratchpads are always redacted. |
+| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. |
 | GET | `/api/v1/agents/{agent_id}/threads` | List threads for an agent. |
 | GET | `/api/v1/agents/{agent_id}/threads/{thread_id}/messages` | Fetch messages in a thread. |
 | DELETE | `/api/v1/agents/{agent_id}/threads/{thread_id}` | Delete a thread. |
@@ -3799,19 +3392,19 @@ A few illustrative endpoints (grepped verbatim from `backend/api/routes_*.py`):
 
 Source: `backend/app.py:1270-1309`.
 
-### 25.6 Webhooks (trigger-based, HMAC-signed)
+### 25.6 Webhooks (bidirectional, HMAC-signed)
 
-The webhook integration is now modeled as a trigger (`backend/channels/webhook/trigger.py`) even though the public inbound endpoint remains `POST /api/webhooks/{slug}/inbound` (numeric ids still work as a legacy fallback).
+The webhook channel (`backend/channels/webhook/adapter.py`) is bidirectional:
 
-**Inbound** — external systems POST signed events to `POST /api/webhooks/{slug}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
+**Inbound** — external systems POST signed events to `POST /api/webhooks/{webhook_id}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
 
-**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url` via `Trigger.notify_external_system(...)`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/trigger.py`). Outbound requests carry custom headers:
+**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/adapter.py:148`). Outbound requests carry custom headers:
 
 * `X-Tsushin-Webhook-Id: <int>`
 * `X-Tsushin-Signature: <hex sha256 HMAC>`
-* (plus timestamp fields — see `channels/webhook/trigger.py:114-121`)
+* (plus timestamp fields — see `channels/webhook/adapter.py:131-155`)
 
-Callback URLs are subject to SSRF policy enforcement (`channels/webhook/trigger.py`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/trigger.py`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty, and their canonical management surface is `/api/triggers/webhook/*` plus `GET /api/triggers`.
+Callback URLs are subject to SSRF policy enforcement (`channels/webhook/adapter.py:125`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/adapter.py:72-85`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty.
 
 ---
 
@@ -3925,8 +3518,6 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 /shell myserver:df -h            — Execute on specific host "myserver"
 /shell @all:uptime               — Execute on all registered beacons
 ```
-
-Shell command requests are rate-limited per beacon/integration (60 commands/minute by default in the shared shell security service), and the HTTP beacon endpoints apply additional throttles. Registration and version checks are capped at 12 requests/minute per beacon, beacon-package downloads are capped at 6 requests/minute per beacon or signed-in user, check-ins get 3x burst headroom over the configured poll cadence (clamped to 30-360 RPM), and command-result posts get 8x headroom (clamped to 60-480 RPM).
 
 #### Thread commands
 ```

@@ -1,8 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import CopyableBlock from '@/components/ui/CopyableBlock'
-import { authenticatedFetch } from '@/lib/client'
 
 interface Props {
   apiKey: string
@@ -15,47 +13,17 @@ interface Props {
  * Extracted from frontend/app/hub/shell/page.tsx so both the existing
  * "bare form" modal and the new ShellBeaconSetupWizard render the same
  * install guidance with the same source of truth.
- *
- * BUG-720: when the install runs with SSL_MODE=selfsigned, fetch the
- * public-info endpoint and emit `curl -k` so the operator's first
- * registration attempt does not trip on the self-signed cert. Footer
- * note explains the flag is unnecessary for auto/letsencrypt installs.
  */
 export default function BeaconInstallInstructions({
   apiKey,
   apiBaseUrl = '',
   onCopyFeedback,
 }: Props) {
-  const [sslMode, setSslMode] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const detect = async () => {
-      try {
-        const resp = await authenticatedFetch(`${apiBaseUrl}/api/system/public-info`)
-        if (!resp.ok) return
-        const data = await resp.json()
-        if (!cancelled && typeof data?.ssl_mode === 'string') {
-          setSslMode(data.ssl_mode.toLowerCase())
-        }
-      } catch {
-        // Non-fatal: fall back to no `-k` (auto/letsencrypt assumption).
-      }
-    }
-    detect()
-    return () => {
-      cancelled = true
-    }
-  }, [apiBaseUrl])
-
-  const isSelfSigned = sslMode === 'selfsigned'
-  const curlInsecureFlag = isSelfSigned ? ' -k' : ''
-
   const downloadUrl = `${apiBaseUrl}/api/shell/beacon/download`
   const serverUrl = `${apiBaseUrl}/api/shell`
 
   const installScript = `# Download and install beacon
-curl -L${curlInsecureFlag} -H "X-API-Key: ${apiKey}" "${downloadUrl}" -o beacon.zip && \\
+curl -L -H "X-API-Key: ${apiKey}" "${downloadUrl}" -o beacon.zip && \\
 unzip beacon.zip && \\
 cd shell_beacon && \\
 pip install -r requirements.txt
@@ -129,12 +97,6 @@ logging:
         <div className="mb-4">
           <p className="text-sm text-gray-400 mb-2">Option 2 — Quick install (paste into the target terminal)</p>
           <CopyableBlock value={installScript} tone="teal" maxHeight="16rem" />
-          {isSelfSigned && (
-            <p className="text-xs text-amber-400 mt-2">
-              <code>-k</code> is required because this install uses a self-signed certificate.
-              Production installs (<code>auto</code> / <code>letsencrypt</code>) do not need this flag.
-            </p>
-          )}
         </div>
 
         <div className="mb-2">

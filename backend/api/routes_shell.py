@@ -36,16 +36,6 @@ router = APIRouter(prefix="/shell", tags=["Shell Skill"])
 # Global engine reference (set by main app.py)
 _engine = None
 
-BEACON_REGISTER_RATE_LIMIT_RPM = 12
-BEACON_CHECKIN_MIN_RPM = 30
-BEACON_CHECKIN_MAX_RPM = 360
-BEACON_CHECKIN_BURST_MULTIPLIER = 3
-BEACON_RESULT_MIN_RPM = 60
-BEACON_RESULT_MAX_RPM = 480
-BEACON_RESULT_BURST_MULTIPLIER = 8
-BEACON_VERSION_RATE_LIMIT_RPM = 12
-BEACON_DOWNLOAD_RATE_LIMIT_RPM = 6
-
 
 def set_engine(engine):
     """Set the global engine reference"""
@@ -123,109 +113,6 @@ def verify_integration_access(
     """Verify user can access an integration (tenant check)."""
     if not ctx.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Integration not found")
-
-
-def _derive_beacon_rate_limit(
-    poll_interval: Optional[int],
-    *,
-    minimum: int,
-    maximum: int,
-    multiplier: int,
-) -> int:
-    interval = max(int(poll_interval or 5), 1)
-    expected_rpm = (60 + interval - 1) // interval
-    return max(minimum, min(maximum, expected_rpm * multiplier))
-
-
-def _enforce_beacon_rate_limit(integration: ShellIntegration, action: str) -> None:
-    from middleware.rate_limiter import api_rate_limiter
-
-    if action == "register":
-        rate_limit = BEACON_REGISTER_RATE_LIMIT_RPM
-    elif action == "checkin":
-        rate_limit = _derive_beacon_rate_limit(
-            integration.poll_interval,
-            minimum=BEACON_CHECKIN_MIN_RPM,
-            maximum=BEACON_CHECKIN_MAX_RPM,
-            multiplier=BEACON_CHECKIN_BURST_MULTIPLIER,
-        )
-    elif action == "result":
-        rate_limit = _derive_beacon_rate_limit(
-            integration.poll_interval,
-            minimum=BEACON_RESULT_MIN_RPM,
-            maximum=BEACON_RESULT_MAX_RPM,
-            multiplier=BEACON_RESULT_BURST_MULTIPLIER,
-        )
-    elif action == "version":
-        rate_limit = BEACON_VERSION_RATE_LIMIT_RPM
-    elif action == "download":
-        rate_limit = BEACON_DOWNLOAD_RATE_LIMIT_RPM
-    else:
-        rate_limit = 60
-
-    rate_key = f"shell_beacon:{integration.id}:{action}"
-    if api_rate_limiter.allow(rate_key, rate_limit):
-        return
-
-    raise HTTPException(
-        status_code=429,
-        detail=f"Beacon {action} rate limit exceeded ({rate_limit} requests/minute)",
-        headers={"Retry-After": "60"},
-    )
-
-
-def _enforce_beacon_user_rate_limit(user: User, action: str) -> None:
-    from middleware.rate_limiter import api_rate_limiter
-
-    rate_limit = BEACON_DOWNLOAD_RATE_LIMIT_RPM if action == "download" else 60
-    tenant_id = getattr(user, "tenant_id", "unknown")
-    user_id = getattr(user, "id", "unknown")
-    rate_key = f"shell_beacon_user:{tenant_id}:{user_id}:{action}"
-
-    if api_rate_limiter.allow(rate_key, rate_limit):
-        return
-
-    raise HTTPException(
-        status_code=429,
-        detail=f"Beacon {action} rate limit exceeded ({rate_limit} requests/minute)",
-        headers={"Retry-After": "60"},
-    )
-
-
-def _log_shell_command_audit_event(
-    *,
-    db: Session,
-    tenant_id: str,
-    user_id: Optional[int],
-    action: str,
-    shell_id: int,
-    command_id: Optional[str],
-    details: Optional[Dict] = None,
-    severity: str = "info",
-    request: Optional[Request] = None,
-) -> None:
-    try:
-        from services.audit_service import log_tenant_event
-
-        payload = dict(details or {})
-        payload.setdefault("shell_id", shell_id)
-        if command_id:
-            payload.setdefault("command_id", command_id)
-
-        log_tenant_event(
-            db,
-            tenant_id,
-            user_id,
-            action,
-            resource_type="shell_command",
-            resource_id=command_id or str(shell_id),
-            details=payload,
-            request=request,
-            channel="api",
-            severity=severity,
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to write shell audit event {action}: {exc}")
 
 
 # ============================================================================
@@ -797,8 +684,6 @@ async def beacon_register(
     if not integration:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    _enforce_beacon_rate_limit(integration, "register")
-
     # Get client IP
     client_ip = http_request.client.host if http_request.client else None
 
@@ -846,8 +731,6 @@ async def beacon_checkin(
 
     if not integration:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
-    _enforce_beacon_rate_limit(integration, "checkin")
 
     # Update checkin info
     integration.last_checkin = datetime.utcnow()
@@ -920,8 +803,6 @@ async def beacon_report_result(
 
     if not integration:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
-    _enforce_beacon_rate_limit(integration, "result")
 
     # Find the command
     command = db.query(ShellCommand).filter(
@@ -1016,7 +897,6 @@ async def queue_command(
     """
     from fastapi.responses import JSONResponse
     from services.shell_security_service import get_security_service
-    from services.audit_service import TenantAuditActions
 
     # Verify integration exists and user has access
     integration = db.query(ShellIntegration).filter(
@@ -1035,43 +915,6 @@ async def queue_command(
     # SECURITY CHECK (CRIT-005 Fix)
     # =========================================================================
     security_service = get_security_service()
-
-    rate_allowed, rate_error = security_service.check_rate_limit(shell_id)
-    if not rate_allowed:
-        blocked_cmd = ShellCommand(
-            id=str(uuid.uuid4()),
-            shell_id=shell_id,
-            tenant_id=ctx.tenant_id,
-            commands=request.commands,
-            initiated_by=f"user:{current_user.email}",
-            status="blocked",
-            error_message=rate_error,
-            timeout_seconds=request.timeout_seconds,
-        )
-        blocked_cmd.completed_at = datetime.utcnow()
-        db.add(blocked_cmd)
-        db.commit()
-
-        _log_shell_command_audit_event(
-            db=db,
-            tenant_id=ctx.tenant_id,
-            user_id=current_user.id,
-            action=TenantAuditActions.SHELL_COMMAND_BLOCKED,
-            shell_id=shell_id,
-            command_id=blocked_cmd.id,
-            details={"commands": request.commands, "reason": rate_error, "blocked_by": "rate_limit"},
-            severity="warning",
-        )
-
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": "Command rate limit exceeded",
-                "reason": rate_error,
-                "command_id": blocked_cmd.id,
-            },
-            headers={"Retry-After": "60"},
-        )
 
     # Check all commands against patterns
     all_allowed, security_result = security_service.check_commands(
@@ -1102,21 +945,6 @@ async def queue_command(
         logger.warning(
             f"Command blocked: {security_result.blocked_reason} "
             f"(user={current_user.email}, shell={shell_id})"
-        )
-
-        _log_shell_command_audit_event(
-            db=db,
-            tenant_id=ctx.tenant_id,
-            user_id=current_user.id,
-            action=TenantAuditActions.SHELL_COMMAND_BLOCKED,
-            shell_id=shell_id,
-            command_id=blocked_cmd.id,
-            details={
-                "commands": request.commands,
-                "reason": security_result.blocked_reason,
-                "risk_level": security_result.risk_level.value,
-            },
-            severity="warning",
         )
 
         raise HTTPException(
@@ -1160,20 +988,6 @@ async def queue_command(
                 f"(risk={security_result.risk_level.value})"
             )
 
-            _log_shell_command_audit_event(
-                db=db,
-                tenant_id=ctx.tenant_id,
-                user_id=current_user.id,
-                action=TenantAuditActions.SHELL_COMMAND_PENDING_APPROVAL,
-                shell_id=shell_id,
-                command_id=command.id,
-                details={
-                    "commands": request.commands,
-                    "risk_level": security_result.risk_level.value,
-                    "security_warnings": security_result.warnings,
-                },
-            )
-
             # Return 202 Accepted with approval info
             return JSONResponse(
                 status_code=202,
@@ -1206,16 +1020,6 @@ async def queue_command(
     db.refresh(command)
 
     logger.info(f"Command {command.id} queued for shell {shell_id}")
-
-    _log_shell_command_audit_event(
-        db=db,
-        tenant_id=ctx.tenant_id,
-        user_id=current_user.id,
-        action=TenantAuditActions.SHELL_COMMAND_QUEUED,
-        shell_id=shell_id,
-        command_id=command.id,
-        details={"commands": request.commands},
-    )
 
     return CommandResponse(
         id=command.id,
@@ -1309,8 +1113,6 @@ async def get_beacon_version(
     if not integration:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    _enforce_beacon_rate_limit(integration, "version")
-
     import os
     import hashlib
     from pathlib import Path
@@ -1359,9 +1161,7 @@ async def download_beacon(
     curl-from-target-host install flow keeps working, and so beacons can
     auto-update via the URL returned from /beacon/version).
     """
-    integration = verify_beacon_api_key(x_api_key, db) if x_api_key else None
-    if integration:
-        _enforce_beacon_rate_limit(integration, "download")
+    if x_api_key and verify_beacon_api_key(x_api_key, db):
         jwt_ok = True
     else:
         jwt_ok = False
@@ -1371,7 +1171,6 @@ async def download_beacon(
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
         ensure_permission(current_user, "shell.read", db)
-        _enforce_beacon_user_rate_limit(current_user, "download")
 
     import io
     import zipfile

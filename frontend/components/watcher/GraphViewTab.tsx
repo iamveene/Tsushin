@@ -11,7 +11,6 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
-import Link from 'next/link'
 import EmptyState from '@/components/EmptyState'
 import { GraphNode, GraphViewType } from './graph/types'
 import { LayoutOptions, DEFAULT_LAYOUT_OPTIONS } from './graph/layout'
@@ -58,21 +57,8 @@ const EMPTY_STATE_CONFIG: Record<GraphViewType, { title: string; description: st
   },
 }
 
-function continuousRunStatusClass(status: string): string {
-  const normalized = status.toLowerCase()
-  if (['success', 'succeeded', 'completed', 'complete'].includes(normalized)) {
-    return 'border-green-500/35 bg-green-500/10 text-green-200'
-  }
-  if (['failed', 'error'].includes(normalized)) {
-    return 'border-red-500/40 bg-red-500/10 text-red-200'
-  }
-  if (['skipped', 'cancelled', 'canceled'].includes(normalized)) {
-    return 'border-gray-500/35 bg-gray-500/10 text-gray-300'
-  }
-  return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-}
-
 export default function GraphViewTab() {
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [viewType, setViewType] = useState<GraphViewType>('agents')
 
   // Phase 2: Layout state
@@ -121,7 +107,6 @@ export default function GraphViewTab() {
     activeA2ASessions,
     fadingA2ASessions,
     agentA2ADepths,
-    activeContinuousRuns,
   } = useWatcherActivity({
     enabled: viewType === 'agents' // Only connect when viewing agents
   })
@@ -185,6 +170,7 @@ export default function GraphViewTab() {
   }), [layoutDirection])
 
   const handleNodeClick = (node: GraphNode) => {
+    setSelectedNode(node)
     console.log('[GraphViewTab] Node clicked:', node)
   }
 
@@ -250,6 +236,7 @@ export default function GraphViewTab() {
 
   const handleViewTypeChange = (newViewType: GraphViewType) => {
     setViewType(newViewType)
+    setSelectedNode(null) // Clear selection when switching views
     setExpandedAgentsCount(0) // Reset expand state when switching views
   }
 
@@ -330,8 +317,6 @@ export default function GraphViewTab() {
     )
   }
 
-  const continuousRunList = Array.from(activeContinuousRuns.values())
-
   return (
     <div className="space-y-4 animate-fade-in">
       {/* View Type Selector */}
@@ -366,54 +351,6 @@ export default function GraphViewTab() {
           )}
         </div>
       </div>
-
-      {viewType === 'agents' && continuousRunList.length > 0 && (
-        <div className="glass-card rounded-xl border border-cyan-500/25 bg-cyan-500/5 px-4 py-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="text-sm font-semibold text-white flex items-center gap-2">
-                <span className="inline-block h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
-                Continuous agent activity
-              </div>
-              <p className="text-xs text-tsushin-slate mt-1">
-                Backend WebSocket events with <code className="font-mono">type=continuous_run</code> are being tracked separately from user-initiated runs.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {continuousRunList.slice(0, 4).map(run => (
-                <span
-                  key={run.runId}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
-                    run.isEnding
-                      ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-200/70'
-                      : continuousRunStatusClass(run.status)
-                  }`}
-                >
-                  <span className="font-mono">#{run.runId}</span>
-                  <span className="rounded-full border border-current/30 px-1.5 py-0 text-[10px] uppercase leading-4">
-                    continuous
-                  </span>
-                  <span>{run.status}</span>
-                  {run.channelType && <span className="text-cyan-300/70">{run.channelType}</span>}
-                  {run.wakeEventIds.length > 0 && (
-                    <Link
-                      href={`/hub/wake-events?highlight=${run.wakeEventIds[0]}`}
-                      className="text-cyan-100 underline-offset-2 hover:underline"
-                    >
-                      wake #{run.wakeEventIds[0]}
-                    </Link>
-                  )}
-                </span>
-              ))}
-              {continuousRunList.length > 4 && (
-                <span className="rounded-full border border-cyan-500/20 bg-cyan-500/5 px-2.5 py-1 text-xs text-cyan-200/70">
-                  +{continuousRunList.length - 4}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Phase 10: Fullscreen backdrop */}
       {isMaximized && (

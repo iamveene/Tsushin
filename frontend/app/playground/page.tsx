@@ -50,15 +50,6 @@ export default function PlaygroundPage() {
         const n = Number(agentParam)
         if (!Number.isNaN(n)) return n
       }
-      // BUG-691: when no ?agent= in URL (e.g. user landed via sidebar nav),
-      // restore the last-active agent from localStorage so a hard refresh
-      // can put them back where they were rather than defaulting to the
-      // tenant default agent (which loses the active thread context).
-      const storedAgent = window.localStorage.getItem('tsushin.playground.lastAgentId')
-      if (storedAgent) {
-        const n = Number(storedAgent)
-        if (!Number.isNaN(n) && n > 0) return n
-      }
     } catch {
       /* ignore */
     }
@@ -187,19 +178,9 @@ export default function PlaygroundPage() {
     try {
       if (activeThreadId) {
         window.localStorage.setItem('tsushin.playground.lastThreadId', String(activeThreadId))
-        // BUG-691: also persist the agent so a hard refresh (which has no
-        // ?agent= param if the user navigated via the sidebar) restores both
-        // the agent AND the thread, not just the thread under whatever
-        // default agent loadAgents() picked.
-        if (selectedAgentId) {
-          window.localStorage.setItem('tsushin.playground.lastAgentId', String(selectedAgentId))
-        }
         const params = new URLSearchParams(window.location.search)
-        const threadChanged = params.get('thread') !== String(activeThreadId)
-        const agentChanged = selectedAgentId !== null && params.get('agent') !== String(selectedAgentId)
-        if (threadChanged || agentChanged) {
+        if (params.get('thread') !== String(activeThreadId)) {
           params.set('thread', String(activeThreadId))
-          if (selectedAgentId !== null) params.set('agent', String(selectedAgentId))
           const next = `${window.location.pathname}?${params.toString()}`
           window.history.replaceState(null, '', next)
         }
@@ -207,7 +188,7 @@ export default function PlaygroundPage() {
     } catch {
       /* ignore — URL sync is best-effort */
     }
-  }, [activeThreadId, selectedAgentId])
+  }, [activeThreadId])
 
   // --- Playground Mini handover (de-dupe)
   // Tracks the last-consumed ?thread= so re-expanding with the same thread
@@ -1244,27 +1225,9 @@ export default function PlaygroundPage() {
 
         // Refresh messages from backend to show slash commands in conversation history
         // This ensures complete conversation history including /inject, /tools, etc.
-        // BUG-714: slash-command output is stored in conversation memory but not
-        // in the PlaygroundThread. After refreshing the thread we re-append the
-        // user command + handler reply locally so the operator can see what
-        // happened (and so the /shell stub bubble below has a logical anchor).
         if (activeThreadId) {
           const threadData = await api.getThread(activeThreadId)
-          const refreshed: PlaygroundMessage[] = threadData.messages || []
-          const localUserSlash: PlaygroundMessage = {
-            role: 'user',
-            content: userMessage,
-            timestamp: new Date().toISOString(),
-            message_id: messageId,
-          }
-          const replyMsgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-          const localReply: PlaygroundMessage = {
-            role: 'assistant',
-            content: result.message || 'Command executed.',
-            timestamp: new Date().toISOString(),
-            message_id: replyMsgId,
-          }
-          setMessages([...refreshed, localUserSlash, localReply])
+          setMessages(threadData.messages || [])
         } else {
           // Fallback: Add result to local state (Phase 14.2: with message_id)
           const agentMsgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
@@ -1275,108 +1238,6 @@ export default function PlaygroundPage() {
             message_id: agentMsgId
           }
           setMessages((prev) => [...prev, agentMsg])
-        }
-
-        // BUG-714: surface beacon command status for /shell (fire-and-forget).
-        // The slash service returns action=shell_queued with command_id when
-        // the beacon hasn't checked in yet. Append a status bubble here and
-        // poll /api/shell/commands/{id} until it completes (or 60s elapse).
-        if (result.action === 'shell_queued' && result.data?.command_id) {
-          const shellCommandId = String(result.data.command_id)
-          const shellBubbleId = `msg_shell_${shellCommandId}`
-          const initialBubble: PlaygroundMessage = {
-            role: 'assistant',
-            content: `🐚 **Shell Command Queued** (id: \`${shellCommandId}\`)\n\nWaiting for beacon to check in…`,
-            timestamp: new Date().toISOString(),
-            message_id: shellBubbleId,
-          }
-          setMessages((prev) => [...prev, initialBubble])
-
-          const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '')
-          const POLL_INTERVAL_MS = 2000
-          const POLL_TIMEOUT_MS = 60000
-          const startedAt = Date.now()
-
-          const renderBubble = (text: string): PlaygroundMessage => ({
-            role: 'assistant',
-            content: text,
-            timestamp: new Date().toISOString(),
-            message_id: shellBubbleId,
-          })
-
-          const updateBubble = (text: string) => {
-            setMessages((prev) =>
-              prev.map((m) => (m.message_id === shellBubbleId ? renderBubble(text) : m))
-            )
-          }
-
-          // Poll asynchronously so the input remains responsive.
-          ;(async () => {
-            try {
-              while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-                await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-                try {
-                  const resp = await authenticatedFetch(
-                    `${apiBase}/api/shell/commands/${encodeURIComponent(shellCommandId)}`
-                  )
-                  if (!resp.ok) {
-                    if (resp.status === 404) {
-                      updateBubble(
-                        `🐚 **Shell Command** (id: \`${shellCommandId}\`)\n\n❌ Command not found (the beacon may have been removed).`
-                      )
-                      return
-                    }
-                    // Transient error — keep polling.
-                    continue
-                  }
-                  const cmd = await resp.json()
-                  const status: string = cmd.status || 'unknown'
-                  if (status === 'completed' || status === 'failed' || status === 'timeout') {
-                    const exit = cmd.exit_code ?? '?'
-                    const stdout = (cmd.stdout || '').toString()
-                    const stderr = (cmd.stderr || '').toString()
-                    const shortStdout =
-                      stdout.length > 1500 ? stdout.slice(0, 1500) + '\n… (truncated)' : stdout
-                    const shortStderr =
-                      stderr.length > 800 ? stderr.slice(0, 800) + '\n… (truncated)' : stderr
-                    const errorMsg = cmd.error_message ? `\n\n**Error:** ${cmd.error_message}` : ''
-                    const stderrBlock = shortStderr
-                      ? `\n\n**Stderr**\n\n\`\`\`\n${shortStderr}\n\`\`\``
-                      : ''
-                    const stdoutBlock = shortStdout
-                      ? `\n\n**Stdout**\n\n\`\`\`\n${shortStdout}\n\`\`\``
-                      : '\n\n_(no output)_'
-                    const icon = status === 'completed' ? '✅' : '❌'
-                    updateBubble(
-                      `🐚 **Shell Command ${status}** (id: \`${shellCommandId}\`)\n\n${icon} **Exit:** ${exit}${errorMsg}${stdoutBlock}${stderrBlock}`
-                    )
-                    return
-                  }
-                  if (status === 'sent' || status === 'running') {
-                    updateBubble(
-                      `🐚 **Shell Command Running** (id: \`${shellCommandId}\`)\n\nBeacon picked up the command — awaiting output…`
-                    )
-                  } else {
-                    // queued / pending — keep the initial bubble copy but include status.
-                    updateBubble(
-                      `🐚 **Shell Command ${status}** (id: \`${shellCommandId}\`)\n\nWaiting for beacon to check in…`
-                    )
-                  }
-                } catch (pollErr) {
-                  // Network blip — keep polling until timeout.
-                }
-              }
-              // Polling timeout
-              updateBubble(
-                `🐚 **Shell Command** (id: \`${shellCommandId}\`)\n\n⏱️ Still pending after 60s. The beacon may be offline. Use the Shell hub to inspect later.`
-              )
-            } catch {
-              // Polling poisoned — surface a generic failure.
-              updateBubble(
-                `🐚 **Shell Command** (id: \`${shellCommandId}\`)\n\n❌ Failed to poll command status. Check the Shell hub for the result.`
-              )
-            }
-          })()
         }
 
         // Handle special command actions

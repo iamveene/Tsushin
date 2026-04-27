@@ -6,13 +6,12 @@ import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
-  SearchIcon, AlertTriangleIcon, CheckIcon, GitHubIcon,
+  SearchIcon, AlertTriangleIcon, CheckIcon, MessageIcon, FileTextIcon,
   IconProps,
 } from '@/components/ui/icons'
 import AddSkillModal from './skills/AddSkillModal'
 import ToggleSwitch from './ui/ToggleSwitch'
 import { HIDDEN_SKILLS, SPECIAL_RENDERED_SKILLS, SKILL_DISPLAY_INFO, getSkillDisplay } from './skills/skill-constants'
-import { AudioTranscriptFields } from '@/components/audio-wizard/AudioProviderFields'
 
 interface Props {
   agentId: number
@@ -23,146 +22,10 @@ const PROVIDER_SKILLS = {
   'scheduler': { displayName: 'Scheduler', skillType: 'flows', providerKey: 'scheduler' },
   'email': { displayName: 'Email', skillType: 'gmail', providerKey: 'email' },
   'web_search': { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
-  'ticket_management': { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
-  'code_repository': { displayName: 'Code Repository', skillType: 'code_repository', providerKey: 'code_repository' },
-}
-
-type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository'
-
-// Ticket Management capability labels (mirrors backend default_config)
-const TICKET_MANAGEMENT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
-  search_tickets: { label: 'Search tickets', description: 'JQL search across tickets (read)', defaultEnabled: true },
-  read_ticket: { label: 'Read ticket', description: "Fetch one ticket's fields (read)", defaultEnabled: true },
-  read_comments: { label: 'Read comments', description: "Fetch a ticket's comments (read)", defaultEnabled: true },
-  update_ticket: { label: 'Update ticket', description: 'Modify ticket fields (write — off by default)', defaultEnabled: false },
-  add_comment: { label: 'Add comment', description: 'Post a comment on a ticket (write — off by default)', defaultEnabled: false },
-  transition_ticket: { label: 'Transition ticket', description: 'Move a ticket through its workflow (write — off by default)', defaultEnabled: false },
-}
-
-// Email (Gmail) capability labels — mirrors backend GmailSkill default_config.
-// Read default ON, write default OFF — same safety stance as Ticket Management.
-const EMAIL_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
-  list_emails: { label: 'List emails', description: 'View recent messages in inbox (read)', defaultEnabled: true },
-  search_emails: { label: 'Search emails', description: 'Search with Gmail query syntax (read)', defaultEnabled: true },
-  read_email: { label: 'Read email', description: 'Get full email content (read)', defaultEnabled: true },
-  send_email: { label: 'Send email', description: 'Send a new outbound email (write — off by default)', defaultEnabled: false },
-  reply_email: { label: 'Reply to email', description: 'Reply within an existing email thread (write — off by default)', defaultEnabled: false },
-  draft_email: { label: 'Create draft', description: 'Save an email draft without sending it (write — off by default)', defaultEnabled: false },
-}
-
-// Code Repository capability labels — mirrors backend CodeRepositorySkill
-// default_config. Read defaults ON, write defaults OFF (same safety stance as
-// Ticket Management / Email). Provider today: GitHub via REST.
-const CODE_REPOSITORY_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
-  search_repos: { label: 'Search repositories', description: 'Search across the connected account’s repositories (read)', defaultEnabled: true },
-  list_pull_requests: { label: 'List pull requests', description: 'List PRs on a repository, filterable by state (read)', defaultEnabled: true },
-  read_pull_request: { label: 'Read pull request', description: 'Fetch one PR’s metadata, files, and reviews (read)', defaultEnabled: true },
-  list_issues: { label: 'List issues', description: 'List issues on a repository (read)', defaultEnabled: true },
-  read_issue: { label: 'Read issue', description: 'Fetch one issue’s metadata and comments (read)', defaultEnabled: true },
-  create_issue: { label: 'Create issue', description: 'Open a new issue on a repository (write — off by default)', defaultEnabled: false },
-  add_pr_comment: { label: 'Add PR comment', description: 'Post a comment on an existing pull request (write — off by default)', defaultEnabled: false },
-  approve_pull_request: { label: 'Approve pull request', description: 'Submit an APPROVE review on a PR (write — off by default)', defaultEnabled: false },
-  request_changes: { label: 'Request changes on PR', description: 'Submit a REQUEST_CHANGES review on a PR (write — off by default)', defaultEnabled: false },
-  merge_pull_request: { label: 'Merge pull request', description: 'Merge a PR via merge/squash/rebase (write — off by default)', defaultEnabled: false },
-  close_pull_request: { label: 'Close pull request', description: 'Close a PR without merging (write — off by default)', defaultEnabled: false },
-  close_issue: { label: 'Close issue', description: 'Close an issue (write — off by default)', defaultEnabled: false },
 }
 
 // Audio sub-skill tabs
 type AudioTab = 'tts' | 'transcript'
-type TranscriptResponseMode = 'conversational' | 'transcript_only'
-type TranscriptASRMode = 'openai' | 'tenant_default' | 'instance'
-type SkillConfig = Record<string, unknown>
-
-interface ConfigSchemaProperty extends SkillConfig {
-  type?: string
-  default?: unknown
-  title?: string
-  description?: string
-  options?: Array<string | number>
-  enum?: Array<string | number>
-  min?: number
-  max?: number
-  step?: number
-}
-
-interface CapabilityConfig extends SkillConfig {
-  enabled?: boolean
-  label?: string
-  description?: string
-}
-
-interface CustomSkillAssignment {
-  custom_skill_id: number
-}
-
-interface CustomSkillSummary {
-  id: number
-  is_enabled: boolean
-  name?: string
-  description?: string
-}
-
-interface ShellSkillConfig extends SkillConfig {
-  execution_mode?: string
-  wait_for_result?: boolean
-  default_timeout?: number
-}
-
-interface ShellBeacon {
-  is_online?: boolean
-  hostname?: string
-  name?: string
-  last_seen?: string
-}
-
-interface WebSearchProviderWithPricing extends SkillProvider {
-  pricing?: {
-    description?: string
-  }
-}
-
-interface SkillProviderWithDefault extends SkillProvider {
-  is_default?: boolean
-}
-
-interface TranscriptSkillConfig extends Record<string, unknown> {
-  language: string
-  model: string
-  response_mode: TranscriptResponseMode
-  asr_mode: TranscriptASRMode
-  asr_instance_id: number | null
-}
-
-function normalizeTranscriptConfig(
-  config: Record<string, unknown> | null | undefined,
-): TranscriptSkillConfig {
-  const raw = config || {}
-  const rawAsrMode = raw.asr_mode
-  const asrMode: TranscriptASRMode =
-    rawAsrMode === 'openai' || rawAsrMode === 'tenant_default' || rawAsrMode === 'instance'
-      ? rawAsrMode
-      : raw.asr_instance_id
-        ? 'instance'
-        : 'openai'
-
-  const normalized: TranscriptSkillConfig = {
-    ...raw,
-    language: typeof raw.language === 'string' ? raw.language : 'auto',
-    model: typeof raw.model === 'string' ? raw.model : 'whisper-1',
-    response_mode: raw.response_mode === 'transcript_only' ? 'transcript_only' : 'conversational',
-    asr_mode: asrMode,
-    asr_instance_id: typeof raw.asr_instance_id === 'number' ? raw.asr_instance_id : null,
-  }
-  if (normalized.asr_mode !== 'instance') {
-    normalized.asr_instance_id = null
-  }
-  return normalized
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
-}
 
 export default function AgentSkillsManager({ agentId }: Props) {
   const [availableSkills, setAvailableSkills] = useState<SkillDefinition[]>([])
@@ -171,14 +34,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [loading, setLoading] = useState(true)
   const [configuring, setConfiguring] = useState<string | null>(null)
   const [configuringProvider, setConfiguringProvider] = useState<string | null>(null)
-  const [configData, setConfigData] = useState<SkillConfig>({})
+  const [configData, setConfigData] = useState<Record<string, any>>({})
 
   // Provider configuration state
   const [schedulerProviders, setSchedulerProviders] = useState<SkillProvider[]>([])
   const [emailProviders, setEmailProviders] = useState<SkillProvider[]>([])
   const [webSearchProviders, setWebSearchProviders] = useState<SkillProvider[]>([])
-  const [ticketManagementProviders, setTicketManagementProviders] = useState<SkillProvider[]>([])
-  const [codeRepositoryProviders, setCodeRepositoryProviders] = useState<SkillProvider[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [selectedIntegration, setSelectedIntegration] = useState<number | null>(null)
   const [providerLoading, setProviderLoading] = useState(false)
@@ -188,27 +49,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
     read: true,
     write: false
   })
-
-  // Ticket Management capability toggles (per-agent, six booleans)
-  const [ticketCapabilities, setTicketCapabilities] = useState<Record<string, boolean>>(
-    Object.fromEntries(
-      Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
-    )
-  )
-
-  // Email (Gmail) capability toggles — same shape, read on / write off by default.
-  const [emailCapabilities, setEmailCapabilities] = useState<Record<string, boolean>>(
-    Object.fromEntries(
-      Object.entries(EMAIL_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
-    )
-  )
-
-  // Code Repository (GitHub) capability toggles — read defaults ON, write OFF.
-  const [codeRepositoryCapabilities, setCodeRepositoryCapabilities] = useState<Record<string, boolean>>(
-    Object.fromEntries(
-      Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
-    )
-  )
 
   // Unified Audio skill state
   const [configuringAudio, setConfiguringAudio] = useState(false)
@@ -220,12 +60,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [ttsConfig, setTTSConfig] = useState<AgentTTSConfig>({ provider: 'kokoro', voice: 'pf_dora', language: 'pt', speed: 1.0 })
 
   // Transcript config state
-  const [transcriptConfig, setTranscriptConfig] = useState<TranscriptSkillConfig>(normalizeTranscriptConfig(undefined))
+  const [transcriptConfig, setTranscriptConfig] = useState<Record<string, any>>({ language: 'auto', model: 'whisper-1', response_mode: 'conversational' })
 
   // Shell skill state
   const [configuringShell, setConfiguringShell] = useState(false)
-  const [shellConfig, setShellConfig] = useState<ShellSkillConfig>({ wait_for_result: false, default_timeout: 60 })
-  const [shellBeacons, setShellBeacons] = useState<ShellBeacon[]>([])
+  const [shellConfig, setShellConfig] = useState<Record<string, any>>({ wait_for_result: false, default_timeout: 60 })
+  const [shellBeacons, setShellBeacons] = useState<any[]>([])
 
   // Skill-level security profile state (v1.6.0 Phase E)
   const [securityProfiles, setSecurityProfiles] = useState<SentinelProfile[]>([])
@@ -234,8 +74,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const securityPopoverRef = useRef<HTMLDivElement>(null)
 
   // Phase 24: Custom Skills state
-  const [customSkillAssignments, setCustomSkillAssignments] = useState<CustomSkillAssignment[]>([])
-  const [availableCustomSkills, setAvailableCustomSkills] = useState<CustomSkillSummary[]>([])
+  const [customSkillAssignments, setCustomSkillAssignments] = useState<any[]>([])
+  const [availableCustomSkills, setAvailableCustomSkills] = useState<any[]>([])
+  const [showCustomSkillPicker, setShowCustomSkillPicker] = useState(false)
 
   // Add Skill modal state
   const [showAddSkillModal, setShowAddSkillModal] = useState(false)
@@ -301,15 +142,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
     return agentSkills.some(s => s.skill_type === skillType && s.is_enabled)
   }
 
-  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): SkillConfig => {
+  const buildDefaultSkillConfig = (skillDef?: SkillDefinition | null): Record<string, any> => {
     if (!skillDef) return {}
 
-    const schemaDefaults: SkillConfig = {}
-    const schemaProperties = (skillDef.config_schema?.properties || {}) as Record<string, ConfigSchemaProperty>
+    const schemaDefaults: Record<string, any> = {}
+    const schemaProperties = skillDef.config_schema?.properties || {}
 
     Object.entries(schemaProperties).forEach(([key, schema]) => {
-      if (schema.default !== undefined) {
-        schemaDefaults[key] = schema.default
+      if ((schema as any).default !== undefined) {
+        schemaDefaults[key] = (schema as any).default
       }
     })
 
@@ -319,7 +160,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const getSkillConfig = (skillType: string): SkillConfig => {
+  const getSkillConfig = (skillType: string): Record<string, any> => {
     const skill = agentSkills.find(s => s.skill_type === skillType)
     const skillDef = availableSkills.find(s => s.skill_type === skillType)
     return {
@@ -342,9 +183,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
         await api.disableAgentSkill(agentId, skillType)
       }
       loadData()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to toggle skill:', err)
-      alert(errorMessage(err, 'Failed to toggle skill'))
+      alert(err?.message || 'Failed to toggle skill')
     }
   }
 
@@ -360,7 +201,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Open the appropriate config modal
       const info = SKILL_DISPLAY_INFO[skillType]
       if (info?.configType === 'provider' && info.providerKey) {
-        openProviderConfig(info.providerKey as ProviderKey)
+        openProviderConfig(info.providerKey as 'scheduler' | 'email' | 'web_search')
       } else if (info?.configType === 'audio') {
         openAudioConfig(skillType === 'audio_transcript' ? 'transcript' : 'tts')
       } else if (info?.configType === 'shell') {
@@ -368,9 +209,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       } else {
         openConfig(skillType)
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to add skill:', err)
-      alert(errorMessage(err, 'Failed to add skill'))
+      alert(err?.message || 'Failed to add skill')
     }
   }
 
@@ -453,7 +294,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const openProviderConfig = async (providerKey: ProviderKey) => {
+  const openProviderConfig = async (providerKey: 'scheduler' | 'email' | 'web_search') => {
     setProviderLoading(true)
     setConfiguringProvider(providerKey)
 
@@ -465,24 +306,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setEmailProviders(providers)
       } else if (providerKey === 'web_search') {
         setWebSearchProviders(providers)
-      } else if (providerKey === 'ticket_management') {
-        setTicketManagementProviders(providers)
-      } else if (providerKey === 'code_repository') {
-        setCodeRepositoryProviders(providers)
       }
 
       // Load current integration for this skill
       const skillType = PROVIDER_SKILLS[providerKey].skillType
       const integration = getSkillIntegration(skillType)
-      const providersWithDefaults = providers as SkillProviderWithDefault[]
       const defaultProvider =
-        (providersWithDefaults.find(p => p.is_default)?.provider_type)
+        (providers.find((p: any) => p.is_default)?.provider_type)
         || providers[0]?.provider_type
-        || (providerKey === 'scheduler' ? 'flows'
-          : providerKey === 'email' ? 'gmail'
-          : providerKey === 'ticket_management' ? 'jira'
-          : providerKey === 'code_repository' ? 'github'
-          : 'brave')
+        || (providerKey === 'scheduler' ? 'flows' : (providerKey === 'email' ? 'gmail' : 'brave'))
 
       if (integration) {
         setSelectedProvider(
@@ -499,58 +331,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
         // Set default provider
         setSelectedProvider(defaultProvider)
         setSelectedIntegration(null)
-        // For ticket_management, auto-select the only integration when there's exactly one
-        if (providerKey === 'ticket_management') {
-          const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
-          if (defaultProviderEntry?.available_integrations?.length === 1) {
-            setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
-          }
-        }
-        // Same auto-select-only-integration UX for code_repository (GitHub).
-        if (providerKey === 'code_repository') {
-          const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
-          if (defaultProviderEntry?.available_integrations?.length === 1) {
-            setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
-          }
-        }
         // Default permissions: read-only for safety
         setProviderPermissions({ read: true, write: false })
-      }
-
-      // Load ticket capability toggles for ticket_management
-      if (providerKey === 'ticket_management') {
-        const skillCfg = getSkillConfig(skillType)
-        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
-        const next: Record<string, boolean> = {}
-        for (const [capKey, meta] of Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS)) {
-          const stored = cfgCaps[capKey]
-          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
-        }
-        setTicketCapabilities(next)
-      }
-
-      // Load email capability toggles for the email/gmail provider
-      if (providerKey === 'email') {
-        const skillCfg = getSkillConfig(skillType)
-        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
-        const next: Record<string, boolean> = {}
-        for (const [capKey, meta] of Object.entries(EMAIL_CAPABILITY_LABELS)) {
-          const stored = cfgCaps[capKey]
-          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
-        }
-        setEmailCapabilities(next)
-      }
-
-      // Load code_repository capability toggles (GitHub provider).
-      if (providerKey === 'code_repository') {
-        const skillCfg = getSkillConfig(skillType)
-        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
-        const next: Record<string, boolean> = {}
-        for (const [capKey, meta] of Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)) {
-          const stored = cfgCaps[capKey]
-          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
-        }
-        setCodeRepositoryCapabilities(next)
       }
     } catch (err) {
       console.error('Failed to load providers:', err)
@@ -565,10 +347,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
     if (!configuringProvider) return
 
     try {
-      const skillType = PROVIDER_SKILLS[configuringProvider as ProviderKey].skillType
+      const skillType = PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].skillType
 
       // Build config with permissions (for Google Calendar)
-      const config: SkillConfig = {}
+      const config: Record<string, any> = {}
       if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar') {
         config.permissions = providerPermissions
       }
@@ -587,101 +369,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
           is_enabled: true,
           config: config
         })
-      } else if (configuringProvider === 'ticket_management') {
-        // Persist the integration link AND the capability toggles in parallel.
-        // Both PUTs are idempotent on retry; running them concurrently avoids a
-        // half-updated DB state when a transient error fails the second call
-        // after the first has already committed.
-        const currentConfig = getSkillConfig(skillType)
-        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
-        for (const [capKey, meta] of Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS)) {
-          capabilities[capKey] = {
-            enabled: ticketCapabilities[capKey] ?? meta.defaultEnabled,
-            label: meta.label,
-            description: meta.description,
-          }
-        }
-        const mergedConfig: SkillConfig = {
-          ...currentConfig,
-          execution_mode: 'tool',
-          integration_id: selectedIntegration,
-          capabilities,
-        }
-        await Promise.all([
-          api.updateAgentSkill(agentId, skillType, {
-            is_enabled: true,
-            config: mergedConfig,
-          }),
-          api.updateSkillIntegration(agentId, skillType, {
-            scheduler_provider: null,
-            integration_id: selectedIntegration,
-            config: undefined,
-          }),
-        ])
-      } else if (configuringProvider === 'email') {
-        // Email/Gmail: persist integration link AND capability toggles in
-        // parallel — same Promise.all pattern used by ticket_management so a
-        // transient API error doesn't leave a half-updated state.
-        const currentConfig = getSkillConfig(skillType)
-        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
-        for (const [capKey, meta] of Object.entries(EMAIL_CAPABILITY_LABELS)) {
-          capabilities[capKey] = {
-            enabled: emailCapabilities[capKey] ?? meta.defaultEnabled,
-            label: meta.label,
-            description: meta.description,
-          }
-        }
-        const mergedConfig: SkillConfig = {
-          ...currentConfig,
-          execution_mode: 'tool',
-          integration_id: selectedIntegration,
-          capabilities,
-        }
-        await Promise.all([
-          api.updateAgentSkill(agentId, skillType, {
-            is_enabled: true,
-            config: mergedConfig,
-          }),
-          api.updateSkillIntegration(agentId, skillType, {
-            scheduler_provider: null,
-            integration_id: selectedIntegration,
-            config: undefined,
-          }),
-        ])
-      } else if (configuringProvider === 'code_repository') {
-        // Code Repository (GitHub today): same atomic Promise.all pattern as
-        // ticket_management/email — keep AgentSkill.config and the
-        // AgentSkillIntegration link in sync so the LLM tool spec and the
-        // integration link can never disagree about which connection or
-        // which capabilities are active.
-        const currentConfig = getSkillConfig(skillType)
-        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
-        for (const [capKey, meta] of Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)) {
-          capabilities[capKey] = {
-            enabled: codeRepositoryCapabilities[capKey] ?? meta.defaultEnabled,
-            label: meta.label,
-            description: meta.description,
-          }
-        }
-        const mergedConfig: SkillConfig = {
-          ...currentConfig,
-          execution_mode: 'tool',
-          integration_id: selectedIntegration,
-          capabilities,
-        }
-        await Promise.all([
-          api.updateAgentSkill(agentId, skillType, {
-            is_enabled: true,
-            config: mergedConfig,
-          }),
-          api.updateSkillIntegration(agentId, skillType, {
-            scheduler_provider: null,
-            integration_id: selectedIntegration,
-            config: undefined,
-          }),
-        ])
       } else {
-        // Save skill integration for scheduler
+        // Save skill integration for scheduler/email
         await api.updateSkillIntegration(agentId, skillType, {
           scheduler_provider: configuringProvider === 'scheduler' ? selectedProvider : null,
           integration_id: selectedIntegration,
@@ -691,10 +380,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
         // Make sure the skill is enabled
         if (!isSkillEnabled(skillType)) {
           const skillDef = availableSkills.find(s => s.skill_type === skillType)
-          const defaultConfig: SkillConfig = {}
+          const defaultConfig: Record<string, any> = {}
           if (skillDef) {
-            Object.entries((skillDef.config_schema || {}) as Record<string, ConfigSchemaProperty>).forEach(([key, schema]) => {
-              defaultConfig[key] = schema.default
+            Object.entries(skillDef.config_schema || {}).forEach(([key, schema]) => {
+              defaultConfig[key] = (schema as any).default
             })
           }
           await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
@@ -742,9 +431,9 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Load current transcript config
       const transcriptSkill = agentSkills.find(s => s.skill_type === 'audio_transcript')
       if (transcriptSkill?.config) {
-        setTranscriptConfig(normalizeTranscriptConfig(transcriptSkill.config))
+        setTranscriptConfig(transcriptSkill.config)
       } else {
-        setTranscriptConfig(normalizeTranscriptConfig(undefined))
+        setTranscriptConfig({ language: 'auto', model: 'whisper-1', response_mode: 'conversational' })
       }
     } catch (err) {
       console.error('Failed to load audio config:', err)
@@ -830,16 +519,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  const renderCapabilitiesConfig = (capabilities: Record<string, unknown>) => {
+  const renderCapabilitiesConfig = (capabilities: Record<string, any>) => {
     return (
       <div className="space-y-3">
-        {Object.entries(capabilities).map(([capKey, capValue]) => {
-          const capConfig = (
-            typeof capValue === 'object' && capValue !== null ? capValue : {}
-          ) as CapabilityConfig
-          const capEnabled = capConfig.enabled ?? true
-          const capLabel = capConfig.label || capKey.replace(/_/g, ' ')
-          const capDesc = capConfig.description || ''
+        {Object.entries(capabilities).map(([capKey, capValue]: [string, any]) => {
+          const capEnabled = capValue?.enabled ?? true
+          const capLabel = capValue?.label || capKey.replace(/_/g, ' ')
+          const capDesc = capValue?.description || ''
 
           return (
             <div
@@ -852,11 +538,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 onChange={(e) => {
                   const newConfig = { ...configData }
                   if (!newConfig.capabilities) newConfig.capabilities = {}
-                  const capabilityMap = newConfig.capabilities as Record<string, CapabilityConfig>
-                  if (!capabilityMap[capKey]) {
-                    capabilityMap[capKey] = { ...capConfig }
+                  if (!newConfig.capabilities[capKey]) {
+                    newConfig.capabilities[capKey] = { ...capValue }
                   }
-                  capabilityMap[capKey].enabled = e.target.checked
+                  newConfig.capabilities[capKey].enabled = e.target.checked
                   setConfigData(newConfig)
                 }}
                 className="mt-1 w-5 h-5"
@@ -878,11 +563,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
-  const renderConfigInput = (key: string, schema: ConfigSchemaProperty, value: unknown) => {
+  const renderConfigInput = (key: string, schema: any, value: any) => {
     const inputClasses = "w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
 
     if (key === 'capabilities' && schema.type === 'object' && value) {
-      return renderCapabilitiesConfig(value as Record<string, unknown>)
+      return renderCapabilitiesConfig(value)
     }
 
     if (schema.type === 'boolean') {
@@ -890,7 +575,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         <label className="flex items-center cursor-pointer">
           <input
             type="checkbox"
-            checked={Boolean(value !== undefined ? value : schema.default)}
+            checked={value !== undefined ? value : schema.default}
             onChange={(e) => setConfigData({ ...configData, [key]: e.target.checked })}
             className="mr-2 w-5 h-5"
           />
@@ -902,11 +587,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
 
     if (schema.type === 'array') {
-      const arrayValue = Array.isArray(value)
-        ? value.map(String)
-        : Array.isArray(schema.default)
-          ? schema.default.map(String)
-          : []
+      const arrayValue = value || schema.default || []
       return (
         <ArrayConfigInput
           value={arrayValue}
@@ -920,11 +601,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
       const options = schema.options || schema.enum || []
       return (
         <select
-          value={String(value || schema.default || '')}
+          value={value || schema.default}
           onChange={(e) => setConfigData({ ...configData, [key]: e.target.value })}
           className={inputClasses}
         >
-          {options.map((opt) => (
+          {options.map((opt: string) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
@@ -935,7 +616,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       return (
         <input
           type="number"
-          value={String(value !== undefined ? value : (schema.default || 0))}
+          value={value !== undefined ? value : (schema.default || 0)}
           onChange={(e) => setConfigData({ ...configData, [key]: parseFloat(e.target.value) })}
           className={inputClasses}
           min={schema.min}
@@ -948,7 +629,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     return (
       <input
         type="text"
-        value={String(value || schema.default || '')}
+        value={value || schema.default || ''}
         onChange={(e) => setConfigData({ ...configData, [key]: e.target.value })}
         className={inputClasses}
       />
@@ -972,7 +653,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       }
       setSkillSecurityPopover(null)
       loadData()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to update skill security:', err)
     }
   }
@@ -1038,10 +719,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
-  // Render provider-based skill card (Scheduler, Email, Web Search, Ticket Management)
+  // Render provider-based skill card (Scheduler, Email, Web Search)
   const renderProviderSkillCard = (
     displayName: string,
-    providerKey: ProviderKey,
+    providerKey: 'scheduler' | 'email' | 'web_search',
     SkillIcon: React.FC<IconProps>,
     description: string
   ) => {
@@ -1079,9 +760,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
           default:
             providerDisplay = integration.scheduler_provider || 'Flows (Built-in)'
         }
-      } else if (providerKey === 'ticket_management') {
-        providerDisplay = 'Atlassian Jira'
-        integrationDisplay = integration.integration_name || ''
       } else {
         providerDisplay = 'Gmail'
         integrationDisplay = integration.integration_email || ''
@@ -1281,11 +959,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
             {transcriptEnabled && (
               <div className="text-xs text-tsushin-muted">
-                {transcriptConfigData.asr_mode === 'instance'
-                  ? 'Pinned local ASR'
-                  : transcriptConfigData.asr_mode === 'tenant_default'
-                    ? 'Tenant default ASR'
-                    : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
+                Whisper • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
               </div>
             )}
           </div>
@@ -1315,11 +989,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
                     <div className="text-xs text-tsushin-muted mb-1">STT Model</div>
                     <div className="font-medium text-sm text-white">
-                      {transcriptConfigData.asr_mode === 'instance'
-                        ? 'Pinned local'
-                        : transcriptConfigData.asr_mode === 'tenant_default'
-                          ? 'Tenant default'
-                          : 'OpenAI Whisper'}
+                      Whisper
                     </div>
                   </div>
                   <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
@@ -1374,8 +1044,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
       try {
         const response = await fetch('/api/shell/beacons')
         if (response.ok) {
-          const beacons = (await response.json()) as ShellBeacon[]
-          setShellBeacons(beacons.filter(b => b.is_online))
+          const beacons = await response.json()
+          setShellBeacons(beacons.filter((b: any) => b.is_online))
         }
       } catch {
         setShellBeacons([])
@@ -1575,18 +1245,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }, [agentSkills])
 
   const assignedCustomSkillIds = useMemo(() => {
-    return new Set(customSkillAssignments.map(a => a.custom_skill_id))
+    return new Set(customSkillAssignments.map((a: any) => a.custom_skill_id))
   }, [customSkillAssignments])
 
   // Filter which provider skills are enabled
   const enabledProviderSkills = useMemo(() => {
-    const result: { providerKey: ProviderKey; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
-    const providerEntries: { providerKey: ProviderKey; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
+    const result: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = []
+    const providerEntries: { providerKey: 'scheduler' | 'email' | 'web_search'; displayName: string; skillType: string; icon: React.FC<IconProps>; description: string }[] = [
       { providerKey: 'scheduler', displayName: 'Scheduler', skillType: 'flows', icon: CalendarIcon, description: 'Create events, reminders, and schedule AI conversations. Choose between built-in Flows, Google Calendar, or Asana.' },
-      { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.' },
+      { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read and search emails. Connect your Gmail account to enable email access.' },
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
-      { providerKey: 'ticket_management', displayName: 'Ticket Management', skillType: 'ticket_management', icon: WrenchIcon, description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.' },
-      { providerKey: 'code_repository', displayName: 'Code Repository', skillType: 'code_repository', icon: GitHubIcon, description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.' },
     ]
     for (const entry of providerEntries) {
       if (enabledSkillTypes.has(entry.skillType)) {
@@ -1618,8 +1286,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
     configuringProvider === 'scheduler' ? schedulerProviders :
     configuringProvider === 'email' ? emailProviders :
     configuringProvider === 'web_search' ? webSearchProviders :
-    configuringProvider === 'ticket_management' ? ticketManagementProviders :
-    configuringProvider === 'code_repository' ? codeRepositoryProviders :
     []
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
 
@@ -1706,7 +1372,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             <div className="bg-tsushin-surface rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
             <div className="bg-gradient-to-r from-teal-600 to-cyan-600 px-6 py-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-white">
-                Configure {PROVIDER_SKILLS[configuringProvider as ProviderKey].displayName}
+                Configure {PROVIDER_SKILLS[configuringProvider as 'scheduler' | 'email' | 'web_search'].displayName}
               </h3>
               <button
                 onClick={() => setConfiguringProvider(null)}
@@ -1841,7 +1507,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           }
                         </p>
                         <p className="text-xs mt-1">
-                          {(selectedProviderData as WebSearchProviderWithPricing).pricing?.description || 'Web search provider'}
+                          {(selectedProviderData as any).pricing?.description || 'Web search provider'}
                         </p>
                       </div>
                     </div>
@@ -1898,132 +1564,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       </div>
                     </div>
                   )}
-
-                  {/* Capability toggles — Email (Gmail) */}
-                  {configuringProvider === 'email' && !providerLoading && (
-                    <div className="border-t pt-6 border-tsushin-border">
-                      <label className="block text-sm font-medium mb-3">
-                        Capabilities
-                      </label>
-                      <p className="text-xs text-tsushin-muted mb-3">
-                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
-                        Read actions are on by default; write actions are off by default for safety.
-                      </p>
-                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
-                        {Object.entries(EMAIL_CAPABILITY_LABELS).map(([capKey, meta]) => (
-                          <div key={capKey} className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              id={`email-cap-${capKey}`}
-                              checked={!!emailCapabilities[capKey]}
-                              onChange={(e) =>
-                                setEmailCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
-                              }
-                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
-                            />
-                            <div className="flex-1">
-                              <label htmlFor={`email-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
-                                {meta.label}
-                                {!meta.defaultEnabled && (
-                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
-                                )}
-                              </label>
-                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
-                            </div>
-                          </div>
-                        ))}
-                        {!Object.values(emailCapabilities).some(Boolean) && (
-                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
-                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Capability toggles — Ticket Management (Jira) */}
-                  {configuringProvider === 'ticket_management' && !providerLoading && (
-                    <div className="border-t pt-6 border-tsushin-border">
-                      <label className="block text-sm font-medium mb-3">
-                        Capabilities
-                      </label>
-                      <p className="text-xs text-tsushin-muted mb-3">
-                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
-                        Read actions are on by default; write actions are off by default for safety.
-                      </p>
-                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
-                        {Object.entries(TICKET_MANAGEMENT_CAPABILITY_LABELS).map(([capKey, meta]) => (
-                          <div key={capKey} className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              id={`ticket-cap-${capKey}`}
-                              checked={!!ticketCapabilities[capKey]}
-                              onChange={(e) =>
-                                setTicketCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
-                              }
-                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
-                            />
-                            <div className="flex-1">
-                              <label htmlFor={`ticket-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
-                                {meta.label}
-                                {!meta.defaultEnabled && (
-                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
-                                )}
-                              </label>
-                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
-                            </div>
-                          </div>
-                        ))}
-                        {!Object.values(ticketCapabilities).some(Boolean) && (
-                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
-                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Capability toggles — Code Repository (GitHub) */}
-                  {configuringProvider === 'code_repository' && !providerLoading && (
-                    <div className="border-t pt-6 border-tsushin-border">
-                      <label className="block text-sm font-medium mb-3">
-                        Capabilities
-                      </label>
-                      <p className="text-xs text-tsushin-muted mb-3">
-                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
-                        Read actions are on by default; write actions are off by default for safety.
-                      </p>
-                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
-                        {Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([capKey, meta]) => (
-                          <div key={capKey} className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              id={`coderepo-cap-${capKey}`}
-                              checked={!!codeRepositoryCapabilities[capKey]}
-                              onChange={(e) =>
-                                setCodeRepositoryCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
-                              }
-                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
-                            />
-                            <div className="flex-1">
-                              <label htmlFor={`coderepo-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
-                                {meta.label}
-                                {!meta.defaultEnabled && (
-                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
-                                )}
-                              </label>
-                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
-                            </div>
-                          </div>
-                        ))}
-                        {!Object.values(codeRepositoryCapabilities).some(Boolean) && (
-                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
-                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </>
               )}
             </div>
@@ -2037,20 +1577,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
               </button>
               <button
                 onClick={saveProviderConfig}
-                disabled={(() => {
-                  if (selectedProviderData?.requires_integration && !selectedIntegration) return true
-                  if (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) return true
-                  if (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) return true
-                  if (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) return true
-                  if (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)) return true
-                  return false
-                })()}
+                disabled={
+                  (selectedProviderData?.requires_integration && !selectedIntegration) ||
+                  (!providerPermissions.read && !providerPermissions.write)
+                }
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                  ((selectedProviderData?.requires_integration && !selectedIntegration) ||
-                    (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) ||
-                    (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) ||
-                    (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) ||
-                    (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)))
+                  (selectedProviderData?.requires_integration && !selectedIntegration) ||
+                  (!providerPermissions.read && !providerPermissions.write)
                     ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}
@@ -2269,30 +1802,112 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     />
                   </div>
 
-                  <AudioTranscriptFields
-                    value={{
-                      responseMode: transcriptConfig.response_mode || 'conversational',
-                      language: transcriptConfig.language || 'auto',
-                      model: transcriptConfig.model || 'whisper-1',
-                      asrMode: transcriptConfig.asr_mode || 'openai',
-                      asrInstanceId: transcriptConfig.asr_instance_id ?? null,
-                    }}
-                    onChange={(patch) => setTranscriptConfig(prev => normalizeTranscriptConfig({
-                      ...prev,
-                      response_mode: patch.responseMode !== undefined ? patch.responseMode : prev.response_mode,
-                      language: patch.language !== undefined ? patch.language : prev.language,
-                      model: patch.model !== undefined ? patch.model : prev.model,
-                      asr_mode: patch.asrMode !== undefined ? patch.asrMode : prev.asr_mode,
-                      asr_instance_id: patch.asrInstanceId !== undefined ? patch.asrInstanceId : prev.asr_instance_id,
-                    }))}
-                  />
+                  {/* Response Mode */}
+                  <div>
+                    <label className="block text-sm font-medium mb-3">Response Mode</label>
+                    <div className="space-y-2">
+                      <div
+                        onClick={() => setTranscriptConfig(prev => ({ ...prev, response_mode: 'conversational' }))}
+                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                          transcriptConfig.response_mode === 'conversational'
+                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                            : 'border-tsushin-border hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium flex items-center gap-1.5"><MessageIcon size={14} /> Conversational</div>
+                            <div className="text-sm text-tsushin-muted">
+                              Transcribe audio → Pass to AI → Natural response
+                            </div>
+                          </div>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            transcriptConfig.response_mode === 'conversational'
+                              ? 'border-teal-500 bg-teal-500'
+                              : 'border-tsushin-border'
+                          }`}>
+                            {transcriptConfig.response_mode === 'conversational' && (
+                              <div className="w-2 h-2 rounded-full bg-white" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        onClick={() => setTranscriptConfig(prev => ({ ...prev, response_mode: 'transcript_only' }))}
+                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                          transcriptConfig.response_mode === 'transcript_only'
+                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                            : 'border-tsushin-border hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-medium flex items-center gap-1.5"><FileTextIcon size={14} /> Transcript Only</div>
+                            <div className="text-sm text-tsushin-muted">
+                              Transcribe audio → Return raw transcript text (no AI)
+                            </div>
+                          </div>
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            transcriptConfig.response_mode === 'transcript_only'
+                              ? 'border-teal-500 bg-teal-500'
+                              : 'border-tsushin-border'
+                          }`}>
+                            {transcriptConfig.response_mode === 'transcript_only' && (
+                              <div className="w-2 h-2 rounded-full bg-white" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Language */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Language Detection</label>
+                    <select
+                      value={transcriptConfig.language || 'auto'}
+                      onChange={(e) => setTranscriptConfig(prev => ({ ...prev, language: e.target.value }))}
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                    >
+                      <option value="auto">Auto-detect</option>
+                      <option value="pt">🇧🇷 Portuguese</option>
+                      <option value="en">🇺🇸 English</option>
+                      <option value="es">🇪🇸 Spanish</option>
+                      <option value="fr">🇫🇷 French</option>
+                      <option value="de">🇩🇪 German</option>
+                      <option value="it">🇮🇹 Italian</option>
+                      <option value="ja">🇯🇵 Japanese</option>
+                      <option value="ko">🇰🇷 Korean</option>
+                      <option value="zh">🇨🇳 Chinese</option>
+                    </select>
+                  </div>
+
+                  {/* Model */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Whisper Model</label>
+                    <select
+                      value={transcriptConfig.model || 'whisper-1'}
+                      onChange={(e) => setTranscriptConfig(prev => ({ ...prev, model: e.target.value }))}
+                      className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+                    >
+                      <option value="whisper-1">whisper-1 (Standard)</option>
+                    </select>
+                  </div>
+
+                  {/* Info Box */}
+                  <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg">
+                    <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200 flex items-center gap-1.5"><AlertTriangleIcon size={14} /> OpenAI API Key Required</p>
+                    <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                      Uses OpenAI Whisper API. Cost: ~$0.006 per minute of audio.
+                    </p>
+                  </div>
 
                   {/* TTS Conflict Warning */}
                   {transcriptConfig.response_mode === 'transcript_only' && isSkillEnabled('audio_tts') && (
                     <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg">
                       <p className="text-sm font-medium text-red-800 dark:text-red-200 flex items-center gap-1.5"><AlertTriangleIcon size={14} /> TTS Conflict</p>
                       <p className="text-xs text-red-700 dark:text-red-300 mt-1">
-                        &quot;Transcript Only&quot; mode cannot be used with TTS Response enabled. The transcript bypasses AI processing, so there&apos;s no text to convert to speech.
+                        "Transcript Only" mode cannot be used with TTS Response enabled. The transcript bypasses AI processing, so there's no text to convert to speech.
                       </p>
                     </div>
                   )}
@@ -2404,7 +2019,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           <div>
                             <div className="font-medium flex items-center gap-1.5"><BotIcon size={14} /> Agentic (Natural Language)</div>
                             <div className="text-sm text-tsushin-muted">
-                              Both <code>/shell</code> AND natural language like &quot;list files in /tmp&quot; work.
+                              Both <code>/shell</code> AND natural language like "list files in /tmp" work.
                             </div>
                           </div>
                           <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
@@ -2505,7 +2120,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <label className="block text-sm font-medium mb-2">Connected Beacons</label>
                     {shellBeacons.length > 0 ? (
                       <div className="space-y-2">
-                        {shellBeacons.map((beacon, idx) => (
+                        {shellBeacons.map((beacon: any, idx: number) => (
                           <div key={idx} className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg flex items-center justify-between">
                             <div>
                               <div className="font-medium text-green-700 dark:text-green-300 flex items-center gap-1.5">
@@ -2533,7 +2148,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <p className="text-sm font-medium text-orange-800 dark:text-orange-200 flex items-center gap-1.5"><TerminalIcon size={14} /> Shell Skill Usage</p>
                     <ul className="text-xs text-orange-700 dark:text-orange-300 mt-2 space-y-1">
                       <li>• <strong>Programmatic:</strong> Use <code>/shell &lt;command&gt;</code> for direct execution</li>
-                      <li>• <strong>Agentic:</strong> Ask naturally: &quot;List files in /tmp&quot;</li>
+                      <li>• <strong>Agentic:</strong> Ask naturally: "List files in /tmp"</li>
                       <li>• <strong>Note:</strong> /shell always uses fire-and-forget to avoid UI freezing</li>
                     </ul>
                   </div>
@@ -2577,14 +2192,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
             <div className="overflow-y-auto p-6 space-y-4 flex-1">
               {availableSkills.find(s => s.skill_type === configuring)?.config_schema?.properties &&
-                Object.entries((availableSkills.find(s => s.skill_type === configuring)!.config_schema.properties || {}) as Record<string, ConfigSchemaProperty>).map(([key, schema]) => (
+                Object.entries(availableSkills.find(s => s.skill_type === configuring)!.config_schema.properties).map(([key, schema]) => (
                   <div key={key}>
                     <label className="block text-sm font-medium mb-2 capitalize">
-                      {schema.title || key.replace(/_/g, ' ')}
+                      {(schema as any).title || key.replace(/_/g, ' ')}
                     </label>
                     {renderConfigInput(key, schema, configData[key])}
-                    {schema.description && (
-                      <p className="text-xs text-tsushin-muted mt-1">{schema.description}</p>
+                    {(schema as any).description && (
+                      <p className="text-xs text-tsushin-muted mt-1">{(schema as any).description}</p>
                     )}
                   </div>
                 ))}

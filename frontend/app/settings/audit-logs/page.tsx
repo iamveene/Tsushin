@@ -44,7 +44,6 @@ const ACTION_CATEGORIES = [
   { value: 'contact', label: 'Contacts' },
   { value: 'settings', label: 'Settings' },
   { value: 'security', label: 'Security' },
-  { value: 'shell', label: 'Shell' },
   { value: 'api_client', label: 'API Clients' },
   { value: 'skill', label: 'Custom Skills' },
   { value: 'mcp', label: 'MCP Servers' },
@@ -175,7 +174,6 @@ export default function AuditLogsPage() {
   const handleExport = async () => {
     try {
       setExporting(true)
-      setError(null)
       const blob = await api.exportAuditLogs({
         action: filterAction || undefined,
         severity: filterSeverity || undefined,
@@ -193,7 +191,6 @@ export default function AuditLogsPage() {
       window.URL.revokeObjectURL(url)
     } catch (err) {
       console.error('Failed to export audit logs:', err)
-      setError(err instanceof Error ? err.message : 'Failed to export audit logs')
     } finally {
       setExporting(false)
     }
@@ -257,7 +254,6 @@ export default function AuditLogsPage() {
     { value: 'contact', label: 'Contacts' },
     { value: 'settings', label: 'Settings' },
     { value: 'security', label: 'Security' },
-    { value: 'shell', label: 'Shell' },
     { value: 'api_client', label: 'API Clients' },
     { value: 'skill', label: 'Custom Skills' },
     { value: 'mcp', label: 'MCP Servers' },
@@ -305,7 +301,7 @@ export default function AuditLogsPage() {
             <h1 className="text-3xl font-bold text-white">Audit Logs</h1>
             <p className="text-tsushin-slate mt-1">Track all activities in your organization</p>
           </div>
-          {hasPermission('audit.export') && (
+          {hasPermission('audit.read') && (
             <button
               onClick={handleExport}
               disabled={exporting}

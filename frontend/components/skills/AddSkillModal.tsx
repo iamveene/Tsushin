@@ -57,9 +57,8 @@ export default function AddSkillModal({
       composite.skillTypes.forEach(st => coveredSkills.add(st))
     }
 
-    // Check provider skills (flows → Scheduler, gmail → Email, web_search → Web Search,
-    // ticket_management → Ticket Management, code_repository → Code Repository)
-    const providerSkillTypes = new Set(['flows', 'gmail', 'web_search', 'ticket_management', 'code_repository'])
+    // Check provider skills (flows → Scheduler, gmail → Email, web_search → Web Search)
+    const providerSkillTypes = new Set(['flows', 'gmail', 'web_search'])
 
     for (const skill of availableSkills) {
       if (HIDDEN_SKILLS.has(skill.skill_type)) continue
