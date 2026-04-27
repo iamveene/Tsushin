@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Release-finishing UX fixes: ConfirmDialog + Schedule cron validation + tenantless-admin Hub gating (2026-04-26)
+
+Three UX bugs surfaced by the comprehensive end-of-release QA pass. None are functional regressions, but the user directive ("no user discovers bugs") covers cosmetic + UX defects too.
+
+- **HIGH UX — Replace native `window.confirm()` for destructive trigger actions** with a styled in-app ConfirmDialog. Three call sites covered: `TriggerDetailShell` Danger Zone delete, webhook secret rotation, and `WiredFlowsCard` unbind. The trigger-delete dialog requires the user to type the trigger name to enable the destructive button (ride-along defense against accidental delete on muscle memory). New component: `frontend/components/ui/ConfirmDialog.tsx` (~140 lines), reusable across the app.
+- **LOW UX — Schedule wizard "Create Trigger" button enabled with invalid cron.** Previously the button stayed clickable for cron strings like `"not-a-cron"`, then silently no-op'd on click (the server-side validator returned 400 but the UX swallowed it). Added a client-side cron shape check (5 or 6 whitespace-separated fields, only the legal cron alphabet) so the button is disabled until the cron at least *looks* valid. Server remains authoritative for semantic correctness.
+- **MEDIUM — Tenantless global admins on `/hub` triggered 10 console errors + 4 4xx network calls.** `/hub` fired a Promise.all of tenant-scoped fetchers (jira/github integrations, MCP instances, public-ingress, toolbox status, etc.) without checking `user?.tenant_id`. For a global admin browsing /hub without an active tenant context every load painted the console with `400 User has no tenant` + `403 Permission denied`. Both the initial `loadAllData` and the 10s polling interval now gate tenant-scoped fetchers on `hasTenantScope = Boolean(user?.tenant_id)`. Non-tenant calls (API keys, Ollama/Kokoro health, system config, vector stores) still run for everyone.
+
+**Verified live:**
+- ConfirmDialog renders for delete trigger (type-the-name protection visible). Cancel closes; correct name enables destructive button.
+- Schedule wizard rejects `"not-a-cron"` at the client (Create button stays disabled until cron parses).
+- /hub as `testadmin@example.com` (global admin, no tenant) — zero `User has no tenant` console errors after rebuild + hard reload.
+- Comprehensive QA-D regression: 27/29 documented routes PASS for Owner role; zero console errors on any tested page; DefaultAgentChip works end-to-end; /flows hard reload zero `canWriteFlows is not defined`. Two routes from the spec (`/knowledge`, `/watcher`) don't exist — spec error, not a product bug.
+
 ### Release 0.7.0 — Wave 4/5 finishing fixes: dispatch fork agent_id + message_queue check constraint + suppress-flip script + rollback script (2026-04-26)
 
 End-to-end env-var-gated path testing surfaced four real bugs that the release-as-shipped (with all gates default-off) would have hidden. Each surfaces only after an operator flips the env vars on.

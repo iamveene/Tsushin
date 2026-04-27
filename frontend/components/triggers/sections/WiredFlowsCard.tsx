@@ -28,6 +28,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import {
   api,
   type FlowTriggerBinding,
@@ -151,13 +152,11 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
     }
   }
 
-  async function handleUnbind(b: FlowTriggerBinding) {
-    if (!canWrite) return
-    if (b.is_system_managed) return
-    const ok = typeof window !== 'undefined' && window.confirm(
-      `Unbind "${b.flow_name || 'this flow'}" from this trigger? The flow will no longer wake when the trigger fires. The flow itself will not be deleted.`,
-    )
-    if (!ok) return
+  // v0.7.0 release-finishing UX fix — replace native window.confirm()
+  // with the styled in-app ConfirmDialog.
+  const [unbindTarget, setUnbindTarget] = useState<FlowTriggerBinding | null>(null)
+
+  async function performUnbind(b: FlowTriggerBinding) {
     setBusyId(b.id)
     try {
       await api.deleteFlowTriggerBinding(b.id)
@@ -165,12 +164,19 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       setBindings(next)
       onBindingsChange?.(next)
       toast.success('Flow unbound', `${b.flow_name || 'Flow'} is no longer wired to this trigger.`)
+      setUnbindTarget(null)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to unbind flow'
       toast.error('Unbind failed', msg)
     } finally {
       setBusyId(null)
     }
+  }
+
+  function handleUnbind(b: FlowTriggerBinding) {
+    if (!canWrite) return
+    if (b.is_system_managed) return
+    setUnbindTarget(b)
   }
 
   if (!canRead) {
@@ -295,6 +301,26 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           )
         })}
       </div>
+
+      <ConfirmDialog
+        isOpen={unbindTarget !== null}
+        title="Unbind this flow?"
+        message={
+          unbindTarget ? (
+            <>
+              <span className="font-mono text-white">"{unbindTarget.flow_name || 'this flow'}"</span>
+              {' '}will no longer wake when this trigger fires. The flow itself
+              is not deleted — you can re-wire it from the Flows editor at any
+              time.
+            </>
+          ) : 'The flow will no longer wake when the trigger fires.'
+        }
+        confirmLabel="Unbind flow"
+        danger
+        isBusy={unbindTarget !== null && busyId === unbindTarget.id}
+        onConfirm={() => unbindTarget && performUnbind(unbindTarget)}
+        onCancel={() => setUnbindTarget(null)}
+      />
     </div>
   )
 }

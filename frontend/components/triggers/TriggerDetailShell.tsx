@@ -5,6 +5,7 @@ import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import {
   api,
   authenticatedFetch,
@@ -613,9 +614,12 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
+  const [showRotateConfirm, setShowRotateConfirm] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   const handleRotateWebhookSecret = async () => {
     if (!trigger || kind !== 'webhook') return
-    if (!confirm('Rotate the webhook signing secret? Any callers using the previous secret will start failing immediately.')) return
+    setShowRotateConfirm(false)
     setWebhookRotating(true)
     setError(null)
     try {
@@ -685,7 +689,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const deleteTrigger = async () => {
     if (!trigger) return
-    if (!confirm(`Delete ${kind} trigger "${trigger.integration_name}"? This cannot be undone.`)) return
+    setShowDeleteConfirm(false)
     setSaving(true)
     setError(null)
     try {
@@ -739,7 +743,7 @@ export default function TriggerDetailShell({ kind }: Props) {
           copied={webhookCopied}
           onCopyInboundUrl={handleCopyInboundUrl}
           rotatingSecret={webhookRotating}
-          onRotateWebhookSecret={kind === 'webhook' ? handleRotateWebhookSecret : undefined}
+          onRotateWebhookSecret={kind === 'webhook' ? () => setShowRotateConfirm(true) : undefined}
           canWriteHub={canWriteHub}
         />
 
@@ -1001,7 +1005,7 @@ export default function TriggerDetailShell({ kind }: Props) {
             {canWriteHub && (
               <button
                 type="button"
-                onClick={deleteTrigger}
+                onClick={() => setShowDeleteConfirm(true)}
                 disabled={saving}
                 className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/50 bg-red-500/20 px-4 py-2 text-sm text-red-100 hover:text-white disabled:opacity-50"
               >
@@ -1157,6 +1161,40 @@ export default function TriggerDetailShell({ kind }: Props) {
           {activeTab === 'danger' && renderDangerTab()}
         </div>
       )}
+
+      {/* v0.7.0 release-finishing UX fix — replace native window.confirm()
+          with the styled in-app ConfirmDialog. */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title={`Delete ${kind} trigger?`}
+        message={
+          trigger ? (
+            <>
+              You are about to permanently delete the trigger
+              {' '}<span className="font-mono text-white">"{trigger.integration_name}"</span>.
+              {' '}This removes the saved source binding, all wake-event history,
+              and any auto-generated default Flow attached to it. This cannot be undone.
+            </>
+          ) : 'This cannot be undone.'
+        }
+        confirmLabel="Delete trigger"
+        danger
+        requireType={trigger?.integration_name ?? null}
+        isBusy={saving}
+        onConfirm={deleteTrigger}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showRotateConfirm}
+        title="Rotate webhook signing secret?"
+        message="Any caller still using the previous secret will start failing immediately. The new secret is shown once after rotation — copy it before closing the page."
+        confirmLabel="Rotate secret"
+        danger
+        isBusy={webhookRotating}
+        onConfirm={handleRotateWebhookSecret}
+        onCancel={() => setShowRotateConfirm(false)}
+      />
     </div>
   )
 }
