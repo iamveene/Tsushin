@@ -12,11 +12,11 @@ import logging
 import time
 from typing import ClassVar, Optional
 
-from channels.base import Channel
+from channels.base import ChannelAdapter
 from channels.types import SendResult, HealthResult
 
 
-class WhatsAppChannelAdapter(Channel):
+class WhatsAppChannelAdapter(ChannelAdapter):
     """WhatsApp channel via MCP container bridge."""
 
     channel_type: ClassVar[str] = "whatsapp"
@@ -150,7 +150,6 @@ class WhatsAppChannelAdapter(Channel):
             if agent.whatsapp_integration_id:
                 instance = self.db.query(WhatsAppMCPInstance).filter(
                     WhatsAppMCPInstance.id == agent.whatsapp_integration_id,
-                    WhatsAppMCPInstance.tenant_id == agent.tenant_id,
                     WhatsAppMCPInstance.status.in_(["running", "starting"])
                 ).first()
                 if instance:

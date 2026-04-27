@@ -21,10 +21,7 @@ import {
   GlobeIcon,
   KeyIcon,
   ShieldIcon,
-  ShieldCheckIcon,
-  TerminalIcon,
   UserIcon,
-  ServerIcon,
 } from '@/components/ui/icons'
 import type { IconProps } from '@/components/ui/icons'
 
@@ -65,14 +62,6 @@ const getActionIcon = (action: string): React.FC<IconProps> => {
     'settings.update': SettingsIcon,
     'security.sentinel_block': ShieldIcon,
     'security.permission_denied': BanIcon,
-    'shell.command_queued': TerminalIcon,
-    'shell.command_blocked': BanIcon,
-    'shell.command_pending_approval': ShieldIcon,
-    'shell.approval_requested': ShieldIcon,
-    'shell.approved': ShieldCheckIcon,
-    'shell.rejected': BanIcon,
-    'shell.expired': ClockIcon,
-    'shell.beacon_registered': ServerIcon,
     'api_client.create': KeyIcon,
     'api_client.rotate': RefreshIcon,
     'api_client.revoke': TrashIcon,
@@ -99,7 +88,6 @@ const getActionIcon = (action: string): React.FC<IconProps> => {
     contact: UserIcon,
     settings: SettingsIcon,
     security: ShieldIcon,
-    shell: TerminalIcon,
     api_client: KeyIcon,
     skill: DocumentIcon,
     mcp: GlobeIcon,
@@ -123,10 +111,6 @@ const getActionColor = (action: string): string => {
   }
   if (suffix === 'update' || suffix === 'rotate' || suffix === 'role_change') {
     return 'text-amber-400'
-  }
-  if (prefix === 'shell') {
-    if (suffix === 'approved' || suffix === 'command_queued') return 'text-teal-400'
-    if (suffix === 'command_pending_approval' || suffix === 'approval_requested' || suffix === 'expired') return 'text-amber-400'
   }
   if (prefix === 'security') return 'text-red-400'
   if (prefix === 'auth') return 'text-blue-400'

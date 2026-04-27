@@ -32,12 +32,6 @@ from models import (
     OAuthToken,
 )
 from hub.google import GoogleOAuthHandler, get_google_oauth_handler, GmailService, CalendarService
-from hub.google.gmail_service import (
-    GMAIL_SEND_SCOPE,
-    GMAIL_COMPOSE_SCOPE,
-    GMAIL_SEND_COMPATIBLE_SCOPES,
-    GMAIL_DRAFT_COMPATIBLE_SCOPES,
-)
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_google_encryption_key
 
@@ -81,8 +75,6 @@ class IntegrationResponse(BaseModel):
     authorized_at: datetime
     health_status: str
     health_status_reason: Optional[str] = None
-    can_send: bool = False
-    can_draft: bool = False
 
     class Config:
         from_attributes = True
@@ -120,15 +112,6 @@ def get_encryption_key(db: Session) -> str:
             detail="GOOGLE_ENCRYPTION_KEY not configured in database or environment"
         )
     return key
-
-
-def get_gmail_oauth_scopes(include_send_scope: bool) -> List[str]:
-    scopes = list(GoogleOAuthHandler.DEFAULT_SCOPES["gmail"])
-    if include_send_scope:
-        for scope in (GMAIL_SEND_SCOPE, GMAIL_COMPOSE_SCOPE):
-            if scope not in scopes:
-                scopes.append(scope)
-    return scopes
 
 
 # ============================================
@@ -283,10 +266,6 @@ async def list_gmail_integrations(
     result = []
     for integration in integrations:
         base = db.query(HubIntegration).filter(HubIntegration.id == integration.id).first()
-        token = db.query(OAuthToken).filter(
-            OAuthToken.integration_id == integration.id
-        ).order_by(OAuthToken.created_at.desc()).first()
-        token_scopes = set((token.scope or "").split()) if token and token.scope else set()
         result.append(IntegrationResponse(
             id=integration.id,
             type='gmail',
@@ -296,9 +275,7 @@ async def list_gmail_integrations(
             is_active=base.is_active if base else True,
             authorized_at=integration.authorized_at,
             health_status=base.health_status if base else "unknown",
-            health_status_reason=getattr(base, 'health_status_reason', None) if base else None,
-            can_send=bool(token_scopes & GMAIL_SEND_COMPATIBLE_SCOPES),
-            can_draft=bool(token_scopes & GMAIL_DRAFT_COMPATIBLE_SCOPES),
+            health_status_reason=getattr(base, 'health_status_reason', None) if base else None
         ))
 
     return IntegrationListResponse(integrations=result, count=len(result))
@@ -309,10 +286,6 @@ async def gmail_oauth_authorize(
     display_name: Optional[str] = Query(None, description="User-friendly name for this account"),
     login_hint: Optional[str] = Query(None, description="Email hint for account selector"),
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
-    include_send_scope: bool = Query(
-        False,
-        description="When true, request Gmail outbound scopes (gmail.send + gmail.compose) in addition to the default Gmail scopes.",
-    ),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session),
     current_user: User = Depends(require_permission("hub.write"))
@@ -327,7 +300,6 @@ async def gmail_oauth_authorize(
 
         auth_url, state = await handler.generate_authorization_url(
             integration_type="gmail",
-            scopes=get_gmail_oauth_scopes(include_send_scope),
             redirect_url=redirect_url,
             display_name=display_name,
             login_hint=login_hint
@@ -711,10 +683,6 @@ async def check_calendar_health(
 async def reauthorize_integration(
     integration_id: int,
     redirect_url: Optional[str] = Query(None, description="URL to redirect after OAuth"),
-    include_send_scope: bool = Query(
-        False,
-        description="When true for Gmail integrations, request Gmail outbound scopes (gmail.send + gmail.compose) in addition to the default Gmail scopes.",
-    ),
     current_user: User = Depends(require_permission("hub.write")),
     ctx: TenantContext = Depends(get_current_tenant_context),
     db: Session = Depends(get_session)
@@ -751,7 +719,6 @@ async def reauthorize_integration(
 
         auth_url, state = await handler.generate_authorization_url(
             integration_type=integration.type,
-            scopes=get_gmail_oauth_scopes(include_send_scope) if integration.type == 'gmail' else None,
             redirect_url=redirect_url or f"{settings.FRONTEND_URL}/hub",
             display_name=integration.display_name,
             login_hint=email

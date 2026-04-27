@@ -27,6 +27,7 @@ const CHANNELS: { id: string; label: string; desc: string; requiresSetup: boolea
   { id: 'telegram', label: 'Telegram', desc: 'Route Telegram messages to this agent.', requiresSetup: true },
   { id: 'slack', label: 'Slack', desc: 'Respond to Slack messages and mentions.', requiresSetup: true },
   { id: 'discord', label: 'Discord', desc: 'Respond to Discord messages and mentions.', requiresSetup: true },
+  { id: 'webhook', label: 'Webhook', desc: 'Expose a webhook endpoint for custom integrations.', requiresSetup: true },
 ]
 
 function rowsFromFallback(): ChannelRow[] {

@@ -61,17 +61,8 @@ export const WIZARDS: readonly WizardDescriptor[] = [
       'frontend/components/TelegramBotModal.tsx',
       'frontend/components/SlackSetupWizard.tsx',
       'frontend/components/DiscordSetupWizard.tsx',
-    ],
-  },
-  {
-    id: 'triggers',
-    label: '+ Add Trigger',
-    componentPath: 'frontend/components/triggers/TriggerWizard.tsx',
-    catalogEndpoint: '/api/triggers',
-    catalogModule: 'backend/channels/catalog.py',
-    dispatchesTo: [
-      'frontend/components/triggers/EmailTriggerWizard.tsx',
       'frontend/components/WebhookSetupModal.tsx',
+      'frontend/components/integrations/GmailSetupWizard.tsx',
     ],
   },
   {

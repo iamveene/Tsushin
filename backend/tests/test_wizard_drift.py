@@ -33,17 +33,7 @@ FRONTEND = REPO_ROOT / "frontend"
 
 # Skills intentionally hidden from the wizard (require post-creation setup
 # the wizard doesn't collect inline). Must match the BaseSkill subclass attr.
-# Note: ``scheduler`` is registered as an alias of ``FlowsSkill``; since
-# FlowsSkill has wizard_visible=False the alias inherits the flag and shows
-# up here too — the wizard already renders the unified Scheduler card via
-# the ``flows`` entry, so the alias staying hidden is correct.
-WIZARD_HIDDEN_SKILLS: Set[str] = {
-    "gmail",
-    "shell",
-    "flows",
-    "agent_communication",
-    "scheduler",
-}
+WIZARD_HIDDEN_SKILLS: Set[str] = {"gmail", "shell", "flows", "agent_communication"}
 
 # TTS provider IDs registered at startup in TTSProviderRegistry.initialize_providers().
 # If you add a provider there, add its ID here AND ensure a matching entry exists
@@ -59,27 +49,6 @@ def _read(path: Path) -> str:
 # Guard 1 — Skill catalog drift
 # ---------------------------------------------------------------------------
 
-def _evict_stale_skill_modules():
-    """Remove any stale `agent.skills.*` modules that other tests in the
-    same pytest session loaded via `_load_module()`.
-
-    Several tests (e.g. test_audio_transcript_skill_asr.py,
-    test_agent_communication_service.py) bypass the regular import system to
-    avoid heavy dependencies. Each call to `_load_module("agent.skills.base",
-    ...)` puts a fresh `BaseSkill` instance in sys.modules. Any skill class
-    that was imported earlier (against a different `BaseSkill`) ends up
-    failing `issubclass(SkillCls, BaseSkill)` inside SkillManager.
-
-    By dropping all `agent.skills.*` and `agent.skills` entries here, the
-    next `from agent.skills.skill_manager import SkillManager` re-imports
-    everything from the real package against the SAME `BaseSkill`.
-    """
-    import sys
-    stale = [name for name in sys.modules if name == "agent.skills" or name.startswith("agent.skills.")]
-    for name in stale:
-        sys.modules.pop(name, None)
-
-
 def test_skill_catalog_frontend_matches_backend_registry():
     """
     Every skill registered by SkillManager._register_builtin_skills must also
@@ -90,7 +59,6 @@ def test_skill_catalog_frontend_matches_backend_registry():
     This catches the recurring bug where a new skill is added to the backend
     but the frontend skill card / wizard row is never updated.
     """
-    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -142,7 +110,6 @@ def test_skill_wizard_visible_matches_expected_hidden_set():
     the top of this file. If you add wizard_visible=False to a skill, add the
     skill_type to WIZARD_HIDDEN_SKILLS; if you remove it, remove it here too.
     """
-    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -758,9 +725,9 @@ def test_channels_wizard_fallback_matches_backend():
     fallback matches backend CHANNEL_CATALOG; this one does the same for the
     Hub > Communication tab's ChannelsWizard (the "+ Add Channel" launcher).
     The two fallbacks aren't literally the same array — ChannelsWizard drops
-    'playground' because it is not actionable from the Hub — but every
-    *actionable* channel id registered in CHANNEL_CATALOG must appear in the
-    ChannelsWizard fallback.
+    'playground' (not actionable from the Hub) and adds 'gmail' (inbound
+    email-as-channel) — but every *actionable* channel id registered in
+    CHANNEL_CATALOG must appear in the ChannelsWizard fallback.
     """
     from channels.catalog import CHANNEL_CATALOG
 
@@ -790,63 +757,23 @@ def test_channels_wizard_fallback_matches_backend():
         f"setup for must also be offered in the + Add Channel launcher."
     )
 
-    extra_in_wizard = frontend_ids - actionable_backend_ids
-    assert not extra_in_wizard, (
-        f"ChannelsWizard fallback has channel ids not in actionable "
-        f"CHANNEL_CATALOG: {sorted(extra_in_wizard)}. Either register them "
-        f"in backend/channels/catalog.py or remove them from the fallback."
+    # The wizard is allowed to include channels beyond CHANNEL_CATALOG (e.g.
+    # 'gmail' which is a productivity service re-exposed as an inbound
+    # channel). Enforce the extras stay on an explicit allowlist so new
+    # drift doesn't slip in under this exception.
+    wizard_extras = frontend_ids - actionable_backend_ids
+    allowed_extras = {"gmail"}
+    unexpected_extras = wizard_extras - allowed_extras
+    assert not unexpected_extras, (
+        f"ChannelsWizard fallback has channel ids not in CHANNEL_CATALOG "
+        f"and not on the extras allowlist ({sorted(allowed_extras)}): "
+        f"{sorted(unexpected_extras)}. Either register them in "
+        f"backend/channels/catalog.py or extend the allowlist in this test."
     )
 
 
 # ---------------------------------------------------------------------------
-# Guard 10 — Trigger wizard fallback vs. backend trigger catalog
-# ---------------------------------------------------------------------------
-
-def test_trigger_wizard_fallback_matches_backend():
-    """
-    The Hub trigger launcher keeps a static fallback in
-    ``frontend/components/triggers/TriggerWizard.tsx`` for degraded mode.
-    That fallback must stay aligned with ``TRIGGER_CATALOG`` so Email and
-    Webhook remain discoverable even if ``/api/triggers`` is temporarily
-    unavailable.
-    """
-    from channels.catalog import TRIGGER_CATALOG
-
-    backend_ids = {entry.id for entry in TRIGGER_CATALOG if entry.requires_setup}
-
-    wizard_path = FRONTEND / "components" / "triggers" / "TriggerWizard.tsx"
-    assert wizard_path.exists(), f"TriggerWizard.tsx not found at {wizard_path}"
-    text = _read(wizard_path)
-
-    fallback_match = re.search(
-        r"const FALLBACK_TRIGGERS[^=]*=\s*\[(.*?)\n\]",
-        text,
-        re.DOTALL,
-    )
-    assert fallback_match, (
-        "Fallback FALLBACK_TRIGGERS array not found in TriggerWizard.tsx. "
-        "If you refactored the fallback shape, update this regex too."
-    )
-    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
-
-    missing_in_frontend = backend_ids - frontend_ids
-    extra_in_frontend = frontend_ids - backend_ids
-
-    assert not missing_in_frontend, (
-        f"Triggers registered in backend TRIGGER_CATALOG are missing from "
-        f"TriggerWizard.tsx: {sorted(missing_in_frontend)}. Add matching "
-        f"entries so offline mode still renders them."
-    )
-    assert not extra_in_frontend, (
-        f"Triggers present in TriggerWizard.tsx but not in backend "
-        f"TRIGGER_CATALOG: {sorted(extra_in_frontend)}. Either register "
-        f"them in backend/channels/catalog.py or remove them from the "
-        f"frontend fallback."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Guard 11 — Gemini TTS model catalog drift
+# Guard 10 — Gemini TTS model catalog drift
 # ---------------------------------------------------------------------------
 
 def test_gemini_tts_models_frontend_fallback_matches_backend():

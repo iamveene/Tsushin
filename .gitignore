@@ -91,8 +91,6 @@ frontend/build/
 
 # Build artifacts
 frontend/tsconfig.tsbuildinfo
-frontend/playwright-report/
-frontend/test-results/
 
 # Dependencies
 /package-lock.json
@@ -155,7 +153,6 @@ backend/data/knowledge/
 backend/data/mcp/
 backend/data/workspace/
 backend/data/projects/
-backend/data/wake_events/
 backend/data/*.db*
 backend/data/*_report.json
 backend/data/*.py
@@ -190,9 +187,6 @@ tmp/
 
 # Development test scripts (not CI/CD tests)
 backend/dev_tests/
-!backend/dev_tests/
-backend/dev_tests/*
-!backend/dev_tests/export_gmail_oauth_fixture.py
 
 # Individual test files outside tests/ directory
 # (prevents accidental commits of dev test scripts)
@@ -265,9 +259,6 @@ backend/tests/*
 !backend/tests/test_mcp_container_manager.py
 !backend/tests/test_routes_mcp_instances_tester.py
 !backend/tests/test_searxng_container_manager.py
-!backend/tests/test_whisper_container_manager.py
-!backend/tests/test_whisper_auth.py
-!backend/tests/test_audio_transcript_skill_asr.py
 !backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py
 !backend/tests/test_wizard_drift.py
@@ -275,35 +266,8 @@ backend/tests/*
 !backend/tests/test_memory_tenant_scoping.py
 !backend/tests/test_installer_ssl.py
 !backend/tests/test_invitation_scope.py
-!backend/tests/test_routes_default_agents.py
-!backend/tests/test_routes_email_triggers.py
-!backend/tests/test_routes_continuous_crud.py
-!backend/tests/test_trigger_dispatch_service.py
-!backend/tests/test_continuous_agent_dispatch.py
-!backend/tests/test_webhook_trigger_dispatch_foundation.py
-!backend/tests/test_gmail_send_phase3_live_gate.py
 !backend/tests/test_invitation_link_portability.py
 !backend/tests/test_skill_integration_tenant_isolation.py
-!backend/tests/conftest.py
-!backend/tests/test_gmail_oauth_fixture.py
-!backend/tests/test_phase0_5_fixtures.py
-!backend/tests/test_agent_knowledge_metadata.py
-!backend/tests/test_track_e_shell_audit_hardening.py
-!backend/tests/test_new_contact_welcome_template.py
-!backend/tests/test_flow_completed_steps_counter.py
-!backend/tests/test_webhook_replay.py
-!backend/tests/test_oauth_bearer_rate_limit.py
-!backend/tests/test_unauth_rate_limit.py
-!backend/tests/test_provider_audit.py
-!backend/tests/test_429_logged.py
-!backend/tests/test_followup_detector.py
-!backend/tests/test_scratchpad_preservation.py
-!backend/tests/test_agent_update_pydantic.py
-!backend/tests/fixtures/
-backend/tests/fixtures/*
-!backend/tests/fixtures/asr_test_en.ogg
-!backend/tests/fixtures/asr_test_pt.ogg
-!backend/tests/fixtures/gmail_oauth.enc
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py
 ops/check_openrouter_agent.py

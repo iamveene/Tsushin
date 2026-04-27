@@ -1,5 +1,5 @@
-"""Webhook trigger exports."""
+"""Webhook channel adapter package (v0.6.0)."""
 
-from channels.webhook.trigger import WebhookTrigger
+from channels.webhook.adapter import WebhookChannelAdapter
 
-__all__ = ["WebhookTrigger"]
+__all__ = ["WebhookChannelAdapter"]

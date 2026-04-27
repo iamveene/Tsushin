@@ -42,25 +42,6 @@ class SkillManager:
         self._register_builtin_skills()
         logger.info(f"SkillManager initialized with {len(self.registry)} registered skills")
 
-    # Reserved config keys that should stay out of per-skill AgentSkill.config
-    # payloads. Track A will eventually thread scratchpad/queue-style metadata
-    # through a separate contract; this audit surface is intentionally
-    # observational only for now.
-    RESERVED_AGENT_SKILL_CONFIG_KEYS = frozenset({
-        "execution_mode",
-        "keywords",
-        "use_ai_fallback",
-        "ai_model",
-        "scratchpad",
-        "queue",
-        "max_agentic_rounds",
-        "auto_inject_results",
-        "skip_ai_on_data_fetch",
-        "max_result_bytes",
-        "max_results_retained",
-        "max_turns_lookback",
-    })
-
     def _register_builtin_skills(self):
         """
         Register built-in skills.
@@ -156,15 +137,7 @@ class SkillManager:
             from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
             self.register_skill(OKGTermMemorySkill)
 
-            # v0.7.0: Ticket Management — Jira provider (read/write capability-gated)
-            from agent.skills.jira_skill import JiraSkill
-            self.register_skill(JiraSkill)
-
-            # v0.7.0: Code Repository — GitHub provider (read/write capability-gated)
-            from agent.skills.code_repository_skill import CodeRepositorySkill
-            self.register_skill(CodeRepositorySkill)
-
-            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository")
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -291,44 +264,6 @@ class SkillManager:
             logger.error(f"Error fetching skill config: {e}", exc_info=True)
             return None
 
-    @classmethod
-    def audit_agent_skill_config_key_collisions(
-        cls,
-        skill_configs: Dict[str, Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """
-        Report top-level config key collisions against reserved agent-skill keys.
-
-        This is a prep-only audit helper. It does not mutate data or enforce any
-        schema/API contract. The goal is to surface keys that would clash with
-        future shared scratchpad/queue fields before Track A persists them.
-        """
-        collisions: List[Dict[str, Any]] = []
-        for skill_type, config in skill_configs.items():
-            config_keys = set((config or {}).keys())
-            overlapping_keys = sorted(config_keys & cls.RESERVED_AGENT_SKILL_CONFIG_KEYS)
-            if overlapping_keys:
-                collisions.append({
-                    "skill_type": skill_type,
-                    "colliding_keys": overlapping_keys,
-                })
-        return collisions
-
-    async def audit_agent_skill_config_collisions(
-        self,
-        db: Session,
-        agent_id: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        Collect the current enabled skill configs and flag reserved-key overlap.
-
-        This is useful for prep-time audits, but it intentionally does not block
-        saves or imply any new persistence/API behavior.
-        """
-        skills = await self.get_agent_skills(db, agent_id)
-        skill_configs = {skill.skill_type: (skill.config or {}) for skill in skills}
-        return self.audit_agent_skill_config_key_collisions(skill_configs)
-
     async def get_skill_tool_definitions(
         self,
         db: Session,
@@ -371,17 +306,6 @@ class SkillManager:
 
                 # SKILL-002 Fix: Use centralized _create_skill_instance method
                 skill_instance = self._create_skill_instance(skill_class, db, agent_id)
-
-                # BUG-FIX: propagate the saved AgentSkill.config to the instance
-                # so per-agent capability filtering (JiraSkill / GmailSkill /
-                # any future skill that overrides to_openai_tool to read
-                # self._config) actually sees the persisted toggles. Without
-                # this, the instance always falls back to get_default_config(),
-                # silently ignoring saved capability changes — the bug was
-                # masked while saved configs happened to match the defaults.
-                if not hasattr(skill_instance, '_agent_id') or skill_instance._agent_id is None:
-                    skill_instance._agent_id = agent_id
-                skill_instance._config = skill_record.config or {}
 
                 # Check if skill has is_tool_enabled
                 if hasattr(skill_instance, 'is_tool_enabled'):

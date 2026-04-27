@@ -17,14 +17,7 @@ from typing import Optional, Set, Dict, Any
 import requests
 from sqlalchemy.orm import Session
 
-from services.container_runtime import (
-    PORT_RANGES,
-    get_container_runtime,
-    iter_port_range,
-    ContainerRuntime,
-    ContainerNotFoundError,
-    ContainerRuntimeError,
-)
+from services.container_runtime import get_container_runtime, ContainerRuntime, ContainerNotFoundError, ContainerRuntimeError
 from services.docker_network_utils import resolve_tsushin_network_name
 
 logger = logging.getLogger(__name__)
@@ -45,7 +38,8 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-PORT_RANGE_START, PORT_RANGE_END = PORT_RANGES["vector_store"]
+PORT_RANGE_START = 6300
+PORT_RANGE_END = 6399
 HEALTH_CHECK_TIMEOUT = 90
 
 
@@ -110,7 +104,7 @@ class VectorStoreContainerManager:
         import socket
         used = self._get_used_ports(db)
         docker_used = self._docker_published_ports()
-        for port in iter_port_range("vector_store"):
+        for port in range(PORT_RANGE_START, PORT_RANGE_END):
             if port in used or port in docker_used:
                 continue
             try:

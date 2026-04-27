@@ -9,16 +9,6 @@ interface Props {
   agentId: number
 }
 
-const MAX_DOCUMENT_TAGS = 12
-const MAX_DOCUMENT_TAG_LENGTH = 48
-
-function parseKnowledgeTags(input: string): string[] {
-  return input
-    .split(/[,\n]/)
-    .map((tag) => tag.trim().toLowerCase().replace(/\s+/g, ' '))
-    .filter(Boolean)
-}
-
 export default function AgentKnowledgeManager({ agentId }: Props) {
   const [documents, setDocuments] = useState<AgentKnowledge[]>([])
   const [selectedDoc, setSelectedDoc] = useState<AgentKnowledge | null>(null)
@@ -29,20 +19,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<KnowledgeChunk[]>([])
   const [searching, setSearching] = useState(false)
-  const [editingDoc, setEditingDoc] = useState<AgentKnowledge | null>(null)
-  const [editDocumentName, setEditDocumentName] = useState('')
-  const [editTagsText, setEditTagsText] = useState('')
-  const [savingEdit, setSavingEdit] = useState(false)
-
-  const normalizedEditTags = parseKnowledgeTags(editTagsText)
-  const uniqueEditTags = Array.from(new Set(normalizedEditTags))
-  const overlongTag = uniqueEditTags.find((tag) => tag.length > MAX_DOCUMENT_TAG_LENGTH)
-  const tagValidationError =
-    uniqueEditTags.length > MAX_DOCUMENT_TAGS
-      ? `Use up to ${MAX_DOCUMENT_TAGS} tags per document.`
-      : overlongTag
-        ? `Each tag must be ${MAX_DOCUMENT_TAG_LENGTH} characters or fewer.`
-        : null
 
   useEffect(() => {
     loadDocuments()
@@ -134,51 +110,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
     }
   }
 
-  const startEditDocument = (doc: AgentKnowledge) => {
-    setEditingDoc(doc)
-    setEditDocumentName(doc.document_name)
-    setEditTagsText((doc.tags || []).join(', '))
-  }
-
-  const closeEditDocument = () => {
-    setEditingDoc(null)
-    setEditDocumentName('')
-    setEditTagsText('')
-    setSavingEdit(false)
-  }
-
-  const saveDocumentMetadata = async () => {
-    if (!editingDoc) return
-
-    const documentName = editDocumentName.trim()
-    if (!documentName) {
-      alert('Document name is required.')
-      return
-    }
-
-    if (tagValidationError) {
-      alert(tagValidationError)
-      return
-    }
-
-    const tags = uniqueEditTags
-
-    setSavingEdit(true)
-    try {
-      const updated = await api.updateKnowledgeDocument(agentId, editingDoc.id, {
-        document_name: documentName,
-        tags,
-      })
-      setDocuments((prev) => prev.map((doc) => (doc.id === updated.id ? updated : doc)))
-      setSelectedDoc((prev) => (prev && prev.id === updated.id ? updated : prev))
-      closeEditDocument()
-    } catch (err) {
-      console.error('Failed to update document metadata:', err)
-      alert(err instanceof Error ? err.message : 'Failed to update document details')
-      setSavingEdit(false)
-    }
-  }
-
   const deleteDocument = async (docId: number) => {
     if (!confirm('Delete this document?\n\nThis will remove all chunks from the knowledge base.')) {
       return
@@ -231,25 +162,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       <span className={`px-2 py-1 rounded text-xs font-medium ${badge.bg} ${badge.text}`}>
         {badge.label}
       </span>
-    )
-  }
-
-  const renderTags = (tags?: string[]) => {
-    if (!tags || tags.length === 0) {
-      return <span className="text-xs text-tsushin-muted">No tags</span>
-    }
-
-    return (
-      <div className="flex flex-wrap gap-1">
-        {tags.map((tag) => (
-          <span
-            key={tag}
-            className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-500/10 text-teal-300 border border-teal-500/20"
-          >
-            {tag}
-          </span>
-        ))}
-      </div>
     )
   }
 
@@ -347,7 +259,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Document Name</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Type</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Tags</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Size</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Chunks</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Status</th>
@@ -358,7 +269,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
             <tbody>
               {documents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-tsushin-muted">
+                  <td colSpan={7} className="px-4 py-8 text-center text-tsushin-muted">
                     No documents uploaded yet. Upload documents to build agent's knowledge base.
                   </td>
                 </tr>
@@ -370,9 +281,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                       <span className="px-2 py-1 bg-tsushin-elevated rounded text-xs font-mono">
                         {doc.document_type.toUpperCase()}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm">
-                      {renderTags(doc.tags)}
                     </td>
                     <td className="px-4 py-3 text-sm">{formatBytes(doc.file_size_bytes)}</td>
                     <td className="px-4 py-3 text-sm">{doc.num_chunks || '-'}</td>
@@ -389,12 +297,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                           View
                         </button>
                       )}
-                      <button
-                        onClick={() => startEditDocument(doc)}
-                        className="px-3 py-1 text-sm rounded bg-tsushin-elevated hover:bg-tsushin-border text-white"
-                      >
-                        Edit
-                      </button>
                       <button
                         onClick={() => deleteDocument(doc.id)}
                         className="btn-danger px-3 py-1 text-sm rounded"
@@ -420,9 +322,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                 <p className="text-sm text-tsushin-slate">
                   {formatBytes(selectedDoc.file_size_bytes)} • {selectedDoc.num_chunks} chunks
                 </p>
-                <div className="mt-2">
-                  {renderTags(selectedDoc.tags)}
-                </div>
               </div>
               <button
                 onClick={() => setSelectedDoc(null)}
@@ -454,76 +353,6 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                 className="px-4 py-2 bg-tsushin-elevated text-white rounded-md hover:bg-tsushin-surface"
               >
                 Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editingDoc && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-tsushin-surface rounded-lg max-w-xl w-full overflow-hidden">
-            <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
-              <div>
-                <h3 className="text-lg font-semibold">Edit Document</h3>
-                <p className="text-sm text-tsushin-slate">{editingDoc.document_name}</p>
-              </div>
-              <button
-                onClick={closeEditDocument}
-                className="text-tsushin-slate hover:text-white"
-                disabled={savingEdit}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Document Name</label>
-                <input
-                  type="text"
-                  value={editDocumentName}
-                  onChange={(e) => setEditDocumentName(e.target.value)}
-                  maxLength={255}
-                  className="w-full px-4 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">Tags</label>
-                <textarea
-                  value={editTagsText}
-                  onChange={(e) => setEditTagsText(e.target.value)}
-                  rows={3}
-                  placeholder="billing, faq, onboarding"
-                  className="w-full px-4 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
-                />
-                <p className="text-xs text-tsushin-muted mt-2">
-                  Separate tags with commas or line breaks. Up to {MAX_DOCUMENT_TAGS} tags, {MAX_DOCUMENT_TAG_LENGTH} characters each. Tags are normalized to lowercase and deduplicated before save.
-                </p>
-                <p className="text-xs text-tsushin-muted mt-1">
-                  {uniqueEditTags.length}/{MAX_DOCUMENT_TAGS} tags
-                </p>
-                {tagValidationError && (
-                  <p className="text-xs text-red-400 mt-2">{tagValidationError}</p>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-tsushin-elevated px-6 py-4 border-t flex justify-end gap-3">
-              <button
-                onClick={closeEditDocument}
-                className="px-4 py-2 bg-tsushin-ink text-white rounded-md hover:bg-tsushin-surface"
-                disabled={savingEdit}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveDocumentMetadata}
-                className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
-                disabled={savingEdit || !!tagValidationError}
-              >
-                {savingEdit ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>

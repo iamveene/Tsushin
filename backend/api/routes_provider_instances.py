@@ -24,32 +24,6 @@ from auth_dependencies import (
     get_current_user_optional_strict_from_request,
     ensure_permission,
 )
-from services.audit_service import log_tenant_event, TenantAuditActions
-
-
-# BUG-709 FIX (v0.7.0): Predefined tenant-audit actions for provider-instance
-# CRUD. Suggested-by-bug names map cleanly onto the existing TenantAuditActions
-# convention even though they aren't yet baked into the class — using string
-# literals here keeps the change surgical and avoids touching the audit
-# constants file (and downstream syslog forwarder mappings).
-_PROVIDER_AUDIT_CREATE = "provider.created"
-_PROVIDER_AUDIT_UPDATE = "provider.updated"
-_PROVIDER_AUDIT_DELETE = "provider.deleted"
-
-
-def _provider_audit_payload(instance: ProviderInstance) -> dict:
-    """
-    BUG-709: Redacted payload for provider-instance audit events.
-    Never include `api_key`, encrypted blob, or extra_config (which can carry
-    Vertex AI service-account JSON keys). Only emit safe identifiers.
-    """
-    return {
-        "id": instance.id,
-        "vendor": instance.vendor,
-        "instance_name": instance.instance_name,
-        "is_active": bool(instance.is_active),
-        "is_default": bool(instance.is_default),
-    }
 
 logger = logging.getLogger(__name__)
 
@@ -380,11 +354,10 @@ PREDEFINED_MODELS = {
         "o1", "o1-mini", "o3-mini", "o4-mini",
     ],
     "anthropic": [
-        # Current generation. Older claude-3.5-sonnet / claude-3-opus removed
-        # from selectable list (BUG-697); pricing rows in token_tracker.py are
-        # retained for legacy invoice cost calculation.
         "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
     ],
     "gemini": [
         # Static fallback only — used when the live /v1beta/models call fails
@@ -711,7 +684,6 @@ def list_provider_instances(
 def create_provider_instance(
     data: ProviderInstanceCreate,
     background_tasks: BackgroundTasks,
-    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -798,18 +770,6 @@ def create_provider_instance(
     db.refresh(instance)
     logger.info(f"Created provider instance '{data.instance_name}' (vendor={vendor}) for tenant {ctx.tenant_id}")
 
-    # BUG-709: emit tenant audit event (no api_key in payload)
-    log_tenant_event(
-        db,
-        ctx.tenant_id,
-        current_user.id,
-        _PROVIDER_AUDIT_CREATE,
-        "provider_instance",
-        str(instance.id),
-        _provider_audit_payload(instance),
-        request,
-    )
-
     # Auto-run a connection test in the background so the Hub UI dot reflects
     # real connectivity instead of staying gray ('unknown') until the user
     # clicks Test Connection. Skip when no credentials are configured (the
@@ -867,7 +827,6 @@ def update_provider_instance(
     instance_id: int,
     data: ProviderInstanceUpdate,
     background_tasks: BackgroundTasks,
-    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -956,18 +915,6 @@ def update_provider_instance(
     db.refresh(instance)
     logger.info(f"Updated provider instance {instance_id} for tenant {instance.tenant_id}")
 
-    # BUG-709: emit tenant audit event (no api_key in payload)
-    log_tenant_event(
-        db,
-        instance.tenant_id,
-        current_user.id,
-        _PROVIDER_AUDIT_UPDATE,
-        "provider_instance",
-        str(instance.id),
-        _provider_audit_payload(instance),
-        request,
-    )
-
     # Re-test in the background when something connectivity-relevant changed
     # (key, base URL, vendor-specific config, or model list). Skip pure metadata
     # edits like rename or default-toggle so we don't burn provider quota for
@@ -988,7 +935,6 @@ def update_provider_instance(
 @router.delete("/provider-instances/{instance_id}")
 def delete_provider_instance(
     instance_id: int,
-    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -1023,19 +969,6 @@ def delete_provider_instance(
     instance.updated_at = datetime.utcnow()
     db.commit()
     logger.info(f"Soft-deleted provider instance {instance_id} for tenant {instance.tenant_id}")
-
-    # BUG-709: emit tenant audit event (no api_key in payload)
-    log_tenant_event(
-        db,
-        instance.tenant_id,
-        current_user.id,
-        _PROVIDER_AUDIT_DELETE,
-        "provider_instance",
-        str(instance.id),
-        _provider_audit_payload(instance),
-        request,
-    )
-
     return {"message": f"Provider instance '{instance.instance_name}' deleted successfully"}
 
 

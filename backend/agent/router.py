@@ -162,19 +162,13 @@ class AgentRouter:
                 self.logger.error(f"Failed to initialize TelegramSender: {e}", exc_info=True)
 
         # Item 32: Channel Abstraction Layer — register adapters per channel
-        from channels.base import Channel
-        from channels.dispatch import dispatch_outbound
         from channels.registry import ChannelRegistry
-        from channels.trigger import Trigger
         from channels.whatsapp.adapter import WhatsAppChannelAdapter
         from channels.telegram.adapter import TelegramChannelAdapter
         from channels.playground.adapter import PlaygroundChannelAdapter
-        from channels.webhook.trigger import WebhookTrigger
+        from channels.webhook.adapter import WebhookChannelAdapter
 
         self.channel_registry = ChannelRegistry()
-        self._channel_base_type = Channel
-        self._dispatch_outbound = dispatch_outbound
-        self._trigger_base_type = Trigger
 
         if mcp_instance_id:
             self.channel_registry.register(
@@ -189,7 +183,7 @@ class AgentRouter:
         if webhook_instance_id:
             self.channel_registry.register(
                 "webhook",
-                WebhookTrigger(db_session, webhook_instance_id, self.logger)
+                WebhookChannelAdapter(db_session, webhook_instance_id, self.logger)
             )
         self.channel_registry.register(
             "playground",
@@ -710,24 +704,20 @@ class AgentRouter:
             if channel == "slack" and self._inbound_slack_thread_ts:
                 send_kwargs["thread_ts"] = self._inbound_slack_thread_ts
 
-            result = await self._dispatch_outbound(
-                adapter,
-                recipient=recipient,
-                message_text=message_text,
+            result = await adapter.send_message(
+                to=recipient,
+                text=message_text,
                 media_path=media_path,
                 agent_id=agent_id,
                 **send_kwargs,
             )
 
-            success = result.success if hasattr(result, "success") else bool(result.get("success"))
-            error = result.error if hasattr(result, "error") else result.get("error")
-
-            if not success:
+            if not result.success:
                 self.logger.warning(
-                    f"Message send failed via {channel}: {error or 'unknown error'}"
+                    f"Message send failed via {channel}: {result.error or 'unknown error'}"
                 )
 
-            return success
+            return result.success
 
         except Exception as e:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
@@ -957,34 +947,12 @@ class AgentRouter:
             return None, None, None
 
         # Step 3: Default agent (fallback for DMs only - LOWEST PRIORITY)
-        # Phase 1: centralize resolution through default_agent_service.
-        from services.default_agent_service import get_default_agent
-
-        default_channel_type = "playground"
-        default_instance_id = None
-        if self.webhook_instance_id:
-            default_channel_type = "webhook"
-            default_instance_id = self.webhook_instance_id
-        elif self.telegram_instance_id:
-            default_channel_type = "telegram"
-            default_instance_id = self.telegram_instance_id
-        elif self.mcp_instance_id:
-            default_channel_type = "whatsapp"
-            default_instance_id = self.mcp_instance_id
-
-        default_agent_id = get_default_agent(
-            db=self.db,
-            tenant_id=self.tenant_id,
-            channel_type=default_channel_type,
-            instance_id=default_instance_id,
-            user_identifier=sender,
-            contact_id=contact.id if contact else None,
-        )
-        default_agent = (
-            self.db.query(Agent).filter(Agent.id == default_agent_id).first()
-            if default_agent_id
-            else None
-        )
+        # Phase 10: Also check channel validity for default agent
+        # MONITORING 2026-01-08: Log default agent usage for audit
+        default_query = self.db.query(Agent).filter(Agent.is_default == True)
+        if self.tenant_id:
+            default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+        default_agent = default_query.first()
         if default_agent and is_agent_valid_for_channel(default_agent):
             self.logger.warning(f"⚠️ DEFAULT AGENT FALLBACK: Using agent {default_agent.id} for {sender} (no contact mapping, no mention, no keyword)")
             self.logger.warning(f"📊 AUDIT: Sender {sender} | Trigger: {trigger_type} | Default fallback used")
@@ -1030,10 +998,6 @@ class AgentRouter:
             "memory_size": self.config.get("memory_size", 10),  # Inherit from config
             "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
             "provider_instance_id": getattr(agent, 'provider_instance_id', None),
-            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
-            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
-            "platform_min_agentic_rounds": self.config.get("platform_min_agentic_rounds"),
-            "platform_max_agentic_rounds": self.config.get("platform_max_agentic_rounds"),
         }
 
     def _build_persona_context(self, persona) -> str:
@@ -2485,8 +2449,6 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             if result.get('tool_used'):
                 memory_metadata['is_tool_output'] = True
                 memory_metadata['tool_used'] = result.get('tool_used')
-                if result.get('tool_result_structured'):
-                    memory_metadata['tool_result'] = result.get('tool_result_structured')
 
                 # Layer 5: Store FULL tool output in ephemeral buffer for follow-up interactions
                 # This enables agentic analysis of tool results without polluting long-term memory
@@ -3452,16 +3414,6 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 original_query=message_content
             )
 
-            # BUG-707: Only persist the scratchpad when a tool actually fired
-            # this turn. A no-tool turn (e.g. follow-up question that answers
-            # purely from the prior DATA block) used to overwrite the column
-            # with [], wiping the trace from the earlier round and forcing the
-            # next follow-up to re-fetch.
-            if result.get("agentic_scratchpad") is not None and (
-                result.get("tool_was_called") or result.get("tool_used")
-            ):
-                thread.agentic_scratchpad = result.get("agentic_scratchpad")
-
             ai_reply = result.get("answer", "")
 
             if ai_reply:
@@ -3502,14 +3454,11 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 self.logger.info(f"Thread {thread.id}: Response clean, using: '{ai_reply[:80]}...')")
 
                 # Add AI response to history
-                history_entry = {
+                history.append({
                     "role": "agent",
                     "content": ai_reply,
                     "timestamp": datetime.utcnow().isoformat() + "Z"
-                }
-                if result.get("tool_result_structured"):
-                    history_entry["tool_result"] = result.get("tool_result_structured")
-                history.append(history_entry)
+                })
                 thread.conversation_history = history
 
                 # Check for goal completion in both user message and agent response
@@ -3961,29 +3910,14 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 except Exception:
                     pass
 
-            # If no saved session, try to get the resolved default agent
+            # If no saved session, try to get default agent
             if not agent_id:
-                from services.default_agent_service import get_default_agent
-
-                default_channel_type = "playground"
-                default_instance_id = None
-                if channel.startswith("whatsapp"):
-                    default_channel_type = "whatsapp"
-                    default_instance_id = self.mcp_instance_id
-                elif channel == "telegram":
-                    default_channel_type = "telegram"
-                    default_instance_id = self.telegram_instance_id
-                elif channel == "webhook":
-                    default_channel_type = "webhook"
-                    default_instance_id = self.webhook_instance_id
-
-                agent_id = get_default_agent(
-                    db=self.db,
-                    tenant_id=self.tenant_id,
-                    channel_type=default_channel_type,
-                    instance_id=default_instance_id,
-                    user_identifier=sender_key,
-                )
+                default_query = self.db.query(Agent).filter(Agent.is_default == True)
+                if self.tenant_id:
+                    default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
+                default_agent = default_query.first()
+                if default_agent:
+                    agent_id = default_agent.id
 
             # Get tenant_id from agent
             tenant_id = "_system"  # Default to system commands
