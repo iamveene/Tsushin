@@ -155,10 +155,6 @@ services:
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
-      # BUG-712: optional bearer-token gate for /metrics (enforced inside backend
-      # services/metrics_service.py). Empty = open. The proxy now passes /metrics
-      # straight through, so this single env is the only auth knob to flip.
-      - TSN_METRICS_SCRAPE_TOKEN=${TSN_METRICS_SCRAPE_TOKEN:-}
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
@@ -167,13 +163,6 @@ services:
       # line 156 shadowed this value with an empty string when the var was unset.
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
       - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
-      # v0.7.0 Triggers↔Flows Unification env-var gates. Default off so
-      # the release ships byte-identical to 0.6.x. Operators flip per
-      # tenant in staging then production. See backend/config/feature_flags.py.
-      - TSN_FLOWS_TRIGGER_BINDING_ENABLED=${TSN_FLOWS_TRIGGER_BINDING_ENABLED:-false}
-      - TSN_FLOWS_AUTO_GENERATION_ENABLED=${TSN_FLOWS_AUTO_GENERATION_ENABLED:-false}
-      - TSN_FLOWS_BACKFILL_ENABLED=${TSN_FLOWS_BACKFILL_ENABLED:-false}
-      - TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=${TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY:-false}
       # Docker socket proxy (BUG-135: no direct socket mount)
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 

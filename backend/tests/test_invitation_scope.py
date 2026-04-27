@@ -110,20 +110,9 @@ def purge_orphaned_test_data(db_session):
                 synchronize_session=False
             )
 
-        # Ensure max_users is generous enough for the test suite. Anchor on
-        # the tenant that owns the seeded test user so we don't accidentally
-        # widen a different tenant's quota when multiple tenants exist.
-        seeded = (
-            db_session.query(User)
-            .filter(User.email == "test@example.com", User.is_global_admin == False)  # noqa: E712
-            .first()
-        )
-        target_tenant_id = seeded.tenant_id if seeded else None
-        tenant = (
-            db_session.query(Tenant).filter(Tenant.id == target_tenant_id).first()
-            if target_tenant_id
-            else db_session.query(Tenant).first()
-        )
+        # Ensure max_users is generous enough for the test suite. We restore
+        # the original value in teardown so we don't widen production limits.
+        tenant = db_session.query(Tenant).first()
         original_max = tenant.max_users if tenant else None
         if tenant and (tenant.max_users or 0) < 50:
             tenant.max_users = 200
@@ -132,7 +121,6 @@ def purge_orphaned_test_data(db_session):
     except Exception:
         db_session.rollback()
         original_max = None
-        target_tenant_id = None
 
     yield
 
@@ -153,10 +141,8 @@ def purge_orphaned_test_data(db_session):
             db_session.query(User).filter(User.id.in_(test_user_ids)).delete(
                 synchronize_session=False
             )
-        if original_max is not None and target_tenant_id is not None:
-            tenant = (
-                db_session.query(Tenant).filter(Tenant.id == target_tenant_id).first()
-            )
+        if original_max is not None:
+            tenant = db_session.query(Tenant).first()
             if tenant is not None:
                 tenant.max_users = original_max
         db_session.commit()
@@ -166,26 +152,9 @@ def purge_orphaned_test_data(db_session):
 
 @pytest.fixture(scope="module")
 def tenant_id(db_session):
-    """Resolve the tenant that owns the seeded test owner user.
-
-    Multi-tenant test environments may have several tenants in the DB; relying
-    on ``Tenant.query.first()`` (no ORDER BY) is non-deterministic in Postgres
-    and can return a tenant that does not own the seeded ``test@example.com``
-    user, breaking the ``tenant_owner`` fixture. Anchor on the seeded user
-    instead so the fixture is stable regardless of insertion order.
-    """
-    from models_rbac import Tenant, User
-
-    seeded = (
-        db_session.query(User)
-        .filter(User.email == "test@example.com", User.is_global_admin == False)  # noqa: E712
-        .first()
-    )
-    assert seeded is not None and seeded.tenant_id, (
-        "Expected seeded tenant-owner test@example.com with a tenant_id."
-    )
-    t = db_session.query(Tenant).filter(Tenant.id == seeded.tenant_id).first()
-    assert t is not None, f"Tenant {seeded.tenant_id} for seeded user not found."
+    from models_rbac import Tenant
+    t = db_session.query(Tenant).first()
+    assert t is not None, "Expected at least one tenant in the DB (seeded)."
     return t.id
 
 

@@ -1,6 +1,0 @@
-4517:  async getContinuousAgents(params: ContinuousAgentListParams = {}): Promise<PageResponse<ContinuousAgent>> {
-4534:  async getContinuousRuns(params: ContinuousRunListParams = {}): Promise<PageResponse<ContinuousRun>> {
-4546:  async getContinuousRun(id: number): Promise<ContinuousRun> {
-4552:  async getWakeEvents(params: WakeEventListParams = {}): Promise<PageResponse<WakeEvent>> {
-4567:  async getWakeEvent(id: number): Promise<WakeEvent> {
-4573:  async getWakeEventPayload(id: number): Promise<WakeEventPayload> {

@@ -23,8 +23,6 @@ from models import (
     AsanaIntegration,
     AmadeusIntegration,
     GoogleFlightsIntegration,
-    JiraIntegration,
-    GitHubIntegration,
     Agent,
 )
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -573,7 +571,7 @@ async def get_available_providers(
             providers.append({
                 "provider_type": "gmail",
                 "provider_name": "Gmail",
-                "description": "Read, search, send, reply to, and draft emails in Gmail",
+                "description": "Read and search emails in Gmail",
                 "requires_integration": True,
                 "available_integrations": gmail_integrations
             })
@@ -640,107 +638,6 @@ async def get_available_providers(
                 "providers": providers
             }
 
-        elif skill_type == 'ticket_management':
-            # Ticket Management providers — Jira today; Linear/ServiceNow later.
-            providers = []
-
-            # Jira (programmatic mode only — agentic surfaces as "coming soon"
-            # in the UI but does not appear in the available_integrations list).
-            jira_list = db.query(JiraIntegration)\
-                .join(HubIntegration, HubIntegration.id == JiraIntegration.id)\
-                .filter(JiraIntegration.is_active == True)\
-                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
-                .all()
-
-            jira_integrations = [
-                {
-                    "integration_id": jira.id,
-                    "name": jira.name or jira.display_name or f"Jira #{jira.id}",
-                    "site_url": jira.site_url,
-                    "project_key": jira.project_key,
-                    "provider_mode": getattr(jira, "provider_mode", None) or "programmatic",
-                    "health_status": jira.health_status,
-                }
-                for jira in jira_list
-                if (getattr(jira, "provider_mode", None) or "programmatic") == "programmatic"
-            ]
-
-            providers.append({
-                "provider_type": "jira",
-                "provider_name": "Atlassian Jira",
-                "description": "Search, read, and act on Jira tickets via the REST API",
-                "requires_integration": True,
-                "available_integrations": jira_integrations,
-                "is_default": True,
-            })
-
-            # Placeholder for the agentic transport — surface but with no integrations.
-            providers.append({
-                "provider_type": "jira_agentic",
-                "provider_name": "Atlassian Remote MCP",
-                "description": "OAuth 2.1 to mcp.atlassian.com/v1/mcp — coming soon",
-                "requires_integration": True,
-                "available_integrations": [],
-                "is_default": False,
-                "coming_soon": True,
-            })
-
-            return {
-                "skill_type": skill_type,
-                "providers": providers,
-            }
-
-        elif skill_type == 'code_repository':
-            # Code Repository providers — GitHub today; Bitbucket/GitLab later.
-            providers = []
-
-            # GitHub (programmatic mode only — agentic surfaces as "coming soon"
-            # in the UI but does not appear in the available_integrations list).
-            github_list = db.query(GitHubIntegration)\
-                .join(HubIntegration, HubIntegration.id == GitHubIntegration.id)\
-                .filter(GitHubIntegration.is_active == True)\
-                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
-                .all()
-
-            github_integrations = [
-                {
-                    "integration_id": gh.id,
-                    "name": gh.name or gh.display_name or f"GitHub #{gh.id}",
-                    "default_owner": gh.default_owner,
-                    "default_repo": gh.default_repo,
-                    "provider_mode": getattr(gh, "provider_mode", None) or "programmatic",
-                    "health_status": gh.health_status,
-                }
-                for gh in github_list
-                if (getattr(gh, "provider_mode", None) or "programmatic") == "programmatic"
-            ]
-
-            providers.append({
-                "provider_type": "github",
-                "provider_name": "GitHub",
-                "description": "Search repos, read pull requests and issues, and (when enabled) post comments / create issues via the REST API",
-                "requires_integration": True,
-                "available_integrations": github_integrations,
-                "is_default": True,
-            })
-
-            # Placeholder for a future GitHub App / MCP transport — surface but
-            # with no integrations.
-            providers.append({
-                "provider_type": "github_app",
-                "provider_name": "GitHub App (OAuth)",
-                "description": "GitHub App installation flow — coming soon",
-                "requires_integration": True,
-                "available_integrations": [],
-                "is_default": False,
-                "coming_soon": True,
-            })
-
-            return {
-                "skill_type": skill_type,
-                "providers": providers,
-            }
-
         elif skill_type == 'web_search':
             # Web Search providers
             from hub.providers import SearchProviderRegistry
@@ -771,7 +668,7 @@ async def get_available_providers(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search, ticket_management, code_repository"
+                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search"
             )
 
     except HTTPException:

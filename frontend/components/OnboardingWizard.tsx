@@ -14,22 +14,16 @@
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
  * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
- *           custom skills/MCP, and A2A + long-term memory (vector stores).
- * v0.7.0 showcase: Total steps is now 16, with voice, Playground Mini, Sentinel,
- *           and a Triggers & Continuous Agents step before the finale.
+ *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
  */
 
-import React, { useEffect, useCallback, useMemo, useState } from 'react'
+import React, { useEffect, useCallback, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useAudioWizard } from '@/contexts/AudioWizardContext'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
-
-function getErrorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback
-}
 
 function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
   const [isBlock, setIsBlock] = useState<boolean | null>(null)
@@ -69,8 +63,8 @@ function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
         })
       }
       setIsBlock(next)
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to save Sentinel setting'))
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save Sentinel setting')
     } finally {
       setSaving(false)
     }
@@ -223,18 +217,16 @@ export default function OnboardingWizard() {
   // live /api/tts-providers catalog so a new backend provider auto-appears in
   // the tour without manual edits. Falls back to a single generic line if the
   // fetch failed.
-  const voiceProviderBullets: string[] = useMemo(() => (
-    ttsProviderSummaries.length > 0
-      ? ttsProviderSummaries.map(p => {
-          const label = p.name
-          const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
-          const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
-          return `${label}${voiceCount}${cost}`
-        })
-      : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
-  ), [ttsProviderSummaries])
+  const voiceProviderBullets: string[] = ttsProviderSummaries.length > 0
+    ? ttsProviderSummaries.map(p => {
+        const label = p.name
+        const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
+        const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
+        return `${label}${voiceCount}${cost}`
+      })
+    : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
 
-  const tourSteps: TourStep[] = useMemo(() => [
+  const tourSteps: TourStep[] = [
     {
       // Step 1
       title: 'Welcome to Tsushin!',
@@ -272,17 +264,17 @@ export default function OnboardingWizard() {
     },
     {
       // Step 3 — v0.6.0 showcase: New communication channels
-      title: "What's New in v0.6.0 — Slack, Discord, Webhook Triggers & More",
+      title: "What's New in v0.6.0 — Slack, Discord, Webhooks & More",
       targetSelector: null,
-      content: 'Tsushin now speaks through a unified entry-point layer. Conversational channels route chats from WhatsApp, Telegram, Slack, and Discord, while signed webhook events live under Triggers. Agents, skills, flows, and Sentinel use the same normalized shape no matter where the event starts.',
+      content: 'Tsushin now speaks six channels through a unified adapter layer. The router normalises every inbound message into the same shape so agents, skills, flows, and Sentinel behave identically whether the message came from WhatsApp, a Slack thread, a Discord guild, or your own service via a signed webhook. Each channel has its own guided setup wizard, per-instance health + circuit breakers, and per-agent routing via enabled_channels.',
       highlightFeatures: [
         'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
         'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
         'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
         'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
-        'Webhook triggers — HMAC-signed HTTP events with timestamp replay guard, IP allowlist, and rate limits',
+        'Webhooks — HMAC-signed bidirectional HTTP, timestamp replay guard, IP allowlist, rate limit',
         'Playground — built-in internal WebSocket channel for safe testing',
-        'Per-agent channel routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
+        'Per-agent enabled_channels routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
         'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
       ],
       actionButton: {
@@ -379,11 +371,11 @@ export default function OnboardingWizard() {
       // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Custom HTTP events are configured later as Triggers, not conversational channels.',
+      content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
       highlightFeatures: [
         'WhatsApp: scan QR code to connect your phone',
         'Telegram: add your bot token',
-        'Slack and Discord: connect workspace and community conversations',
+        'Webhooks: connect Slack, Discord, or custom services',
         'Each channel can be independently routed to agents'
       ],
       actionButton: {
@@ -474,26 +466,10 @@ export default function OnboardingWizard() {
         'Detect-only or warn-only modes for dev work',
         'Full audit log of every decision',
       ],
-      customBody: <SentinelTourPanel onAdvanced={minimize} />,
+      customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
     },
     {
-      // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
-      title: 'New in v0.7.0 - Triggers & Continuous Agents',
-      targetSelector: '[data-testid="hub-triggers-section"]',
-      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email, Webhook, Jira, Schedule, and GitHub triggers live in the Hub Communication tab; Wake Events and Continuous Agents are linked directly from that Triggers section.',
-      highlightFeatures: [
-        'Trigger detail pages use the new /api/triggers namespace',
-        'Wake Events browser shows payload_ref instead of raw payload JSON',
-        'Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
-        'Conversational channel routing rules stay limited to WhatsApp, Telegram, Slack, and Discord'
-      ],
-      actionButton: {
-        label: 'Open Hub Triggers',
-        action: () => router.push('/hub?tab=communication')
-      }
-    },
-    {
-      // Step 16 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
+      // Step 15 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
       // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
       title: "You're All Set!",
       targetSelector: null,
@@ -512,16 +488,7 @@ export default function OnboardingWizard() {
         }
       }
     }
-  ], [
-    completeTour,
-    isUserGuideOpen,
-    minimize,
-    openChannelsWizard,
-    openUserGuide,
-    openVoiceWizard,
-    router,
-    voiceProviderBullets,
-  ])
+  ]
 
   const currentStepData = tourSteps[state.currentStep - 1]
 
@@ -561,7 +528,7 @@ export default function OnboardingWizard() {
     return () => {
       document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'))
     }
-  }, [state.currentStep, tourSteps])
+  }, [state.currentStep])
 
   // BUG-122: Don't render tour on unauthenticated pages (placed after all hooks)
   if (isAuthPage) {

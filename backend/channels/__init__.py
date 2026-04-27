@@ -2,34 +2,29 @@
 Channel Abstraction Layer
 v0.6.0 Item 32
 
-Provides the shared contracts for conversational Channels and event-driven
-Triggers plus the per-router registry used for dispatch.
+Provides a unified interface for all messaging channels (WhatsApp, Telegram,
+Slack, Discord, Playground). Each channel implements the ChannelAdapter contract
+and registers with the ChannelRegistry for dispatch.
 
 Usage:
-    from channels import Channel, ChannelAdapter, Trigger, ChannelRegistry, SendResult, HealthResult
+    from channels import ChannelAdapter, ChannelRegistry, SendResult, HealthResult
     from channels.types import InboundMessage, Attachment
 """
 
-from channels.base import Channel, ChannelAdapter, EntryPoint
+from channels.base import ChannelAdapter
 from channels.registry import ChannelRegistry
-from channels.trigger import Trigger
 from channels.types import (
     Attachment,
     HealthResult,
     InboundMessage,
     SendResult,
-    TriggerEvent,
 )
 
 __all__ = [
-    "EntryPoint",
-    "Channel",
     "ChannelAdapter",
-    "Trigger",
     "ChannelRegistry",
     "Attachment",
     "HealthResult",
     "InboundMessage",
     "SendResult",
-    "TriggerEvent",
 ]

@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Modal from './ui/Modal'
 import { AlertTriangleIcon, CheckCircleIcon, XCircleIcon } from '@/components/ui/icons'
-import { api, type TriggerCriteria, type WebhookIntegration, type WebhookIntegrationUpdate } from '@/lib/client'
-import CriteriaBuilder, { formatCriteriaText, parseCriteriaText } from '@/components/triggers/CriteriaBuilder'
+import { api, WebhookIntegration, WebhookIntegrationUpdate } from '@/lib/client'
 
 interface Props {
   isOpen: boolean
@@ -23,7 +22,6 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
   const [callbackUrl, setCallbackUrl] = useState('')
   const [rateLimitRpm, setRateLimitRpm] = useState(30)
   const [ipAllowlistText, setIpAllowlistText] = useState('')
-  const [criteriaText, setCriteriaText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [slugStatus, setSlugStatus] = useState<
@@ -33,18 +31,17 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
     | { state: 'error'; reason: string }
   >({ state: 'idle' })
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [originalSlug, setOriginalSlug] = useState('')
+  const originalSlugRef = useRef<string>('')
 
   useEffect(() => {
     if (!isOpen || !integration) return
     setIntegrationName(integration.integration_name || '')
     setSlug(integration.slug || '')
-    setOriginalSlug(integration.slug || '')
+    originalSlugRef.current = integration.slug || ''
     setCallbackEnabled(Boolean(integration.callback_enabled))
     setCallbackUrl(integration.callback_url || '')
     setRateLimitRpm(integration.rate_limit_rpm || 30)
     setIpAllowlistText((integration.ip_allowlist || []).join('\n'))
-    setCriteriaText(formatCriteriaText(integration.trigger_criteria))
     setSlugStatus({ state: 'idle' })
     setError(null)
   }, [isOpen, integration])
@@ -57,7 +54,7 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
       setSlugStatus({ state: 'error', reason: 'Slug required' })
       return
     }
-    if (trimmed === originalSlug) {
+    if (trimmed === originalSlugRef.current) {
       setSlugStatus({ state: 'idle' })
       return
     }
@@ -74,7 +71,7 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [slug, isOpen, integration, originalSlug])
+  }, [slug, isOpen, integration])
 
   const canSave = (() => {
     if (!integration || saving) return false
@@ -92,14 +89,6 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
         .split(/[\n,]/)
         .map(s => s.trim())
         .filter(Boolean)
-      let triggerCriteria: TriggerCriteria | null
-      try {
-        triggerCriteria = parseCriteriaText(criteriaText)
-      } catch (parseError: unknown) {
-        setError(parseError instanceof Error ? parseError.message : 'Invalid criteria JSON')
-        setSaving(false)
-        return
-      }
       const patch: WebhookIntegrationUpdate = {
         integration_name: integrationName.trim(),
         slug: slug.trim(),
@@ -107,13 +96,12 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
         callback_url: callbackUrl.trim() || null,
         rate_limit_rpm: rateLimitRpm,
         ip_allowlist: ipAllowlist.length > 0 ? ipAllowlist : null,
-        trigger_criteria: triggerCriteria,
       }
       await api.updateWebhookIntegration(integration.id, patch)
       onSaved()
       onClose()
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to save webhook')
+    } catch (e: any) {
+      setError(e.message || 'Failed to save webhook')
     } finally {
       setSaving(false)
     }
@@ -124,7 +112,7 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
   const slugPreview = slug.trim()
     ? `${apiBase}/api/webhooks/${slug.trim()}/inbound`
     : ''
-  const slugChanged = slug.trim() !== originalSlug
+  const slugChanged = slug.trim() !== originalSlugRef.current
 
   return (
     <Modal
@@ -213,7 +201,7 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
           )}
           {!slugChanged && (
             <p className="text-xs text-gray-500 mt-2">
-              Current slug. Renaming will break any external system still pointing at <code className="text-gray-400">{originalSlug}</code>.
+              Current slug. Renaming will break any external system still pointing at <code className="text-gray-400">{originalSlugRef.current}</code>.
             </p>
           )}
 
@@ -290,8 +278,6 @@ export default function WebhookEditModal({ isOpen, onClose, onSaved, integration
             If set, inbound requests from IPs outside the allowlist are rejected.
           </p>
         </div>
-
-        <CriteriaBuilder value={criteriaText} onChange={setCriteriaText} disabled={saving} />
       </div>
     </Modal>
   )

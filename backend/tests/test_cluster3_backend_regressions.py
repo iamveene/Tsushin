@@ -85,17 +85,6 @@ _ensure_package("agent.skills", os.path.join("agent", "skills"))
 _ensure_package("api", "api")
 _ensure_package("services", "services")
 
-# `_ensure_package` only creates a placeholder package — `__init__.py` is
-# never executed, so `get_skill_manager` / `InboundMessage` aren't on the
-# placeholder. Downstream tests in the same pytest session that import
-# `from app import app` need those attributes.
-_skills_pkg = sys.modules.get("agent.skills")
-if _skills_pkg is not None:
-    if not hasattr(_skills_pkg, "get_skill_manager"):
-        _skills_pkg.get_skill_manager = lambda *args, **kwargs: None
-    if not hasattr(_skills_pkg, "InboundMessage"):
-        _skills_pkg.InboundMessage = type("InboundMessage", (), {})
-
 _load_module(
     "agent.skills.base",
     os.path.join("agent", "skills", "base.py"),

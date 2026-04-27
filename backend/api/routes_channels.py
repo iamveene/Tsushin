@@ -27,6 +27,7 @@ from models import (
     DiscordIntegration,
     SlackIntegration,
     TelegramBotInstance,
+    WebhookIntegration,
     WhatsAppMCPInstance,
 )
 
@@ -72,6 +73,10 @@ def _tenant_has_configured(channel_id: str, tenant_id: str, db: Session) -> bool
         if channel_id == "discord":
             return db.query(DiscordIntegration.id).filter(
                 DiscordIntegration.tenant_id == tenant_id
+            ).first() is not None
+        if channel_id == "webhook":
+            return db.query(WebhookIntegration.id).filter(
+                WebhookIntegration.tenant_id == tenant_id
             ).first() is not None
     except Exception as exc:
         # Tables that don't exist yet (partial migration) or transient DB

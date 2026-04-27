@@ -1,4 +1,17 @@
-"""Webhook trigger implementation."""
+"""
+Webhook Channel Adapter
+v0.6.0
+
+Bidirectional HTTP webhook channel:
+- Inbound: external systems POST HMAC-signed events to /api/webhooks/{id}/inbound
+- Outbound: agent responses POST back to customer callback_url (optional, HMAC-signed)
+
+This adapter implements the outbound leg. Inbound is handled by routes_webhook_inbound.py
+enqueueing into MessageQueue, and QueueWorker._handle_webhook routing the message
+through AgentRouter — which then calls send_message() here for the callback.
+
+No container is spawned — webhooks are stateless HTTP in/out.
+"""
 
 import hashlib
 import hmac
@@ -10,8 +23,8 @@ from typing import ClassVar, Optional
 import httpx
 from sqlalchemy.orm import Session
 
-from channels.trigger import Trigger
-from channels.types import HealthResult, SendResult, TriggerEvent
+from channels.base import ChannelAdapter
+from channels.types import HealthResult, SendResult
 from utils.ssrf_validator import SSRFValidationError, validate_url
 
 
@@ -20,8 +33,8 @@ _MAX_RESPONSE_BYTES = 65536
 _CALLBACK_TIMEOUT_SECONDS = 10.0
 
 
-class WebhookTrigger(Trigger):
-    """Webhook trigger with optional outbound callback delivery."""
+class WebhookChannelAdapter(ChannelAdapter):
+    """Outbound leg of the webhook channel: POST agent responses to customer callback_url."""
 
     channel_type: ClassVar[str] = "webhook"
     delivery_mode: ClassVar[str] = "push"
@@ -72,25 +85,37 @@ class WebhookTrigger(Trigger):
             self.logger.error(f"Failed to decrypt webhook secret: {e}")
             return None
 
-    async def poll_or_receive(self) -> list[TriggerEvent]:
-        """Webhook events are received via the public FastAPI route."""
-        return []
+    async def send_message(
+        self,
+        to: str,
+        text: str,
+        *,
+        media_path: Optional[str] = None,
+        **kwargs,
+    ) -> SendResult:
+        """POST agent response to customer's callback_url with HMAC-SHA256 signature.
 
-    async def emit_wake_event(self, event: TriggerEvent) -> None:
-        """Wake-event persistence lands with the continuous-agent control plane."""
-        return None
+        Args:
+            to: Ignored (resolved internally from webhook_integration_id).
+                Kept for ChannelAdapter contract compatibility.
+            text: Agent response text to deliver.
+            media_path: Unsupported in v1 (webhooks are text-only).
+            **kwargs: agent_id, sender_key, source_id optionally included in payload.
 
-    async def notify_external_system(self, result: dict) -> Optional[dict]:
-        """POST agent output to the customer's callback_url with HMAC-SHA256."""
+        Returns:
+            SendResult(success=True) if callback disabled or POST succeeded.
+            SendResult(success=False, error=…) on SSRF/HTTP/timeout failure.
+        """
         integration = self._load_integration()
         if integration is None:
-            return {"success": False, "error": "Webhook integration not found"}
+            return SendResult(success=False, error="Webhook integration not found")
 
         if not integration.callback_enabled or not integration.callback_url:
+            # Inbound-only mode: queue result remains pollable via /api/v1/queue/{id}
             self.logger.debug(
                 f"Webhook {self.webhook_integration_id}: callback disabled, skipping outbound POST"
             )
-            return {"success": True, "message_id": "webhook_inbound_only"}
+            return SendResult(success=True, message_id="webhook_inbound_only")
 
         # SSRF safety gate on the callback URL (customer-controlled)
         try:
@@ -99,25 +124,26 @@ class WebhookTrigger(Trigger):
             self.logger.error(
                 f"Webhook {self.webhook_integration_id}: callback_url blocked by SSRF policy: {e}"
             )
-            return {"success": False, "error": "callback_url blocked by SSRF policy"}
+            return SendResult(success=False, error="callback_url blocked by SSRF policy")
 
         secret = self._decrypt_secret(integration.api_secret_encrypted, integration.tenant_id)
         if not secret:
-            return {"success": False, "error": "Could not decrypt webhook secret"}
+            return SendResult(success=False, error="Could not decrypt webhook secret")
 
+        # Construct canonical payload
         timestamp = str(int(time.time()))
         payload = {
             "event": "agent_response",
             "webhook_id": self.webhook_integration_id,
             "timestamp": int(timestamp),
-            "text": result.get("text"),
-            "agent_id": result.get("agent_id"),
-            "sender_key": result.get("sender_key"),
-            "source_id": result.get("source_id"),
-            "metadata": result.get("metadata"),
+            "text": text,
+            "agent_id": kwargs.get("agent_id"),
+            "sender_key": kwargs.get("sender_key"),
+            "source_id": kwargs.get("source_id"),
         }
         body_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
+        # HMAC-SHA256 signature over timestamp + body (replay-protected)
         signed_input = f"{timestamp}.".encode("utf-8") + body_bytes
         signature = hmac.new(secret.encode("utf-8"), signed_input, hashlib.sha256).hexdigest()
 
@@ -140,6 +166,7 @@ class WebhookTrigger(Trigger):
                     content=body_bytes,
                     headers=headers,
                 )
+            # Cap response body to avoid memory blowup
             _ = response.text[:_MAX_RESPONSE_BYTES]
 
             if 200 <= response.status_code < 300:
@@ -147,34 +174,32 @@ class WebhookTrigger(Trigger):
                     f"Webhook {self.webhook_integration_id} callback POST succeeded "
                     f"({response.status_code})"
                 )
-                return {
-                    "success": True,
-                    "message_id": f"whk_{self.webhook_integration_id}_{timestamp}",
-                    "status_code": response.status_code,
-                }
+                return SendResult(
+                    success=True,
+                    message_id=f"whk_{self.webhook_integration_id}_{timestamp}",
+                )
             self.logger.warning(
                 f"Webhook {self.webhook_integration_id} callback POST failed: "
                 f"HTTP {response.status_code}"
             )
-            return {
-                "success": False,
-                "error": f"Callback returned HTTP {response.status_code}",
-                "status_code": response.status_code,
-            }
+            return SendResult(
+                success=False,
+                error=f"Callback returned HTTP {response.status_code}",
+            )
         except httpx.TimeoutException:
             self.logger.warning(f"Webhook {self.webhook_integration_id} callback POST timed out")
-            return {"success": False, "error": "Callback timeout"}
+            return SendResult(success=False, error="Callback timeout")
         except httpx.HTTPError as e:
             self.logger.warning(
                 f"Webhook {self.webhook_integration_id} callback POST transport error: {e}"
             )
-            return {"success": False, "error": f"Transport error: {type(e).__name__}"}
+            return SendResult(success=False, error=f"Transport error: {type(e).__name__}")
         except Exception as e:
             self.logger.error(
                 f"Webhook {self.webhook_integration_id} callback POST error: {e}",
                 exc_info=True,
             )
-            return {"success": False, "error": "Unexpected error"}
+            return SendResult(success=False, error="Unexpected error")
 
     async def health_check(self) -> HealthResult:
         """Return stored health snapshot — no live probe (avoid amplification)."""

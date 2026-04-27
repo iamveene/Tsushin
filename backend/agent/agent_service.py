@@ -1,7 +1,6 @@
 import logging
 import time
 import re
-import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -22,10 +21,6 @@ from services.watcher_activity_service import emit_kb_used_async
 
 class AgentService:
     """Agent service that processes messages with AI and memory"""
-
-    MAX_AGENTIC_ROUNDS_DEFAULT = 1
-    MAX_AGENTIC_ROUNDS_HARD_CAP = 8
-    MAX_AGENTIC_LOOP_BYTES_DEFAULT = 8192
 
     def __init__(
         self,
@@ -424,72 +419,6 @@ class AgentService:
         cleaned = re.sub(r"\n\n\n+", "\n\n", cleaned).strip()
         return cleaned
 
-    @staticmethod
-    def _parse_tool_call_block(ai_response: str) -> Optional[Dict[str, Any]]:
-        """
-        Parse the bracketed [TOOL_CALL] envelope used by skill prompts.
-
-        This helper intentionally only understands the envelope contract, not any
-        future scratchpad or queue metadata. Those additions should remain
-        additive and be threaded through without changing this parser boundary.
-        """
-        try:
-            start = ai_response.find("[TOOL_CALL]") + len("[TOOL_CALL]")
-            end = ai_response.find("[/TOOL_CALL]")
-            if end <= start:
-                return None
-
-            lines = [line.strip() for line in ai_response[start:end].strip().split("\n") if line.strip()]
-            tool_name, command_name, parameters, in_parameters = None, None, {}, False
-
-            for line in lines:
-                if line.startswith("tool_name:"):
-                    tool_name = line.split(":", 1)[1].strip()
-                elif line.startswith("command_name:"):
-                    command_name = line.split(":", 1)[1].strip()
-                elif line.startswith("parameters:"):
-                    in_parameters = True
-                elif in_parameters and ":" in line:
-                    key, value = line.split(":", 1)
-                    parameters[key.strip()] = value.strip()
-
-            if tool_name and command_name:
-                return {
-                    "tool_name": tool_name,
-                    "command_name": command_name,
-                    "parameters": parameters,
-                }
-            # If only tool_name is present, default command_name to tool_name.
-            # Many single-tool skills (gmail_operation, ticket_operation, etc.)
-            # have one command per tool, and LLMs sometimes omit the redundant
-            # command_name even when the prompt asks for it.
-            if tool_name and not command_name:
-                return {
-                    "tool_name": tool_name,
-                    "command_name": tool_name,
-                    "parameters": parameters,
-                }
-        except Exception:
-            return None
-
-        return None
-
-    def _parse_tool_call_response(self, ai_response: str) -> Optional[Dict[str, Any]]:
-        """
-        Parse any AI tool-call response while keeping the parser boundary local.
-
-        Prefer the sandboxed tool parser when available, then fall back to the
-        lightweight [TOOL_CALL] envelope parser used by skill prompts.
-        """
-        tool_call = None
-        if self.sandboxed_tools:
-            tool_call = self.sandboxed_tools.parse_tool_call(ai_response)
-
-        if tool_call is None and "[TOOL_CALL]" in ai_response and "[/TOOL_CALL]" in ai_response:
-            tool_call = self._parse_tool_call_block(ai_response)
-
-        return tool_call
-
     def _prefer_tool_result_when_response_empty(
         self,
         ai_response: Optional[str],
@@ -510,339 +439,6 @@ class AgentService:
             return tool_result
 
         return ai_response
-
-    def _build_structured_tool_result(
-        self,
-        *,
-        skill_type: str,
-        operation: str,
-        output: Optional[str],
-        metadata: Optional[Dict[str, Any]] = None,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Build the persisted tool_result JSON payload for follow-up turns."""
-        from agent.utils import summarize_tool_result
-
-        output_text = output if isinstance(output, str) else str(output or "")
-        data = dict(metadata or {})
-        data.pop("skip_ai", None)
-        if parameters:
-            data.setdefault("parameters", parameters)
-        if output_text and "output_preview" not in data:
-            data["output_preview"] = output_text[:1000]
-
-        return {
-            "skill_type": skill_type,
-            "operation": operation or "execute",
-            "summary": summarize_tool_result(output_text, skill_type) if output_text else "",
-            "data": data,
-            "ts": datetime.utcnow().isoformat() + "Z",
-        }
-
-    def _get_max_agentic_rounds(self) -> int:
-        """Resolve the outer-loop round cap; 1 preserves legacy single-shot behavior."""
-        raw_value = self.config.get("max_agentic_rounds", self.MAX_AGENTIC_ROUNDS_DEFAULT)
-        try:
-            rounds = int(raw_value or self.MAX_AGENTIC_ROUNDS_DEFAULT)
-        except (TypeError, ValueError):
-            rounds = self.MAX_AGENTIC_ROUNDS_DEFAULT
-
-        try:
-            platform_min = int(self.config.get("platform_min_agentic_rounds") or 1)
-        except (TypeError, ValueError):
-            platform_min = 1
-        try:
-            platform_max = int(self.config.get("platform_max_agentic_rounds") or self.MAX_AGENTIC_ROUNDS_HARD_CAP)
-        except (TypeError, ValueError):
-            platform_max = self.MAX_AGENTIC_ROUNDS_HARD_CAP
-
-        platform_min = max(1, min(self.MAX_AGENTIC_ROUNDS_HARD_CAP, platform_min))
-        platform_max = max(platform_min, min(self.MAX_AGENTIC_ROUNDS_HARD_CAP, platform_max))
-        return max(platform_min, min(platform_max, rounds))
-
-    def _get_agentic_loop_byte_cap(self) -> int:
-        try:
-            return max(1024, int(self.config.get("max_agentic_loop_bytes") or self.MAX_AGENTIC_LOOP_BYTES_DEFAULT))
-        except (TypeError, ValueError):
-            return self.MAX_AGENTIC_LOOP_BYTES_DEFAULT
-
-    def _bound_scratchpad(self, scratchpad: List[Dict[str, Any]], byte_cap: int) -> List[Dict[str, Any]]:
-        """Trim oldest scratchpad entries until the JSON payload fits byte_cap."""
-        bounded = list(scratchpad)
-        while bounded and len(json.dumps(bounded, ensure_ascii=False).encode("utf-8")) > byte_cap:
-            bounded.pop(0)
-        return bounded
-
-    def _format_agentic_scratchpad_for_prompt(self, scratchpad: List[Dict[str, Any]], byte_cap: int) -> str:
-        bounded = self._bound_scratchpad(scratchpad, byte_cap)
-        return json.dumps(bounded, ensure_ascii=False, indent=2)
-
-    async def _answer_followup_without_tool(
-        self,
-        *,
-        system_prompt: str,
-        context: str,
-        suppressed_tool_name: str,
-        agent_run_id: Optional[int],
-        sender_key: Optional[str],
-    ) -> Optional[str]:
-        """Answer from an injected DATA block when a redundant tool call was proposed."""
-        result = await self.ai_client.generate(
-            system_prompt,
-            (
-                f"{context}\n\n"
-                f"The model attempted to call {suppressed_tool_name} again, but this is a follow-up "
-                "over the DATA block already supplied above. Answer naturally from DATA and do not call tools."
-            ),
-            operation_type="tool_followup_reuse",
-            agent_id=self.agent_id,
-            agent_run_id=agent_run_id,
-            sender_key=sender_key,
-            tools=None,
-        )
-        if result.get("error"):
-            self.logger.warning(f"Suppressed follow-up tool retry failed: {result.get('error')}")
-            return None
-
-        answer = self._strip_reasoning_tags(result.get("answer") or "")
-        if answer:
-            answer = self._strip_internal_context(answer)
-            answer = self._filter_sensitive_content(answer)
-        return answer or None
-
-    async def _execute_followup_tool_call(
-        self,
-        *,
-        tool_call: Dict[str, Any],
-        skill_manager,
-        skill_tools: List[Dict[str, Any]],
-        sender_key: Optional[str],
-        message_text: str,
-        agent_run_id: Optional[int],
-    ) -> Optional[Dict[str, Any]]:
-        """Execute a parsed follow-up tool call for additional agentic rounds."""
-        tool_name = tool_call.get("tool_name", "")
-        command_name = tool_call.get("command_name", "")
-        parameters = tool_call.get("parameters", {}) or {}
-
-        is_shell_tool = tool_name == "shell" or command_name == "run_shell_command"
-        effective_tool_name = "run_shell_command" if is_shell_tool else tool_name
-        skill_class = skill_manager.find_skill_by_tool_name(effective_tool_name) if skill_tools else None
-
-        if skill_class and skill_tools:
-            from agent.skills.base import InboundMessage as SkillInboundMessage, SkillResult
-
-            skill_message = SkillInboundMessage(
-                id=f"tool_call_{tool_name}",
-                sender=sender_key or "tool_caller",
-                sender_key=sender_key or "tool_caller",
-                body=message_text[:500] if message_text else "",
-                chat_id="tool_execution",
-                chat_name=None,
-                is_group=False,
-                timestamp=datetime.utcnow(),
-                channel="tool",
-            )
-
-            if is_shell_tool:
-                script = parameters.get("script", "")
-                if not script:
-                    return None
-                output = await skill_manager.execute_tool_call(
-                    db=self.db,
-                    agent_id=self.agent_id,
-                    tool_name="run_shell_command",
-                    arguments={
-                        "script": script,
-                        "target": parameters.get("target", "default"),
-                        "timeout": int(parameters.get("timeout", 120)),
-                    },
-                    message=skill_message,
-                    sender_key=sender_key,
-                )
-                metadata = None
-            else:
-                skill_result = await skill_manager.execute_tool_call(
-                    db=self.db,
-                    agent_id=self.agent_id,
-                    tool_name=tool_name,
-                    arguments=parameters,
-                    message=skill_message,
-                    sender_key=sender_key,
-                    return_full_result=True,
-                )
-                if isinstance(skill_result, SkillResult):
-                    output = skill_result.output if skill_result.success else f"Error: {skill_result.output}"
-                    metadata = dict(skill_result.metadata or {})
-                    if skill_result.media_paths:
-                        if not hasattr(self, "_pending_media_paths"):
-                            self._pending_media_paths = []
-                        self._pending_media_paths.extend(skill_result.media_paths)
-                else:
-                    output = skill_result
-                    metadata = None
-
-            if output:
-                return {
-                    "tool_used": f"skill:{tool_name}",
-                    "tool_result": output,
-                    "structured": self._build_structured_tool_result(
-                        skill_type=tool_name,
-                        operation=command_name or effective_tool_name,
-                        output=output,
-                        metadata=metadata,
-                        parameters=parameters,
-                    ),
-                }
-
-        if self.sandboxed_tools:
-            output = await self.sandboxed_tools.execute_tool_call(
-                tool_call,
-                agent_run_id=agent_run_id,
-                recipient=sender_key,
-            )
-            if output:
-                return {
-                    "tool_used": f"custom:{tool_name}",
-                    "tool_result": output,
-                    "structured": self._build_structured_tool_result(
-                        skill_type=tool_name or "custom",
-                        operation=command_name or "execute",
-                        output=output,
-                        parameters=parameters,
-                    ),
-                }
-
-        return None
-
-    async def _run_additional_agentic_rounds(
-        self,
-        *,
-        system_prompt: str,
-        base_context: str,
-        message_text: str,
-        scratchpad: List[Dict[str, Any]],
-        skill_manager,
-        skill_tools: List[Dict[str, Any]],
-        ollama_tools,
-        agent_run_id: Optional[int],
-        sender_key: Optional[str],
-        max_rounds: int,
-        byte_cap: int,
-    ) -> Dict[str, Any]:
-        """Continue after the first tool result for bounded multi-round tool use."""
-        current_answer = None
-        tool_used = None
-        tool_result = None
-        structured = None
-        cap_reached = False
-
-        for round_number in range(2, max_rounds + 1):
-            scratchpad_json = self._format_agentic_scratchpad_for_prompt(scratchpad, byte_cap)
-            loop_context = (
-                f"{base_context}\n\n"
-                f"DATA:\n{scratchpad_json}\n\n"
-                "Use DATA to continue this same user request. If another tool is required, "
-                "emit one [TOOL_CALL] block. Otherwise answer the user naturally."
-            )
-            result = await self.ai_client.generate(
-                system_prompt,
-                loop_context,
-                operation_type="agentic_loop",
-                agent_id=self.agent_id,
-                agent_run_id=agent_run_id,
-                sender_key=sender_key,
-                tools=ollama_tools,
-            )
-            if result.get("error"):
-                return {"answer": None, "error": result.get("error")}
-
-            ai_response = self._strip_reasoning_tags(result.get("answer") or "")
-            if ai_response:
-                ai_response = self._strip_internal_context(ai_response)
-                ai_response = self._filter_sensitive_content(ai_response)
-
-            has_tool_call = bool(
-                ai_response
-                and (
-                    "```tool:" in ai_response
-                    or re.search(r"(?:^|\n)tool:", ai_response) is not None
-                    or ("```json" in ai_response and '"name"' in ai_response)
-                    or ("[TOOL_CALL]" in ai_response and "[/TOOL_CALL]" in ai_response)
-                )
-            )
-            if not has_tool_call:
-                current_answer = self._sanitize_unexecuted_tool_output(ai_response)
-                return {
-                    "answer": current_answer,
-                    "tool_used": tool_used,
-                    "tool_result": tool_result,
-                    "tool_result_structured": structured,
-                    "scratchpad": self._bound_scratchpad(scratchpad, byte_cap),
-                    "cap_reached": False,
-                }
-
-            parsed = self._parse_tool_call_response(ai_response)
-            if not parsed:
-                current_answer = self._sanitize_unexecuted_tool_output(ai_response)
-                return {
-                    "answer": self._prefer_tool_result_when_response_empty(current_answer, tool_result),
-                    "tool_used": tool_used,
-                    "tool_result": tool_result,
-                    "tool_result_structured": structured,
-                    "scratchpad": self._bound_scratchpad(scratchpad, byte_cap),
-                    "cap_reached": False,
-                }
-
-            executed = await self._execute_followup_tool_call(
-                tool_call=parsed,
-                skill_manager=skill_manager,
-                skill_tools=skill_tools,
-                sender_key=sender_key,
-                message_text=message_text,
-                agent_run_id=agent_run_id,
-            )
-            if not executed:
-                return {
-                    "answer": self._sanitize_unexecuted_tool_output(ai_response),
-                    "tool_used": tool_used,
-                    "tool_result": tool_result,
-                    "tool_result_structured": structured,
-                    "scratchpad": self._bound_scratchpad(scratchpad, byte_cap),
-                    "cap_reached": False,
-                }
-
-            tool_used = executed["tool_used"]
-            tool_result = executed["tool_result"]
-            structured = executed["structured"]
-            scratchpad.append({
-                "round": round_number,
-                "tool_call": parsed,
-                "tool_result": structured,
-            })
-            scratchpad = self._bound_scratchpad(scratchpad, byte_cap)
-            cap_reached = round_number == max_rounds
-
-        if cap_reached and tool_result:
-            reasoned = await self._reason_over_tool_result(
-                tool_name=(structured or {}).get("skill_type", "tool"),
-                parameters=((structured or {}).get("data") or {}).get("parameters", {}),
-                tool_execution_result=tool_result,
-                message_text=message_text,
-                system_prompt=system_prompt,
-                agent_run_id=agent_run_id,
-                sender_key=sender_key,
-            )
-            current_answer = reasoned or tool_result
-
-        return {
-            "answer": current_answer,
-            "tool_used": tool_used,
-            "tool_result": tool_result,
-            "tool_result_structured": structured,
-            "scratchpad": self._bound_scratchpad(scratchpad, byte_cap),
-            "cap_reached": cap_reached,
-        }
 
     async def _reason_over_tool_result(
         self,
@@ -948,24 +544,6 @@ class AgentService:
         start_time = time.time()
         tool_used = None
         tool_result = None
-        tool_result_structured = None
-        # BUG-707: Seed scratchpad from prior thread so a no-tool turn (e.g. a
-        # follow-up that re-uses already-fetched DATA) does not silently wipe
-        # the trace from earlier rounds. Router/playground only persist when a
-        # tool actually fires, but we still want process_message() callers that
-        # supply prior scratchpad via config to keep their history.
-        prior_scratchpad: List[Dict[str, Any]] = []
-        try:
-            cfg_prior = (self.config or {}).get("prior_agentic_scratchpad")
-            if isinstance(cfg_prior, list):
-                prior_scratchpad = list(cfg_prior)
-        except Exception:
-            prior_scratchpad = []
-        agentic_scratchpad: List[Dict[str, Any]] = list(prior_scratchpad)
-        max_agentic_rounds = self._get_max_agentic_rounds()
-        agentic_loop_byte_cap = self._get_agentic_loop_byte_cap()
-        agentic_loop_cap_reached = False
-        tool_was_called = False  # BUG-707: track whether any tool fired this turn
 
         self.logger.info(f"Processing message from {sender_key}")
         self.logger.info(f"Message text: {message_text[:200]}")
@@ -1254,17 +832,6 @@ You can add a brief message AFTER the tool call block if needed.
         if self.db and self.agent_id and not self.disable_skills:
             try:
                 skill_tools, shell_os_context = await skill_manager.get_skill_tool_definitions(self.db, self.agent_id)
-                suppressed_followup_tool = self.config.get("suppress_followup_tool_skill_type")
-                if suppressed_followup_tool and skill_tools:
-                    before_count = len(skill_tools)
-                    skill_tools = [
-                        tool for tool in skill_tools
-                        if tool.get("function", {}).get("name") != suppressed_followup_tool
-                    ]
-                    if len(skill_tools) != before_count:
-                        self.logger.info(
-                            f"[SKILL TOOLS] Suppressed {suppressed_followup_tool} for follow-up DATA reuse"
-                        )
                 if skill_tools:
                     self.logger.info(f"[SKILL TOOLS] Found {len(skill_tools)} skill tools for agent {self.agent_id}")
 
@@ -1452,18 +1019,41 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
             if has_backtick_format or has_simple_format or has_json_format or has_tool_call_format:
                 self.logger.info("Tool call detected in AI response")
-                tool_call = self._parse_tool_call_response(ai_response)
-                if tool_call and has_tool_call_format and not self.sandboxed_tools:
-                    self.logger.info(
-                        "Parsed [TOOL_CALL] for skill tool (no sandboxed_tools): "
-                        f"{tool_call.get('tool_name')}/{tool_call.get('command_name')}"
-                    )
+
+                # Try to parse the tool call
+                tool_call = None
+                if self.sandboxed_tools:
+                    tool_call = self.sandboxed_tools.parse_tool_call(ai_response)
+
+                # Fallback: parse [TOOL_CALL] blocks for skill-based tools (e.g. agent_communication)
+                # that don't require the sandboxed_tools skill to be enabled.
+                if tool_call is None and has_tool_call_format:
+                    try:
+                        start = ai_response.find("[TOOL_CALL]") + len("[TOOL_CALL]")
+                        end = ai_response.find("[/TOOL_CALL]")
+                        if end > start:
+                            lines = [l.strip() for l in ai_response[start:end].strip().split("\n") if l.strip()]
+                            t_name, c_name, params, in_params = None, None, {}, False
+                            for line in lines:
+                                if line.startswith("tool_name:"):
+                                    t_name = line.split(":", 1)[1].strip()
+                                elif line.startswith("command_name:"):
+                                    c_name = line.split(":", 1)[1].strip()
+                                elif line.startswith("parameters:"):
+                                    in_params = True
+                                elif in_params and ":" in line:
+                                    k, v = line.split(":", 1)
+                                    params[k.strip()] = v.strip()
+                            if t_name and c_name:
+                                tool_call = {"tool_name": t_name, "command_name": c_name, "parameters": params}
+                                self.logger.info(f"Parsed [TOOL_CALL] for skill tool (no sandboxed_tools): {t_name}/{c_name}")
+                    except Exception as e:
+                        self.logger.warning(f"Error in fallback [TOOL_CALL] parse: {e}")
 
                 if tool_call:
                     tool_name = tool_call.get('tool_name', '')
                     command_name = tool_call.get('command_name', '')
                     parameters = tool_call.get('parameters', {})
-                    tool_result_metadata = None
 
                     self.logger.info(f"Parsed tool call: tool={tool_name}, command={command_name}, params={parameters}")
 
@@ -1473,28 +1063,9 @@ IMPORTANT: When the user asks for system information, server status, file listin
 
                     # For shell tool, LLM may call it as "shell" but MCP def uses "run_shell_command"
                     effective_tool_name = 'run_shell_command' if is_shell_tool else tool_name
-                    suppressed_followup_tool = self.config.get("suppress_followup_tool_skill_type")
-                    if suppressed_followup_tool and effective_tool_name == suppressed_followup_tool:
-                        self.logger.info(
-                            f"Suppressing redundant follow-up tool call to {effective_tool_name}; "
-                            "answering from injected DATA context"
-                        )
-                        no_tool_answer = await self._answer_followup_without_tool(
-                            system_prompt=system_prompt_with_date,
-                            context=context,
-                            suppressed_tool_name=effective_tool_name,
-                            agent_run_id=agent_run_id,
-                            sender_key=sender_key,
-                        )
-                        if no_tool_answer:
-                            ai_response = no_tool_answer
-                        tool_call = None
-                    if not tool_call:
-                        pass
-                    else:
-                        skill_class = skill_manager.find_skill_by_tool_name(effective_tool_name) if skill_tools else None
+                    skill_class = skill_manager.find_skill_by_tool_name(effective_tool_name) if skill_tools else None
 
-                    if tool_call and skill_class and skill_tools:
+                    if skill_class and skill_tools:
                         # Phase 5: Execute skill-based tool via skill manager
                         self.logger.info(f"[SKILL TOOL] Executing skill tool '{tool_name}' via skill_manager")
 
@@ -1523,20 +1094,6 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         # tools, confirmations, and A2A delegate keep the current behavior
                         # (raw tool output becomes the reply).
                         _should_reason = False
-                        typed_skip_ai_on_data_fetch = False
-                        if self.db and self.agent_id:
-                            try:
-                                from models import AgentSkill
-
-                                skill_record = self.db.query(AgentSkill).filter(
-                                    AgentSkill.agent_id == self.agent_id,
-                                    AgentSkill.skill_type == ("shell" if is_shell_tool else tool_name),
-                                ).first()
-                                typed_skip_ai_on_data_fetch = bool(
-                                    getattr(skill_record, "skip_ai_on_data_fetch", False)
-                                )
-                            except Exception as skill_config_err:
-                                self.logger.warning(f"Failed to load typed skill config: {skill_config_err}")
 
                         if is_shell_tool:
                             # Shell tool needs special parameter handling
@@ -1576,7 +1133,6 @@ IMPORTANT: When the user asks for system information, server status, file listin
                             from agent.skills.base import SkillResult
                             if isinstance(skill_result, SkillResult):
                                 tool_execution_result = skill_result.output if skill_result.success else f"Error: {skill_result.output}"
-                                tool_result_metadata = dict(skill_result.metadata or {})
                                 # Store media paths for later sending
                                 if skill_result.media_paths:
                                     if not hasattr(self, '_pending_media_paths'):
@@ -1596,7 +1152,6 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                     skill_result.success
                                     and not needs_media_output
                                     and not skill_skip_ai
-                                    and not typed_skip_ai_on_data_fetch
                                 )
                             else:
                                 # Legacy: skill_manager returned a raw string (e.g.
@@ -1614,64 +1169,13 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 ai_response = tool_execution_result
 
                             tool_used = f"skill:{tool_name}"
-                            tool_was_called = True  # BUG-707
                             tool_result = tool_execution_result
-                            tool_result_structured = self._build_structured_tool_result(
-                                skill_type=tool_name,
-                                operation=command_name or effective_tool_name,
-                                output=tool_execution_result,
-                                metadata=tool_result_metadata,
-                                parameters=parameters,
-                            )
-                            agentic_scratchpad.append({
-                                "round": 1,
-                                "tool_call": tool_call,
-                                "tool_result": tool_result_structured,
-                            })
-                            agentic_scratchpad = self._bound_scratchpad(
-                                agentic_scratchpad,
-                                agentic_loop_byte_cap,
-                            )
 
                             # Option X: second LLM call so the model reasons over the raw
                             # tool output and composes a natural answer instead of dumping
                             # the formatted listing. Falls back to the raw output on any
                             # failure so tool execution never blocks the reply.
-                            if max_agentic_rounds > 1:
-                                loop_result = await self._run_additional_agentic_rounds(
-                                    system_prompt=system_prompt_with_date,
-                                    base_context=context,
-                                    message_text=message_text,
-                                    scratchpad=agentic_scratchpad,
-                                    skill_manager=skill_manager,
-                                    skill_tools=skill_tools,
-                                    ollama_tools=ollama_tools,
-                                    agent_run_id=agent_run_id,
-                                    sender_key=sender_key,
-                                    max_rounds=max_agentic_rounds,
-                                    byte_cap=agentic_loop_byte_cap,
-                                )
-                                if loop_result.get("error"):
-                                    return {
-                                        "answer": None,
-                                        "tool_used": tool_used,
-                                        "tool_result": tool_result,
-                                        "tool_result_structured": tool_result_structured,
-                                        "agentic_scratchpad": agentic_scratchpad,
-                                        "tokens": result["token_usage"],
-                                        "execution_time_ms": execution_time,
-                                        "kb_used": [],
-                                        "error": loop_result.get("error"),
-                                    }
-                                if loop_result.get("answer"):
-                                    ai_response = loop_result["answer"]
-                                if loop_result.get("tool_used"):
-                                    tool_used = loop_result["tool_used"]
-                                    tool_result = loop_result.get("tool_result")
-                                    tool_result_structured = loop_result.get("tool_result_structured")
-                                agentic_scratchpad = loop_result.get("scratchpad") or agentic_scratchpad
-                                agentic_loop_cap_reached = bool(loop_result.get("cap_reached"))
-                            elif _should_reason:
+                            if _should_reason:
                                 reasoned = await self._reason_over_tool_result(
                                     tool_name=tool_name,
                                     parameters=parameters,
@@ -1717,45 +1221,7 @@ IMPORTANT: When the user asks for system information, server status, file listin
                                 ai_response = tool_execution_result
 
                             tool_used = f"custom:{tool_call['tool_name']}"
-                            tool_was_called = True  # BUG-707
                             tool_result = tool_execution_result
-                            tool_result_structured = self._build_structured_tool_result(
-                                skill_type=tool_call.get("tool_name", "custom"),
-                                operation=tool_call.get("command_name", "execute"),
-                                output=tool_execution_result,
-                                parameters=tool_call.get("parameters", {}),
-                            )
-                            agentic_scratchpad.append({
-                                "round": 1,
-                                "tool_call": tool_call,
-                                "tool_result": tool_result_structured,
-                            })
-                            agentic_scratchpad = self._bound_scratchpad(
-                                agentic_scratchpad,
-                                agentic_loop_byte_cap,
-                            )
-                            if max_agentic_rounds > 1:
-                                loop_result = await self._run_additional_agentic_rounds(
-                                    system_prompt=system_prompt_with_date,
-                                    base_context=context,
-                                    message_text=message_text,
-                                    scratchpad=agentic_scratchpad,
-                                    skill_manager=skill_manager,
-                                    skill_tools=skill_tools,
-                                    ollama_tools=ollama_tools,
-                                    agent_run_id=agent_run_id,
-                                    sender_key=sender_key,
-                                    max_rounds=max_agentic_rounds,
-                                    byte_cap=agentic_loop_byte_cap,
-                                )
-                                if loop_result.get("answer"):
-                                    ai_response = loop_result["answer"]
-                                if loop_result.get("tool_used"):
-                                    tool_used = loop_result["tool_used"]
-                                    tool_result = loop_result.get("tool_result")
-                                    tool_result_structured = loop_result.get("tool_result_structured")
-                                agentic_scratchpad = loop_result.get("scratchpad") or agentic_scratchpad
-                                agentic_loop_cap_reached = bool(loop_result.get("cap_reached"))
 
             # UX FIX: Never leak raw tool-call markup to end users if the tool
             # wasn't executed or the model produced pseudo tool syntax.
@@ -1781,8 +1247,6 @@ IMPORTANT: When the user asks for system information, server status, file listin
                     "answer": "⚠️ Erro interno: Resposta contaminada detectada e bloqueada.",
                     "tool_used": None,
                     "tool_result": None,
-                    "tool_result_structured": None,
-                    "agentic_scratchpad": agentic_scratchpad,
                     "tokens": result["token_usage"] if result else None,
                     "execution_time_ms": execution_time,
                     "kb_used": [],
@@ -1814,12 +1278,6 @@ IMPORTANT: When the user asks for system information, server status, file listin
                 "answer": ai_response,
                 "tool_used": tool_used,
                 "tool_result": tool_result,  # Include raw tool response
-                "tool_result_structured": tool_result_structured,
-                "agentic_scratchpad": agentic_scratchpad,
-                "agentic_loop_cap_reached": agentic_loop_cap_reached,
-                # BUG-707: caller (router/playground) only persists scratchpad
-                # to thread.agentic_scratchpad when a tool fired this turn.
-                "tool_was_called": tool_was_called or bool(tool_used),
                 "tokens": result["token_usage"],
                 "execution_time_ms": execution_time,
                 "kb_used": kb_used,  # KB usage tracking
