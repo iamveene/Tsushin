@@ -156,6 +156,14 @@ export default function StepVariablePanel({
                       const fields = getStepFields(step)
                       const alias = step.config?.output_alias
                       const normalizedName = step.name.toLowerCase().replace(/[\s-]/g, '_')
+                      // v0.7.0 release-finishing — Source step has a special context
+                      // shape: lightweight identifiers (trigger_kind, instance_id,
+                      // etc.) ARE echoed as step_N.* output, but the deep payload
+                      // paths (`payload.issue.key`, `payload.subject`, ...) live
+                      // under the `source.*` root merge in flow_engine
+                      // _build_step_context, NOT under step_N.*. Emit the right
+                      // template syntax per chip.
+                      const isSource = step.type === 'source' || step.type === 'Source'
 
                       return (
                         <div key={step.position} className="rounded-lg border border-slate-700/60 overflow-hidden">
@@ -175,6 +183,9 @@ export default function StepVariablePanel({
                             <span className="text-[10px] text-slate-500">
                               Ref by position: <code className="text-amber-400/70">step_{step.position}</code>
                               {' | '}name: <code className="text-amber-400/70">{normalizedName}</code>
+                              {isSource && (
+                                <>{' | '}wake event: <code className="text-amber-400/70">source.payload</code></>
+                              )}
                               {alias && (
                                 <>{' | '}alias: <code className="text-amber-400/70">{alias}</code></>
                               )}
@@ -184,7 +195,15 @@ export default function StepVariablePanel({
                           {/* Variable chips */}
                           <div className="p-2 flex flex-wrap gap-1.5">
                             {fields.map((field: StepVariable) => {
-                              const template = generateVariableTemplate(step.position, field.field)
+                              // Source-step payload paths address the trigger-context
+                              // root merge as `{{source.payload.foo}}`; everything else
+                              // (and source identifiers like trigger_kind / instance_id
+                              // which ARE echoed by SourceStepHandler) keeps the
+                              // canonical `{{step_N.field}}` form.
+                              const isPayloadPath = field.field === 'payload' || field.field.startsWith('payload.')
+                              const template = (isSource && isPayloadPath)
+                                ? `{{source.${field.field}}}`
+                                : generateVariableTemplate(step.position, field.field)
                               const varKey = `${step.position}-${field.field}`
                               const isInserted = copiedVar === varKey
 
