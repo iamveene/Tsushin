@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Source-step variable reference now per-kind (Jira/Email/GitHub/Schedule/Webhook) (2026-04-26)
+
+User-reported defect: when editing the auto-generated Jira flow's Notification step, the "Variable Reference" panel showed only the generic `{{source.payload}}` chip — operators had no discoverable way to reference Jira-specific fields like the issue key, summary, status, assignee, or priority. The auto-generated default flow promised "process the inbound event and notify" but the variable picker forced operators to know the Jira webhook payload schema by heart.
+
+- **`frontend/lib/stepOutputVariables.ts`** — added `SOURCE_PAYLOAD_FIELDS_BY_KIND` registry with deep payload paths per trigger kind:
+  - **Jira:** `payload.webhookEvent`, `payload.issue.key`, `payload.issue.id`, `payload.issue.fields.{summary, description, status.name, priority.name, issuetype.name, assignee.displayName, reporter.displayName, project.key, project.name, labels, created, updated}`, `payload.issue.self`.
+  - **Email:** `payload.{subject, sender_email, sender_name, snippet, body_preview, body, message_id, thread_id, received_at, labels, has_attachments}`.
+  - **GitHub:** `payload.action`, `payload.pull_request.{number, title, body, html_url, state, draft, merged, user.login, head.ref, base.ref, changed_files, additions, deletions}`, `payload.repository.full_name`, `payload.sender.login`.
+  - **Schedule:** `payload.{fired_at, cron_expression, instance_name, timezone, payload_template}`.
+  - **Webhook:** `payload.{message_text, sender_id, sender_name, source_id, timestamp, raw_event, webhook_id}` (`raw_event` is the inbound JSON; arbitrary fields reference as `{{source.payload.raw_event.your_field}}`; Wave 5's last-5-payload-capture autocomplete supplements this in `SourceStepConfig`).
+- **`getSourceStepVariables(triggerKind)`** new exported helper returns the base source fields PLUS the kind-specific deep paths.
+- **`frontend/components/flows/StepVariablePanel.tsx`** — new internal `getStepFields(step)` helper: when iterating previous steps, source steps go through `getSourceStepVariables(step.config?.trigger_kind)`; everything else uses the existing `getOutputFieldsForStepType(step.type)`. `STEP_TYPE_ICONS` gains `source: '⚡'` so the panel renders a recognizable icon for the source row instead of the `?` fallback.
+
+**Net effect for the auto-generated Jira flow:**
+- Open `/flows`, edit the auto-generated `Jira: <integration name>` flow.
+- Click the Notification step → Variable Reference panel.
+- Step 1 (Source) row now shows ~16 clickable chips: `.payload`, `.trigger_kind`, `.payload.issue.key`, `.payload.issue.fields.summary`, `.payload.issue.fields.status.name`, `.payload.issue.fields.priority.name`, `.payload.issue.fields.assignee.displayName`, etc.
+- Each chip click inserts `{{step_1.<path>}}` at the cursor (also copies to clipboard as fallback).
+- The same chip set is also addressable as `{{source.<path>}}` per Wave 2's `_build_step_context` root merge.
+
+Same wins for Email auto-flows (`{{step_1.payload.subject}}`, `{{step_1.payload.sender_email}}`, `{{step_1.payload.body_preview}}`), GitHub auto-flows (`{{step_1.payload.pull_request.title}}`, `{{step_1.payload.action}}`), and the rest.
+
 ### Release 0.7.0 — Release-finishing UX fixes: ConfirmDialog + Schedule cron validation + tenantless-admin Hub gating (2026-04-26)
 
 Three UX bugs surfaced by the comprehensive end-of-release QA pass. None are functional regressions, but the user directive ("no user discovers bugs") covers cosmetic + UX defects too.
