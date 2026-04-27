@@ -2328,6 +2328,14 @@ export interface FlowDefinition {
   execution_count?: number
   // BUG-336: Keyword triggers
   trigger_keywords?: string[] | null
+  // v0.7.0 release-finishing — system-managed (auto-generated from a trigger)
+  // metadata. Lets the UI render a per-kind badge and disable Delete on
+  // auto-generated flows. All fields default to user-authored behaviour
+  // when absent so older API responses keep working.
+  is_system_owned?: boolean
+  editable_by_tenant?: boolean
+  deletable_by_tenant?: boolean
+  system_trigger_kind?: 'jira' | 'email' | 'github' | 'schedule' | 'webhook' | null
 }
 
 export interface FlowNode {

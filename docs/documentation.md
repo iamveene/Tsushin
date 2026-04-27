@@ -1658,6 +1658,30 @@ Variable references inside step configs/messages:
 
 Built-in helpers (Source: `template_parser.py:69-82`): `truncate`, `upper`, `lower`, `default`, `json`, `length`, `first`, `last`, `join`, `replace`, `trim`.
 
+#### Variable Reference panel (UI helper)
+
+The flow editor surfaces a collapsible **Variable Reference** panel under every templatable step-config field. It auto-populates with the output variables of every preceding step in the flow, plus per-trigger-kind deep payload paths when the source is a Jira/Email/GitHub/Schedule/Webhook trigger.
+
+- **Click any chip** to insert `{{step_N.<field>}}` at the cursor.
+- **Drag any chip** onto the textarea/input to insert at the drop point.
+- The panel filters to *previous* steps only (`s.position < currentStepPosition`), so a Step 3 editor sees Step 1 + Step 2 outputs.
+- The panel also lists helper functions, conditional examples, and flow-context variables — each is also drag-and-drop.
+
+The panel is wired into every templatable free-text field: notification text, message template, conversation objective + initial prompt, skill prompt, summarization custom prompt, slash-command body, agentic gate prompt, and the gate-fail notification recipient + message. Sources: `frontend/components/flows/StepVariablePanel.tsx`, `frontend/components/flows/TemplateTextarea.tsx`, `frontend/components/flows/TemplateInput.tsx`, `frontend/lib/stepOutputVariables.ts`.
+
+#### Trigger-generated flow badge
+
+Flows minted by `ensure_system_managed_flow_for_trigger()` (4-node Source/Gate/Conversation/Notification chain, `is_system_owned=true`) display a per-kind pill in the flows list and editor header — "Jira Trigger" (blue), "Email Trigger" (emerald), "GitHub Trigger" (violet), "Schedule Trigger" (amber), "Webhook Trigger" (cyan). The badge tooltip explains: *"Auto-generated from <kind> trigger — editable, but not deletable. Delete the trigger to remove this flow."* The Delete button on the row is disabled to match. User-authored flows show no badge.
+
+The `FlowDefinitionResponse` (`backend/api/routes_flows.py:111+`) exposes the underlying flags so the UI can render correctly:
+
+| Field | Meaning |
+|---|---|
+| `is_system_owned` | True if the flow was minted by a trigger wizard. |
+| `editable_by_tenant` | True if step config can be edited by the tenant (auto-flows ship with True so the casual-user "Enable Notification" toggle works). |
+| `deletable_by_tenant` | False on auto-flows — they live and die with the trigger. |
+| `system_trigger_kind` | The trigger kind that minted the flow (`jira` / `email` / `github` / `schedule` / `webhook`), or `null` for user-authored flows. |
+
 ### 13.5 Flow Execution Status Lifecycle
 
 **FlowRun statuses** (Source: `models.py:1663`):

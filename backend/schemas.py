@@ -488,6 +488,13 @@ class FlowResponse(BaseModel):
     # populated so clients migrating from legacy don't break.
     node_count: int = 0
 
+    # v0.7.0 release-finishing — system-managed trigger flow metadata.
+    # Mirrors FlowDefinitionResponse so v2 callers see the same fields.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None
+
     @model_validator(mode="after")
     def _mirror_step_node_count(self):
         # Keep step_count and node_count in sync regardless of which one

@@ -192,9 +192,14 @@ export default function StepVariablePanel({
                                 <button
                                   key={varKey}
                                   onClick={() => handleInsert(template, varKey)}
-                                  title={`${field.description} (${field.type})\nClick to insert: ${template}`}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData('text/plain', template)
+                                    e.dataTransfer.effectAllowed = 'copy'
+                                  }}
+                                  title={`${field.description} (${field.type})\nClick to insert or drag into a textarea: ${template}`}
                                   className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono
-                                    border transition-all cursor-pointer
+                                    border transition-all cursor-grab active:cursor-grabbing
                                     ${isInserted
                                       ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                                       : 'bg-slate-800/50 border-slate-700 text-amber-400/90 hover:bg-cyan-500/10 hover:border-cyan-500/30 hover:text-cyan-400'
@@ -245,8 +250,13 @@ export default function StepVariablePanel({
                     <button
                       key={helper.name}
                       onClick={() => handleInsert(helper.syntax, key)}
-                      title={helper.description}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', helper.syntax)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${helper.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'
@@ -288,8 +298,13 @@ export default function StepVariablePanel({
                     <button
                       key={i}
                       onClick={() => handleInsert(cond.syntax, key)}
-                      title={cond.description}
-                      className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', cond.syntax)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${cond.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'
@@ -340,8 +355,13 @@ export default function StepVariablePanel({
                     <button
                       key={ctx.variable}
                       onClick={() => handleInsert(template, key)}
-                      title={ctx.description}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', template)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${ctx.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'

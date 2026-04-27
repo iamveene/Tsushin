@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Variable Reference panel everywhere + Trigger-generated flow badge (2026-04-27)
+
+User-reported gaps in the v0.7.0 flow editor:
+
+1. The Variable Reference panel (which auto-updates with previous-step outputs and per-trigger-kind deep paths) was wired into only TWO step-editor fields — Notification text and Message template. Every other free-text field that accepts `{{step_N.field}}` templates (skill prompt, conversation objective + initial prompt, agentic gate prompt, summarization custom prompt, slash-command body, gate-fail notification recipient + message) used a plain `CursorSafeTextarea`/`CursorSafeInput` and showed nothing — even when their placeholder text told the user to use templating. To the user the panel looked broken whenever they were on a step where it didn't actually exist.
+
+2. Auto-generated trigger flows (`is_system_owned=true`, minted by `ensure_system_managed_flow_for_trigger`) had no visual cue separating them from user-authored flows. Operators could open them, edit them, even try to delete them — and only learn from a 403 error that they're built-in.
+
+**Backend (additive — no schema migration):**
+- **`backend/api/routes_flows.py`** — `FlowDefinitionResponse` gains four optional fields: `is_system_owned`, `editable_by_tenant`, `deletable_by_tenant`, `system_trigger_kind` (`'jira'|'email'|'github'|'schedule'|'webhook'|null`). `flow_to_response()` populates them; `system_trigger_kind` is looked up from `flow_trigger_binding` only when `is_system_owned=True`, so user-authored flows pay no extra query cost. Mirror onto `backend/schemas.py::FlowResponse` (the v2 schema).
+- **`backend/api/routes_flows.py`** also imports `FlowTriggerBinding` for the lookup.
+
+**Frontend — Variable Reference coverage:**
+- **`frontend/components/flows/TemplateTextarea.tsx`** — turned into a true drop-in replacement for `CursorSafeTextarea`. Accepts the full `<textarea>` HTML attribute surface (`onBlur`, `disabled`, `id`, `name`, etc.) via rest-spread; preserves the `onBlur`-driven debounced-save flush so parent forms don't lose pending input on blur. Added drag-and-drop: chips dropped onto the textarea insert at the caret position (Firefox `caretPositionFromPoint`, fallback to last cursor on other engines).
+- **`frontend/components/flows/TemplateInput.tsx`** (NEW) — single-line mirror of `TemplateTextarea` for templated `<input>` fields. Same prop surface, same panel below, same drag-and-drop.
+- **`frontend/components/flows/StepVariablePanel.tsx`** — every chip (variables, helpers, conditionals, flow-context vars) is now `draggable`; `dataTransfer.setData('text/plain', template)` on drag-start. Click-to-insert continues to work unchanged.
+- **`frontend/app/flows/page.tsx`** — `StepConfigForm` (create) and `EditableStepConfigForm` (edit) both received the swap, kept in lockstep. Templatable fields now uniformly render the panel: conversation objective, conversation initial prompt, skill prompt, summarization summary prompt, slash-command body, agentic gate prompt, gate-fail notification recipient, gate-fail notification message template — alongside the original notification.content / message.message_template. Each form computes a single `stepInfoList` once and reuses it.
+
+**Frontend — Trigger-generated flow badge:**
+- **`frontend/lib/client.ts`** — `FlowDefinition` interface gains the four optional fields above, defaulted to user-authored behaviour when absent.
+- **`frontend/app/flows/page.tsx`** — new `TriggerOriginBadge` component renders a per-kind pill ("Jira Trigger" blue, "Email Trigger" emerald, "GitHub Trigger" violet, "Schedule Trigger" amber, "Webhook Trigger" cyan), each with the same icon used by `/hub/triggers` (`CodeIcon`/`EnvelopeIcon`/`GitHubIcon`/`CalendarDaysIcon`/`WebhookIcon`). Tooltip: *"Auto-generated from <kind> trigger — editable, but not deletable. Delete the trigger to remove this flow."* Returns `null` when `is_system_owned` is false, so user-authored flows show nothing. Rendered (a) next to the flow name in the flows-list table cell and (b) next to "Flow #N" in the EditFlowModal header.
+- **Flows-list Delete button** is now disabled (with the same tooltip) when `flow.deletable_by_tenant === false`, so users see immediately that auto-generated flows can't be removed from the flow page — they have to delete the trigger that minted them.
+
+**Net effect:** Wherever a step config field accepts a `{{step_N.field}}` template, the Variable Reference panel auto-shows previous-step variables; chips can be clicked or dragged into the cursor position. Auto-generated trigger flows are visually distinct in the list and editor; their Delete button is disabled with a clear remediation message.
+
 ### Release 0.7.0 — Source-step variable reference now per-kind (Jira/Email/GitHub/Schedule/Webhook) (2026-04-26)
 
 User-reported defect: when editing the auto-generated Jira flow's Notification step, the "Variable Reference" panel showed only the generic `{{source.payload}}` chip — operators had no discoverable way to reference Jira-specific fields like the issue key, summary, status, assignee, or priority. The auto-generated default flow promised "process the inbound event and notify" but the variable picker forced operators to know the Jira webhook payload schema by heart.
