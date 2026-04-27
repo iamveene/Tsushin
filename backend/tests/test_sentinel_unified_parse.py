@@ -106,18 +106,9 @@ def test_none_threat_type_is_allowed(sentinel, block_config):
 
 def test_invalid_threat_type_downgraded_to_none(sentinel, block_config, caplog):
     """Unknown threat_type must be coerced to 'none' and log a warning."""
-    from unittest.mock import patch
-
     payload = _llm_payload("definitely_not_real", score=0.9)
 
-    # Use both caplog AND a direct logger spy. In some test orderings the
-    # SentinelService logger's propagation is interfered with by other tests
-    # in the same pytest session, leaving caplog.text empty even though the
-    # warning was emitted (visible in the live log). Capture via a spy on
-    # `sentinel.logger.warning` to make the assertion robust regardless of
-    # log handler / propagation pollution.
-    with caplog.at_level(logging.WARNING, logger="services.sentinel_service"), \
-         patch.object(sentinel.logger, "warning", wraps=sentinel.logger.warning) as warn_spy:
+    with caplog.at_level(logging.WARNING, logger="services.sentinel_service"):
         result = sentinel._parse_unified_response(
             llm_result=payload,
             analysis_type="prompt",
@@ -128,16 +119,4 @@ def test_invalid_threat_type_downgraded_to_none(sentinel, block_config, caplog):
     assert result.detection_type == "none"
     assert result.is_threat_detected is False
     assert result.action == "allowed"
-
-    # Either caplog OR the spy should have seen the "Invalid threat_type"
-    # warning — whichever was wired up correctly under the current
-    # pytest-session-wide logger config.
-    spy_messages = [str(call.args[0]) if call.args else "" for call in warn_spy.call_args_list]
-    saw_invalid_threat_warning = (
-        "Invalid threat_type" in caplog.text
-        or any("Invalid threat_type" in msg for msg in spy_messages)
-    )
-    assert saw_invalid_threat_warning, (
-        f"Expected an 'Invalid threat_type' warning. caplog.text={caplog.text!r}, "
-        f"spy_messages={spy_messages!r}"
-    )
+    assert "Invalid threat_type" in caplog.text

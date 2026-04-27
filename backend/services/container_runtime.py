@@ -20,49 +20,9 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
-
-
-# Inclusive host-port ranges for dynamically managed runtime containers.
-# Keep this central so new provisioning tracks cannot silently collide.
-PORT_RANGES: Dict[str, Tuple[int, int]] = {
-    "vector_store": (6300, 6399),
-    "whisper": (6400, 6499),
-    "searxng": (6500, 6599),
-    "kokoro": (6600, 6699),
-    "ollama": (6700, 6799),
-    "mcp": (8080, 8180),
-}
-
-
-def iter_port_range(name: str) -> range:
-    """Return the inclusive configured range for a managed runtime service."""
-    start, end = PORT_RANGES[name]
-    return range(start, end + 1)
-
-
-def validate_port_ranges() -> None:
-    """Fail fast if two managed service ranges overlap or are malformed."""
-    claimed: Dict[int, str] = {}
-    for name, (start, end) in PORT_RANGES.items():
-        if start > end:
-            raise ValueError(f"Invalid PORT_RANGES[{name!r}]: {start}>{end}")
-        for port in range(start, end + 1):
-            owner = claimed.get(port)
-            if owner is not None:
-                raise ValueError(
-                    f"PORT_RANGES overlap on port {port}: {owner!r} and {name!r}"
-                )
-            claimed[port] = name
-    logger.info(
-        "[CONTAINER_RUNTIME] PORT_RANGES validated: %d ranges, no overlap",
-        len(PORT_RANGES),
-    )
-
-
-validate_port_ranges()
 
 
 class ContainerRuntime(ABC):

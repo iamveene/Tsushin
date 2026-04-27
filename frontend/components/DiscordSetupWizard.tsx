@@ -1,5 +1,4 @@
 'use client'
-/* eslint-disable react-hooks/set-state-in-effect, react/no-unescaped-entities */
 
 /**
  * Discord Setup Wizard (v0.6.0 V060-CHN-002).
@@ -21,8 +20,8 @@
  * commands and DMs without needing a guild.
  */
 
-import { useEffect, useState } from 'react'
-import Wizard, { type WizardStep } from './ui/Wizard'
+import { useEffect, useMemo, useState } from 'react'
+import Modal from './ui/Modal'
 import {
   AlertTriangleIcon,
   CheckCircleIcon,
@@ -53,15 +52,6 @@ const PERMS_LIST = [
   'Use Slash Commands',
 ]
 
-const WIZARD_STEPS: WizardStep[] = [
-  { id: 'welcome', label: 'Welcome', description: 'Public URL' },
-  { id: 'create-app', label: 'Create App', description: 'Dev Portal' },
-  { id: 'credentials', label: 'Get Credentials', description: 'Token + keys' },
-  { id: 'paste-save', label: 'Paste & Save', description: 'Encrypted token' },
-  { id: 'webhook-url', label: 'Webhook URL', description: 'Interactions' },
-  { id: 'invite', label: 'Invite Bot', description: 'Install' },
-]
-
 function CopyableInline({ value, ariaLabel = 'value' }: { value: string; ariaLabel?: string }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -82,6 +72,22 @@ function CopyableInline({ value, ariaLabel = 'value' }: { value: string; ariaLab
         {copied ? 'Copied!' : 'Copy'}
       </button>
     </div>
+  )
+}
+
+function StepPill({ idx, current, completed }: { idx: number; current: number; completed: boolean }) {
+  return (
+    <div
+      className={`w-2 h-2 rounded-full transition-colors ${
+        idx === current
+          ? 'bg-indigo-500'
+          : completed
+          ? 'bg-green-500'
+          : idx < current
+          ? 'bg-tsushin-slate/60'
+          : 'bg-tsushin-slate/20'
+      }`}
+    />
   )
 }
 
@@ -123,6 +129,12 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
     : ingressSource === 'override' ? 'tenant override'
     : ingressSource === 'dev' ? 'dev environment'
     : null
+
+  const totalSteps = 6
+  const stepTitles = useMemo(
+    () => ['Welcome', 'Create App', 'Get Credentials', 'Paste & Save', 'Set Webhook URL', 'Invite Bot'],
+    [],
+  )
 
   const isAppIdValid = APP_ID_PATTERN.test(appId)
   const isPublicKeyValid = PUBLIC_KEY_PATTERN.test(publicKey.trim())
@@ -424,16 +436,21 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
   }
 
   const footer = (
-    <div className="flex items-center justify-between gap-3 w-full">
+    <div className="flex items-center justify-between w-full">
       {step > 1 && step < 6 ? (
-        <button type="button" onClick={() => setStep(step - 1)} className="px-4 py-2 text-tsushin-slate hover:text-white transition-colors rounded-lg">
+        <button onClick={() => setStep(step - 1)} className="px-4 py-2 text-tsushin-slate hover:text-white transition-colors rounded-lg">
           ← Back
         </button>
       ) : <div />}
 
+      <div className="flex items-center gap-2">
+        {stepTitles.map((_, idx) => (
+          <StepPill key={idx} idx={idx + 1} current={step} completed={idx + 1 < step} />
+        ))}
+      </div>
+
       {step === 4 ? (
         <button
-          type="button"
           onClick={handleSubmit}
           disabled={saving || !canSubmit}
           className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
@@ -441,16 +458,15 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
           {saving ? 'Connecting…' : 'Save & Continue'}
         </button>
       ) : step === 5 ? (
-        <button type="button" onClick={() => setStep(6)} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+        <button onClick={() => setStep(6)} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
           Done with Discord portal →
         </button>
       ) : step === 6 ? (
-        <button type="button" onClick={onClose} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+        <button onClick={onClose} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
           Done
         </button>
       ) : (
         <button
-          type="button"
           onClick={() => setStep(step + 1)}
           className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
         >
@@ -461,18 +477,26 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
   )
 
   return (
-    <Wizard
+    <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Discord Setup"
-      steps={WIZARD_STEPS}
-      currentStep={step}
+      title={`Discord Setup — ${stepTitles[step - 1]}`}
       size="xl"
       footer={footer}
-      showProgress
-      tone="discord"
     >
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-tsushin-slate">Step {step} of {totalSteps}</span>
+          <span className="text-xs text-tsushin-slate">{Math.round((step / totalSteps) * 100)}%</span>
+        </div>
+        <div className="w-full bg-gray-800 rounded-full h-1">
+          <div
+            className="bg-gradient-to-r from-indigo-500 to-purple-500 h-1 rounded-full transition-all"
+            style={{ width: `${(step / totalSteps) * 100}%` }}
+          />
+        </div>
+      </div>
       {renderStep()}
-    </Wizard>
+    </Modal>
   )
 }

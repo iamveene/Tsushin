@@ -12,7 +12,7 @@ Covers the pieces most likely to regress:
   only entry is `settings.yml` with the exact bytes we passed in — the
   Docker `put_archive` API expects that shape.
 - Port allocation: `SearxngContainerManager._allocate_port` must stay within
-  the inclusive 6500–6599 range and skip ports already claimed by another
+  the 6500–6599 range and skip ports already claimed by another
   `SearxngInstance` row or already bound on 127.0.0.1.
 - Registry shape: `SearXNGSearchProvider` is registered with the agreed
   `requires_api_key=False` so the wizard knows to skip the API-key step.
@@ -116,7 +116,7 @@ def test_allocate_port_stays_within_configured_range():
     mgr = SearxngContainerManager.__new__(SearxngContainerManager)  # bypass __init__
     db = _FakeDB(used_ports=[])
     port = mgr._allocate_port(db)
-    assert PORT_RANGE_START <= port <= PORT_RANGE_END
+    assert PORT_RANGE_START <= port < PORT_RANGE_END
 
 
 def test_allocate_port_skips_ports_already_used_in_db():
@@ -125,7 +125,7 @@ def test_allocate_port_skips_ports_already_used_in_db():
     db = _FakeDB(used_ports=reserved)
     port = mgr._allocate_port(db)
     assert port not in reserved
-    assert PORT_RANGE_START <= port <= PORT_RANGE_END
+    assert PORT_RANGE_START <= port < PORT_RANGE_END
 
 
 def test_allocate_port_skips_ports_already_bound_on_loopback():
@@ -137,7 +137,7 @@ def test_allocate_port_skips_ports_already_bound_on_loopback():
     try:
         # Find an actually-free port inside the range to reserve
         held_port = None
-        for candidate in range(PORT_RANGE_START, PORT_RANGE_END + 1):
+        for candidate in range(PORT_RANGE_START, PORT_RANGE_END):
             try:
                 s.bind(("127.0.0.1", candidate))
                 held_port = candidate
@@ -151,7 +151,7 @@ def test_allocate_port_skips_ports_already_bound_on_loopback():
         db = _FakeDB(used_ports=[])
         port = mgr._allocate_port(db)
         assert port != held_port
-        assert PORT_RANGE_START <= port <= PORT_RANGE_END
+        assert PORT_RANGE_START <= port < PORT_RANGE_END
     finally:
         s.close()
 

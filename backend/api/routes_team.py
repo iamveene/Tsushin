@@ -806,18 +806,10 @@ async def remove_team_member(
     from models import UserContactMapping
     from sqlalchemy import text
 
-    # SET NULL on nullable FK columns.
-    # audit_event is append-only (BUG-704); UPDATE is rejected by a Postgres
-    # trigger unless the session declares it is performing the privileged
-    # FK-cleanup-on-user-delete operation. SET LOCAL scopes the GUC to the
-    # current transaction so it cannot leak to other code paths.
-    if ctx.db.bind.dialect.name == "postgresql":
-        ctx.db.execute(text("SET LOCAL app.audit_event_user_fk_cleanup = 'true'"))
+    # SET NULL on nullable FK columns
     ctx.db.query(AuditEvent).filter(AuditEvent.user_id == user_id).update(
         {AuditEvent.user_id: None}, synchronize_session=False
     )
-    if ctx.db.bind.dialect.name == "postgresql":
-        ctx.db.execute(text("SET LOCAL app.audit_event_user_fk_cleanup = 'false'"))
     ctx.db.query(UserRole).filter(UserRole.assigned_by == user_id).update(
         {UserRole.assigned_by: None}, synchronize_session=False
     )

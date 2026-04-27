@@ -47,7 +47,6 @@ export default function PlaygroundMiniPanel({ data, onClose, panelRef }: Playgro
         selectedAgentId={data.selectedAgentId}
         selectedProjectId={data.selectedProjectId}
         activeThreadId={data.activeThreadId}
-        activeThreadIdRef={data.activeThreadIdRef}
         activeThread={data.activeThread}
         onSelectAgent={data.selectAgent}
         onSelectProject={data.selectProject}

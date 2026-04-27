@@ -342,6 +342,6 @@ async def expire_old_approvals(
     This is normally handled automatically, but can be triggered manually.
     """
     service = get_approval_service(db)
-    count = service.expire_old_approvals(ctx.tenant_id)
+    count = service.expire_old_approvals()
 
     return {"expired_count": count, "message": f"Expired {count} pending approvals"}

@@ -27,7 +27,7 @@ API_ROLE_SCOPES = {
     "api_readonly": [
         "agents.read", "contacts.read", "memory.read", "flows.read",
         "knowledge.read", "analytics.read",
-        "hub.read", "watcher.read",
+        "hub.read",
     ],
     "api_member": [
         "agents.read", "agents.write", "agents.execute",
@@ -37,7 +37,7 @@ API_ROLE_SCOPES = {
         "knowledge.read", "knowledge.write",
         "analytics.read",
         "tools.read", "tools.execute",
-        "hub.read", "hub.write", "watcher.read",
+        "hub.read", "hub.write",
     ],
     "api_admin": [
         "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -48,7 +48,7 @@ API_ROLE_SCOPES = {
         "analytics.read",
         "tools.read", "tools.manage", "tools.execute",
         "org.settings.read", "org.settings.write",
-        "hub.read", "hub.write", "watcher.read",
+        "hub.read", "hub.write",
     ],
     "api_owner": [
         "agents.read", "agents.write", "agents.delete", "agents.execute",
@@ -59,7 +59,7 @@ API_ROLE_SCOPES = {
         "analytics.read", "audit.read",
         "tools.read", "tools.manage", "tools.execute",
         "org.settings.read", "org.settings.write",
-        "hub.read", "hub.write", "watcher.read",
+        "hub.read", "hub.write",
     ],
 }
 

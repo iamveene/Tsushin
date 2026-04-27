@@ -39,13 +39,11 @@ def set_engine(engine):
     global _engine
     _engine = engine
 
-# Dependency to get database session.
-# BUG-684 fix (part 1): use the shared module-level sessionmaker rather than
-# constructing a new one per request. The shared factory honours
-# expire_on_commit=False (set in db.py) and reuses the connection pool.
+# Dependency to get database session
 def get_db():
-    from db import get_session_factory
-    db = get_session_factory()()
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=_engine)
+    db = SessionLocal()
     try:
         yield db
     finally:
@@ -54,15 +52,6 @@ def get_db():
         except Exception:
             pass
         db.close()
-
-
-# NOTE on BUG-684: the worker.py session_scope refactor + the 8 s wait_for cap
-# on per-integration health checks bound the dominant pool-exhaustion path
-# already. The full per-probe-session handoff inside `list_integrations`
-# (release the request-scoped `db` before iterating, open a short-lived
-# session per probe) is left as a v0.7.x architectural follow-up; a previous
-# `_open_probe_session()` helper was added in this branch but never wired in,
-# so it has been removed to keep the code honest about what actually ships.
 
 
 # ============================================================================
@@ -107,8 +96,6 @@ class IntegrationResponse(BaseModel):
     default_assignee_gid: Optional[str] = None
     email: Optional[str] = None
     display_name: Optional[str] = None
-    can_send: Optional[bool] = None
-    can_draft: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):
@@ -542,21 +529,6 @@ async def list_integrations(
                             except Exception:
                                 pass
 
-            # Compute Gmail capability flags from the granted OAuth scope string.
-            can_send = None
-            can_draft = None
-            if hub.type == 'gmail' and gmail is not None:
-                try:
-                    gmail_service = GmailService(db, hub.id)
-                    can_send = bool(gmail_service.can_send_messages())
-                    can_draft = bool(gmail_service.can_create_drafts())
-                except Exception as cap_exc:
-                    # Capability probe must never fail the list endpoint —
-                    # leave the flags as None and continue.
-                    logger.debug(
-                        "Gmail capability probe failed for integration %s: %s", hub.id, cap_exc,
-                    )
-
             # Build response with type-specific data
             response = IntegrationResponse(
                 id=hub.id,
@@ -572,9 +544,7 @@ async def list_integrations(
                 default_assignee_gid=asana.default_assignee_gid if asana else None,
                 # Add email for calendar/gmail integrations
                 email=(calendar.email_address if calendar else (gmail.email_address if gmail else None)),
-                display_name=hub.display_name,
-                can_send=can_send,
-                can_draft=can_draft,
+                display_name=hub.display_name
             )
             integrations.append(response)
         except Exception as e:

@@ -1,7 +1,7 @@
 'use client'
 
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
-import Wizard, { type WizardStep } from '@/components/ui/Wizard'
+import Modal from '@/components/ui/Modal'
 import StepWelcome from './StepWelcome'
 import StepCreateInstance from './StepCreateInstance'
 import StepUserInfo from './StepUserInfo'
@@ -11,20 +11,19 @@ import StepContacts from './StepContacts'
 import StepBindAgent from './StepBindAgent'
 import StepConfirmation from './StepConfirmation'
 
-const WIZARD_STEPS: WizardStep[] = [
-  { id: 'welcome', label: 'Welcome', description: 'Overview' },
-  { id: 'connect-phone', label: 'Connect Phone', description: 'MCP instance' },
-  { id: 'user-info', label: 'About You', description: 'Profile' },
-  { id: 'dm-config', label: 'DM Settings', description: 'Direct chat' },
-  { id: 'group-config', label: 'Group Settings', description: 'Groups' },
-  { id: 'contacts', label: 'Contacts', description: 'Allowlist' },
-  { id: 'bind-agent', label: 'Bind Agent', description: 'Routing' },
-  { id: 'done', label: 'All Done!', description: 'Finish' },
+const stepTitles = [
+  'Welcome',
+  'Connect Phone',
+  'About You',
+  'DM Settings',
+  'Group Settings',
+  'Contacts',
+  'Bind Agent',
+  'All Done!',
 ]
 
 export default function WhatsAppSetupWizard() {
-  const { state, closeWizard, previousStep, nextStep } = useWhatsAppWizard()
-  const stepTitles = WIZARD_STEPS.map(step => step.label)
+  const { state, closeWizard, previousStep, nextStep, goToStep } = useWhatsAppWizard()
 
   if (!state.isOpen) return null
 
@@ -59,39 +58,51 @@ export default function WhatsAppSetupWizard() {
   }
 
   return (
-    <Wizard
+    <Modal
       isOpen={state.isOpen}
       onClose={handleClose}
-      title="WhatsApp Setup"
-      steps={WIZARD_STEPS}
-      currentStep={state.currentStep}
+      title={`WhatsApp Setup — ${stepTitles[state.currentStep - 1]}`}
       size="xl"
       autoHeight
-      showProgress
-      tone="whatsapp"
       footer={
         state.currentStep === 1 ? (
           <button
-            type="button"
             onClick={nextStep}
             className="w-full py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-semibold rounded-lg hover:from-teal-600 hover:to-cyan-600 transition-all"
           >
-            Let&apos;s Get Started
+            Let's Get Started
           </button>
         ) : state.currentStep > 1 && state.currentStep < state.totalSteps ? (
           <div className="flex items-center justify-between">
             <button
-              type="button"
               onClick={previousStep}
               className="px-4 py-2 text-tsushin-slate hover:text-white transition-colors rounded-lg"
             >
               &larr; Back
             </button>
-            <div className="hidden sm:block text-xs text-tsushin-slate">
-              {stepTitles[state.currentStep - 1]}
+            <div className="flex items-center gap-2">
+              {/* Step indicator pills */}
+              {stepTitles.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    if (canAccessStep(idx + 1) && state.currentStep !== idx + 1) {
+                      goToStep(idx + 1)
+                    }
+                  }}
+                  className={`w-2 h-2 rounded-full transition-colors ${
+                    idx + 1 === state.currentStep
+                      ? 'bg-teal-500'
+                      : state.stepsCompleted[idx + 1]
+                      ? 'bg-green-500'
+                      : idx + 1 < state.currentStep
+                      ? 'bg-tsushin-slate/60'
+                      : 'bg-tsushin-slate/20'
+                  }`}
+                />
+              ))}
             </div>
             <button
-              type="button"
               onClick={nextStep}
               disabled={!canAccessStep(state.currentStep + 1)}
               className="px-4 py-2 text-tsushin-slate hover:text-white transition-colors rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
@@ -102,7 +113,27 @@ export default function WhatsAppSetupWizard() {
         ) : undefined
       }
     >
+      {/* Progress bar */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-tsushin-slate">
+            Step {state.currentStep} of {state.totalSteps}
+          </span>
+          {state.currentStep > 1 && state.currentStep < state.totalSteps && (
+            <span className="text-xs text-tsushin-slate/60">
+              {stepTitles[state.currentStep - 1]}
+            </span>
+          )}
+        </div>
+        <div className="w-full bg-tsushin-deep rounded-full h-1.5">
+          <div
+            className="bg-gradient-to-r from-teal-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300"
+            style={{ width: `${(state.currentStep / state.totalSteps) * 100}%` }}
+          />
+        </div>
+      </div>
+
       {renderStep()}
-    </Wizard>
+    </Modal>
   )
 }

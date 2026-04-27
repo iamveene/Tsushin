@@ -364,7 +364,7 @@ class PlaygroundDocumentService:
 
             # Get ChromaDB client
             persist_dir = getattr(settings, 'CHROMA_PERSIST_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            client = chromadb.PersistentClient(path=persist_dir)
 
             # Get or create collection for this conversation
             collection_name = self.get_collection_name(doc.tenant_id, doc.user_id, doc.agent_id)
@@ -496,7 +496,7 @@ class PlaygroundDocumentService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_PERSIST_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            client = chromadb.PersistentClient(path=persist_dir)
 
             collection_name = self.get_collection_name(doc.tenant_id, doc.user_id, doc.agent_id)
 
@@ -561,7 +561,7 @@ class PlaygroundDocumentService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_PERSIST_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            client = chromadb.PersistentClient(path=persist_dir)
 
             collection_name = self.get_collection_name(tenant_id, user_id, agent_id)
 
