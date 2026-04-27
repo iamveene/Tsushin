@@ -1023,7 +1023,13 @@ function GitHubIntegrationsPanel({
 
 export default function HubPage() {
   const toast = useToast()
-  const { isGlobalAdmin, hasPermission } = useAuth()
+  const { user, isGlobalAdmin, hasPermission } = useAuth()
+  // v0.7.0 release-finishing fix — global admins browsing /hub without an
+  // active tenant context were getting a wall of 4xx console errors from
+  // tenant-scoped fetchers (loadJiraIntegrations / loadGitHubIntegrations /
+  // loadMcpInstances / public-ingress / toolbox-status etc). Skip those
+  // calls when there's no tenant on the session.
+  const hasTenantScope = Boolean(user?.tenant_id)
   const [oauthPopupHandoff, setOauthPopupHandoff] = useState(false)
   // BUG-610 FIX: Gate every Hub mutation control (connect, disconnect,
   // delete, edit, add) on ``hub.write``. Tenants with only ``hub.read``
@@ -1444,34 +1450,39 @@ export default function HubPage() {
   useEffect(() => {
     loadAllData()
     const interval = setInterval(() => {
-      loadHubIntegrations(true)
-      fetchToolboxStatus()
-      if (activeTab === 'communication') {
-        loadMcpInstances()
-        loadTesterStatus()
-        loadTelegramInstances()  // Phase 10.1.1
-        loadSlackIntegrations()  // v0.6.0
-        loadDiscordIntegrations()  // v0.6.0
-        loadEmailTriggers()
-        loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
-        loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
-        loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
-      }
-      if (activeTab === 'tool-apis') {
-        loadJiraIntegrations()
-      }
-      if (activeTab === 'developer') {
-        loadGitHubIntegrations()
-      }
-      if (activeTab === 'mcp-servers') {
-        loadMcpServers()  // Phase 26
+      // v0.7.0 release-finishing fix — skip every tenant-scoped poll for
+      // sessions without a tenant binding (global admins). Vector stores
+      // is the one tab whose data is global, so it stays unconditional.
+      if (hasTenantScope) {
+        loadHubIntegrations(true)
+        fetchToolboxStatus()
+        if (activeTab === 'communication') {
+          loadMcpInstances()
+          loadTesterStatus()
+          loadTelegramInstances()  // Phase 10.1.1
+          loadSlackIntegrations()  // v0.6.0
+          loadDiscordIntegrations()  // v0.6.0
+          loadEmailTriggers()
+          loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
+          loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
+          loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
+        }
+        if (activeTab === 'tool-apis') {
+          loadJiraIntegrations()
+        }
+        if (activeTab === 'developer') {
+          loadGitHubIntegrations()
+        }
+        if (activeTab === 'mcp-servers') {
+          loadMcpServers()  // Phase 26
+        }
       }
       if (activeTab === 'vector-stores') {
-        loadVectorStoreInstances()  // v0.6.0
+        loadVectorStoreInstances()  // v0.6.0 — global, no tenant gate
       }
     }, 10000)
     return () => clearInterval(interval)
-  }, [activeTab])
+  }, [activeTab, hasTenantScope])
 
   useGlobalRefresh(() => loadAllData())
 
@@ -1624,10 +1635,20 @@ export default function HubPage() {
   const loadAllData = async () => {
     setLoading(true)
     try {
-      await Promise.all([
+      // v0.7.0 release-finishing fix — gate tenant-scoped fetchers on the
+      // session having a tenant. Global admins (no tenant binding) were
+      // hitting a wall of 4xx errors from these per-load. The non-tenant
+      // calls (API keys, Ollama / Kokoro health, system config, provider
+      // instances, vector stores) still run for everyone.
+      const baseLoaders = [
         fetchAPIKeys(),
         fetchOllamaHealth(),
         fetchKokoroHealth(),
+        loadSystemConfig(),
+        fetchProviderInstances(),  // Phase 21: Provider Instances
+        loadVectorStoreInstances(),  // v0.6.0: Vector Store Instances
+      ]
+      const tenantLoaders = hasTenantScope ? [
         refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
         refreshSearxngInstances(),  // v0.6.0-patch.7: per-tenant SearXNG (Hub-consolidated)
         loadHubIntegrations(),
@@ -1644,11 +1665,9 @@ export default function HubPage() {
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
         loadGoogleCredentials(),
-        loadSystemConfig(),
-        fetchProviderInstances(),  // Phase 21: Provider Instances
         loadMcpServers(),  // Phase 26: MCP Servers
-        loadVectorStoreInstances(),  // v0.6.0: Vector Store Instances
-      ])
+      ] : []
+      await Promise.all([...baseLoaders, ...tenantLoaders])
     } finally {
       setLoading(false)
     }

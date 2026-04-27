@@ -258,6 +258,24 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
     [jiraIntegrationId, jiraIntegrations],
   )
 
+  // v0.7.0 release-finishing UX fix — schedule wizard previously kept Create
+  // Trigger enabled with an invalid cron, then silently rejected on click
+  // when the server-side validator returned 400 (no inline error). Add a
+  // simple client-side cron shape check so the button is disabled until
+  // the cron at least *looks* valid (5 or 6 whitespace-separated fields).
+  // Server-side validator is still authoritative for semantic correctness.
+  const cronLooksValid = useMemo(() => {
+    const trimmed = cronExpression.trim()
+    if (!trimmed) return false
+    const parts = trimmed.split(/\s+/)
+    if (parts.length < 5 || parts.length > 6) return false
+    // Each field must be non-empty and contain only the legal cron alphabet
+    // (digits, * / , - L W # ?). Reject obvious non-cron strings like
+    // "not-a-cron" early. This is a light shape check, not a parser.
+    const validChar = /^[0-9*/,\-LW#?]+$/i
+    return parts.every((p) => p.length > 0 && validChar.test(p))
+  }, [cronExpression])
+
   const canSubmit = useMemo(() => {
     if (saving || !integrationName.trim()) return false
     if (triggerType === 'jira') {
@@ -265,7 +283,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
       return Boolean(jiraIntegrationId && jiraJql.trim() && Number.isFinite(poll) && poll >= 60 && poll <= 3600)
     }
     if (triggerType === 'schedule') {
-      return Boolean(cronExpression.trim() && timezone.trim())
+      return Boolean(cronLooksValid && timezone.trim())
     }
     // GitHub: PR Submitted criteria requires at least one selected action.
     return Boolean(
@@ -274,7 +292,7 @@ export default function TriggerSetupModal({ isOpen, triggerType, onClose, onSave
       && githubEvents.length > 0
       && prSelectedActions.length > 0,
     )
-  }, [cronExpression, githubEvents.length, integrationName, jiraIntegrationId, jiraJql, jiraPollInterval, prSelectedActions.length, repoName, repoOwner, saving, timezone, triggerType])
+  }, [cronLooksValid, githubEvents.length, integrationName, jiraIntegrationId, jiraJql, jiraPollInterval, prSelectedActions.length, repoName, repoOwner, saving, timezone, triggerType])
 
   const buildPRSubmittedCriteria = (): PRSubmittedCriteria => ({
     // v0.7.0 release-finishing fix: canonical envelope shape per
