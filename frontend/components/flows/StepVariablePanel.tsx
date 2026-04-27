@@ -16,6 +16,7 @@
 import { useState } from 'react'
 import {
   getOutputFieldsForStepType,
+  getSourceStepVariables,
   generateVariableTemplate,
   HELPER_FUNCTIONS,
   FLOW_CONTEXT_VARS,
@@ -44,6 +45,20 @@ const STEP_TYPE_ICONS: Record<string, string> = {
   skill: 'S',         // Brain/Skill
   slash_command: '/',  // Command
   summarization: 'D',  // Document
+  gate: 'G',          // Gate
+  source: '⚡',       // v0.7.0 — trigger source step
+}
+
+// v0.7.0 release-finishing fix: source steps need kind-aware deep payload
+// paths so the Notification step in an auto-generated Jira/Email flow can
+// reference {{step_1.payload.issue.key}} or {{step_1.payload.subject}}
+// directly. This helper picks the right list per step.
+function getStepFields(step: StepInfo): StepVariable[] {
+  if (step.type === 'source' || step.type === 'Source') {
+    const kind = (step.config?.trigger_kind || step.config?.triggerKind || null) as string | null
+    return getSourceStepVariables(kind)
+  }
+  return getOutputFieldsForStepType(step.type)
 }
 
 export default function StepVariablePanel({
@@ -61,7 +76,7 @@ export default function StepVariablePanel({
   const [copiedVar, setCopiedVar] = useState<string | null>(null)
 
   const previousSteps = allSteps.filter(s => s.position < currentStepPosition)
-  const stepsWithFields = previousSteps.filter(s => getOutputFieldsForStepType(s.type).length > 0)
+  const stepsWithFields = previousSteps.filter(s => getStepFields(s).length > 0)
 
   function toggleSection(key: string) {
     setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }))
@@ -138,7 +153,7 @@ export default function StepVariablePanel({
                 ) : (
                   <div className="space-y-3">
                     {stepsWithFields.map((step) => {
-                      const fields = getOutputFieldsForStepType(step.type)
+                      const fields = getStepFields(step)
                       const alias = step.config?.output_alias
                       const normalizedName = step.name.toLowerCase().replace(/[\s-]/g, '_')
 
