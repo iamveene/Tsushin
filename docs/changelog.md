@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Unified Trigger Creation Wizard + Visual Schedule Picker (2026-04-28)
+
+A single 5-step wizard now creates triggers for all five kinds (Email / Webhook / Jira / Schedule / GitHub), replacing three legacy entry-points (`TriggerSetupModal`, `TriggerWizard`, the standalone `EmailTriggerWizard` for the create path). The Schedule step uses a new visual picker — operators no longer need to remember cron syntax. The wizard ends with a Confirmation step that hands off to the auto-generated flow at `/flows?edit=<auto_flow_id>`, closing the loop from "I want a notification on Jira issues" to "the flow that will fire it is open in the editor".
+
+The standalone `EmailTriggerWizard` is **retired for the create path**. It still exists as a code module to preserve any read-only/edit affordances downstream, but every "+ New Trigger" entry-point in the UI now opens `TriggerCreationWizard`.
+
+QA evidence: `docs/qa/v0.7.0/wizard-e2e/REPORT.md` (10 test cases, all PASS) including a live WhatsApp round-trip with template-resolved Jira ticket content (`{{source.payload.issue.key}}`, `{{source.payload.issue.fields.summary}}`, `{{source.payload.issue.fields.status.name}}` all resolved live to the tester at `+5527999616279`).
+
+**New components:**
+
+- **`frontend/components/triggers/TriggerCreationWizard.tsx`** (~3,300 lines) — the unified 5-step shell. Steps: (1) Kind picker (skipped when `initialKind` is supplied — i.e. when entry-points like `Create Jira Trigger` short-circuit straight to step 2), (2) Source (per-kind input grid: Jira project + JQL + poll interval / Schedule cron via SchedulePicker / GitHub repo + PAT + events / Email Gmail account + saved query / Webhook name + slug + callback), (3) Criteria (per-kind: Jira read-only JQL preview + Test Query, GitHub event/action/filters builder via `CriteriaBuilder`, Email saved-query test, Schedule + Webhook are no-op pass-through), (4) Notification (universal — checkbox + WhatsApp recipient phone input + message hint, gated to require valid phone when ON), (5) Confirmation (pre-save summary cards; post-save: "trigger created" panel + Wired Flow card + "Open Flow Editor" CTA). All trigger kinds inherit the same Notification + Confirmation steps, so the operator-facing UX is identical regardless of which trigger they're creating.
+- **`frontend/components/triggers/SchedulePicker.tsx`** (~700 lines) + **`schedulePickerUtils.ts`** (~385 lines) — visual cron builder. 6 frequency modes (Hourly, Daily, Weekly, Monthly, Once, Custom), live natural-language preview ("Every Monday, Wednesday and Friday at 9:00 AM (America/Sao_Paulo)") in `role="status" aria-live="polite"`, read-only cron chip showing the compiled expression, and a live "Next 3 fire times" preview computed via `cronstrue` + `next-fire-times` helpers. Switching from Custom → Visual best-effort decomposes simple expressions; complex expressions fall back to defaults with a notice. Switching Visual → Custom seeds the textarea with the compiled cron so the operator can edit further.
+
+| Frequency | Inputs | Compiled cron pattern |
+|---|---|---|
+| Hourly | minute offset (0-59) | `<min> * * * *` |
+| Daily | time of day | `<min> <hr> * * *` |
+| Weekly | days of week (chips, multi-select) + time | `<min> <hr> * * <dow_csv>` |
+| Monthly | day of month + time | `<min> <hr> <dom> * *` |
+| Once | date + time (one-shot, operator pauses after first fire) | `<min> <hr> <dom> <month> *` |
+| Custom | raw cron textarea (5 or 6 fields) | as entered, validated client-side |
+
+- **Backend changes (additive):**
+  - **`backend/services/flow_binding_service.py::update_auto_flow_notification`** now writes the engine-correct field name `recipient` to the auto-flow's Notification node `config_json` (previously wrote the legacy `recipient_phone` key, which the engine ignored — silent runtime bug). Drops any pre-existing `recipient_phone` key on each call so older flows self-heal on the next notification toggle. Documented in the helper's docstring.
+  - **`backend/schemas.py`** — `JiraTriggerRead`, `EmailTriggerRead`, `GitHubTriggerRead`, `ScheduleTriggerRead`, and `WebhookTriggerRead` now all expose an optional `auto_flow_id: Optional[int]` field, so the wizard's Confirmation step has a single, kind-agnostic field to read for the "Open Flow Editor" deep-link. The field is populated by each trigger's `create` and `read` paths from the matching `flow_trigger_binding.flow_definition_id` (when `is_system_managed=True`), and stays `None` when no auto-flow exists yet (older triggers, or `TSN_FLOWS_AUTO_GENERATION_ENABLED=false`).
+  - **`POST /api/triggers/{kind}/{id}/notification-subscription`** + the corresponding `update`/`delete` paths now accept either `recipient` (canonical) or the legacy `recipient_phone` for backward compatibility — the wizard sends `recipient`; pre-existing API consumers that send `recipient_phone` continue to work. The validator `_normalize_recipient` strips whitespace and trailing colons.
+
+- **A11y improvements (TC-11 of the QA report):**
+  - 37 `htmlFor`/`id` associations across all wizard inputs (was 0 in the legacy `TriggerSetupModal`).
+  - Day-of-week chips in SchedulePicker have `aria-pressed` + arrow-key navigation between chips.
+  - Natural-language preview is in `role="status" aria-live="polite"` so screen readers announce when the operator changes a chip.
+  - Kind-picker tiles in step 1 are a `role="radiogroup"` with `role="radio"` + `aria-checked` per tile.
+  - GitHub event checklist + action chips use `role="group"` + `aria-pressed`.
+
+- **Retired components (create path only):** `TriggerSetupModal` (Jira/Schedule/GitHub) and `EmailTriggerWizard` (Email) are no longer rendered from any "+ New Trigger" entry-point. Their code remains importable for any non-create surfaces (e.g., old per-trigger detail-page edit modals — these will be migrated in a subsequent v0.7.x cleanup).
+
+- **Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround documented in QA report: user clicks the flow row's Edit button. Likely a Next.js client-side navigation timing race against the page's `editConsumedRef` guard.
+
+**Verified live (2026-04-28):**
+- Jira trigger created via the wizard → trigger #9, auto-flow #99 minted with `is_system_owned=true, editable_by_tenant=true, deletable_by_tenant=false` and a 4-node Source/Gate/Conversation/Notification chain. Notification node config has `enabled=true, channel='whatsapp', recipient='+5527999616279'` — the engine-correct key.
+- Synthetic flow execute against payload `{key: "JSM-WIZARD-E2E", summary: "Trigger creation wizard E2E — please notify Vini", status: "In Progress"}` → tester WhatsApp received `Jira issue JSM-WIZARD-E2E: Trigger creation wizard E2E — please notify Vini (status: In Progress)`. All three template variables resolved live.
+- Schedule picker visual smoke (per `schedule-picker-integrator` agent): Weekly/Monthly/Custom modes rendered correctly, natural-language preview updates as operator changes chips/inputs, "Next 3 fire times" preview computes live, Custom→Visual round-trip decomposes simple expressions and falls back gracefully on complex ones.
+
+### Release 0.7.0 — Code Repository Skill (GitHub provider) + GitHubIntegration + PR trigger criteria (2026-04-25)
+
+Third v0.7.0 capability-gated skill (after Ticket Management and the granular Email-send capability). Generic `code_repository` skill abstraction with **GitHub** as the first provider. Mirrors the JiraSkill / GmailSkill capability-gating pattern exactly so future Bitbucket / GitLab providers slot in cleanly. Ships alongside `GitHubIntegration` (Hub → Tool APIs → Developer Tools → GitHub) and the `pull_request` trigger-criteria envelope used by Wave 5's GitHub trigger wizard.
+
+- **Skill class:** `backend/agent/skills/code_repository_skill.py` — single MCP tool `repository_operation`, 12 actions, capability-gated:
+  - **Read (default ON):** `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`.
+  - **Write (default OFF):** `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`. The full PR-lifecycle action set lets a granted agent reason about a PR and act on it (comment / approve / request changes / merge / close).
+- **Tool-spec capability gating** (same contract as JiraSkill / GmailSkill): `to_openai_tool` / `to_anthropic_tool` rebuild the `action` enum from `AgentSkill.config["capabilities"]`. The LLM literally cannot propose a disabled action — verified end-to-end. A defense-in-depth check in `execute_tool` remains as a fallback.
+- **`GitHubIntegration` (new Hub row, polymorphic subclass of `HubIntegration`):** PAT (encrypted with the API-key encryption key, NOT the webhook key), `default_owner`, `default_repo`, `provider_mode` (`programmatic` | `agentic` — agentic is reserved for the future GitHub App + OAuth flow and currently rejected at create with `400 agentic_mode_not_yet_supported`). PAT preview masked as `<first 4>...<last 4>`. Routes:
+  - `POST/GET/PATCH/DELETE /api/hub/github-integrations` — standard CRUD.
+  - `POST /api/hub/github-integrations/test-connection` — raw-creds dry-run; hits GitHub `/repos/{owner}/{repo}` and returns `{success, status_code, repo_full_name}`.
+  - `POST /api/hub/github-integrations/{id}/test-connection` — saved-creds dry-run for already-stored integrations.
+  - `DELETE` returns `409` when the integration is still referenced by an `AgentSkillIntegration(skill_type='code_repository')` or by `GitHubChannelInstance` rows that match `owner/repo` — operators must detach the skill / trigger first.
+- **PR-submitted trigger criteria envelope** (criteria_version 1, used by the GitHub trigger): `{event:'pull_request', actions:['opened',...], filters:{branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering:'oldest_first'}`. Evaluator at `backend/channels/github/criteria.py` returns `(matched, reason)` for every rejection path. The Wave 5 finishing fix (changelog entry above) restructured the wizard to emit this canonical envelope after a regression had it sending the legacy flat shape.
+- **Hub UI:** `frontend/app/hub/page.tsx` GitHubIntegrationModal — connection mode radio (Programmatic enabled / Agentic-coming-soon disabled), PAT input with masked preview, default owner/repo, "Test connection" button.
+- **Agent Skills tab:** `frontend/components/AgentSkillsManager.tsx` exposes `code_repository` as a provider entry; auto-selects the lone `GitHubIntegration` when only one exists. The capability-toggle modal renders the same WRITE badge + safety copy as Ticket Management.
+- **Skill-providers endpoint:** `GET /api/skill-providers/code_repository` returns the GitHub programmatic integrations and a placeholder `github_app` provider with `coming_soon: true`.
+
+**Validated live (commit db0eb2c + follow-up 131829d + 7a44589):**
+- Programmatic agent on integration #15 + PR `iamveene/Tsushin#38` end-to-end round-trip: `tool_used=skill:repository_operation`, action `merge_pull_request`, returned `merge_commit_sha=128af22d723f9247614250a96a5acc68c013e5b0`.
+- Capability-toggle modal on a read-only agent: write actions (`merge_pull_request`, `close_pull_request`, etc.) appear with the WRITE badge and stay off; the LLM never proposes them in the playground transcript.
+- Wizard delete-and-recreate cycle: integration `#15` rebuilt, skill re-attached, agent prompt round-trip succeeded against the new integration.
+
+### Release 0.7.0 — Granular Email Send Capability + GmailSkill capability gating (2026-04-25)
+
+Mirrors the Ticket Management capability-gating contract for the Gmail skill: read actions (search + read message) on by default, write actions (`send`, `reply`, `draft`) off by default. The action enum is filtered at LLM tool-spec time so disabled actions are never exposed to the model, exactly like `ticket_management` and `code_repository`.
+
+This commit also surfaced (and fixed) a real masked bug discovered during verification: the runtime `SkillManager.get_skill_tool_definitions` path never propagated the saved `AgentSkill.config` to the skill instance before calling `to_openai_tool` / `to_anthropic_tool`. The instance always fell back to `get_default_config()`, silently ignoring saved capability changes — the bug was masked while saved configs happened to match the defaults (which is exactly how earlier `ticket_management` ship-tests inadvertently passed).
+
+- **`backend/agent/skills/gmail_skill.py`:**
+  - `get_mcp_tool_definition` is now a classmethod returning the FULL spec (so `SkillManager._find_skill_by_tool_name` can map the LLM's `gmail_operation` tool name back to `GmailSkill`).
+  - New `get_per_agent_mcp_tool_definition()` instance method filters the action enum based on `self._config["capabilities"]`; returns `None` when zero capabilities are enabled (skill omitted from the tool spec entirely).
+  - `to_openai_tool` / `to_anthropic_tool` rebuild the action enum from the per-agent `capabilities` dict, mirroring the JiraSkill / CodeRepositorySkill pattern.
+- **`backend/agent/skills/skill_manager.py::get_skill_tool_definitions`** — one-line fix: set `skill_instance._config = agent_skill_row.config` and `skill_instance._agent_id = agent.id` BEFORE evaluating the tool spec. This single line was the root cause of the masked bug above, and it now correctly threads the saved capability config to all three capability-gated skills (gmail, ticket_management, code_repository).
+- **`frontend/components/AgentSkillsManager.tsx`** — Gmail capability toggle modal renders WRITE badges on send / reply / draft, the same safety copy as Ticket Management ("Disabled actions are removed from the agent's tool spec — the LLM never even sees them"), and surfaces the existing `gmail.compose` scope dependency for draft (matches §15 Email triggers documentation).
+
+**Validated live:**
+- Read-only Gmail agent: LLM tool spec contains only `search` + `read_message` actions; the model refuses send/reply/draft prompts because the actions don't appear in its tool list.
+- Granted send + draft agent: `gmail_operation` tool spec contains `search, read_message, send, reply, draft`; the agent sends and drafts successfully.
+- Saved-config-vs-default decoupling test: changed the agent's gmail capabilities to `{search: true, read_message: false}`, confirmed the agent's playground transcript only listed `search` (previously the bug was that `read_message` would still appear because the runtime fell back to defaults).
+
 ### Release 0.7.0 — Variable Reference panel everywhere + Trigger-generated flow badge (2026-04-27)
 
 User-reported gaps in the v0.7.0 flow editor:

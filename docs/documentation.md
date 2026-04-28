@@ -1074,6 +1074,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
 | `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
+| `code_repository` | Code Repository | tool | Search/read/act on a connected source-control system. v0.7.0 ships GitHub (programmatic). 12 actions; read on by default (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`); write off by default (`create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`) — same capability-gating contract as `ticket_management` and the v0.7.0 granular Gmail send/reply/draft | `code_repository_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
@@ -1101,6 +1102,23 @@ Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` 
 The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`.
 
 `image_analysis` is media-triggered rather than tool-triggered. It activates on inbound image attachments, uses Gemini multimodal models to analyze the image, and returns a direct response with `skip_ai=true`. If the image caption looks like an edit request ("remove background", "change this", etc.), the skill intentionally defers so the existing `image` editing skill can handle the request instead.
+
+#### 9.2.1 Capability-Gated Skills (v0.7.0)
+
+Three v0.7.0 skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
+
+1. **Single-tool, multi-action.** Each skill exposes ONE MCP/LLM tool (`ticket_operation`, `repository_operation`, `gmail_operation`) whose first argument is an `action` enum. Read actions are on by default; write actions ship implemented but disabled by default per agent.
+2. **Tool-spec gating, not runtime gating.** Disabled actions are filtered out of the per-agent OpenAI / Anthropic tool schema sent to the LLM. The LLM literally cannot propose a disabled action — it doesn't appear in its tool list. A defense-in-depth check inside `execute_tool` remains as a fallback for direct API callers.
+3. **WRITE badge in the UI.** `frontend/components/AgentSkillsManager.tsx` renders WRITE badges on destructive actions and displays the safety copy "Disabled actions are removed from the agent's tool spec — the LLM never even sees them."
+4. **Runtime config threading.** `SkillManager.get_skill_tool_definitions` sets `skill_instance._config = agent_skill_row.config` and `skill_instance._agent_id = agent.id` BEFORE evaluating the tool spec. Without this, the skill instance falls back to `get_default_config()` and silently ignores saved capability changes — a v0.7.0-discovered bug that masked itself whenever saved configs happened to match defaults. Fixed in commit `aaabde8`.
+
+| skill_type | Read capabilities (default ON) | Write capabilities (default OFF) | Source |
+|---|---|---|---|
+| `ticket_management` (Jira) | `search`, `read`, `read_comments` | `update`, `add_comment`, `transition` | `jira_skill.py` |
+| `code_repository` (GitHub) | `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue` | `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue` | `code_repository_skill.py` |
+| `gmail` | `search`, `read_message` | `send`, `reply`, `draft` (`draft` additionally requires the Gmail token's OAuth scope to include `gmail.compose`, `gmail.modify`, or `mail.google.com/`) | `gmail_skill.py` |
+
+Operators toggle capabilities in the per-skill modal on the agent's Skills tab. Disabling a capability that the agent currently has access to takes effect on the next tool-spec rebuild (every chat turn) — there's no cache to bust.
 
 ### 9.3 Custom Skills (Instruction / Script / MCP Server)
 
@@ -1744,6 +1762,74 @@ Implementations:
 Event status values (`scheduler/base.py:27-32`): `scheduled`, `in_progress`, `completed`, `cancelled`, `failed`.
 
 Provider selection is factory-driven: `backend/agent/skills/scheduler/factory.py` (reads `AgentSkillIntegration` rows, `factory.py:196`).
+
+### 14.3 Trigger Creation Wizard (v0.7.0)
+
+**Source:** `frontend/components/triggers/TriggerCreationWizard.tsx` (~3,300 lines).
+
+A single 5-step wizard creates triggers for all five kinds (Email / Webhook / Jira / Schedule / GitHub). It replaces three legacy entry-points (`TriggerSetupModal`, `TriggerWizard`, the standalone `EmailTriggerWizard` for the create path) so operators see the same flow regardless of which trigger they're creating. The wizard is reachable from:
+
+- Hub → Communication → "+ Add Trigger" (kind picker shown).
+- The per-kind tile cards in Hub → Communication ("Create Jira Trigger" / "Create Schedule Trigger" / "Create GitHub Trigger") — these short-circuit step 1 by passing `initialKind` and land directly on step 2.
+- `/hub/triggers` index "+ New Trigger" button (kind picker shown).
+
+**Steps:**
+
+| # | Step | Universal? | What it does |
+|---|---|---|---|
+| 1 | **Kind** | yes | 5-tile `role="radiogroup"` (Email / Webhook / Jira / Schedule / GitHub) with `role="radio"` + `aria-checked`. Skipped when an entry-point passes `initialKind`. |
+| 2 | **Source** | per-kind | Per-kind input grid: Jira (connection + project key + JQL + poll interval + default agent + name), Schedule (cron via SchedulePicker — see §14.4 — + default agent + name), GitHub (PAT or saved integration + owner + repo + events checklist + default agent + name), Email (Gmail account + saved query / label / from-address filters + default agent + name), Webhook (name + slug mode + callback URL + IP allowlist + rate limit). All inputs have `htmlFor`/`id` associations. Continue is gated on per-kind required fields. |
+| 3 | **Criteria** | per-kind | Jira: read-only JQL preview + "Test Query" button. GitHub: full event/action/filters builder via `CriteriaBuilder` with raw envelope JSON preview + "Test against sample payload" dry-run. Email: saved-query test against the connected mailbox. Schedule + Webhook: pass-through (no criteria step rendered). |
+| 4 | **Notification** | yes | Universal across all 5 kinds. Checkbox "Send a WhatsApp notification on each match" + recipient phone input (placeholder `+15551234567`) + message hint (informational only — full template is set later in the flow editor). Continue gated on valid phone when toggle is ON; no gate when OFF. |
+| 5 | **Confirmation** | yes | Pre-save: summary cards (Kind / Default Agent / Status on Save / Notification recipient / Trigger Name / per-kind specifics). Post-save: "Trigger created" panel + saved trigger card + **Wired Flow card** (auto-flow ID + status + "Open Flow Editor" CTA) when an auto-flow was minted. The CTA links to `/flows?edit=<auto_flow_id>`. |
+
+**Auto-flow handoff (steps 4 → 5):**
+
+When `TSN_FLOWS_AUTO_GENERATION_ENABLED=true`, the trigger CREATE endpoints call `flow_binding_service.ensure_system_managed_flow_for_trigger(...)` in the same transaction as the trigger row, minting a 4-node Source → Gate → Conversation → Notification auto-flow with `is_system_owned=true, editable_by_tenant=true, deletable_by_tenant=false`. The wizard's Notification step writes through to that flow's Notification node via `flow_binding_service.update_auto_flow_notification(...)` — flipping `enabled=true` and setting `recipient` (the engine-correct field name; older code wrote `recipient_phone` which the engine ignored, see §13.4).
+
+The auto-flow ID is surfaced on every trigger Read schema (`JiraTriggerRead.auto_flow_id`, `EmailTriggerRead.auto_flow_id`, `GitHubTriggerRead.auto_flow_id`, `ScheduleTriggerRead.auto_flow_id`, `WebhookTriggerRead.auto_flow_id`). The Confirmation step reads it and renders the Wired Flow card; if no auto-flow was generated (older trigger, or feature flag off), the card falls back to a "Wire a custom Flow" CTA that deep-links to `/flows?source_trigger_kind=<kind>&source_trigger_id=<id>` (the Wave 4 deep-link prefill path).
+
+**Retired components (create path only):**
+
+- `TriggerSetupModal.tsx` — was used for Jira / Schedule / GitHub creation. Code retained for any non-create surfaces (legacy edit modals on per-trigger detail pages — those will be migrated in v0.7.x cleanup).
+- `TriggerWizard.tsx` — was the productivity-style picker shell that dispatched to per-kind sub-wizards.
+- `EmailTriggerWizard.tsx` (create path only) — was the standalone email-only wizard.
+
+**A11y:** 37 `htmlFor`/`id` associations across all wizard inputs (was 0 in `TriggerSetupModal`). Day-of-week chips have `aria-pressed` + arrow-key navigation. Natural-language schedule preview uses `role="status" aria-live="polite"`. Kind-picker tiles in step 1 are a `role="radiogroup"`. GitHub event/action chips are in `role="group"` + `aria-pressed`.
+
+**Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted at the top of the list, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround: user clicks the highlighted flow row's Edit button.
+
+### 14.4 Visual Schedule Picker (v0.7.0)
+
+**Source:** `frontend/components/triggers/SchedulePicker.tsx` (~700 lines) + `schedulePickerUtils.ts` (~385 lines).
+
+The Schedule step inside the Trigger Creation Wizard uses a visual picker — operators no longer need to remember cron syntax. The picker compiles to a 5-field cron expression that backend storage and the dispatcher already understand, so existing `ScheduleTrigger` rows are 100% compatible.
+
+**6 frequency modes:**
+
+| Frequency | Inputs | Compiled cron pattern | Example |
+|---|---|---|---|
+| Hourly | minute offset (0-59) | `<min> * * * *` | `15 * * * *` (every hour at :15) |
+| Daily | time of day | `<min> <hr> * * *` | `0 9 * * *` (every day at 9:00 AM) |
+| Weekly | days of week (chips, multi-select) + time | `<min> <hr> * * <dow_csv>` | `0 9 * * 1,3,5` (Mon/Wed/Fri 9:00) |
+| Monthly | day of month + time | `<min> <hr> <dom> * *` | `0 9 15 * *` (15th of every month at 9:00) |
+| Once | date + time (one-shot — operator pauses after first fire) | `<min> <hr> <dom> <month> *` | `0 9 15 6 *` (Jun 15 at 9:00) |
+| Custom | raw cron textarea (5 or 6 fields, `cronLooksValid` shape check) | as entered | `*/30 8-18 * * 1-5` (every 30min, 8AM-6PM weekdays) |
+
+**Live previews:**
+
+- **Natural-language sentence** in `role="status" aria-live="polite"` — e.g., "Every Monday, Wednesday and Friday at 9:00 AM (America/Sao_Paulo)". Updates instantly as the operator changes chips/inputs. Computed via `cronstrue` against the current compiled cron + the tenant's timezone.
+- **Read-only cron chip** showing the compiled expression — useful for operators who want to see what the visual choices produce.
+- **"Next 3 fire times" preview** — `nextFireTimes(cron, count=3)` helper computes the upcoming three trigger fires in the operator's timezone.
+
+**Mode switching:**
+
+- **Visual → Custom** seeds the textarea with the currently-compiled cron so the operator can edit further from a known-good baseline.
+- **Custom → Visual** best-effort decomposes simple expressions into the matching frequency mode (e.g., `0 9 * * 1,3,5` → Weekly with Mon/Wed/Fri at 9:00). Complex expressions (multiple ranges, step values, etc.) fall back to the frequency's defaults with a notice — the picker doesn't pretend to round-trip arbitrary cron.
+
+**Validation:** `cronLooksValid` checks that Custom input is 5 or 6 whitespace-separated fields containing only the legal cron alphabet (`0-9`, `*`, `/`, `-`, `,`, `?`, `L`, `W`). Server-side validation is still authoritative for semantic correctness — the client check just prevents the obvious "not-a-cron" mistakes that previously left the Create button enabled but silently no-op'd on click.
+
+**A11y:** Day-of-week chips have `aria-pressed` + arrow-key navigation between chips. Natural-language sentence is in `role="status" aria-live="polite"` so screen readers announce changes. All inputs have `htmlFor`/`id` associations.
 
 ---
 
@@ -2883,6 +2969,53 @@ A Jira integration row (`jira_integration` — subclass of `hub_integration`) st
 Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool schema (the LLM never sees actions it cannot run). `JiraSkill.get_mcp_tool_definition` (classmethod) returns the *full* spec so `SkillManager._find_skill_by_tool_name('ticket_operation')` can map the tool name to the class for dispatch; per-agent filtering happens in instance-level `to_openai_tool` / `to_anthropic_tool` helpers that read `AgentSkill.config["capabilities"]`.
 
 **DELETE protection:** `DELETE /api/hub/jira-integrations/{id}` returns `409` if the integration is still referenced by any `JiraChannelInstance` (trigger) or `AgentSkillIntegration` row. The user must detach those references first; the modal's Remove button surfaces the reason.
+
+### 20.4.2 GitHub (programmatic + code_repository skill)
+
+**Sources:** `backend/services/github_integration_service.py`, `backend/api/routes_github_integrations.py`, `backend/agent/skills/code_repository_skill.py`, `backend/channels/github/criteria.py`, `frontend/app/hub/page.tsx` (GitHubIntegrationModal).
+
+GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongside the `code_repository` skill (§9.1) and the GitHub trigger criteria envelope (§14.3 wizard step 3). One integration row provides credentials for both the agent-facing skill and the trigger pipeline.
+
+**Hub UI:** Hub → Tool APIs → Developer Tools → GitHub. The modal asks for:
+
+| Field | Required | Notes |
+|---|---|---|
+| Personal Access Token (PAT) | yes | Stored encrypted with the API-key encryption key (NOT the webhook key). Preview shown as `<first 4>...<last 4>`. |
+| Default owner | yes | Used when an action call omits `owner`. |
+| Default repo | optional | Used when an action call omits `repo`. |
+| Connection mode | radio | `Programmatic (REST API)` (enabled) / `Agentic (GitHub App + OAuth)` (disabled — `coming_soon`, rejected at create with `400 agentic_mode_not_yet_supported`). |
+
+**Routes:**
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/hub/github-integrations` | Create. Rejects `provider_mode='agentic'` with 400. |
+| `GET /api/hub/github-integrations` | List for the tenant; PAT preview masked. |
+| `PATCH /api/hub/github-integrations/{id}` | Update name / default owner / default repo. PAT cannot be patched in place — recreate the integration instead. |
+| `DELETE /api/hub/github-integrations/{id}` | Returns `409` when referenced by any `AgentSkillIntegration(skill_type='code_repository')` or any `GitHubChannelInstance` whose owner/repo matches. |
+| `POST /api/hub/github-integrations/test-connection` | Raw-creds dry-run. Hits GitHub `/repos/{owner}/{repo}` and returns `{success, status_code, repo_full_name}`. |
+| `POST /api/hub/github-integrations/{id}/test-connection` | Saved-creds dry-run for already-stored integrations. |
+
+**Code Repository skill** (§9 row `code_repository`): the same `GitHubIntegration` row is reused on demand by agents. The agent's Skills tab auto-selects the GitHub integration when exactly one exists. Capability matrix:
+
+| Action | Default | Notes |
+|---|---|---|
+| `search_repos` | ON | Read |
+| `list_pull_requests` | ON | Read |
+| `read_pull_request` | ON | Read |
+| `list_issues` | ON | Read |
+| `read_issue` | ON | Read |
+| `create_issue` | OFF | Write |
+| `add_pr_comment` | OFF | Write |
+| `approve_pull_request` | OFF | Write |
+| `request_changes` | OFF | Write |
+| `merge_pull_request` | OFF | Write |
+| `close_pull_request` | OFF | Write |
+| `close_issue` | OFF | Write |
+
+Same tool-spec gating contract as `ticket_management` and the v0.7.0 granular Gmail capabilities — see §9.2.1 for the four design properties.
+
+**Trigger criteria envelope** (used by the GitHub trigger wizard, §14.3): `{criteria_version: 1, event: 'pull_request', actions: ['opened', 'reopened', ...], filters: {branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering: 'oldest_first'}`. The evaluator at `backend/channels/github/criteria.py` returns `(matched, reason)` for every rejection path so the dry-run "Test against sample payload" surface in the wizard's Criteria step (and on the existing trigger detail Criteria tab) can show why a sample PR was filtered out.
 
 ### 20.5 Browser Automation (Playwright, CDP)
 
