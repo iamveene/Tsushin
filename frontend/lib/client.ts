@@ -73,30 +73,53 @@ function isAbortError(error: unknown): boolean {
 /**
  * Helper function to handle API response errors with user-friendly messages
  */
+/**
+ * Error class enriched with the FastAPI `detail` payload so callers can
+ * branch on stable codes (e.g. `error.code === 'agent_has_pending_wake_events'`)
+ * instead of regex-matching the human-readable message.
+ */
+export class ApiError extends Error {
+  status: number
+  code?: string
+  detail?: unknown
+
+  constructor(message: string, status: number, detail?: unknown, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+    this.code = code
+  }
+}
+
 async function handleApiError(res: Response, defaultMessage: string): Promise<never> {
   if (res.status === 403) {
-    throw new Error('Permission denied. You do not have access to perform this action.')
+    throw new ApiError('Permission denied. You do not have access to perform this action.', 403)
   }
   if (res.status === 401) {
-    throw new Error('Session expired. Please log in again.')
+    throw new ApiError('Session expired. Please log in again.', 401)
   }
   if (res.status === 404) {
-    throw new Error('Resource not found.')
+    throw new ApiError('Resource not found.', 404)
   }
   if (res.status === 409) {
-    // Try to extract specific error message (e.g., plan limit reached) before falling back to generic
     try {
       const data = await res.json()
-      if (data.detail && typeof data.detail === 'string') {
-        throw new Error(data.detail)
+      if (typeof data.detail === 'string') {
+        throw new ApiError(data.detail, 409, data.detail)
+      }
+      if (data.detail && typeof data.detail === 'object') {
+        const code = typeof data.detail.code === 'string' ? data.detail.code : undefined
+        const message = typeof data.detail.message === 'string'
+          ? data.detail.message
+          : (defaultMessage || 'Conflict')
+        throw new ApiError(message, 409, data.detail, code)
       }
     } catch (jsonErr) {
-      // Re-throw our own error (thrown from data.detail check above); swallow SyntaxErrors (non-JSON body)
-      if (!(jsonErr instanceof SyntaxError)) {
-        throw jsonErr
-      }
+      if (jsonErr instanceof ApiError) throw jsonErr
+      if (!(jsonErr instanceof SyntaxError)) throw jsonErr
     }
-    throw new Error('Conflict: This resource already exists or cannot be modified.')
+    throw new ApiError(defaultMessage || 'Conflict', 409)
   }
   // Try to extract error message from response body
   let detail: string | undefined
@@ -1869,12 +1892,16 @@ export interface PageParams {
   offset?: number
 }
 
+export type ContinuousAgentActionKind = 'tool_run' | 'send_message' | 'conditional_branch' | 'react_only'
+
 export interface ContinuousAgent {
   id: number
   tenant_id: string
   agent_id: number
   agent_name?: string | null
   name?: string | null
+  purpose?: string | null
+  action_kind?: ContinuousAgentActionKind | null
   execution_mode: string
   status: string
   delivery_policy_id?: number | null
@@ -1947,6 +1974,10 @@ export interface WakeEventPayload {
 export interface ContinuousAgentCreate {
   agent_id: number
   name?: string | null
+  // v0.7.0-fix Phase 6: required at API level (min 30 chars). Tells operators
+  // what the agent does when it wakes; surfaced in lists and the run history UI.
+  purpose: string
+  action_kind: ContinuousAgentActionKind
   execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
   delivery_policy_id?: number | null
   budget_policy_id?: number | null
@@ -1956,6 +1987,8 @@ export interface ContinuousAgentCreate {
 
 export interface ContinuousAgentUpdate {
   name?: string | null
+  purpose?: string | null
+  action_kind?: ContinuousAgentActionKind | null
   execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
   delivery_policy_id?: number | null
   budget_policy_id?: number | null

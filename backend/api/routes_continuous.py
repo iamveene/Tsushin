@@ -69,6 +69,8 @@ class ContinuousAgentRead(BaseModel):
     agent_id: int
     agent_name: Optional[str] = None
     name: Optional[str] = None
+    purpose: Optional[str] = None
+    action_kind: Optional[str] = None
     execution_mode: str
     status: str
     delivery_policy_id: Optional[int] = None
@@ -144,6 +146,11 @@ class WakeEventPayloadRead(BaseModel):
 
 _AGENT_EXECUTION_MODES = {"autonomous", "hybrid", "notify_only"}
 _AGENT_USER_STATUSES = {"active", "paused", "disabled"}
+# v0.7.0-fix Phase 6: action_kind values communicate "what does this agent do
+# when it wakes up?" — see also frontend explainer copy in agent-vs-flow-explainer.tsx
+_AGENT_ACTION_KINDS = {"tool_run", "send_message", "conditional_branch", "react_only"}
+# Purpose minimum length so "test", "asdf", and emoji-only inputs don't pass.
+_PURPOSE_MIN_LENGTH = 30
 _SUBSCRIPTION_USER_STATUSES = {"active", "paused", "disabled"}
 _SUBSCRIPTION_CREATE_STATUSES = {"active", "paused"}
 _ACTION_CONFIG_MAX_BYTES = 64 * 1024
@@ -159,6 +166,11 @@ _CHANNEL_INSTANCE_MODELS: dict[str, Type] = {
 class ContinuousAgentCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=128)
     agent_id: int = Field(..., ge=1)
+    # v0.7.0-fix Phase 6: purpose + action_kind are required so operators
+    # always know what each continuous agent does without reading the
+    # underlying Agent's system prompt.
+    purpose: str = Field(..., min_length=_PURPOSE_MIN_LENGTH, max_length=2000)
+    action_kind: str = Field(...)
     execution_mode: str = "hybrid"
     delivery_policy_id: Optional[int] = Field(default=None, ge=1)
     budget_policy_id: Optional[int] = Field(default=None, ge=1)
@@ -172,6 +184,26 @@ class ContinuousAgentCreate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("purpose")
+    @classmethod
+    def _validate_purpose(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < _PURPOSE_MIN_LENGTH:
+            raise ValueError(
+                f"purpose must be at least {_PURPOSE_MIN_LENGTH} characters; "
+                "describe what the agent does when it wakes."
+            )
+        return normalized
+
+    @field_validator("action_kind")
+    @classmethod
+    def _validate_action_kind(cls, value: str) -> str:
+        if value not in _AGENT_ACTION_KINDS:
+            raise ValueError(
+                f"action_kind must be one of {sorted(_AGENT_ACTION_KINDS)}"
+            )
+        return value
 
     @field_validator("execution_mode")
     @classmethod
@@ -194,6 +226,8 @@ class ContinuousAgentCreate(BaseModel):
 
 class ContinuousAgentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=128)
+    purpose: Optional[str] = Field(default=None, min_length=_PURPOSE_MIN_LENGTH, max_length=2000)
+    action_kind: Optional[str] = None
     execution_mode: Optional[str] = None
     delivery_policy_id: Optional[int] = Field(default=None, ge=1)
     budget_policy_id: Optional[int] = Field(default=None, ge=1)
@@ -207,6 +241,30 @@ class ContinuousAgentUpdate(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("purpose")
+    @classmethod
+    def _validate_purpose(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if len(normalized) < _PURPOSE_MIN_LENGTH:
+            raise ValueError(
+                f"purpose must be at least {_PURPOSE_MIN_LENGTH} characters; "
+                "describe what the agent does when it wakes."
+            )
+        return normalized
+
+    @field_validator("action_kind")
+    @classmethod
+    def _validate_action_kind(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if value not in _AGENT_ACTION_KINDS:
+            raise ValueError(
+                f"action_kind must be one of {sorted(_AGENT_ACTION_KINDS)}"
+            )
+        return value
 
     @field_validator("execution_mode")
     @classmethod
@@ -402,6 +460,8 @@ def _continuous_agent_read(db: Session, row: ContinuousAgent) -> ContinuousAgent
         agent_id=row.agent_id,
         agent_name=_agent_name(db, row.agent_id),
         name=row.name,
+        purpose=row.purpose,
+        action_kind=row.action_kind,
         execution_mode=row.execution_mode,
         status=row.status,
         delivery_policy_id=row.delivery_policy_id,
@@ -769,6 +829,8 @@ def create_continuous_agent(
         tenant_id=caller.tenant_id,
         agent_id=payload.agent_id,
         name=payload.name,
+        purpose=payload.purpose,
+        action_kind=payload.action_kind,
         execution_mode=payload.execution_mode,
         delivery_policy_id=payload.delivery_policy_id,
         budget_policy_id=payload.budget_policy_id,

@@ -3501,6 +3501,13 @@ class ContinuousAgent(Base):
     tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(128), nullable=True)
+    # v0.7.0-fix Phase 6: every continuous agent must declare its purpose so
+    # operators understand what it does without reading the wrapped Agent's
+    # system prompt.
+    purpose = Column(Text, nullable=True)
+    # action_kind codifies the four shapes a continuous agent can take:
+    # tool_run | send_message | conditional_branch | react_only.
+    action_kind = Column(String(32), nullable=True)
     execution_mode = Column(String(16), default="hybrid", nullable=False)  # autonomous | hybrid | notify_only
     delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
     budget_policy_id = Column(Integer, ForeignKey("budget_policy.id", ondelete="SET NULL"), nullable=True)
