@@ -25,12 +25,10 @@ import type {
   EmailTrigger,
   FlowTriggerBinding,
   GitHubTrigger,
-  JiraManagedNotificationStatus,
   JiraPollNowResponse,
   JiraTrigger,
   WebhookIntegration,
 } from '@/lib/client'
-import JiraManagedNotificationCard from '@/components/triggers/sections/JiraManagedNotificationCard'
 import JiraManualPollCard from '@/components/triggers/sections/JiraManualPollCard'
 import EmailManagedNotificationCard from '@/components/triggers/sections/EmailManagedNotificationCard'
 import EmailManagedTriageCard from '@/components/triggers/sections/EmailManagedTriageCard'
@@ -49,8 +47,9 @@ interface Props {
   kind: OutputsKind
   trigger: OutputsTrigger
   canWriteHub: boolean
-  // Jira-specific props
-  jiraNotificationStatus?: JiraManagedNotificationStatus | null
+  // Jira-specific props (managed notification props retired in
+  // v0.7.0-fix Phase 4 — left as no-ops for callsite back-compat).
+  jiraNotificationStatus?: unknown
   jiraPhoneInput?: string
   onJiraPhoneChange?: (value: string) => void
   onEnableJiraNotification?: () => void
@@ -103,25 +102,16 @@ export default function OutputsSection({
     const jira = trigger as JiraTrigger
     return (
       <div className="space-y-4">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <JiraManagedNotificationCard
-            trigger={jira}
-            notificationStatus={jiraNotificationStatus}
-            phoneInput={jiraPhoneInput}
-            onPhoneChange={onJiraPhoneChange ?? (() => undefined)}
-            onEnable={onEnableJiraNotification ?? (() => undefined)}
-            enabling={jiraNotificationLoading}
-            canWriteHub={canWriteHub}
-            suppressedByBinding={suppressor}
-          />
-          <JiraManualPollCard
-            trigger={jira}
-            pollResult={jiraPollResult}
-            onPollNow={onJiraPollNow ?? (() => undefined)}
-            polling={jiraPolling}
-            canWriteHub={canWriteHub}
-          />
-        </div>
+        {/* v0.7.0-fix Phase 4: legacy JiraManagedNotificationCard retired.
+            Notification config now lives on the auto-flow's Notification node
+            (see Wired Flows below). The Manual Poll card stays. */}
+        <JiraManualPollCard
+          trigger={jira}
+          pollResult={jiraPollResult}
+          onPollNow={onJiraPollNow ?? (() => undefined)}
+          polling={jiraPolling}
+          canWriteHub={canWriteHub}
+        />
         <WiredFlowsCard
           triggerKind="jira"
           triggerId={jira.id}
