@@ -184,19 +184,12 @@ function splitList(text?: string | null): string[] | null {
   return values.length > 0 ? values : null
 }
 
-function jiraManagedNotificationFromTrigger(trigger: JiraTrigger): JiraManagedNotificationStatus | null {
-  if (trigger.managed_notification_status) return trigger.managed_notification_status
-  if (!trigger.managed_notification_enabled && !trigger.notification_subscription_status && !trigger.managed_notification_recipient_preview && !trigger.notification_recipient_preview) {
-    return null
-  }
-  return {
-    status: trigger.notification_subscription_status || (trigger.managed_notification_enabled ? 'active' : 'inactive'),
-    recipient_preview: trigger.managed_notification_recipient_preview || trigger.notification_recipient_preview,
-    agent_id: trigger.managed_notification_agent_id || trigger.default_agent_id,
-    agent_name: trigger.managed_notification_agent_name,
-    continuous_agent_id: trigger.managed_notification_continuous_agent_id,
-    continuous_subscription_id: trigger.managed_notification_subscription_id,
-  }
+function jiraManagedNotificationFromTrigger(_trigger: JiraTrigger): JiraManagedNotificationStatus | null {
+  // v0.7.0-fix Phase 4: managed-notification fields no longer come from the
+  // backend. Notification config lives on the auto-flow's Notification node.
+  // This helper is kept as a stub to preserve callsite signatures until the
+  // OutputsSection wiring is fully unwound in Phase 4b.
+  return null
 }
 
 function pollResultSummary(result: JiraPollNowResponse): string {

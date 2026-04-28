@@ -134,9 +134,6 @@ export default function TriggerBreadthCards({
           <DetailLine label="Site">{jira.site_url}</DetailLine>
           <DetailLine label="JQL">{jira.jql}</DetailLine>
           <DetailLine label="Poll">{jira.poll_interval_seconds}s</DetailLine>
-          <DetailLine label="WhatsApp notification">
-            {jira.managed_notification_status?.status || jira.notification_subscription_status || (jira.managed_notification_enabled ? 'active' : 'Not enabled')}
-          </DetailLine>
         </>
       )
     }
