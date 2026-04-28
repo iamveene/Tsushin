@@ -2,35 +2,14 @@
 
 v0.7.0-fix Phase 3 deleted the per-trigger PAT path (auth_method,
 installation_id, pat_token, /test-connection, /check-connection) and
-replaced it with a required github_integration_id FK. This file's
-seed helpers + payloads were end-to-end coupled to the legacy fields
-(`pat_token_encrypted`, `pat_token_preview`, `has_pat_token`,
-``api.testGitHubTriggerConnection``) so every test would crash on
-fixture setup.
-
-Skipping the whole file pending a fixture rewrite that:
-  - Seeds a GitHubIntegration (Hub) row with an encrypted PAT
-  - Sets GitHubChannelInstance.github_integration_id to that row's id
-  - Drops every `created.has_pat_token` / `created.pat_token_preview`
-    assertion
-  - Drops `test_connection_check_uses_github_repo_endpoint_when_pat_exists`
-    entirely (the endpoint was removed)
-
-Tracked under v0.7.x test-debt; see commit 49ee2f3 for the API contract
-this file should match.
+replaced it with a required ``github_integration_id`` FK. The trigger
+now reads its credentials from the linked Hub ``GitHubIntegration`` at
+call time. The test suite mirrors the Jira sibling
+(``test_routes_jira_triggers.py``) — seed a Hub integration, then create
+the trigger with ``github_integration_id``.
 """
 
 from __future__ import annotations
-
-import pytest
-
-pytestmark = pytest.mark.skip(
-    reason=(
-        "v0.7.0-fix Phase 3: GitHub trigger fixtures use the deleted "
-        "per-trigger PAT path. Test rewrite gated on the github_integration_id "
-        "fixture refactor — see module docstring."
-    )
-)
 
 import asyncio
 import hashlib
@@ -41,6 +20,7 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -75,14 +55,24 @@ from api import routes_github_triggers as triggers  # noqa: E402
 from api.routes_github_triggers import (  # noqa: E402
     GitHubTriggerCreate,
     GitHubTriggerUpdate,
-    check_github_connection,
     create_github_trigger,
     delete_github_trigger,
     list_github_triggers,
     update_github_trigger,
 )
-from models import Agent, Base, Contact, GitHubChannelInstance  # noqa: E402
+from channels.github import trigger as github_trigger  # noqa: E402
+from models import (  # noqa: E402
+    Agent,
+    Base,
+    Contact,
+    FlowTriggerBinding,
+    GitHubChannelInstance,
+    GitHubIntegration,
+    HubIntegration,
+)
 from models_rbac import Tenant, User  # noqa: E402
+
+TEST_MASTER_KEY = "github-test-master-key"
 
 
 class _RequestStub:
@@ -94,7 +84,22 @@ class _RequestStub:
 
 
 @pytest.fixture
-def db_session():
+def db_session(monkeypatch):
+    # Stub the encryption-key lookup so PAT/webhook secrets encrypt deterministically.
+    from services import encryption_key_service
+
+    monkeypatch.setattr(
+        encryption_key_service, "get_api_key_encryption_key", lambda db: TEST_MASTER_KEY
+    )
+    monkeypatch.setattr(
+        encryption_key_service, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY
+    )
+    # Disable auto-flow generation — the unit test scope is the trigger CRUD
+    # contract, not the FlowDefinition / FlowTriggerBinding side-effects.
+    from config import feature_flags
+
+    monkeypatch.setattr(feature_flags, "flows_auto_generation_enabled", lambda: False)
+
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
@@ -103,7 +108,10 @@ def db_session():
             User.__table__,
             Contact.__table__,
             Agent.__table__,
+            HubIntegration.__table__,
+            GitHubIntegration.__table__,
             GitHubChannelInstance.__table__,
+            FlowTriggerBinding.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -112,30 +120,6 @@ def db_session():
         yield db
     finally:
         db.close()
-
-
-@pytest.fixture(autouse=True)
-def github_crypto(monkeypatch):
-    monkeypatch.setattr(
-        triggers,
-        "encrypt_pat_token",
-        lambda db, tenant_id, token: f"pat:{tenant_id}:{token}",
-    )
-    monkeypatch.setattr(
-        triggers,
-        "encrypt_webhook_secret",
-        lambda db, tenant_id, secret: f"webhook:{tenant_id}:{secret}",
-    )
-    monkeypatch.setattr(
-        triggers,
-        "decrypt_pat_token",
-        lambda db, tenant_id, encrypted: encrypted.rsplit(":", 1)[-1],
-    )
-    monkeypatch.setattr(
-        inbound,
-        "decrypt_webhook_secret",
-        lambda db, tenant_id, encrypted: encrypted.rsplit(":", 1)[-1],
-    )
 
 
 def _ctx(tenant_id: str):
@@ -151,8 +135,23 @@ def _seed_tenant_user_agent(
     agent_id: int,
 ):
     db.add(Tenant(id=tenant_id, name=tenant_id.title(), slug=tenant_id))
-    db.add(User(id=user_id, tenant_id=tenant_id, email=f"{tenant_id}@example.com", password_hash="x", is_active=True))
-    db.add(Contact(id=contact_id, tenant_id=tenant_id, friendly_name=f"Agent {tenant_id}", role="agent"))
+    db.add(
+        User(
+            id=user_id,
+            tenant_id=tenant_id,
+            email=f"{tenant_id}@example.com",
+            password_hash="x",
+            is_active=True,
+        )
+    )
+    db.add(
+        Contact(
+            id=contact_id,
+            tenant_id=tenant_id,
+            friendly_name=f"Agent {tenant_id}",
+            role="agent",
+        )
+    )
     db.add(
         Agent(
             id=agent_id,
@@ -167,25 +166,53 @@ def _seed_tenant_user_agent(
     )
 
 
-def _seed_github(
+def _seed_github_integration(
+    db,
+    *,
+    integration_id: int,
+    tenant_id: str,
+    name: str = "GitHub Production",
+    pat_token: str = "ghp_secret7890",
+) -> GitHubIntegration:
+    encrypted = github_trigger.encrypt_pat_token(db, tenant_id, pat_token)
+    integration = GitHubIntegration(
+        id=integration_id,
+        tenant_id=tenant_id,
+        type="github",
+        name=name,
+        display_name=name,
+        provider="github",
+        auth_method="pat",
+        pat_token_encrypted=encrypted,
+        pat_token_preview=f"{pat_token[:4]}...{pat_token[-4:]}",
+        provider_mode="programmatic",
+        is_active=True,
+    )
+    db.add(integration)
+    return integration
+
+
+def _seed_github_trigger(
     db,
     *,
     instance_id: int,
     tenant_id: str,
     created_by: int,
+    github_integration_id: int,
     default_agent_id: int | None = None,
     repo_owner: str = "octo",
     repo_name: str = "repo",
-):
+    webhook_secret_plain: str = "secret",
+) -> GitHubChannelInstance:
+    encrypted = github_trigger.encrypt_webhook_secret(db, tenant_id, webhook_secret_plain)
     instance = GitHubChannelInstance(
         id=instance_id,
         tenant_id=tenant_id,
         integration_name=f"GitHub {tenant_id}",
+        github_integration_id=github_integration_id,
         repo_owner=repo_owner,
         repo_name=repo_name,
-        pat_token_encrypted=f"pat:{tenant_id}:ghp_token",
-        pat_token_preview="ghp_...oken",
-        webhook_secret_encrypted=f"webhook:{tenant_id}:secret",
+        webhook_secret_encrypted=encrypted,
         webhook_secret_preview="secr...cret",
         events=["push"],
         default_agent_id=default_agent_id,
@@ -203,19 +230,22 @@ def _signed_request(payload: dict, secret: str = "secret"):
     return _RequestStub(body), f"sha256={signature}"
 
 
-def test_create_github_trigger_generates_secret_and_lists_only_tenant_rows(db_session, monkeypatch):
+def test_create_github_trigger_links_integration_and_lists_only_tenant_rows(
+    db_session, monkeypatch
+):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
     _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
-    _seed_github(db_session, instance_id=901, tenant_id="tenant-b", created_by=2, default_agent_id=202)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a", name="Tenant A GitHub")
+    _seed_github_integration(db_session, integration_id=12, tenant_id="tenant-b", name="Tenant B GitHub")
     db_session.commit()
     monkeypatch.setattr(triggers, "generate_webhook_secret", lambda: "generated-secret-1234")
 
     created = create_github_trigger(
         payload=GitHubTriggerCreate(
             integration_name="Repo Watcher",
+            github_integration_id=11,
             repo_owner=" Octo ",
             repo_name=" repo ",
-            pat_token="ghp_secret7890",
             events=["push", "pull_request"],
             default_agent_id=201,
         ),
@@ -224,35 +254,42 @@ def test_create_github_trigger_generates_secret_and_lists_only_tenant_rows(db_se
         db=db_session,
     )
     listed = list_github_triggers(ctx=_ctx("tenant-a"), _user=SimpleNamespace(id=1), db=db_session)
-    stored = db_session.query(GitHubChannelInstance).filter(
-        GitHubChannelInstance.tenant_id == "tenant-a",
-    ).one()
+    stored = (
+        db_session.query(GitHubChannelInstance)
+        .filter(GitHubChannelInstance.tenant_id == "tenant-a")
+        .one()
+    )
 
     assert created.integration_name == "Repo Watcher"
     assert created.repo_owner == "Octo"
+    assert created.repo_name == "repo"
+    assert created.github_integration_id == 11
+    assert created.github_integration_name == "Tenant A GitHub"
     assert created.default_agent_name == "Agent tenant-a"
-    assert created.has_pat_token is True
-    assert created.pat_token_preview == "ghp_...7890"
     assert created.webhook_secret_preview == "gene...1234"
+    # Per-trigger PAT is gone — no PAT fields exposed in the create response.
     assert not hasattr(created, "pat_token")
-    assert not hasattr(created, "webhook_secret")
-    assert stored.pat_token_encrypted == "pat:tenant-a:ghp_secret7890"
-    assert stored.webhook_secret_encrypted == "webhook:tenant-a:generated-secret-1234"
+    assert not hasattr(created, "pat_token_preview")
+    assert not hasattr(created, "has_pat_token")
+    assert stored.github_integration_id == 11
+    assert stored.webhook_secret_encrypted != "generated-secret-1234"
     assert [row.tenant_id for row in listed] == ["tenant-a"]
 
 
 def test_create_github_trigger_rejects_foreign_default_agent(db_session):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
     _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a")
     db_session.commit()
 
     with pytest.raises(HTTPException) as exc_info:
         create_github_trigger(
             payload=GitHubTriggerCreate(
                 integration_name="Repo Watcher",
+                github_integration_id=11,
                 repo_owner="octo",
                 repo_name="repo",
-                default_agent_id=202,
+                default_agent_id=202,  # tenant-b's agent
             ),
             ctx=_ctx("tenant-a"),
             current_user=SimpleNamespace(id=1),
@@ -263,16 +300,78 @@ def test_create_github_trigger_rejects_foreign_default_agent(db_session):
     assert exc_info.value.detail == "Agent not found"
 
 
+def test_create_github_trigger_rejects_foreign_github_integration(db_session):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
+    _seed_github_integration(db_session, integration_id=12, tenant_id="tenant-b")
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_github_trigger(
+            payload=GitHubTriggerCreate(
+                integration_name="Repo Watcher",
+                github_integration_id=12,  # tenant-b's integration
+                repo_owner="octo",
+                repo_name="repo",
+            ),
+            ctx=_ctx("tenant-a"),
+            current_user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 404
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "github_integration_not_found"
+
+
+def test_create_github_trigger_rejects_missing_github_integration(db_session):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_github_trigger(
+            payload=GitHubTriggerCreate(
+                integration_name="Repo Watcher",
+                github_integration_id=99999,
+                repo_owner="octo",
+                repo_name="repo",
+            ),
+            ctx=_ctx("tenant-a"),
+            current_user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail.get("code") == "github_integration_not_found"
+
+
 def test_update_and_delete_github_trigger_are_tenant_scoped(db_session):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
     _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
-    trigger_a = _seed_github(db_session, instance_id=901, tenant_id="tenant-a", created_by=1, default_agent_id=201)
-    trigger_b = _seed_github(db_session, instance_id=902, tenant_id="tenant-b", created_by=2, default_agent_id=202)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a")
+    _seed_github_integration(db_session, integration_id=12, tenant_id="tenant-b")
+    trigger_a = _seed_github_trigger(
+        db_session,
+        instance_id=901,
+        tenant_id="tenant-a",
+        created_by=1,
+        github_integration_id=11,
+        default_agent_id=201,
+    )
+    trigger_b = _seed_github_trigger(
+        db_session,
+        instance_id=902,
+        tenant_id="tenant-b",
+        created_by=2,
+        github_integration_id=12,
+        default_agent_id=202,
+    )
     db_session.commit()
 
     updated = update_github_trigger(
         trigger_id=trigger_a.id,
-        payload=GitHubTriggerUpdate(is_active=False, branch_filter="main", pat_token="ghp_newtoken"),
+        payload=GitHubTriggerUpdate(is_active=False, branch_filter="main"),
         ctx=_ctx("tenant-a"),
         _user=SimpleNamespace(id=1),
         db=db_session,
@@ -281,7 +380,9 @@ def test_update_and_delete_github_trigger_are_tenant_scoped(db_session):
     assert updated.is_active is False
     assert updated.status == "paused"
     assert updated.branch_filter == "main"
-    assert updated.pat_token_preview == "ghp_...oken"
+    # Updates do not expose PAT fields anymore.
+    assert not hasattr(updated, "pat_token_preview")
+
     with pytest.raises(HTTPException) as exc_info:
         delete_github_trigger(
             trigger_id=trigger_b.id,
@@ -292,44 +393,48 @@ def test_update_and_delete_github_trigger_are_tenant_scoped(db_session):
     assert exc_info.value.status_code == 404
 
 
-def test_connection_check_uses_github_repo_endpoint_when_pat_exists(db_session, monkeypatch):
+def test_update_github_trigger_can_relink_integration(db_session):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
-    trigger = _seed_github(db_session, instance_id=901, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a", name="GitHub Prod")
+    _seed_github_integration(db_session, integration_id=13, tenant_id="tenant-a", name="GitHub Staging")
+    trigger = _seed_github_trigger(
+        db_session,
+        instance_id=901,
+        tenant_id="tenant-a",
+        created_by=1,
+        github_integration_id=11,
+        default_agent_id=201,
+    )
     db_session.commit()
-    captured = {}
 
-    async def fake_get_repo(pat_token, repo_owner, repo_name):
-        captured["args"] = (pat_token, repo_owner, repo_name)
-        return 200, "{}"
-
-    monkeypatch.setattr(triggers, "_github_get_repo", fake_get_repo)
-
-    result = asyncio.run(
-        check_github_connection(
-            trigger_id=trigger.id,
-            ctx=_ctx("tenant-a"),
-            _user=SimpleNamespace(id=1),
-            db=db_session,
-        )
+    updated = update_github_trigger(
+        trigger_id=trigger.id,
+        payload=GitHubTriggerUpdate(github_integration_id=13),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
     )
 
-    stored = db_session.query(GitHubChannelInstance).filter(GitHubChannelInstance.id == trigger.id).one()
-    assert captured["args"] == ("ghp_token", "octo", "repo")
-    assert result.ok is True
-    assert result.status == "ok"
-    assert result.status_code == 200
-    assert stored.health_status == "healthy"
-    assert stored.last_health_check is not None
+    assert updated.github_integration_id == 13
+    assert updated.github_integration_name == "GitHub Staging"
 
 
 def test_signed_github_inbound_filters_and_dispatches(db_session, monkeypatch):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
-    trigger = _seed_github(db_session, instance_id=901, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a")
+    trigger = _seed_github_trigger(
+        db_session,
+        instance_id=901,
+        tenant_id="tenant-a",
+        created_by=1,
+        github_integration_id=11,
+        default_agent_id=201,
+    )
     trigger.branch_filter = "main"
     trigger.path_filters = ["src/*"]
     trigger.author_filter = "octocat"
     db_session.commit()
-    captured = {}
+    captured: dict = {}
 
     class FakeDispatchService:
         def __init__(self, db):
@@ -337,7 +442,9 @@ def test_signed_github_inbound_filters_and_dispatches(db_session, monkeypatch):
 
         def dispatch(self, event):
             captured["event"] = event
-            return SimpleNamespace(status="dispatched", wake_event_id=77, continuous_run_ids=[88])
+            return SimpleNamespace(
+                status="dispatched", wake_event_id=77, continuous_run_ids=[88]
+            )
 
     monkeypatch.setattr(inbound, "TriggerDispatchService", FakeDispatchService)
     payload = {
@@ -379,12 +486,23 @@ def test_signed_github_inbound_filters_and_dispatches(db_session, monkeypatch):
     assert event.dedupe_key == "delivery-1"
     assert event.payload["changed_paths"] == ["src/app.py"]
     assert event.sender_key == "github_901_octocat"
-    assert db_session.query(GitHubChannelInstance).filter_by(id=trigger.id).one().last_delivery_id == "delivery-1"
+    refreshed = db_session.query(GitHubChannelInstance).filter_by(id=trigger.id).one()
+    assert refreshed.last_delivery_id == "delivery-1"
 
 
-def test_signed_github_inbound_rejects_bad_signature_and_ignores_filter_misses(db_session, monkeypatch):
+def test_signed_github_inbound_rejects_bad_signature_and_ignores_filter_misses(
+    db_session, monkeypatch
+):
     _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
-    trigger = _seed_github(db_session, instance_id=901, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a")
+    trigger = _seed_github_trigger(
+        db_session,
+        instance_id=901,
+        tenant_id="tenant-a",
+        created_by=1,
+        github_integration_id=11,
+        default_agent_id=201,
+    )
     trigger.branch_filter = "main"
     db_session.commit()
     payload = {

@@ -311,10 +311,12 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
 def _integration_name(db: Session, integration_id: Optional[int]) -> Optional[str]:
     if not integration_id:
         return None
-    row = db.query(GitHubIntegration.integration_name).filter(
+    row = db.query(GitHubIntegration.display_name, GitHubIntegration.name).filter(
         GitHubIntegration.id == integration_id
     ).first()
-    return row.integration_name if row else None
+    if not row:
+        return None
+    return row.display_name or row.name
 
 
 def _inbound_url(instance: GitHubChannelInstance) -> str:

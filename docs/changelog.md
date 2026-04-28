@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Post-tag fix sweep that addresses the structural issues surfaced after the wizard ship: monitoring pages leaking into Hub, hidden Continuous Agents, per-trigger credentials, the Schedule trigger duplicating Flow scheduled execution, and the WhatsApp Notification card the user explicitly asked to retire. Eight phased commits on `release/0.7.0`; full breakdown in `.private/070fix_plan.md`.
 
+**GitHub PAT test re-enable + latent bug fix (2026-04-28)** — `backend/tests/test_routes_github_triggers.py` was rewritten against the new `github_integration_id` FK shape (8 tests, all green) and `pytest.mark.skip` removed. While rewriting, fixed a latent `AttributeError` in `backend/api/routes_github_triggers._integration_name` — it queried `GitHubIntegration.integration_name` (a column that doesn't exist; `GitHubIntegration` inherits `name`/`display_name` from `HubIntegration`). Replaced with `display_name or name` to match the Jira pattern. Bug would have surfaced the first time anyone GET'd a GitHub trigger row.
+
 **Phase 1 — Hub/Watcher restructure** ([8dc1880](https://github.com/iamveene/Tsushin/commit/8dc1880))
 - Wake Events moved from `/hub/wake-events` to `/wake-events` (now under Watcher, where monitoring belongs). The old URL still resolves via a server `redirect()` for back-compat.
 - Watcher landing page exposes a sub-strip with full-page links to **Wake Events** and **Continuous Agents** so they're reachable from the monitoring section.
