@@ -125,7 +125,12 @@ export default function SourceSection({
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
         <Field label="Repository" value={`${github.repo_owner}/${github.repo_name}`} />
-        <Field label="Auth method" value={github.auth_method} />
+        <Field
+          label="Hub integration"
+          value={github.github_integration_name
+            ? <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{github.github_integration_name}</Link>
+            : <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{`Integration #${github.github_integration_id}`}</Link>}
+        />
         <Field label="Events" value={(github.events || []).length > 0 ? github.events!.join(', ') : 'Default'} />
         <Field label="Branch" value={github.branch_filter || 'Any branch'} />
       </div>
