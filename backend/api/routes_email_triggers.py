@@ -17,7 +17,6 @@ from db import get_db
 from hub.google.gmail_service import GmailService
 from models import Agent, Contact, EmailChannelInstance, GmailIntegration
 from services.email_notification_service import (
-    email_notification_status,
     ensure_email_notification_subscription,
 )
 from services.email_triage_service import ensure_email_triage_subscription
@@ -107,15 +106,6 @@ class EmailTriggerUpdate(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
-class EmailManagedNotificationStatus(BaseModel):
-    status: str
-    recipient_preview: Optional[str] = None
-    agent_id: Optional[int] = None
-    agent_name: Optional[str] = None
-    continuous_agent_id: Optional[int] = None
-    continuous_subscription_id: Optional[int] = None
-
-
 class EmailTriggerRead(BaseModel):
     id: int
     tenant_id: str
@@ -136,18 +126,12 @@ class EmailTriggerRead(BaseModel):
     last_health_check: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     last_cursor: Optional[str] = None
-    managed_notification_enabled: bool = False
-    managed_notification_status: Optional[EmailManagedNotificationStatus] = None
-    notification_subscription_status: Optional[str] = None
-    notification_recipient_preview: Optional[str] = None
-    managed_notification_agent_id: Optional[int] = None
-    managed_notification_agent_name: Optional[str] = None
-    managed_notification_recipient_preview: Optional[str] = None
-    managed_notification_continuous_agent_id: Optional[int] = None
-    managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     auto_flow_id: Optional[int] = None
+    # v0.7.0-fix Phase 4: managed_notification_* fields removed for symmetry
+    # with the Jira trigger; notification config now lives on the auto-flow's
+    # Notification node (read via auto_flow_id).
 
 
 class EmailTriageSubscriptionRead(BaseModel):
@@ -325,7 +309,6 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
     # list endpoints when N+1 becomes measurable (architect §6.4).
     from services.flow_binding_service import find_system_managed_flow_for_trigger
 
-    notification = email_notification_status(db, tenant_id=instance.tenant_id, email_trigger_id=instance.id)
     auto_flow = find_system_managed_flow_for_trigger(
         db,
         tenant_id=instance.tenant_id,
@@ -341,20 +324,6 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
     gmail_integration_name = None
     if gmail_integration is not None:
         gmail_integration_name = gmail_integration.display_name or gmail_integration.name
-    notification_status_value = None
-    if notification["continuous_subscription_id"] is not None:
-        notification_status_value = "active" if notification["enabled"] else "inactive"
-    notification_agent_name = _agent_name(db, instance.tenant_id, notification["agent_id"])
-    managed_notification_status = None
-    if notification_status_value is not None:
-        managed_notification_status = EmailManagedNotificationStatus(
-            status=notification_status_value,
-            recipient_preview=notification["recipient_preview"],
-            agent_id=notification["agent_id"],
-            agent_name=notification_agent_name,
-            continuous_agent_id=notification["continuous_agent_id"],
-            continuous_subscription_id=notification["continuous_subscription_id"],
-        )
     return EmailTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -375,15 +344,6 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
         last_health_check=instance.last_health_check,
         last_activity_at=instance.last_activity_at,
         last_cursor=instance.last_cursor,
-        managed_notification_enabled=bool(notification["enabled"]),
-        managed_notification_status=managed_notification_status,
-        notification_subscription_status=notification_status_value,
-        notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_agent_id=notification["agent_id"],
-        managed_notification_agent_name=notification_agent_name,
-        managed_notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_continuous_agent_id=notification["continuous_agent_id"],
-        managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
         auto_flow_id=auto_flow.id if auto_flow else None,

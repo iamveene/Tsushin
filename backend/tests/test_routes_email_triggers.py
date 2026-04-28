@@ -68,7 +68,6 @@ from models import (  # noqa: E402
     JiraChannelInstance,
     JiraIntegration,
     OAuthToken,
-    ScheduleChannelInstance,
     SentinelProfile,
     WakeEvent,
     WebhookIntegration,
@@ -104,7 +103,6 @@ def db_session():
             EmailChannelInstance.__table__,
             WebhookIntegration.__table__,
             JiraChannelInstance.__table__,
-            ScheduleChannelInstance.__table__,
             GitHubChannelInstance.__table__,
         ],
     )

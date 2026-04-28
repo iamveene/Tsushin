@@ -63,7 +63,6 @@ from models import (  # noqa: E402
     EmailChannelInstance,
     GitHubChannelInstance,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     SentinelProfile,
     WakeEvent,
     WebhookIntegration,
@@ -91,7 +90,6 @@ def db_session():
             ContinuousRun.__table__,
             EmailChannelInstance.__table__,
             JiraChannelInstance.__table__,
-            ScheduleChannelInstance.__table__,
             GitHubChannelInstance.__table__,
             WebhookIntegration.__table__,
             WhatsAppMCPInstance.__table__,
@@ -137,12 +135,13 @@ def _caller(tenant_id: str, user_id: int = 1) -> ContinuousCaller:
 
 
 def _seed_schedule_instance(db, *, tenant_id: str, user_id: int = 1, instance_id: int = 100):
-    instance = ScheduleChannelInstance(
+    """Phase 2 wipe-out backfill: tests that originally exercised the
+    schedule trigger now exercise the email trigger instead. The helper
+    name is kept to minimize the per-test churn."""
+    instance = EmailChannelInstance(
         id=instance_id,
         tenant_id=tenant_id,
         integration_name=f"sched-{instance_id}",
-        cron_expression="0 9 * * *",
-        timezone="UTC",
         is_active=True,
         status="active",
         created_by=user_id,
@@ -265,7 +264,7 @@ def test_delete_pending_wake_events_409(db_session):
         WakeEvent(
             tenant_id="acme",
             continuous_agent_id=created.id,
-            channel_type="schedule",
+            channel_type="email",
             channel_instance_id=1,
             event_type="tick",
             occurred_at=datetime.utcnow(),
@@ -292,7 +291,7 @@ def test_delete_pending_wake_events_force(db_session):
         WakeEvent(
             tenant_id="acme",
             continuous_agent_id=created.id,
-            channel_type="schedule",
+            channel_type="email",
             channel_instance_id=1,
             event_type="tick",
             occurred_at=datetime.utcnow(),
@@ -321,13 +320,13 @@ def test_subscription_create_happy_path(db_session):
     )
     out = create_continuous_subscription(
         created_agent.id,
-        ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=200, event_type="tick"),
+        ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=200, event_type="tick"),
         caller=_caller("acme"),
         db=db_session,
     )
     assert out.id is not None
     assert out.continuous_agent_id == created_agent.id
-    assert out.channel_type == "schedule"
+    assert out.channel_type == "email"
     assert out.is_system_owned is False
 
 
@@ -339,7 +338,7 @@ def test_subscription_create_dedupe_409(db_session):
         caller=_caller("acme"),
         db=db_session,
     )
-    payload = ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=200, event_type="tick")
+    payload = ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=200, event_type="tick")
     create_continuous_subscription(created_agent.id, payload, caller=_caller("acme"), db=db_session)
     with pytest.raises(HTTPException) as exc:
         create_continuous_subscription(created_agent.id, payload, caller=_caller("acme"), db=db_session)
@@ -375,7 +374,7 @@ def test_subscription_create_missing_channel_instance(db_session):
     with pytest.raises(HTTPException) as exc:
         create_continuous_subscription(
             created_agent.id,
-            ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=9999),
+            ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=9999),
             caller=_caller("acme"),
             db=db_session,
         )
@@ -394,7 +393,7 @@ def test_subscription_delete_system_owned_blocked(db_session):
     sub = ContinuousSubscription(
         tenant_id="acme",
         continuous_agent_id=parent.id,
-        channel_type="schedule",
+        channel_type="email",
         channel_instance_id=200,
         event_type="tick",
         status="active",
@@ -419,13 +418,13 @@ def test_subscription_list_returns_paginated(db_session):
     )
     create_continuous_subscription(
         parent.id,
-        ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=200, event_type="a"),
+        ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=200, event_type="a"),
         caller=_caller("acme"),
         db=db_session,
     )
     create_continuous_subscription(
         parent.id,
-        ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=201, event_type="b"),
+        ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=201, event_type="b"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -444,7 +443,7 @@ def test_subscription_update_changes_status(db_session):
     )
     created = create_continuous_subscription(
         parent.id,
-        ContinuousSubscriptionCreate(channel_type="schedule", channel_instance_id=200, event_type="a"),
+        ContinuousSubscriptionCreate(channel_type="email", channel_instance_id=200, event_type="a"),
         caller=_caller("acme"),
         db=db_session,
     )
