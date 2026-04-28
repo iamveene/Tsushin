@@ -15,7 +15,6 @@ from models import (
     EmailChannelInstance,
     GitHubChannelInstance,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
     UserChannelDefaultAgent,
@@ -168,7 +167,6 @@ def _resolve_instance_default_agent(
         "webhook": WebhookIntegration,
         "email": EmailChannelInstance,
         "jira": JiraChannelInstance,
-        "schedule": ScheduleChannelInstance,
         "github": GitHubChannelInstance,
     }.get(channel_type)
     if model is None or not hasattr(model, "default_agent_id"):

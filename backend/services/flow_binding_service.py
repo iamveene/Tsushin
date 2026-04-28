@@ -6,7 +6,7 @@ flows, plus the cleanup hook that trigger DELETE handlers call.
 
 Wave 4 adds ``ensure_system_managed_flow_for_trigger`` — Phase A's
 auto-Flow generator. When a new trigger is created (any of jira /
-email / github / schedule / webhook), this function creates a
+email / github / webhook), this function creates a
 system-managed FlowDefinition with the canonical
 Source → Gate → Conversation → Notification chain plus a
 ``flow_trigger_binding`` row, so every trigger arrives with its own
@@ -45,7 +45,6 @@ _KIND_NAME_FIELDS: dict[str, str] = {
     "jira": "integration_name",
     "email": "integration_name",
     "github": "integration_name",
-    "schedule": "name",
     "webhook": "integration_name",
 }
 
@@ -54,7 +53,6 @@ _KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
     "jira": "Process the inbound Jira event and surface the actionable insight.",
     "email": "Process the inbound email and surface the actionable insight.",
     "github": "Process the inbound GitHub event and surface the actionable insight.",
-    "schedule": "Process the scheduled fire and execute its routine.",
     "webhook": "Process the inbound webhook payload and surface the actionable insight.",
 }
 
@@ -70,7 +68,6 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         EmailChannelInstance,
         GitHubChannelInstance,
         JiraChannelInstance,
-        ScheduleChannelInstance,
         WebhookIntegration,
     )
 
@@ -78,7 +75,6 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         "jira": JiraChannelInstance,
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
-        "schedule": ScheduleChannelInstance,
         "webhook": WebhookIntegration,
     }.get(trigger_kind)
     if table is None:
@@ -446,7 +442,7 @@ def delete_bindings_for_trigger(
     """Hard-delete every binding row for a (tenant, kind, instance).
 
     Called by the per-kind trigger DELETE handlers (jira / email /
-    github / schedule / webhook) because ``trigger_instance_id`` is a
+    github / webhook) because ``trigger_instance_id`` is a
     semantic FK and cannot CASCADE on its own.
 
     When ``delete_system_managed_flows=True`` (the default), any

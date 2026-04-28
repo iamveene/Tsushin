@@ -1372,7 +1372,7 @@ export interface DefaultAgentsSettings {
   user_defaults: UserChannelDefaultAgent[]
 }
 
-export type TriggerKind = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
+export type TriggerKind = 'email' | 'webhook' | 'jira' | 'github'
 export type TriggerCriteria = Record<string, unknown>
 
 export interface TriggerInstanceBase {
@@ -1705,42 +1705,8 @@ export interface JiraPollNowResponse {
   details?: Record<string, unknown> | null
 }
 
-export interface ScheduleTrigger extends TriggerInstanceBase {
-  cron_expression: string
-  timezone: string
-  payload_template?: Record<string, unknown> | null
-  next_fire_at?: string | null
-  last_fire_at?: string | null
-}
-
-export interface ScheduleTriggerCreateRequest {
-  integration_name: string
-  cron_expression: string
-  timezone?: string
-  payload_template?: Record<string, unknown> | null
-  trigger_criteria?: TriggerCriteria | null
-  default_agent_id?: number | null
-  is_active?: boolean
-  notification_recipient?: string | null
-  notification_enabled?: boolean
-}
-
-export type ScheduleTriggerUpdateRequest = Partial<ScheduleTriggerCreateRequest>
-
-export interface SchedulePreviewRequest {
-  cron_expression: string
-  timezone?: string
-  payload_template?: Record<string, unknown> | null
-}
-
-export interface SchedulePreviewResponse {
-  next_fire_times?: string[]
-  next_fire_preview?: string[]
-  next_runs?: string[]
-  timezone?: string
-  error?: string | null
-  message?: string | null
-}
+// Schedule trigger removed in v0.7.0-fix Phase 2; cron-based execution
+// now lives on FlowDefinition.execution_method='scheduled'.
 
 export type GitHubTriggerAuthMethod = 'pat' | 'app'
 
@@ -2168,7 +2134,7 @@ export interface ChannelRoutingRuleReorderRequest {
 export type ChannelRoutingRuleListParams = PageParams
 
 export type TriggerDetailKind = TriggerKind
-export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | ScheduleTrigger | GitHubTrigger
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger
 
 // v0.7.0 Wave 4: Triggers ↔ Flows binding model
 export interface FlowTriggerBinding {
@@ -2345,7 +2311,7 @@ export interface FlowDefinition {
   is_system_owned?: boolean
   editable_by_tenant?: boolean
   deletable_by_tenant?: boolean
-  system_trigger_kind?: 'jira' | 'email' | 'github' | 'schedule' | 'webhook' | null
+  system_trigger_kind?: 'jira' | 'email' | 'github' | 'webhook' | null
 }
 
 export interface FlowNode {
@@ -6435,55 +6401,6 @@ export const api = {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to poll Jira trigger')
-    return res.json()
-  },
-
-  async listScheduleTriggers(): Promise<ScheduleTrigger[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule triggers')
-    return res.json()
-  },
-
-  async getScheduleTrigger(id: number): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule trigger')
-    return res.json()
-  },
-
-  async createScheduleTrigger(data: ScheduleTriggerCreateRequest): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to create schedule trigger')
-    return res.json()
-  },
-
-  async updateScheduleTrigger(id: number, data: ScheduleTriggerUpdateRequest): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to update schedule trigger')
-    return res.json()
-  },
-
-  async deleteScheduleTrigger(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete schedule trigger')
-  },
-
-  async previewScheduleTrigger(data: SchedulePreviewRequest): Promise<SchedulePreviewResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to preview schedule')
     return res.json()
   },
 

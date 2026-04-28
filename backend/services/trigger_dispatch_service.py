@@ -34,7 +34,6 @@ from models import (
     FlowTriggerBinding,
     GitHubChannelInstance,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     SentinelConfig,
     WakeEvent,
     WebhookIntegration,
@@ -101,7 +100,6 @@ class TriggerDispatchService:
         "webhook": WebhookIntegration,
         "email": EmailChannelInstance,
         "jira": JiraChannelInstance,
-        "schedule": ScheduleChannelInstance,
         "github": GitHubChannelInstance,
     }
     _ACTIVE_STATUS = "active"

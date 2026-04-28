@@ -15,14 +15,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
-import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type ScheduleTrigger, type WebhookIntegration } from '@/lib/client'
+import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, EnvelopeIcon, GitHubIcon, RefreshIcon, WebhookIcon } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, CodeIcon, EnvelopeIcon, GitHubIcon, RefreshIcon, WebhookIcon } from '@/components/ui/icons'
 
-type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'webhook'
 
 interface TriggerRow {
-  kind: 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+  kind: 'jira' | 'email' | 'github' | 'webhook'
   id: number
   name: string
   status: string
@@ -38,7 +38,6 @@ const KIND_LABEL: Record<TriggerRow['kind'], string> = {
   jira: 'Jira',
   email: 'Email',
   github: 'GitHub',
-  schedule: 'Schedule',
   webhook: 'Webhook',
 }
 
@@ -46,7 +45,6 @@ const KIND_ICON_CLASS: Record<TriggerRow['kind'], string> = {
   jira: 'text-blue-300',
   email: 'text-emerald-300',
   github: 'text-violet-300',
-  schedule: 'text-amber-300',
   webhook: 'text-cyan-300',
 }
 
@@ -59,8 +57,6 @@ function KindIcon({ kind, className }: { kind: TriggerRow['kind']; className?: s
       return <EnvelopeIcon size={16} className={merged} />
     case 'github':
       return <GitHubIcon size={16} className={merged} />
-    case 'schedule':
-      return <CalendarDaysIcon size={16} className={merged} />
     case 'webhook':
       return <WebhookIcon size={16} className={merged} />
   }
@@ -123,21 +119,6 @@ function githubToRow(t: GitHubTrigger): TriggerRow {
   }
 }
 
-function scheduleToRow(t: ScheduleTrigger): TriggerRow {
-  return {
-    kind: 'schedule',
-    id: t.id,
-    name: t.integration_name,
-    status: t.status,
-    health: t.health_status,
-    is_active: t.is_active,
-    default_agent_id: t.default_agent_id ?? null,
-    default_agent_name: t.default_agent_name ?? null,
-    last_activity_at: t.last_activity_at ?? null,
-    href: `/hub/triggers/schedule/${t.id}`,
-  }
-}
-
 function webhookToRow(t: WebhookIntegration): TriggerRow {
   return {
     kind: 'webhook',
@@ -169,18 +150,16 @@ export default function HubTriggersIndexPage() {
     setLoading(true)
     setError(null)
     try {
-      const [jira, email, github, schedule, webhook] = await Promise.all([
+      const [jira, email, github, webhook] = await Promise.all([
         api.listJiraTriggers().catch(() => []),
         api.listEmailTriggers().catch(() => []),
         api.listGitHubTriggers().catch(() => []),
-        api.listScheduleTriggers().catch(() => []),
         api.listWebhookIntegrations().catch(() => []),
       ])
       const next: TriggerRow[] = [
         ...jira.map(jiraToRow),
         ...email.map(emailToRow),
         ...github.map(githubToRow),
-        ...schedule.map(scheduleToRow),
         ...webhook.map(webhookToRow),
       ]
       setRows(next)
@@ -248,7 +227,7 @@ export default function HubTriggersIndexPage() {
             Triggers
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            All inbound channels that can wake an agent. Jira, Email, GitHub, Schedule, and Webhook in one place.
+            All inbound channels that can wake an agent. Jira, Email, GitHub, and Webhook in one place.
           </p>
         </div>
         <button
@@ -285,7 +264,6 @@ export default function HubTriggersIndexPage() {
           <option value="jira">Jira</option>
           <option value="email">Email</option>
           <option value="github">GitHub</option>
-          <option value="schedule">Schedule</option>
           <option value="webhook">Webhook</option>
         </select>
         <select

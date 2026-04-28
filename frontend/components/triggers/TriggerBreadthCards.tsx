@@ -3,16 +3,15 @@
 import { useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
-import { api, type GitHubTrigger, type JiraTrigger, type ScheduleTrigger, type TriggerKind } from '@/lib/client'
+import { api, type GitHubTrigger, type JiraTrigger, type TriggerKind } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
-import { CalendarDaysIcon, CodeIcon, GitHubIcon, type IconProps } from '@/components/ui/icons'
+import { CodeIcon, GitHubIcon, type IconProps } from '@/components/ui/icons'
 
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
-type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
+type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'github'>
+type BreadthTrigger = JiraTrigger | GitHubTrigger
 
 interface Props {
   jiraTriggers: JiraTrigger[]
-  scheduleTriggers: ScheduleTrigger[]
   githubTriggers: GitHubTrigger[]
   canWrite: boolean
   onCreate: (kind: BreadthTriggerKind) => void
@@ -68,7 +67,6 @@ function DetailLine({ label, children }: { label: string; children: ReactNode })
 
 export default function TriggerBreadthCards({
   jiraTriggers,
-  scheduleTriggers,
   githubTriggers,
   canWrite,
   onCreate,
@@ -94,20 +92,6 @@ export default function TriggerBreadthCards({
       items: jiraTriggers,
     },
     {
-      kind: 'schedule',
-      title: 'Schedule Triggers',
-      description: 'Cron-based wakeups with structured payload templates.',
-      emptyTitle: 'No schedule triggers',
-      emptyBody: 'Create recurring wakeups for daily briefs, sweeps, or checks.',
-      createLabel: 'Create Schedule Trigger',
-      Icon: CalendarDaysIcon,
-      iconClass: 'text-amber-300',
-      borderClass: 'border-amber-700/30',
-      actionClass: 'bg-amber-600/20 text-amber-300 border-amber-600/50 hover:bg-amber-600/30',
-      detailBase: '/hub/triggers/schedule',
-      items: scheduleTriggers,
-    },
-    {
       kind: 'github',
       title: 'GitHub Triggers',
       description: 'Repository activity from pushes, pull requests, issues, and releases.',
@@ -130,8 +114,6 @@ export default function TriggerBreadthCards({
       const next = !trigger.is_active
       if (kind === 'jira') {
         await api.updateJiraTrigger(trigger.id, { is_active: next })
-      } else if (kind === 'schedule') {
-        await api.updateScheduleTrigger(trigger.id, { is_active: next })
       } else {
         await api.updateGitHubTrigger(trigger.id, { is_active: next })
       }
@@ -155,16 +137,6 @@ export default function TriggerBreadthCards({
           <DetailLine label="WhatsApp notification">
             {jira.managed_notification_status?.status || jira.notification_subscription_status || (jira.managed_notification_enabled ? 'active' : 'Not enabled')}
           </DetailLine>
-        </>
-      )
-    }
-    if (kind === 'schedule') {
-      const schedule = trigger as ScheduleTrigger
-      return (
-        <>
-          <DetailLine label="Cron">{schedule.cron_expression}</DetailLine>
-          <DetailLine label="Timezone">{schedule.timezone}</DetailLine>
-          <DetailLine label="Next fire">{schedule.next_fire_at ? safeRelative(schedule.next_fire_at) : 'Not scheduled'}</DetailLine>
         </>
       )
     }

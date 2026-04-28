@@ -3,17 +3,15 @@
 /**
  * OutputsSection
  *
- * Vertical stack of per-kind managed output cards. Wave 2 supports jira /
- * github / schedule. Wave 3 adds email (Notification + Triage + Manual
- * Poll) and webhook (no managed outputs — empty state). Wave 4 adds the
- * shared `WiredFlowsCard` to every kind, replacing the inert "Wire a
- * custom Flow" CTA with the live binding list + Create-from-this-trigger
- * deep link.
+ * Vertical stack of per-kind managed output cards. Supports jira /
+ * github / email / webhook (schedule retired in v0.7.0-fix Phase 2).
+ * Every kind also renders the shared `WiredFlowsCard` listing live
+ * Flow bindings and the Create-from-this-trigger deep link.
  *
  * Jira renders the Managed WhatsApp Notification + Manual Poll cards.
  * Email renders the Managed WhatsApp Notification + Manual Poll cards
  * (matching Jira's grid layout — visual smell #5 fix) plus the Managed
- * Triage card. github / schedule / webhook render the WiredFlowsCard
+ * Triage card. github / webhook render the WiredFlowsCard
  * (which carries empty-state messaging when no flows are bound).
  *
  * Wave 4 also propagates a `suppressedByBinding` prop into the Managed
@@ -30,7 +28,6 @@ import type {
   JiraManagedNotificationStatus,
   JiraPollNowResponse,
   JiraTrigger,
-  ScheduleTrigger,
   WebhookIntegration,
 } from '@/lib/client'
 import JiraManagedNotificationCard from '@/components/triggers/sections/JiraManagedNotificationCard'
@@ -45,8 +42,8 @@ function pickSuppressor(bindings: FlowTriggerBinding[]): FlowTriggerBinding | nu
   return bindings.find((b) => b.is_active && b.suppress_default_agent) || null
 }
 
-type OutputsKind = 'jira' | 'github' | 'schedule' | 'email' | 'webhook'
-type OutputsTrigger = JiraTrigger | GitHubTrigger | ScheduleTrigger | EmailTrigger | WebhookIntegration
+type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
+type OutputsTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: OutputsKind
@@ -172,7 +169,7 @@ export default function OutputsSection({
     )
   }
 
-  // github + schedule + webhook: no managed outputs — Wired Flows IS the
+  // github + webhook: no managed outputs — Wired Flows IS the
   // outputs surface. The card carries its own empty-state copy.
   return (
     <div className="space-y-4">

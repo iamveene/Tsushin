@@ -213,7 +213,7 @@ export default function FlowsPage() {
   const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
   const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
   const prefillKind: TriggerKind | null =
-    prefillKindParam && ['jira', 'email', 'github', 'schedule', 'webhook'].includes(prefillKindParam)
+    prefillKindParam && ['jira', 'email', 'github', 'webhook'].includes(prefillKindParam)
       ? prefillKindParam
       : null
   const prefillTriggerId =
@@ -1294,13 +1294,12 @@ function TypeBadge({ type }: { type: FlowType }) {
 // chip surfaces the origin so operators don't mistake it for a hand-built
 // flow. Renders nothing for user-authored flows.
 const TRIGGER_KIND_BADGE: Record<
-  'jira' | 'email' | 'github' | 'schedule' | 'webhook',
+  'jira' | 'email' | 'github' | 'webhook',
   { label: string; classes: string; Icon: React.FC<IconProps> }
 > = {
   jira:     { label: 'Jira Trigger',     classes: 'bg-blue-500/10 border-blue-500/30 text-blue-300',         Icon: CodeIcon },
   email:    { label: 'Email Trigger',    classes: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300', Icon: EnvelopeIcon },
   github:   { label: 'GitHub Trigger',   classes: 'bg-violet-500/10 border-violet-500/30 text-violet-300',   Icon: GitHubIcon },
-  schedule: { label: 'Schedule Trigger', classes: 'bg-amber-500/10 border-amber-500/30 text-amber-300',     Icon: CalendarDaysIcon },
   webhook:  { label: 'Webhook Trigger',  classes: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',         Icon: WebhookIcon },
 }
 

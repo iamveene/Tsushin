@@ -3392,40 +3392,6 @@ class JiraChannelInstance(Base):
     )
 
 
-class ScheduleChannelInstance(Base):
-    """Persisted cron-style trigger configuration for scheduled wake events."""
-
-    __tablename__ = "schedule_channel_instance"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
-    integration_name = Column(String(100), nullable=False)
-    cron_expression = Column(String(120), nullable=False)
-    timezone = Column(String(64), default="UTC", nullable=False)
-    payload_template = Column(JSON, nullable=True)
-    trigger_criteria = Column(JSON, nullable=True)
-    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-    status = Column(String(20), default="active", nullable=False)
-    health_status = Column(String(20), default="unknown", nullable=False)
-    health_status_reason = Column(String(500), nullable=True)
-    last_health_check = Column(DateTime, nullable=True)
-    last_activity_at = Column(DateTime, nullable=True)
-    last_cursor = Column(String(255), nullable=True)
-    next_fire_at = Column(DateTime, nullable=True, index=True)
-    last_fire_at = Column(DateTime, nullable=True)
-    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        Index("idx_schedule_channel_instance_tenant", "tenant_id"),
-        Index("idx_schedule_channel_instance_status", "status"),
-        Index("idx_schedule_channel_instance_next_fire_at", "next_fire_at"),
-        Index("idx_schedule_channel_instance_default_agent_id", "default_agent_id"),
-    )
-
-
 class GitHubChannelInstance(Base):
     """Persisted GitHub trigger configuration for signed webhook deliveries."""
 
