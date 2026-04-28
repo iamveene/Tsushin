@@ -30,15 +30,10 @@ import type {
   WebhookIntegration,
 } from '@/lib/client'
 import JiraManualPollCard from '@/components/triggers/sections/JiraManualPollCard'
-import EmailManagedNotificationCard from '@/components/triggers/sections/EmailManagedNotificationCard'
 import EmailManagedTriageCard from '@/components/triggers/sections/EmailManagedTriageCard'
 import EmailManualPollCard from '@/components/triggers/sections/EmailManualPollCard'
 import WiredFlowsCard from '@/components/triggers/sections/WiredFlowsCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
-
-function pickSuppressor(bindings: FlowTriggerBinding[]): FlowTriggerBinding | null {
-  return bindings.find((b) => b.is_active && b.suppress_default_agent) || null
-}
 
 type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
 type OutputsTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
@@ -95,8 +90,9 @@ export default function OutputsSection({
 }: Props) {
   // Wave 4: track active bindings so the Managed Notification cards know
   // whether a Flow has taken over routing for this trigger.
-  const [bindings, setBindings] = useState<FlowTriggerBinding[]>([])
-  const suppressor = pickSuppressor(bindings)
+  // bindings state still tracked so WiredFlowsCard can refresh; suppressor
+  // logic was retired with the managed notification cards in Phase 4.
+  const [, setBindings] = useState<FlowTriggerBinding[]>([])
 
   if (kind === 'jira') {
     const jira = trigger as JiraTrigger
@@ -125,24 +121,16 @@ export default function OutputsSection({
     const email = trigger as EmailTrigger
     return (
       <div className="space-y-4">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <EmailManagedNotificationCard
-            trigger={email}
-            phoneInput={emailPhoneInput}
-            onPhoneChange={onEmailPhoneChange ?? (() => undefined)}
-            onEnable={onEnableEmailNotification ?? (() => undefined)}
-            enabling={emailNotificationLoading}
-            canWriteHub={canWriteHub}
-            suppressedByBinding={suppressor}
-          />
-          <EmailManualPollCard
-            trigger={email}
-            pollResult={emailPollResult}
-            onPollNow={onEmailPollNow ?? (() => undefined)}
-            polling={emailPolling}
-            canWriteHub={canWriteHub}
-          />
-        </div>
+        {/* v0.7.0-fix Phase 4: legacy EmailManagedNotificationCard retired
+            for symmetry with Jira; notification config now lives on the
+            auto-flow Notification node (see Wired Flows below). */}
+        <EmailManualPollCard
+          trigger={email}
+          pollResult={emailPollResult}
+          onPollNow={onEmailPollNow ?? (() => undefined)}
+          polling={emailPolling}
+          canWriteHub={canWriteHub}
+        />
         <EmailManagedTriageCard
           trigger={email}
           gmailIntegration={emailGmailIntegration}

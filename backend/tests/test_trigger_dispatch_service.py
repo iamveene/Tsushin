@@ -34,7 +34,6 @@ from models import (  # noqa: E402
     HubIntegration,
     JiraChannelInstance,
     JiraIntegration,
-    ScheduleChannelInstance,
     SentinelConfig,
     SentinelProfile,
     WakeEvent,
@@ -64,7 +63,6 @@ def db_session():
             JiraIntegration.__table__,
             EmailChannelInstance.__table__,
             JiraChannelInstance.__table__,
-            ScheduleChannelInstance.__table__,
             GitHubChannelInstance.__table__,
             SentinelConfig.__table__,
             SentinelProfile.__table__,
@@ -162,22 +160,6 @@ def _seed_jira(db, *, instance_id: int, tenant_id: str, created_by: int, default
             site_url="https://example.atlassian.net",
             project_key="TSN",
             jql="project = TSN",
-            default_agent_id=default_agent_id,
-            created_by=created_by,
-            is_active=True,
-            status="active",
-        )
-    )
-
-
-def _seed_schedule(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
-    db.add(
-        ScheduleChannelInstance(
-            id=instance_id,
-            tenant_id=tenant_id,
-            integration_name=f"Schedule {tenant_id}",
-            cron_expression="*/5 * * * *",
-            timezone="UTC",
             default_agent_id=default_agent_id,
             created_by=created_by,
             is_active=True,
@@ -500,7 +482,6 @@ def test_dispatch_creates_redacted_payload_ref_for_email_instance(db_session, tm
     ("trigger_type", "instance_id", "event_type", "seed_fn"),
     [
         ("jira", 701, "jira.issue.updated", _seed_jira),
-        ("schedule", 801, "schedule.fire", _seed_schedule),
         ("github", 901, "github.pull_request", _seed_github),
     ],
 )
