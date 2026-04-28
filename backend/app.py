@@ -111,7 +111,6 @@ from api.routes_webhook_instances import router as webhook_instances_router
 from api.routes_email_triggers import router as email_triggers_router
 from api.routes_jira_integrations import router as jira_integrations_router
 from api.routes_jira_triggers import router as jira_triggers_router
-from api.routes_schedule_triggers import router as schedule_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
 from api.routes_github_inbound import router as github_inbound_router
 from api.routes_github_integrations import router as github_integrations_router
@@ -1360,7 +1359,6 @@ app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/trigg
 app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
 app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
 app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
-app.include_router(schedule_triggers_router)  # Schedule trigger CRUD (/api/triggers/schedule/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
 app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)

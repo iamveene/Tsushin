@@ -35,7 +35,6 @@ from models import (
     EmailChannelInstance,
     GitHubChannelInstance,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     SentinelProfile,
     WakeEvent,
     WebhookIntegration,
@@ -151,7 +150,6 @@ _ACTION_CONFIG_MAX_BYTES = 64 * 1024
 _CHANNEL_INSTANCE_MODELS: dict[str, Type] = {
     "email": EmailChannelInstance,
     "jira": JiraChannelInstance,
-    "schedule": ScheduleChannelInstance,
     "github": GitHubChannelInstance,
     "webhook": WebhookIntegration,
     "whatsapp": WhatsAppMCPInstance,

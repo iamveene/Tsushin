@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/icons'
 
 const STATUS_OPTIONS = ['all', 'pending', 'claimed', 'processed', 'failed', 'filtered']
-const CHANNEL_OPTIONS = ['all', 'email', 'webhook', 'jira', 'schedule', 'github', 'whatsapp', 'telegram', 'slack', 'discord']
+const CHANNEL_OPTIONS = ['all', 'email', 'webhook', 'jira', 'github', 'whatsapp', 'telegram', 'slack', 'discord']
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback

@@ -24,7 +24,6 @@ import {
   type JiraTrigger,
   type PRSubmittedAction,
   type PRSubmittedCriteria,
-  type ScheduleTrigger,
   type TriggerCatalogEntry,
   type TriggerCriteria,
   type WebhookIntegration,
@@ -38,15 +37,8 @@ import {
 } from '@/components/triggers/CriteriaBuilder'
 import CriteriaBuilder from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
-import SchedulePicker from '@/components/triggers/SchedulePicker'
-import {
-  DEFAULT_SCHEDULE_STATE,
-  isScheduleStateValid,
-  type ScheduleState,
-} from '@/components/triggers/schedulePickerUtils'
 import useGmailOAuthPoller from '@/hooks/useGmailOAuthPoller'
 import {
-  CalendarDaysIcon,
   CodeIcon,
   EnvelopeIcon,
   GitHubIcon,
@@ -54,12 +46,11 @@ import {
   type IconProps,
 } from '@/components/ui/icons'
 
-export type TriggerId = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
+export type TriggerId = 'email' | 'webhook' | 'jira' | 'github'
 
 export type SavedTriggerAny =
   | EmailTrigger
   | JiraTrigger
-  | ScheduleTrigger
   | GitHubTrigger
   | WebhookIntegration
 
@@ -118,15 +109,6 @@ const KIND_CATALOG: KindEntry[] = [
     iconBg: 'bg-blue-500/10',
   },
   {
-    id: 'schedule',
-    display_name: 'Schedule',
-    description: 'Wake agents on cron schedules with structured payloads.',
-    setup_hint: 'Pick a cron expression, timezone, and optional payload template.',
-    Icon: CalendarDaysIcon,
-    iconClass: 'text-amber-300',
-    iconBg: 'bg-amber-500/10',
-  },
-  {
     id: 'github',
     display_name: 'GitHub',
     description: 'Receive signed repository events and wake agents from matching activity.',
@@ -142,7 +124,6 @@ const KIND_TONE: Record<TriggerId, WizardTone> = {
   email: 'gmail',
   webhook: 'default',
   jira: 'default',
-  schedule: 'default',
   github: 'default',
 }
 
@@ -150,7 +131,6 @@ const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
   email: 'bg-red-600 hover:bg-red-500 text-white',
   webhook: 'bg-cyan-600 hover:bg-cyan-500 text-white',
   jira: 'bg-blue-600 hover:bg-blue-500 text-white',
-  schedule: 'bg-amber-600 hover:bg-amber-500 text-white',
   github: 'bg-violet-600 hover:bg-violet-500 text-white',
 }
 
@@ -258,16 +238,6 @@ export default function TriggerCreationWizard({
   const [jiraTesting, setJiraTesting] = useState(false)
   const [jiraTestResult, setJiraTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
 
-  // Schedule-specific state
-  const [scheduleIntegrationName, setScheduleIntegrationName] = useState('Hourly schedule')
-  const [cronExpression, setCronExpression] = useState('0 * * * *')
-  const [timezone, setTimezone] = useState('UTC')
-  const [scheduleState, setScheduleState] = useState<ScheduleState>(DEFAULT_SCHEDULE_STATE)
-  const [payloadTemplateText, setPayloadTemplateText] = useState('{\n  "source": "schedule"\n}')
-  const [scheduleCriteriaText, setScheduleCriteriaText] = useState('')
-  const [schedulePreviewing, setSchedulePreviewing] = useState(false)
-  const [schedulePreviewResult, setSchedulePreviewResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
-
   // GitHub-specific state
   const [githubIntegrationName, setGithubIntegrationName] = useState('GitHub repository events')
   const [githubIntegrations, setGithubIntegrations] = useState<GitHubIntegration[]>([])
@@ -333,15 +303,6 @@ export default function TriggerCreationWizard({
     setJiraSampleIssues([])
     setJiraTesting(false)
     setJiraTestResult(null)
-
-    setScheduleIntegrationName('Hourly schedule')
-    setCronExpression('0 * * * *')
-    setTimezone('UTC')
-    setScheduleState(DEFAULT_SCHEDULE_STATE)
-    setPayloadTemplateText('{\n  "source": "schedule"\n}')
-    setScheduleCriteriaText('')
-    setSchedulePreviewing(false)
-    setSchedulePreviewResult(null)
 
     setGithubIntegrationName('GitHub repository events')
     setSelectedGithubIntegrationId(null)
@@ -509,28 +470,6 @@ export default function TriggerCreationWizard({
   const jiraPollIntervalValid =
     Number.isFinite(jiraPollValue) && jiraPollValue >= 60 && jiraPollValue <= 3600
 
-  // Light cron shape check — 5 or 6 whitespace-separated fields with the
-  // legal cron alphabet. Server-side validator is authoritative.
-  const cronLooksValid = useMemo(() => {
-    const trimmed = cronExpression.trim()
-    if (!trimmed) return false
-    const parts = trimmed.split(/\s+/)
-    if (parts.length < 5 || parts.length > 6) return false
-    const validChar = /^[0-9*/,\-LW#?]+$/i
-    return parts.every((p) => p.length > 0 && validChar.test(p))
-  }, [cronExpression])
-
-  const payloadTemplateValid = useMemo(() => {
-    const trimmed = payloadTemplateText.trim()
-    if (!trimmed) return true
-    try {
-      const parsed = JSON.parse(trimmed)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-    } catch {
-      return false
-    }
-  }, [payloadTemplateText])
-
   const sourceValid = useMemo(() => {
     if (!kind) return false
     if (kind === 'email') {
@@ -552,15 +491,6 @@ export default function TriggerCreationWizard({
           jiraPollIntervalValid,
       )
     }
-    if (kind === 'schedule') {
-      return Boolean(
-        scheduleIntegrationName.trim() &&
-          isScheduleStateValid(scheduleState) &&
-          cronLooksValid &&
-          timezone.trim() &&
-          payloadTemplateValid,
-      )
-    }
     if (kind === 'github') {
       return Boolean(
         githubIntegrationName.trim() &&
@@ -571,7 +501,6 @@ export default function TriggerCreationWizard({
     }
     return false
   }, [
-    cronLooksValid,
     emailCredentialsOk,
     emailIntegrationId,
     emailIntegrationName,
@@ -583,12 +512,8 @@ export default function TriggerCreationWizard({
     jiraJql,
     jiraPollIntervalValid,
     kind,
-    payloadTemplateValid,
     repoName,
     repoOwner,
-    scheduleIntegrationName,
-    scheduleState,
-    timezone,
     webhookName,
   ])
 
@@ -647,43 +572,6 @@ export default function TriggerCreationWizard({
       setJiraTesting(false)
     }
   }, [jiraIntegrationId, jiraJql])
-
-  const handleSchedulePreview = useCallback(async () => {
-    setSchedulePreviewResult(null)
-    setSchedulePreviewing(true)
-    try {
-      let payloadTemplate: Record<string, unknown> | null = null
-      const trimmed = payloadTemplateText.trim()
-      if (trimmed) {
-        try {
-          const parsed = JSON.parse(trimmed)
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new Error('Payload template must be a JSON object')
-          }
-          payloadTemplate = parsed as Record<string, unknown>
-        } catch (error: unknown) {
-          throw new Error(`Payload template is not valid JSON: ${getErrorMessage(error, 'parse error')}`)
-        }
-      }
-      const result = await api.previewScheduleTrigger({
-        cron_expression: cronExpression.trim(),
-        timezone: timezone.trim(),
-        payload_template: payloadTemplate,
-      })
-      const times = result.next_fire_times || result.next_fire_preview || result.next_runs || []
-      setSchedulePreviewResult({
-        tone: result.error ? 'error' : 'success',
-        message: result.error
-          || (times.length > 0
-            ? `Next runs: ${times.slice(0, 5).join(', ')}`
-            : result.message || 'Schedule preview returned no runs.'),
-      })
-    } catch (error: unknown) {
-      setSchedulePreviewResult({ tone: 'error', message: getErrorMessage(error, 'Schedule preview failed') })
-    } finally {
-      setSchedulePreviewing(false)
-    }
-  }, [cronExpression, payloadTemplateText, timezone])
 
   const handleGithubTestConnection = useCallback(async () => {
     setGithubTestResult(null)
@@ -874,56 +762,6 @@ export default function TriggerCreationWizard({
           return
         }
 
-        case 'schedule': {
-          if (!scheduleIntegrationName.trim()) {
-            throw new Error('Trigger name is required.')
-          }
-          if (!cronLooksValid) {
-            throw new Error('Cron expression looks invalid.')
-          }
-          if (!timezone.trim()) {
-            throw new Error('Timezone is required.')
-          }
-          let payloadTemplate: Record<string, unknown> | null = null
-          const trimmedPayload = payloadTemplateText.trim()
-          if (trimmedPayload) {
-            try {
-              const parsed = JSON.parse(trimmedPayload)
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new Error('Payload template must be a JSON object')
-              }
-              payloadTemplate = parsed as Record<string, unknown>
-            } catch (error: unknown) {
-              throw new Error(`Payload template is not valid JSON: ${getErrorMessage(error, 'parse error')}`)
-            }
-          }
-          let parsedCriteria: TriggerCriteria | null = null
-          if (scheduleCriteriaText.trim()) {
-            try {
-              parsedCriteria = parseCriteriaText(scheduleCriteriaText)
-            } catch (error: unknown) {
-              throw new Error(`Invalid criteria JSON: ${getErrorMessage(error, 'parse error')}`)
-            }
-          }
-          const result = await api.createScheduleTrigger({
-            integration_name: scheduleIntegrationName.trim(),
-            cron_expression: cronExpression.trim(),
-            timezone: timezone.trim(),
-            payload_template: payloadTemplate,
-            trigger_criteria: parsedCriteria,
-            default_agent_id: defaultAgentId,
-            is_active: isActive,
-            notification_recipient: notificationEnabled ? notificationRecipient.trim() : null,
-            notification_enabled: notificationEnabled,
-          })
-          const flowId = result.auto_flow_id ?? null
-          setSavedTrigger(result)
-          setAutoFlowId(flowId)
-          setSaveState('success')
-          onCreated?.('schedule', result.id, flowId)
-          return
-        }
-
         case 'github': {
           if (!githubIntegrationName.trim()) {
             throw new Error('Trigger name is required.')
@@ -972,8 +810,6 @@ export default function TriggerCreationWizard({
     authorFilter,
     branchFilter,
     buildPRSubmittedCriteria,
-    cronExpression,
-    cronLooksValid,
     defaultAgentId,
     emailIntegrationId,
     emailIntegrationName,
@@ -999,13 +835,9 @@ export default function TriggerCreationWizard({
     onCreated,
     pathFiltersText,
     patToken,
-    payloadTemplateText,
     prSelectedActions.length,
     repoName,
     repoOwner,
-    scheduleCriteriaText,
-    scheduleIntegrationName,
-    timezone,
     webhookCallbackEnabled,
     webhookCallbackUrl,
     webhookCriteriaText,
@@ -1208,26 +1040,6 @@ export default function TriggerCreationWizard({
           />
         )}
 
-        {kind === 'schedule' && (
-          <ScheduleSourceBody
-            integrationName={scheduleIntegrationName}
-            onIntegrationNameChange={setScheduleIntegrationName}
-            scheduleState={scheduleState}
-            onScheduleStateChange={setScheduleState}
-            onCronExpressionChange={setCronExpression}
-            timezone={timezone}
-            onTimezoneChange={setTimezone}
-            payloadTemplateText={payloadTemplateText}
-            onPayloadTemplateChange={setPayloadTemplateText}
-            payloadTemplateValid={payloadTemplateValid}
-            agents={agents}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-            isActive={isActive}
-            onIsActiveChange={setIsActive}
-          />
-        )}
-
         {kind === 'github' && (
           <GitHubSourceBody
             integrationName={githubIntegrationName}
@@ -1342,23 +1154,6 @@ export default function TriggerCreationWizard({
             projectKey={jiraProjectKey}
             onProjectKeyChange={setJiraProjectKey}
             onJqlChange={setJiraJql}
-          />
-        )}
-
-        {kind === 'schedule' && (
-          <ScheduleCriteriaBody
-            cronExpression={cronExpression}
-            timezone={timezone}
-            payloadTemplateText={payloadTemplateText}
-            previewing={schedulePreviewing}
-            previewResult={schedulePreviewResult}
-            canPreview={cronLooksValid && timezone.trim().length > 0 && payloadTemplateValid}
-            onPreview={handleSchedulePreview}
-            criteriaText={scheduleCriteriaText}
-            onCriteriaTextChange={setScheduleCriteriaText}
-            onCronChange={setCronExpression}
-            onTimezoneChange={setTimezone}
-            onPayloadTemplateChange={setPayloadTemplateText}
           />
         )}
 
@@ -1584,12 +1379,6 @@ export default function TriggerCreationWizard({
               jql: jiraJql,
               pollSeconds: jiraPollValue,
             }}
-            schedule={{
-              integrationName: scheduleIntegrationName,
-              cronExpression,
-              timezone,
-              payloadTemplateText,
-            }}
             github={{
               integrationName: githubIntegrationName,
               repoOwner,
@@ -1620,8 +1409,6 @@ function sourceStepTitle(kind: TriggerId): string {
       return 'Configure the inbound webhook integration'
     case 'jira':
       return 'Connect a Jira workspace and pick a JQL'
-    case 'schedule':
-      return 'Pick the cron schedule and payload'
     case 'github':
       return 'Connect a GitHub repository to watch'
   }
@@ -1635,8 +1422,6 @@ function sourceStepDescription(kind: TriggerId): string {
       return 'Generates a unique inbound URL and signed secret you can hand to a third-party system.'
     case 'jira':
       return 'Pick a configured Jira connection and the JQL the trigger should poll.'
-    case 'schedule':
-      return 'Schedules wake agents on a cadence — no external service required.'
     case 'github':
       return 'Wire a GitHub webhook so repository events fire this trigger.'
   }
@@ -2323,202 +2108,6 @@ function JiraCriteriaBody({
 }
 
 // ============================================================================
-// Schedule step bodies
-// ============================================================================
-
-interface ScheduleSourceBodyProps {
-  integrationName: string
-  onIntegrationNameChange: (value: string) => void
-  scheduleState: ScheduleState
-  onScheduleStateChange: (next: ScheduleState) => void
-  onCronExpressionChange: (value: string) => void
-  timezone: string
-  onTimezoneChange: (value: string) => void
-  payloadTemplateText: string
-  onPayloadTemplateChange: (value: string) => void
-  payloadTemplateValid: boolean
-  agents: Agent[]
-  defaultAgentId: number | null
-  onDefaultAgentChange: (id: number | null) => void
-  isActive: boolean
-  onIsActiveChange: (value: boolean) => void
-}
-
-function ScheduleSourceBody({
-  integrationName,
-  onIntegrationNameChange,
-  scheduleState,
-  onScheduleStateChange,
-  onCronExpressionChange,
-  timezone,
-  onTimezoneChange,
-  payloadTemplateText,
-  onPayloadTemplateChange,
-  payloadTemplateValid,
-  agents,
-  defaultAgentId,
-  onDefaultAgentChange,
-  isActive,
-  onIsActiveChange,
-}: ScheduleSourceBodyProps) {
-  const idPrefix = useId()
-  const integrationNameId = `${idPrefix}-name`
-  const payloadTemplateId = `${idPrefix}-payload`
-  const defaultAgentSelectId = `${idPrefix}-agent`
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2 md:col-span-2">
-          <label htmlFor={integrationNameId} className="block text-sm font-medium text-white">
-            Trigger Name <span className="text-red-400">*</span>
-          </label>
-          <input
-            id={integrationNameId}
-            type="text"
-            value={integrationName}
-            onChange={(event) => onIntegrationNameChange(event.target.value)}
-            placeholder="Hourly schedule"
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-          />
-        </div>
-
-        <div className="md:col-span-2">
-          <SchedulePicker
-            value={scheduleState}
-            onChange={onScheduleStateChange}
-            cronOnChange={onCronExpressionChange}
-            timezoneId={timezone}
-            onTimezoneIdChange={onTimezoneChange}
-          />
-        </div>
-
-        <div className="space-y-2 md:col-span-2">
-          <label htmlFor={payloadTemplateId} className="block text-sm font-medium text-white">Payload Template</label>
-          <textarea
-            id={payloadTemplateId}
-            value={payloadTemplateText}
-            onChange={(event) => onPayloadTemplateChange(event.target.value)}
-            rows={5}
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 font-mono text-xs text-white placeholder:text-tsushin-slate focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-          />
-          <p className={`text-xs ${payloadTemplateValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
-            Optional. Must be a JSON object if provided.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor={defaultAgentSelectId} className="block text-sm font-medium text-white">Default agent</label>
-          <select
-            id={defaultAgentSelectId}
-            value={defaultAgentId ?? ''}
-            onChange={(event) => onDefaultAgentChange(event.target.value ? Number(event.target.value) : null)}
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-          >
-            <option value="">No default agent</option>
-            {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.contact_name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <label className="flex items-center gap-3 rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
-          <input
-            type="checkbox"
-            checked={isActive}
-            onChange={(event) => onIsActiveChange(event.target.checked)}
-            className="h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-amber-500 focus:ring-amber-500"
-          />
-          <div>
-            <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
-            <p className="mt-1 text-xs text-tsushin-slate">Paused schedules will not fire until resumed.</p>
-          </div>
-        </label>
-      </div>
-    </div>
-  )
-}
-
-interface ScheduleCriteriaBodyProps {
-  cronExpression: string
-  timezone: string
-  payloadTemplateText: string
-  previewing: boolean
-  previewResult: { tone: 'success' | 'error'; message: string } | null
-  canPreview: boolean
-  onPreview: () => void
-  criteriaText: string
-  onCriteriaTextChange: (value: string) => void
-  onCronChange: (value: string) => void
-  onTimezoneChange: (value: string) => void
-  onPayloadTemplateChange: (value: string) => void
-}
-
-function ScheduleCriteriaBody({
-  cronExpression,
-  timezone,
-  payloadTemplateText,
-  previewing,
-  previewResult,
-  canPreview,
-  onPreview,
-  criteriaText,
-  onCriteriaTextChange,
-  onCronChange,
-  onTimezoneChange,
-  onPayloadTemplateChange,
-}: ScheduleCriteriaBodyProps) {
-  return (
-    <div className="space-y-4">
-      <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-amber-200">Schedule preview</div>
-            <p className="mt-1 text-xs text-tsushin-slate">
-              {cronExpression || '—'} · {timezone || '—'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onPreview}
-            disabled={!canPreview || previewing}
-            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {previewing ? 'Previewing…' : 'Preview next runs'}
-          </button>
-        </div>
-        {previewResult && (
-          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-            previewResult.tone === 'success'
-              ? 'border-green-500/30 bg-green-500/10 text-green-200'
-              : 'border-red-500/30 bg-red-500/10 text-red-200'
-          }`}>
-            {previewResult.message}
-          </div>
-        )}
-      </div>
-
-      <CriteriaBuilder
-        kind="schedule"
-        value={criteriaText}
-        onChange={onCriteriaTextChange}
-        source={{
-          cronExpression,
-          timezone,
-          payloadTemplateText,
-        }}
-        onSourceChange={(patch) => {
-          if (patch.cronExpression !== undefined) onCronChange(patch.cronExpression || '')
-          if (patch.timezone !== undefined) onTimezoneChange(patch.timezone || '')
-          if (patch.payloadTemplateText !== undefined) onPayloadTemplateChange(patch.payloadTemplateText || '')
-        }}
-      />
-    </div>
-  )
-}
-
-// ============================================================================
 // GitHub step bodies
 // ============================================================================
 
@@ -3139,12 +2728,6 @@ interface PreSaveSummaryProps {
     jql: string
     pollSeconds: number
   }
-  schedule: {
-    integrationName: string
-    cronExpression: string
-    timezone: string
-    payloadTemplateText: string
-  }
   github: {
     integrationName: string
     repoOwner: string
@@ -3165,7 +2748,6 @@ function PreSaveSummary({
   email,
   webhook,
   jira,
-  schedule,
   github,
 }: PreSaveSummaryProps) {
   const agentLabel = agents.find((agent) => agent.id === defaultAgentId)?.contact_name || 'No default agent'
@@ -3196,14 +2778,6 @@ function PreSaveSummary({
     cells.push(['Project key', jira.projectKey || 'Any'])
     cells.push(['JQL', jira.jql.trim() || '—'])
     cells.push(['Poll interval', `${jira.pollSeconds}s`])
-  } else if (kind === 'schedule') {
-    cells.push(['Trigger name', schedule.integrationName || '—'])
-    cells.push(['Cron', schedule.cronExpression || '—'])
-    cells.push(['Timezone', schedule.timezone || '—'])
-    cells.push([
-      'Payload',
-      schedule.payloadTemplateText.trim() ? 'Custom JSON template' : 'No payload template',
-    ])
   } else if (kind === 'github') {
     cells.push(['Trigger name', github.integrationName || '—'])
     cells.push(['Repository', github.repoOwner && github.repoName ? `${github.repoOwner}/${github.repoName}` : '—'])
@@ -3264,11 +2838,6 @@ function PostSaveSummary({
     summaryRows.push(['JQL', jira.jql || '—'])
     summaryRows.push(['Project key', jira.project_key || 'Any'])
     summaryRows.push(['Poll interval', `${jira.poll_interval_seconds}s`])
-  } else if (kind === 'schedule') {
-    const schedule = savedTrigger as ScheduleTrigger
-    summaryRows.push(['Cron', schedule.cron_expression])
-    summaryRows.push(['Timezone', schedule.timezone])
-    if (schedule.next_fire_at) summaryRows.push(['Next fire', schedule.next_fire_at])
   } else if (kind === 'github') {
     const github = savedTrigger as GitHubTrigger
     summaryRows.push(['Repository', `${github.repo_owner}/${github.repo_name}`])

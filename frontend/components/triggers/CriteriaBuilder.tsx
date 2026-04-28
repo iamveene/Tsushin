@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react'
 import type { TriggerCriteria, TriggerKind } from '@/lib/client'
 import {
-  CalendarDaysIcon,
   CheckCircleIcon,
   CodeIcon,
   EnvelopeIcon,
@@ -26,9 +25,6 @@ export interface CriteriaSourceValues {
   emailBodyKeyword?: string | null
   jiraJql?: string | null
   jiraProjectKey?: string | null
-  cronExpression?: string | null
-  timezone?: string | null
-  payloadTemplateText?: string | null
   githubEventsText?: string | null
   githubBranchFilter?: string | null
   githubPathFiltersText?: string | null
@@ -68,12 +64,6 @@ const JSONPATH_TEMPLATE = {
   ordering: 'oldest_first',
   dedupe_scope: 'instance',
 }
-
-const CRON_PRESETS = [
-  { label: 'Hourly', value: '0 * * * *' },
-  { label: 'Weekday AM', value: '0 9 * * 1-5' },
-  { label: 'Daily', value: '0 8 * * *' },
-]
 
 const GITHUB_EVENT_OPTIONS = ['push', 'pull_request', 'issues', 'issue_comment', 'release', 'workflow_run']
 
@@ -176,29 +166,6 @@ export function buildCriteriaTemplate(kind: TriggerKind = 'webhook', source: Cri
     })
   }
 
-  if (kind === 'schedule') {
-    return baseCriteria(
-      {
-        schedule: {
-          cron_expression: nullableTrim(source.cronExpression),
-          timezone: nullableTrim(source.timezone) || 'UTC',
-        },
-        jsonpath_matchers: [
-          {
-            path: '$.source',
-            operator: 'equals',
-            value: 'schedule',
-          },
-        ],
-      },
-      {
-        rate_limit: {
-          max_events_per_poll: 1,
-        },
-      },
-    )
-  }
-
   if (kind === 'github') {
     return baseCriteria({
       github: {
@@ -272,7 +239,6 @@ export default function CriteriaBuilder({
   const config = useMemo(() => {
     if (kind === 'email') return { title: 'Email criteria', Icon: EnvelopeIcon, accent: 'text-cyan-200' }
     if (kind === 'jira') return { title: 'Jira criteria', Icon: CodeIcon, accent: 'text-blue-200' }
-    if (kind === 'schedule') return { title: 'Schedule criteria', Icon: CalendarDaysIcon, accent: 'text-amber-200' }
     if (kind === 'github') return { title: 'GitHub criteria', Icon: GitHubIcon, accent: 'text-violet-200' }
     return { title: 'Webhook criteria', Icon: WebhookIcon, accent: 'text-cyan-200' }
   }, [kind])
@@ -416,65 +382,6 @@ export default function CriteriaBuilder({
           >
             Priority JSON Template
           </button>
-        </div>
-      )
-    }
-
-    if (kind === 'schedule') {
-      return (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <FieldLabel>Cron</FieldLabel>
-            <input
-              value={source.cronExpression || ''}
-              onChange={(event) => updateSource({ cronExpression: event.target.value })}
-              disabled={!canEditSource}
-              placeholder="0 * * * *"
-              className={inputClass(!canEditSource)}
-            />
-          </div>
-          <div className="space-y-2">
-            <FieldLabel>Timezone</FieldLabel>
-            <input
-              value={source.timezone || ''}
-              onChange={(event) => updateSource({ timezone: event.target.value })}
-              disabled={!canEditSource}
-              placeholder="UTC"
-              className={inputClass(!canEditSource)}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2 md:col-span-2">
-            {CRON_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => updateSource({ cronExpression: preset.value })}
-                disabled={!canEditSource}
-                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100 hover:text-white disabled:opacity-50"
-              >
-                {preset.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => applyTemplate('schedule')}
-              disabled={disabled}
-              className="rounded-lg border border-tsushin-border bg-tsushin-surface px-3 py-1.5 text-xs text-tsushin-fog hover:text-white disabled:opacity-50"
-            >
-              Schedule JSON Template
-            </button>
-          </div>
-          <div className="space-y-2 md:col-span-2">
-            <FieldLabel>Payload template</FieldLabel>
-            <textarea
-              value={source.payloadTemplateText || ''}
-              onChange={(event) => updateSource({ payloadTemplateText: event.target.value })}
-              disabled={!canEditSource}
-              rows={4}
-              placeholder={'{\n  "source": "schedule"\n}'}
-              className={textAreaClass(!canEditSource)}
-            />
-          </div>
         </div>
       )
     }

@@ -12,7 +12,7 @@
  *
  * Lives inside `OutputsSection`, directly below the Managed Notification
  * card (when present) and above the Manual Poll card. For kinds that
- * have no managed outputs (github / schedule / webhook), this card
+ * have no managed outputs (github / webhook), this card
  * carries the empty-state messaging.
  *
  * Permission model:

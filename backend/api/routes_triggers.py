@@ -16,7 +16,6 @@ from models import (
     EmailChannelInstance,
     GitHubChannelInstance,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     WebhookIntegration,
 )
 
@@ -48,10 +47,6 @@ def _tenant_has_configured(trigger_id: str, tenant_id: str, db: Session) -> bool
         if trigger_id == "jira":
             return db.query(JiraChannelInstance.id).filter(
                 JiraChannelInstance.tenant_id == tenant_id
-            ).first() is not None
-        if trigger_id == "schedule":
-            return db.query(ScheduleChannelInstance.id).filter(
-                ScheduleChannelInstance.tenant_id == tenant_id
             ).first() is not None
         if trigger_id == "github":
             return db.query(GitHubChannelInstance.id).filter(

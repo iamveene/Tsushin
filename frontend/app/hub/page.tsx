@@ -48,7 +48,7 @@ const EmailTriggerWizard = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, ScheduleTrigger, GitHubTrigger, GitHubIntegration } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -1156,7 +1156,6 @@ export default function HubPage() {
   const [showJiraIntegrationModal, setShowJiraIntegrationModal] = useState(false)
   const [jiraIntegrationTestingId, setJiraIntegrationTestingId] = useState<number | null>(null)
   const [jiraIntegrationTestResults, setJiraIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
-  const [scheduleTriggers, setScheduleTriggers] = useState<ScheduleTrigger[]>([])
   const [githubTriggers, setGithubTriggers] = useState<GitHubTrigger[]>([])
   // v0.7.0: GitHub Hub Integrations (mirrors Jira state above) — used by both
   // the Code Repository skill and PR Submitted triggers.
@@ -1421,15 +1420,6 @@ export default function HubPage() {
     }
   }
 
-  async function loadScheduleTriggers() {
-    try {
-      const data = await api.listScheduleTriggers()
-      setScheduleTriggers(data)
-    } catch (err) {
-      console.error('Failed to load schedule triggers:', err)
-    }
-  }
-
   async function loadGitHubTriggers() {
     try {
       const data = await api.listGitHubTriggers()
@@ -1442,7 +1432,6 @@ export default function HubPage() {
   async function loadBreadthTriggers() {
     await Promise.all([
       loadJiraTriggers(),
-      loadScheduleTriggers(),
       loadGitHubTriggers(),
     ])
   }
@@ -5514,11 +5503,11 @@ export default function HubPage() {
                     </div>
                   </div>
 
-                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && scheduleTriggers.length === 0 && githubTriggers.length === 0 && (
+                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && (
                     <div className="card p-6 border-dashed border-tsushin-border/60">
                       <h4 className="text-white font-semibold mb-1">No triggers configured yet</h4>
                       <p className="text-sm text-tsushin-slate mb-4">
-                        Create an Email, Webhook, Jira, Schedule, or GitHub trigger to wake agents from external events.
+                        Create an Email, Webhook, Jira, or GitHub trigger to wake agents from external events.
                       </p>
                       {canWriteHub && (
                         <button onClick={() => openTriggerWizard()} className="btn-primary px-4 py-2 text-sm">
@@ -5762,7 +5751,6 @@ export default function HubPage() {
 
                 <TriggerBreadthCards
                   jiraTriggers={jiraTriggers}
-                  scheduleTriggers={scheduleTriggers}
                   githubTriggers={githubTriggers}
                   canWrite={canWriteHub}
                   onCreate={(kind) => openTriggerWizard(kind)}

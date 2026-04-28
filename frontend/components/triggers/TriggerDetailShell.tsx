@@ -21,7 +21,6 @@ import {
   type JiraTrigger,
   type PageResponse,
   type PublicIngressInfo,
-  type ScheduleTrigger,
   type TriggerKind,
   type WakeEvent,
   type WebhookIntegration,
@@ -30,7 +29,6 @@ import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import {
   AlertTriangleIcon,
   BellIcon,
-  CalendarDaysIcon,
   CodeIcon,
   EnvelopeIcon,
   GitHubIcon,
@@ -60,8 +58,8 @@ import type { EmailGmailIntegrationSummary } from '@/components/triggers/section
 // Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
 // handles `email` and `webhook` kinds. The standalone fork pages are
 // reduced to one-line wrappers around `<TriggerDetailShell kind=...>`.
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github' | 'email' | 'webhook'>
-type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'github' | 'email' | 'webhook'>
+type BreadthTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
 interface Props {
@@ -81,13 +79,6 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
     Icon: CodeIcon,
     iconClass: 'text-blue-300',
     accentClass: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
-  },
-  schedule: {
-    label: 'Schedule Trigger',
-    description: 'Cron-based wake source with structured payloads.',
-    Icon: CalendarDaysIcon,
-    iconClass: 'text-amber-300',
-    accentClass: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
   },
   github: {
     label: 'GitHub Trigger',
@@ -292,14 +283,6 @@ function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): C
       jiraProjectKey: jira.project_key || '',
     }
   }
-  if (kind === 'schedule') {
-    const schedule = trigger as ScheduleTrigger
-    return {
-      cronExpression: schedule.cron_expression,
-      timezone: schedule.timezone,
-      payloadTemplateText: formatJsonText(schedule.payload_template),
-    }
-  }
   if (kind === 'github') {
     const github = trigger as GitHubTrigger
     return {
@@ -429,7 +412,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       const next = !trigger.is_active
       let updated: BreadthTrigger
       if (kind === 'jira') updated = await api.updateJiraTrigger(trigger.id, { is_active: next })
-      else if (kind === 'schedule') updated = await api.updateScheduleTrigger(trigger.id, { is_active: next })
       else if (kind === 'github') updated = await api.updateGitHubTrigger(trigger.id, { is_active: next })
       else if (kind === 'email') updated = await api.updateEmailTrigger(trigger.id, { is_active: next })
       else updated = await api.updateWebhookIntegration(trigger.id, { is_active: next })
@@ -649,13 +631,6 @@ export default function TriggerDetailShell({ kind }: Props) {
           project_key: sourceDraft.jiraProjectKey?.trim() || null,
           jql: sourceDraft.jiraJql?.trim() || (trigger as JiraTrigger).jql,
         })
-      } else if (kind === 'schedule') {
-        updated = await api.updateScheduleTrigger(trigger.id, {
-          trigger_criteria: triggerCriteria,
-          cron_expression: sourceDraft.cronExpression?.trim() || (trigger as ScheduleTrigger).cron_expression,
-          timezone: sourceDraft.timezone?.trim() || (trigger as ScheduleTrigger).timezone,
-          payload_template: parseJsonObjectText(sourceDraft.payloadTemplateText || '', 'Payload template'),
-        })
       } else if (kind === 'github') {
         updated = await api.updateGitHubTrigger(trigger.id, {
           trigger_criteria: triggerCriteria,
@@ -695,8 +670,6 @@ export default function TriggerDetailShell({ kind }: Props) {
     try {
       if (kind === 'jira') {
         await api.deleteJiraTrigger(trigger.id)
-      } else if (kind === 'schedule') {
-        await api.deleteScheduleTrigger(trigger.id)
       } else if (kind === 'github') {
         await api.deleteGitHubTrigger(trigger.id)
       } else if (kind === 'email') {
@@ -704,7 +677,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       } else {
         await api.deleteWebhookIntegration(trigger.id)
       }
-      router.push('/hub?tab=communication')
+      router.push('/hub?tab=triggers')
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to delete trigger'))
       setSaving(false)
@@ -724,7 +697,7 @@ export default function TriggerDetailShell({ kind }: Props) {
   }
 
   // Wave 3 of the Triggers ↔ Flows unification: Overview tab renders three
-  // explicit sections (Source / Routing / Outputs) for jira, github, schedule,
+  // explicit sections (Source / Routing / Outputs) for jira, github,
   // email, and webhook.
   const renderOverview = () => {
     if (!trigger) return null
@@ -794,7 +767,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const renderCriteriaTab = () => {
     if (!trigger) return null
-    const showSidePanel = kind === 'jira' || kind === 'schedule' || kind === 'github'
+    const showSidePanel = kind === 'jira' || kind === 'github'
     const webhookId = trigger.id
     return (
       <div className={showSidePanel ? 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]' : 'space-y-3'}>
@@ -896,14 +869,6 @@ export default function TriggerDetailShell({ kind }: Props) {
                     siteUrl={(trigger as JiraTrigger).site_url}
                     emptyLabel="Run the saved JQL to preview matching issues."
                   />
-                </>
-              )}
-              {kind === 'schedule' && (
-                <>
-                  <DetailRow label="Cron">{(trigger as ScheduleTrigger).cron_expression}</DetailRow>
-                  <DetailRow label="Payload template">
-                    <JsonBlock value={(trigger as ScheduleTrigger).payload_template} emptyLabel="No payload template saved." />
-                  </DetailRow>
                 </>
               )}
               {kind === 'github' && (

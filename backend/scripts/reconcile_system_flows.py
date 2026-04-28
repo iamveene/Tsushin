@@ -38,7 +38,6 @@ _KIND_INSTANCE_TABLE = {
     "jira": "JiraChannelInstance",
     "email": "EmailChannelInstance",
     "github": "GitHubChannelInstance",
-    "schedule": "ScheduleChannelInstance",
     "webhook": "WebhookIntegration",
 }
 
