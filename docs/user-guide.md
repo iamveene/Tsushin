@@ -12,6 +12,7 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 4. [Personas and Tone Presets](#4-personas-and-tone-presets)
 5. [Skills](#5-skills)
 6. [Setting Up Communication Channels](#6-setting-up-communication-channels)
+6a. [Setting Up Event Triggers (v0.7.0)](#6a-setting-up-event-triggers-v070)
 7. [Managing Contacts](#7-managing-contacts)
 8. [Using the Playground](#8-using-the-playground)
 9. [Flows (Workflow Automation)](#9-flows-workflow-automation)
@@ -459,6 +460,49 @@ curl -X POST http://your-tsushin-server/api/webhooks/<webhook_id>/inbound \
 ### Playground
 
 The built-in web chat interface. No setup required -- always available in the sidebar. See [Section 8](#8-using-the-playground) for details.
+
+---
+
+## 6a. Setting Up Event Triggers (v0.7.0)
+
+Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a scheduled time fires, a webhook is called, an email matching a saved query arrives, a GitHub PR is opened) instead of on a human DM.
+
+All five trigger kinds share the same **Trigger Creation Wizard** (Hub > Communication > "+ Add Trigger") with five steps: **Kind**, **Source**, **Criteria**, **Notification**, and **Confirmation**. The Notification step is universal -- toggle the WhatsApp notification on or off, and enter a recipient phone, and the wizard wires it into the auto-generated flow that fires on every match.
+
+### The 5 trigger kinds
+
+- **Email** -- a Gmail saved-query polled every minute. Filter by subject, sender, label, body. Operators paste a saved Gmail search query (e.g., `is:unread label:support has:attachment`); the trigger fires once per matching message and dedupes on the message id.
+- **Webhook** -- inbound HMAC-signed POST from any external system. The wizard generates a slug (auto or custom), an HMAC signing secret, and an inbound URL like `https://<your-host>/api/webhooks/<slug>/inbound` that you paste into the external system.
+- **Jira** -- live JQL polling against a Jira Cloud project. Connect your Jira account once via Hub > Tool APIs > Jira (with an API token); the wizard then asks for a JQL query and a poll interval. One notification per deduped issue.
+- **Schedule** -- cron-style time triggers without writing cron. The Schedule step uses a visual picker with 6 frequency modes (Hourly / Daily / Weekly / Monthly / Once / Custom) and a live natural-language preview ("Every Monday, Wednesday and Friday at 9:00 AM"). Switch to Custom for raw cron access.
+- **GitHub** -- pull-request events on a connected repo. Connect your GitHub account once via Hub > Tool APIs > GitHub (with a Personal Access Token); the wizard then asks for the events to listen to (`opened`, `reopened`, `closed`, etc.) and per-PR filters (branch, paths changed, author, draft state, title/body matchers).
+
+### What happens after you click "Create Trigger"
+
+1. The trigger row is persisted (e.g., trigger #9).
+2. An **auto-generated flow** is minted (e.g., flow #99) with four steps: **Source -> Gate -> Conversation -> Notification**. The flow is system-managed: you can edit its content but you can't delete it directly -- delete the trigger to remove the flow.
+3. The wizard's Confirmation step shows a "Wired Flow" card with the auto-flow ID and an **Open Flow Editor** button.
+4. Clicking the button takes you to `/flows?edit=<auto_flow_id>` where you can edit the Notification step's message template -- this is where you reference data from the inbound event using template variables like `{{source.payload.issue.key}}`, `{{source.payload.issue.fields.summary}}`, or `{{source.payload.pull_request.title}}`.
+
+### Per-kind trigger-generated flow badges
+
+Auto-generated flows are visually distinct in the flows list and the Edit Flow modal header: each trigger kind has its own coloured "Trigger" pill (Jira blue, Email emerald, GitHub violet, Schedule amber, Webhook cyan). The Delete button on auto-generated flows is disabled with a tooltip "Auto-generated from <kind> trigger -- delete the trigger to remove this flow."
+
+### Editing template variables in the auto-flow
+
+Open the auto-flow's Notification step. The **Variable Reference panel** on the right shows previous-step outputs as draggable chips. The Source step's chips are per-kind: for a Jira auto-flow you'll see `payload.issue.key`, `payload.issue.fields.summary`, `payload.issue.fields.status.name`, `payload.issue.fields.priority.name`, `payload.issue.fields.assignee.displayName`, and ~10 more. Click a chip to insert it at the cursor, or drag it into the textarea -- the editor accepts `{{source.payload.X}}` and `{{step_1.payload.X}}` interchangeably.
+
+Example notification template for a Jira trigger:
+
+```
+Jira issue {{source.payload.issue.key}}: {{source.payload.issue.fields.summary}} (status: {{source.payload.issue.fields.status.name}})
+```
+
+When the trigger fires on issue `JSM-12345` with summary `Customer can't log in` and status `In Progress`, the rendered WhatsApp message is:
+
+```
+Jira issue JSM-12345: Customer can't log in (status: In Progress)
+```
 
 ---
 
