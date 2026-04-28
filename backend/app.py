@@ -112,6 +112,7 @@ from api.routes_email_triggers import router as email_triggers_router
 from api.routes_jira_integrations import router as jira_integrations_router
 from api.routes_jira_triggers import router as jira_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
+from api.routes_wizards import router as wizards_router
 from api.routes_github_inbound import router as github_inbound_router
 from api.routes_github_integrations import router as github_integrations_router
 # Playground Feature
@@ -1360,6 +1361,7 @@ app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/e
 app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
 app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
 app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
 # v0.6.0 Item 38: Channel Health Monitor
