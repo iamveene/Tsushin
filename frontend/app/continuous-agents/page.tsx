@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { api, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
+import { api, ApiError, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { ActivityIcon, BotIcon, ClockIcon, EyeIcon, LightningIcon, RefreshIcon } from '@/components/ui/icons'
 import { ContinuousAgentSetupModal } from '@/components/continuous-agents/ContinuousAgentSetupModal'
@@ -100,10 +100,17 @@ export default function ContinuousAgentsPage() {
         try {
           await api.deleteContinuousAgent(agent.id)
         } catch (firstErr) {
-          const message = firstErr instanceof Error ? firstErr.message : ''
-          if (typeof window !== 'undefined' && /pending/i.test(message)) {
+          // Phase 6: branch on the stable backend code so the user no longer
+          // sees the raw "Conflict: This resource already exists..." string.
+          const isPendingEvents = firstErr instanceof ApiError
+            && firstErr.code === 'agent_has_pending_wake_events'
+          if (isPendingEvents && typeof window !== 'undefined') {
+            const detail = (firstErr as ApiError).detail as { count?: number } | undefined
+            const count = typeof detail?.count === 'number' ? detail.count : null
             const force = window.confirm(
-              'This agent has pending wake events. Force delete? Pending events will be marked filtered.',
+              count !== null
+                ? `This agent has ${count} pending wake event(s). Force-delete and mark them as filtered?`
+                : 'This agent has pending wake events. Force-delete and mark them as filtered?'
             )
             if (!force) {
               setDeletingId(null)
