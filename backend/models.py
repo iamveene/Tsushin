@@ -3400,12 +3400,17 @@ class GitHubChannelInstance(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
     integration_name = Column(String(100), nullable=False)
-    auth_method = Column(String(20), default="pat", nullable=False)  # pat | app
+    # v0.7.0-fix Phase 3: GitHub triggers MUST link to a Hub GitHubIntegration
+    # row. Per-trigger PATs were removed; the trigger reads its credentials
+    # from the linked integration at call time.
+    github_integration_id = Column(
+        Integer,
+        ForeignKey("github_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     repo_owner = Column(String(100), nullable=False)
     repo_name = Column(String(100), nullable=False)
-    installation_id = Column(String(64), nullable=True)
-    pat_token_encrypted = Column(Text, nullable=True)
-    pat_token_preview = Column(String(32), nullable=True)
     webhook_secret_encrypted = Column(Text, nullable=True)
     webhook_secret_preview = Column(String(32), nullable=True)
     events = Column(JSON, nullable=True)

@@ -18,7 +18,6 @@ import {
   type EmailTrigger,
   type GitHubIntegration,
   type GitHubTrigger,
-  type GitHubTriggerAuthMethod,
   type JiraIntegration,
   type JiraIssuePreview,
   type JiraTrigger,
@@ -238,23 +237,20 @@ export default function TriggerCreationWizard({
   const [jiraTesting, setJiraTesting] = useState(false)
   const [jiraTestResult, setJiraTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
 
-  // GitHub-specific state
+  // GitHub-specific state — v0.7.0-fix Phase 3: integration linkage required;
+  // no per-trigger PAT, no auth_method toggle, no installation_id, no
+  // per-trigger test-connection.
   const [githubIntegrationName, setGithubIntegrationName] = useState('GitHub repository events')
   const [githubIntegrations, setGithubIntegrations] = useState<GitHubIntegration[]>([])
   const [githubIntegrationsLoading, setGithubIntegrationsLoading] = useState(false)
   const [selectedGithubIntegrationId, setSelectedGithubIntegrationId] = useState<number | null>(null)
-  const [githubAuthMethod, setGithubAuthMethod] = useState<GitHubTriggerAuthMethod>('pat')
   const [repoOwner, setRepoOwner] = useState('')
   const [repoName, setRepoName] = useState('')
-  const [installationId, setInstallationId] = useState('')
-  const [patToken, setPatToken] = useState('')
   const [githubWebhookSecret, setGithubWebhookSecret] = useState('')
   const [githubEvents, setGithubEvents] = useState<string[]>(['push', 'pull_request'])
   const [branchFilter, setBranchFilter] = useState('')
   const [pathFiltersText, setPathFiltersText] = useState('')
   const [authorFilter, setAuthorFilter] = useState('')
-  const [githubTesting, setGithubTesting] = useState(false)
-  const [githubTestResult, setGithubTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   // PR Submitted criteria envelope (verbatim from TriggerSetupModal)
   const [prSelectedActions, setPrSelectedActions] = useState<PRSubmittedAction[]>(['opened', 'reopened'])
   const [prDraftOnly, setPrDraftOnly] = useState(false)
@@ -306,18 +302,13 @@ export default function TriggerCreationWizard({
 
     setGithubIntegrationName('GitHub repository events')
     setSelectedGithubIntegrationId(null)
-    setGithubAuthMethod('pat')
     setRepoOwner('')
     setRepoName('')
-    setInstallationId('')
-    setPatToken('')
     setGithubWebhookSecret('')
     setGithubEvents(['push', 'pull_request'])
     setBranchFilter('')
     setPathFiltersText('')
     setAuthorFilter('')
-    setGithubTesting(false)
-    setGithubTestResult(null)
     setPrSelectedActions(['opened', 'reopened'])
     setPrDraftOnly(false)
     setPrTitleContains('')
@@ -573,30 +564,6 @@ export default function TriggerCreationWizard({
     }
   }, [jiraIntegrationId, jiraJql])
 
-  const handleGithubTestConnection = useCallback(async () => {
-    setGithubTestResult(null)
-    setGithubTesting(true)
-    try {
-      const result = await api.testGitHubTriggerConnection({
-        auth_method: githubAuthMethod,
-        repo_owner: repoOwner.trim(),
-        repo_name: repoName.trim(),
-        installation_id: installationId.trim() || null,
-        pat_token: patToken.trim() || null,
-      })
-      setGithubTestResult({
-        tone: result.success ? 'success' : 'error',
-        message: result.success
-          ? result.message || `Connected to ${result.repository || `${repoOwner}/${repoName}`}.`
-          : result.error || result.message || 'GitHub connection failed',
-      })
-    } catch (error: unknown) {
-      setGithubTestResult({ tone: 'error', message: getErrorMessage(error, 'GitHub connection test failed') })
-    } finally {
-      setGithubTesting(false)
-    }
-  }, [githubAuthMethod, installationId, patToken, repoName, repoOwner])
-
   const buildPRSubmittedCriteria = useCallback((): PRSubmittedCriteria => ({
     criteria_version: 1,
     event: 'pull_request',
@@ -766,6 +733,9 @@ export default function TriggerCreationWizard({
           if (!githubIntegrationName.trim()) {
             throw new Error('Trigger name is required.')
           }
+          if (!selectedGithubIntegrationId) {
+            throw new Error('Pick a Hub GitHub integration to link this trigger to.')
+          }
           if (!repoOwner.trim() || !repoName.trim()) {
             throw new Error('Repository owner and name are required.')
           }
@@ -778,11 +748,9 @@ export default function TriggerCreationWizard({
           const criteria = buildPRSubmittedCriteria() as unknown as TriggerCriteria
           const result = await api.createGitHubTrigger({
             integration_name: githubIntegrationName.trim(),
-            auth_method: githubAuthMethod,
+            github_integration_id: selectedGithubIntegrationId,
             repo_owner: repoOwner.trim(),
             repo_name: repoName.trim(),
-            installation_id: installationId.trim() || null,
-            pat_token: patToken.trim() || null,
             webhook_secret: githubWebhookSecret.trim() || null,
             events: githubEvents,
             branch_filter: branchFilter.trim() || null,
@@ -816,11 +784,9 @@ export default function TriggerCreationWizard({
     emailPollIntervalValid,
     emailPollValue,
     emailSearchQuery,
-    githubAuthMethod,
     githubEvents,
     githubIntegrationName,
     githubWebhookSecret,
-    installationId,
     isActive,
     jiraCriteriaText,
     jiraIntegrationId,
@@ -834,10 +800,10 @@ export default function TriggerCreationWizard({
     notificationRecipient,
     onCreated,
     pathFiltersText,
-    patToken,
     prSelectedActions.length,
     repoName,
     repoOwner,
+    selectedGithubIntegrationId,
     webhookCallbackEnabled,
     webhookCallbackUrl,
     webhookCriteriaText,
@@ -1055,16 +1021,10 @@ export default function TriggerCreationWizard({
                 if (match?.default_repo) setRepoName(match.default_repo)
               }
             }}
-            authMethod={githubAuthMethod}
-            onAuthMethodChange={setGithubAuthMethod}
             repoOwner={repoOwner}
             onRepoOwnerChange={setRepoOwner}
             repoName={repoName}
             onRepoNameChange={setRepoName}
-            patToken={patToken}
-            onPatTokenChange={setPatToken}
-            installationId={installationId}
-            onInstallationIdChange={setInstallationId}
             webhookSecret={githubWebhookSecret}
             onWebhookSecretChange={setGithubWebhookSecret}
             events={githubEvents}
@@ -1073,9 +1033,6 @@ export default function TriggerCreationWizard({
                 ? current.filter((item) => item !== eventName)
                 : [...current, eventName]
             ))}
-            testing={githubTesting}
-            testResult={githubTestResult}
-            onTestConnection={handleGithubTestConnection}
             agents={agents}
             defaultAgentId={defaultAgentId}
             onDefaultAgentChange={setDefaultAgentId}
@@ -1381,9 +1338,9 @@ export default function TriggerCreationWizard({
             }}
             github={{
               integrationName: githubIntegrationName,
+              integrationId: selectedGithubIntegrationId,
               repoOwner,
               repoName,
-              authMethod: githubAuthMethod,
               events: githubEvents,
               prActions: prSelectedActions,
             }}
@@ -2118,23 +2075,14 @@ interface GitHubSourceBodyProps {
   integrationsLoading: boolean
   selectedIntegrationId: number | null
   onIntegrationSelect: (id: number | null) => void
-  authMethod: GitHubTriggerAuthMethod
-  onAuthMethodChange: (value: GitHubTriggerAuthMethod) => void
   repoOwner: string
   onRepoOwnerChange: (value: string) => void
   repoName: string
   onRepoNameChange: (value: string) => void
-  patToken: string
-  onPatTokenChange: (value: string) => void
-  installationId: string
-  onInstallationIdChange: (value: string) => void
   webhookSecret: string
   onWebhookSecretChange: (value: string) => void
   events: string[]
   onToggleEvent: (eventName: string) => void
-  testing: boolean
-  testResult: { tone: 'success' | 'error'; message: string } | null
-  onTestConnection: () => void
   agents: Agent[]
   defaultAgentId: number | null
   onDefaultAgentChange: (id: number | null) => void
@@ -2149,23 +2097,14 @@ function GitHubSourceBody({
   integrationsLoading,
   selectedIntegrationId,
   onIntegrationSelect,
-  authMethod,
-  onAuthMethodChange,
   repoOwner,
   onRepoOwnerChange,
   repoName,
   onRepoNameChange,
-  patToken,
-  onPatTokenChange,
-  installationId,
-  onInstallationIdChange,
   webhookSecret,
   onWebhookSecretChange,
   events,
   onToggleEvent,
-  testing,
-  testResult,
-  onTestConnection,
   agents,
   defaultAgentId,
   onDefaultAgentChange,
@@ -2177,8 +2116,6 @@ function GitHubSourceBody({
   const connectionId = `${idPrefix}-conn`
   const repoOwnerId = `${idPrefix}-owner`
   const repoNameId = `${idPrefix}-repo`
-  const authMethodId = `${idPrefix}-auth`
-  const credentialId = `${idPrefix}-cred`
   const webhookSecretId = `${idPrefix}-secret`
   const eventsLegendId = `${idPrefix}-events`
   const defaultAgentSelectId = `${idPrefix}-agent`
@@ -2200,7 +2137,9 @@ function GitHubSourceBody({
         </div>
 
         <div className="space-y-2">
-          <label htmlFor={connectionId} className="block text-sm font-medium text-white">GitHub Connection</label>
+          <label htmlFor={connectionId} className="block text-sm font-medium text-white">
+            GitHub Connection <span className="text-red-400">*</span>
+          </label>
           <select
             id={connectionId}
             value={selectedIntegrationId ?? ''}
@@ -2208,7 +2147,7 @@ function GitHubSourceBody({
             className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
           >
             <option value="">
-              {integrationsLoading ? 'Loading GitHub connections…' : 'Use a per-trigger PAT (no Hub connection)'}
+              {integrationsLoading ? 'Loading GitHub connections…' : 'Pick a Hub GitHub integration…'}
             </option>
             {integrations.map((integration) => (
               <option key={integration.id} value={integration.id}>
@@ -2220,7 +2159,9 @@ function GitHubSourceBody({
             ))}
           </select>
           <p className="text-xs text-tsushin-slate">
-            Pick a shared Hub connection or leave blank and paste a PAT below.
+            Triggers reuse Hub-side GitHub integrations. Create one under{' '}
+            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-violet-300 hover:text-white">Hub → Developer Tools</a>{' '}
+            if none exist yet.
           </p>
         </div>
 
@@ -2248,32 +2189,6 @@ function GitHubSourceBody({
             value={repoName}
             onChange={(event) => onRepoNameChange(event.target.value)}
             placeholder="platform"
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor={authMethodId} className="block text-sm font-medium text-white">Auth Method</label>
-          <select
-            id={authMethodId}
-            value={authMethod}
-            onChange={(event) => onAuthMethodChange(event.target.value as GitHubTriggerAuthMethod)}
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-          >
-            <option value="pat">Personal access token</option>
-            <option value="app">GitHub App</option>
-          </select>
-        </div>
-
-        <div className="space-y-2">
-          <label htmlFor={credentialId} className="block text-sm font-medium text-white">
-            {authMethod === 'pat' ? 'PAT Token' : 'Installation ID'}
-          </label>
-          <input
-            id={credentialId}
-            type={authMethod === 'pat' ? 'password' : 'text'}
-            value={authMethod === 'pat' ? patToken : installationId}
-            onChange={(event) => (authMethod === 'pat' ? onPatTokenChange(event.target.value) : onInstallationIdChange(event.target.value))}
             className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
           />
         </div>
@@ -2347,33 +2262,6 @@ function GitHubSourceBody({
         </label>
       </div>
 
-      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-white">Test GitHub connection</div>
-            <p className="mt-1 text-xs text-tsushin-slate">
-              Validates owner/repo + token reach without creating the trigger.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onTestConnection}
-            disabled={testing || !repoOwner.trim() || !repoName.trim()}
-            className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs text-violet-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {testing ? 'Testing…' : 'Test Connection'}
-          </button>
-        </div>
-        {testResult && (
-          <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-            testResult.tone === 'success'
-              ? 'border-green-500/30 bg-green-500/10 text-green-200'
-              : 'border-red-500/30 bg-red-500/10 text-red-200'
-          }`}>
-            {testResult.message}
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -2730,9 +2618,9 @@ interface PreSaveSummaryProps {
   }
   github: {
     integrationName: string
+    integrationId: number | null
     repoOwner: string
     repoName: string
-    authMethod: GitHubTriggerAuthMethod
     events: string[]
     prActions: PRSubmittedAction[]
   }
@@ -2781,7 +2669,7 @@ function PreSaveSummary({
   } else if (kind === 'github') {
     cells.push(['Trigger name', github.integrationName || '—'])
     cells.push(['Repository', github.repoOwner && github.repoName ? `${github.repoOwner}/${github.repoName}` : '—'])
-    cells.push(['Auth method', github.authMethod === 'pat' ? 'Personal access token' : 'GitHub App'])
+    cells.push(['Hub integration', github.integrationId ? `#${github.integrationId}` : '— (required)'])
     cells.push(['Events', github.events.length > 0 ? github.events.join(', ') : '—'])
     cells.push(['PR actions', github.prActions.length > 0 ? github.prActions.join(', ') : '—'])
   }

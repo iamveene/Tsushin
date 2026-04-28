@@ -1708,15 +1708,14 @@ export interface JiraPollNowResponse {
 // Schedule trigger removed in v0.7.0-fix Phase 2; cron-based execution
 // now lives on FlowDefinition.execution_method='scheduled'.
 
-export type GitHubTriggerAuthMethod = 'pat' | 'app'
+// GitHubTriggerAuthMethod was retired in v0.7.0-fix Phase 3 — every GitHub
+// trigger now reads its credentials from a linked Hub GitHubIntegration.
 
 export interface GitHubTrigger extends TriggerInstanceBase {
-  auth_method: GitHubTriggerAuthMethod
+  github_integration_id: number
+  github_integration_name?: string | null
   repo_owner: string
   repo_name: string
-  installation_id?: string | null
-  has_pat_token?: boolean
-  pat_token_preview?: string | null
   webhook_secret_preview?: string | null
   events?: string[] | null
   branch_filter?: string | null
@@ -1728,11 +1727,9 @@ export interface GitHubTrigger extends TriggerInstanceBase {
 
 export interface GitHubTriggerCreateRequest {
   integration_name: string
-  auth_method?: GitHubTriggerAuthMethod
+  github_integration_id: number
   repo_owner: string
   repo_name: string
-  installation_id?: string | null
-  pat_token?: string | null
   webhook_secret?: string | null
   events?: string[] | null
   branch_filter?: string | null
@@ -1747,24 +1744,8 @@ export interface GitHubTriggerCreateRequest {
 
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
 
-export interface GitHubTriggerTestConnectionRequest {
-  auth_method?: GitHubTriggerAuthMethod
-  repo_owner: string
-  repo_name: string
-  installation_id?: string | null
-  pat_token?: string | null
-}
-
-export interface GitHubTriggerTestConnectionResponse {
-  success: boolean
-  ok?: boolean
-  status?: string
-  status_code?: number | null
-  detail?: string | null
-  message?: string | null
-  error?: string | null
-  repository?: string | null
-}
+// GitHubTriggerTestConnection types removed in v0.7.0-fix Phase 3 — connectivity
+// is verified at the integration level (Hub → Developer Tools), not per trigger.
 
 // v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
 // shared PAT + default owner/repo so the code_repository skill and GitHub
@@ -6443,15 +6424,8 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
   },
 
-  async testGitHubTriggerConnection(data: GitHubTriggerTestConnectionRequest): Promise<GitHubTriggerTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
+  // testGitHubTriggerConnection retired in v0.7.0-fix Phase 3 — verify at
+  // the integration level via api.testGitHubConnection / Hub > Developer Tools.
 
   // ---- v0.7.0: GitHub Hub Integrations (shared PAT, mirrors Jira) ----
 
