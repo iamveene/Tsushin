@@ -204,7 +204,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
                 setForm((prev) => ({ ...prev, agentId: value === '' ? '' : Number(value) }))
               }}
               disabled={isEdit || loadingAgents || submitting}
-              className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white disabled:opacity-60"
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white disabled:opacity-60"
             >
               <option value="">{loadingAgents ? 'Loading agents…' : 'Select an agent'}</option>
               {agents.map((agent) => (
@@ -229,7 +229,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
               onChange={(event) => setForm((prev) => ({ ...prev, purpose: event.target.value }))}
               placeholder="e.g. When a new Jira ticket is filed by Support, check severity and notify on-call if P0/P1."
               disabled={submitting}
-              className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
             />
             <p className={`mt-1 text-xs ${purposeValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
               {purposeTrimmed.length}/{PURPOSE_MIN}+ characters — explain what the agent does when it wakes.
@@ -252,7 +252,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
                     className={`rounded-lg border px-3 py-2 text-left transition-colors ${
                       selected
                         ? 'border-cyan-500/60 bg-cyan-500/10 text-white'
-                        : 'border-tsushin-border bg-tsushin-bg text-tsushin-slate hover:text-white'
+                        : 'border-tsushin-border bg-tsushin-ink text-tsushin-slate hover:text-white'
                     }`}
                   >
                     <div className="text-sm font-medium">{kind.label}</div>
@@ -272,7 +272,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
               placeholder="e.g. Email Watcher"
               disabled={submitting}
-              className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white placeholder:text-tsushin-slate"
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white placeholder:text-tsushin-slate"
             />
           </div>
 
@@ -306,7 +306,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
                   setForm((prev) => ({ ...prev, status: event.target.value as AgentStatus }))
                 }
                 disabled={submitting}
-                className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white"
               >
                 {STATUSES.map((status) => (
                   <option key={status} value={status}>

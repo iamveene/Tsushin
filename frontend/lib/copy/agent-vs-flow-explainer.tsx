@@ -30,7 +30,7 @@ interface SideProps {
 }
 
 function Side({ active, title, tagline, bullets, example, badge }: SideProps) {
-  const baseBorder = active ? 'border-cyan-500/60 bg-cyan-500/5' : 'border-tsushin-border bg-tsushin-bg/40'
+  const baseBorder = active ? 'border-cyan-500/60 bg-cyan-500/5' : 'border-tsushin-border bg-tsushin-ink/40'
   const activeBadge = active ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/40' : 'bg-tsushin-border/40 text-tsushin-slate border-tsushin-border'
   return (
     <div className={`rounded-xl border ${baseBorder} p-3`}>
@@ -56,7 +56,7 @@ function Side({ active, title, tagline, bullets, example, badge }: SideProps) {
 
 export default function AgentVsFlowExplainer({ kind, className }: Props) {
   return (
-    <div className={`rounded-xl border border-tsushin-border bg-tsushin-bg/30 p-3 ${className ?? ''}`}>
+    <div className={`rounded-xl border border-tsushin-border bg-tsushin-ink/30 p-3 ${className ?? ''}`}>
       <div className="mb-2 text-xs uppercase tracking-wide text-tsushin-slate">
         Continuous Agent vs Flow — pick the right surface
       </div>
