@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — v0.7.0-fix sweep (2026-04-28)
+
+Post-tag fix sweep that addresses the structural issues surfaced after the wizard ship: monitoring pages leaking into Hub, hidden Continuous Agents, per-trigger credentials, the Schedule trigger duplicating Flow scheduled execution, and the WhatsApp Notification card the user explicitly asked to retire. Eight phased commits on `release/0.7.0`; full breakdown in `.private/070fix_plan.md`.
+
+**Phase 1 — Hub/Watcher restructure** ([8dc1880](https://github.com/iamveene/Tsushin/commit/8dc1880))
+- Wake Events moved from `/hub/wake-events` to `/wake-events` (now under Watcher, where monitoring belongs). The old URL still resolves via a server `redirect()` for back-compat.
+- Watcher landing page exposes a sub-strip with full-page links to **Wake Events** and **Continuous Agents** so they're reachable from the monitoring section.
+- Hub `Communication` tab split into **Channels** (WhatsApp/Telegram/Slack/Discord) and **Triggers** (Email/Webhook/Jira/GitHub). The legacy `?tab=communication` URL is coerced to `?tab=channels`.
+
+**Phase 2 — Schedule Trigger wiped entirely** ([b587755](https://github.com/iamveene/Tsushin/commit/b587755))
+- The Schedule trigger duplicated `FlowDefinition.execution_method='scheduled'`. Per user direction, removed wholesale: routes (`routes_schedule_triggers.py`), runtime channel (`channels/schedule/`), frontend pages, the visual picker, and the `schedule_channel_instance` table (alembic 0071).
+- Cron utilities preserved as a pure-utility service (`services/cron_preview_service.py`) so the Flow scheduled-kind step has a single source of truth.
+- `TriggerKind` reduced to `email | webhook | jira | github`.
+
+**Phase 3 — GitHub trigger linkage** ([49ee2f3](https://github.com/iamveene/Tsushin/commit/49ee2f3))
+- `GitHubChannelInstance.github_integration_id` is now NOT NULL with `ON DELETE RESTRICT` (alembic 0072). Per-trigger PAT/auth_method/installation_id columns dropped.
+- `/test-connection` endpoints (unsaved + saved) deleted; connectivity is verified at integration creation time.
+- Wizard requires a Hub GitHub integration before the user can proceed; deep-links to Hub → Developer Tools when none exist.
+
+**Phase 4 — Jira tighten + WhatsApp Notification card retired** ([0b8f92c](https://github.com/iamveene/Tsushin/commit/0b8f92c))
+- `JiraTriggerCreate.jira_integration_id` is required; `auth_email`, `api_token`, and `site_url` no longer accepted on the API. Site URL is read from the linked integration.
+- All `managed_notification_*` fields stripped from `JiraTriggerRead` and `EmailTriggerRead`. Notification config now lives on the auto-generated Flow's Notification node (already plumbed via Phase 0 groundwork).
+- Frontend WhatsApp Notification card removed from both Jira and Email trigger detail Outputs sections.
+
+**Phase 6a — Continuous Agents revamp** ([c7a04a3](https://github.com/iamveene/Tsushin/commit/c7a04a3))
+- `ContinuousAgent.purpose` (Text) and `ContinuousAgent.action_kind` (`tool_run | send_message | conditional_branch | react_only`) added (alembic 0073). API requires both on create (purpose ≥ 30 chars).
+- New `ApiError` class on the frontend client carries the FastAPI `detail` payload (status/code/detail) so callers can branch on `error.code === 'agent_has_pending_wake_events'` instead of regex-matching a stringified message.
+- The user's "Conflict: This resource already exists or cannot be modified" error replaced with a concrete prompt that names the pending-event count and offers force-delete.
+- Setup modal exposes Purpose textarea + Action kind 2x2 grid with one-line explainer per option.
+
+**Phase 7 — Agent vs Flow explainer** ([e28e87c](https://github.com/iamveene/Tsushin/commit/e28e87c))
+- New `lib/copy/agent-vs-flow-explainer.tsx` shared component renders identically at the top of both the Continuous Agent setup modal and the Flow create modal, with the active surface highlighted.
+- Flow create modal gains a per-execution-method hint sentence so operators see what each kind is for at the point of choice.
+
+Items deferred to v0.7.x (tracked in `.private/070fix_plan.md`): full manifest-driven wizard centralization (Phase 5), Studio New-Agent kind selector + base-agent select dark-mode polish (Phase 6b), runtime channel migration off the legacy `jira_notification_service` / `email_notification_service` paths to read solely from the auto-flow Notification node (Phase 4b).
+
 ### Release 0.7.0 — Unified Trigger Creation Wizard + Visual Schedule Picker (2026-04-28)
 
 A single 5-step wizard now creates triggers for all five kinds (Email / Webhook / Jira / Schedule / GitHub), replacing three legacy entry-points (`TriggerSetupModal`, `TriggerWizard`, the standalone `EmailTriggerWizard` for the create path). The Schedule step uses a new visual picker — operators no longer need to remember cron syntax. The wizard ends with a Confirmation step that hands off to the auto-generated flow at `/flows?edit=<auto_flow_id>`, closing the loop from "I want a notification on Jira issues" to "the flow that will fire it is open in the editor".
