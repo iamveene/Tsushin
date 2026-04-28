@@ -52,6 +52,8 @@ class WebhookIntegrationCreate(BaseModel):
     max_payload_bytes: int = Field(default=1_048_576, ge=1024, le=10_485_760)
     default_agent_id: Optional[int] = Field(default=None, ge=1)
     trigger_criteria: Optional[dict[str, Any]] = None
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("ip_allowlist")
     @classmethod
@@ -134,6 +136,7 @@ class WebhookIntegrationRead(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     inbound_url: str  # derived
+    auto_flow_id: Optional[int] = None
 
 
 class WebhookIntegrationCreateResponse(BaseModel):
@@ -275,12 +278,23 @@ def _inbound_url(slug: str) -> str:
 
 
 def _to_read(db: Session, integration: WebhookIntegration) -> WebhookIntegrationRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
     ip_allowlist = None
     if integration.ip_allowlist_json:
         try:
             ip_allowlist = _json.loads(integration.ip_allowlist_json)
         except Exception:
             ip_allowlist = None
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration.id,
+    )
     return WebhookIntegrationRead(
         id=integration.id,
         tenant_id=integration.tenant_id,
@@ -304,6 +318,7 @@ def _to_read(db: Session, integration: WebhookIntegration) -> WebhookIntegration
         created_at=integration.created_at,
         updated_at=integration.updated_at,
         inbound_url=_inbound_url(integration.slug),
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -411,6 +426,8 @@ async def create_webhook_integration(
                 trigger_kind="webhook",
                 trigger_instance_id=integration.id,
                 default_agent_id=integration.default_agent_id,
+                notification_recipient=body.notification_recipient,
+                notification_enabled=body.notification_enabled,
             )
             db.commit()
     except Exception:

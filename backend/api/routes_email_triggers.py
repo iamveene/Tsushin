@@ -39,6 +39,8 @@ class EmailTriggerCreate(BaseModel):
     trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int = Field(default=60, ge=30, le=3600)
     is_active: bool = True
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("integration_name")
     @classmethod
@@ -145,6 +147,7 @@ class EmailTriggerRead(BaseModel):
     managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    auto_flow_id: Optional[int] = None
 
 
 class EmailTriageSubscriptionRead(BaseModel):
@@ -317,7 +320,18 @@ def _criteria_email_search_query(criteria: Optional[dict[str, Any]]) -> Optional
 
 
 def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
     notification = email_notification_status(db, tenant_id=instance.tenant_id, email_trigger_id=instance.id)
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=instance.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=instance.id,
+    )
     gmail_integration = None
     if instance.gmail_integration_id:
         gmail_integration = db.query(GmailIntegration).filter(
@@ -372,6 +386,7 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
         managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -525,6 +540,8 @@ def create_email_trigger(
                 trigger_kind="email",
                 trigger_instance_id=instance.id,
                 default_agent_id=instance.default_agent_id,
+                notification_recipient=payload.notification_recipient,
+                notification_enabled=payload.notification_enabled,
             )
             db.commit()
     except Exception:

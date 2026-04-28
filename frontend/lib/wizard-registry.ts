@@ -66,12 +66,11 @@ export const WIZARDS: readonly WizardDescriptor[] = [
   {
     id: 'triggers',
     label: '+ Add Trigger',
-    componentPath: 'frontend/components/triggers/TriggerWizard.tsx',
+    componentPath: 'frontend/components/triggers/TriggerCreationWizard.tsx',
     catalogEndpoint: '/api/triggers',
     catalogModule: 'backend/channels/catalog.py',
     dispatchesTo: [
       'frontend/components/triggers/EmailTriggerWizard.tsx',
-      'frontend/components/WebhookSetupModal.tsx',
     ],
   },
   {

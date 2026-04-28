@@ -37,6 +37,8 @@ class ScheduleTriggerCreate(BaseModel):
     trigger_criteria: Optional[dict[str, Any]] = None
     default_agent_id: Optional[int] = Field(default=None, ge=1)
     is_active: bool = True
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("integration_name", "cron_expression", "timezone")
     @classmethod
@@ -130,6 +132,7 @@ class ScheduleTriggerRead(BaseModel):
     next_fire_preview: list[datetime] = Field(default_factory=list)
     created_at: datetime
     updated_at: Optional[datetime] = None
+    auto_flow_id: Optional[int] = None
 
 
 def _load_schedule_trigger(db: Session, tenant_id: str, trigger_id: int) -> ScheduleChannelInstance:
@@ -203,6 +206,17 @@ def _safe_preview(instance: ScheduleChannelInstance) -> list[datetime]:
 
 
 def _to_read(db: Session, instance: ScheduleChannelInstance) -> ScheduleTriggerRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=instance.tenant_id,
+        trigger_kind="schedule",
+        trigger_instance_id=instance.id,
+    )
     return ScheduleTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -225,6 +239,7 @@ def _to_read(db: Session, instance: ScheduleChannelInstance) -> ScheduleTriggerR
         next_fire_preview=_safe_preview(instance),
         created_at=instance.created_at,
         updated_at=instance.updated_at,
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -306,6 +321,8 @@ def create_schedule_trigger(
                 trigger_kind="schedule",
                 trigger_instance_id=instance.id,
                 default_agent_id=instance.default_agent_id,
+                notification_recipient=payload.notification_recipient,
+                notification_enabled=payload.notification_enabled,
             )
             db.commit()
     except Exception:

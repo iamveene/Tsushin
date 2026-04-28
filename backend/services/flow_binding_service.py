@@ -243,7 +243,7 @@ def ensure_system_managed_flow_for_trigger(
         config_json=json.dumps({
             "enabled": bool(notification_enabled and notification_recipient),
             "channel": "whatsapp",
-            "recipient_phone": notification_recipient,
+            "recipient": notification_recipient,
         }),
     )
     db.add(notification_node)
@@ -285,10 +285,15 @@ def update_auto_flow_notification(
     """v0.7.0 Wave 4 — write-through helper for the casual-user notification toggle.
 
     Locates the system-managed auto-flow for a trigger and flips its
-    Notification node ``enabled`` + ``recipient_phone``. Returns a dict
+    Notification node ``enabled`` + ``recipient``. Returns a dict
     describing the resulting node config, or None when no auto-flow
     exists (e.g. trigger pre-dates the auto-gen rollout — fallback to
     the legacy ContinuousAgent path).
+
+    NOTE: the kwarg is named ``recipient_phone`` for backwards
+    compatibility with the existing email/jira notification subscription
+    endpoints, but it is written as ``recipient`` in the node config to
+    match the key NotificationStepHandler reads at flow_engine.py:362.
 
     Mirrors the API contract of the existing
     ``ensure_jira_notification_subscription`` so the
@@ -338,8 +343,11 @@ def update_auto_flow_notification(
 
     config["enabled"] = bool(enabled)
     config["channel"] = config.get("channel", "whatsapp")
+    # Drop any legacy ``recipient_phone`` key from earlier versions so the
+    # engine sees a single source of truth.
+    config.pop("recipient_phone", None)
     if recipient_phone is not None:
-        config["recipient_phone"] = recipient_phone
+        config["recipient"] = recipient_phone
     notification_node.config_json = json.dumps(config)
     notification_node.updated_at = datetime.utcnow()
 
@@ -347,7 +355,7 @@ def update_auto_flow_notification(
         "flow_definition_id": flow.id,
         "notification_node_id": notification_node.id,
         "enabled": config["enabled"],
-        "recipient_phone": config.get("recipient_phone"),
+        "recipient": config.get("recipient"),
         "channel": config.get("channel"),
     }
 
