@@ -1391,6 +1391,7 @@ export interface TriggerInstanceBase {
   last_cursor?: string | null
   created_at: string
   updated_at?: string | null
+  auto_flow_id?: number | null
 }
 
 export interface EmailTrigger {
@@ -1424,6 +1425,7 @@ export interface EmailTrigger {
   managed_notification_subscription_id?: number | null
   created_at: string
   updated_at?: string | null
+  auto_flow_id?: number | null
 }
 
 export interface EmailTriggerCreateRequest {
@@ -1434,6 +1436,8 @@ export interface EmailTriggerCreateRequest {
   trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   is_active?: boolean
+  notification_recipient?: string | null
+  notification_enabled?: boolean
 }
 
 export interface EmailTriggerUpdateRequest {
@@ -1558,6 +1562,8 @@ export interface JiraTriggerCreateRequest {
   poll_interval_seconds?: number
   default_agent_id?: number | null
   is_active?: boolean
+  notification_recipient?: string | null
+  notification_enabled?: boolean
 }
 
 export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
@@ -1715,6 +1721,8 @@ export interface ScheduleTriggerCreateRequest {
   trigger_criteria?: TriggerCriteria | null
   default_agent_id?: number | null
   is_active?: boolean
+  notification_recipient?: string | null
+  notification_enabled?: boolean
 }
 
 export type ScheduleTriggerUpdateRequest = Partial<ScheduleTriggerCreateRequest>
@@ -1767,6 +1775,8 @@ export interface GitHubTriggerCreateRequest {
   trigger_criteria?: TriggerCriteria | null
   default_agent_id?: number | null
   is_active?: boolean
+  notification_recipient?: string | null
+  notification_enabled?: boolean
 }
 
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
@@ -2772,6 +2782,7 @@ export interface WebhookIntegration {
   created_at: string
   updated_at: string | null
   inbound_url: string
+  auto_flow_id?: number | null
 }
 
 export interface WebhookIntegrationCreate {
@@ -2784,6 +2795,8 @@ export interface WebhookIntegrationCreate {
   max_payload_bytes?: number
   default_agent_id?: number | null
   trigger_criteria?: TriggerCriteria | null
+  notification_recipient?: string | null
+  notification_enabled?: boolean
 }
 
 export interface WebhookIntegrationUpdate {

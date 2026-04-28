@@ -35,20 +35,18 @@ const ChannelsWizard = dynamic(
   () => import('@/components/integrations/ChannelsWizard'),
   { ssr: false },
 )
-const TriggerWizard = dynamic(
-  () => import('@/components/triggers/TriggerWizard'),
+const TriggerCreationWizard = dynamic(
+  () => import('@/components/triggers/TriggerCreationWizard'),
   { ssr: false },
 )
+// Email edit flow still uses the legacy EmailTriggerWizard until the unified
+// wizard adds an Edit mode (planned in a follow-up task).
 const EmailTriggerWizard = dynamic(
   () => import('@/components/triggers/EmailTriggerWizard'),
   { ssr: false },
 )
-const TriggerSetupModal = dynamic(
-  () => import('@/components/triggers/TriggerSetupModal'),
-  { ssr: false },
-)
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
-import type { TriggerId } from '@/components/triggers/TriggerWizard'
+import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
 import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, ScheduleTrigger, GitHubTrigger, GitHubIntegration } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
@@ -129,7 +127,6 @@ import {
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
 // now encapsulated inside ManagedContainerPanel.
 
-type BreadthTriggerId = Extract<TriggerId, 'jira' | 'schedule' | 'github'>
 type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
 // SVG Icons for Hub Tabs
@@ -1179,9 +1176,9 @@ export default function HubPage() {
   const [channelsWizardSession, setChannelsWizardSession] = useState(0)
   const [showTriggerWizard, setShowTriggerWizard] = useState(false)
   const [triggerWizardSession, setTriggerWizardSession] = useState(0)
-  const [showEmailTriggerWizard, setShowEmailTriggerWizard] = useState(false)
-  const [triggerSetupTarget, setTriggerSetupTarget] = useState<BreadthTriggerId | null>(null)
+  const [triggerWizardInitialKind, setTriggerWizardInitialKind] = useState<TriggerId | null>(null)
   const [editingEmailTrigger, setEditingEmailTrigger] = useState<EmailTrigger | null>(null)
+  const [showEmailTriggerEditWizard, setShowEmailTriggerEditWizard] = useState(false)
   const [webhookRotateModal, setWebhookRotateModal] = useState<
     { open: boolean; secret: string; inboundUrl: string } | null
   >(null)
@@ -3616,8 +3613,9 @@ export default function HubPage() {
     setShowChannelsWizard(true)
   }
 
-  const openTriggerWizard = () => {
+  const openTriggerWizard = (initialKind: TriggerId | null = null) => {
     setTriggerWizardSession((current) => current + 1)
+    setTriggerWizardInitialKind(initialKind)
     setShowTriggerWizard(true)
   }
 
@@ -3640,41 +3638,22 @@ export default function HubPage() {
     }
   }
 
-  const handleTriggerDispatch = (triggerId: TriggerId) => {
-    switch (triggerId) {
-      case 'email':
-        setEditingEmailTrigger(null)
-        setShowEmailTriggerWizard(true)
-        break
-      case 'webhook':
-        setShowWebhookSetupModal(true)
-        break
-      case 'jira':
-      case 'schedule':
-      case 'github':
-        setTriggerSetupTarget(triggerId)
-        break
-      default:
-        toast.error('Not yet supported', `No connect handler for '${triggerId}' yet`)
-    }
-  }
-
-  const handleEmailTriggerComplete = async (trigger: EmailTrigger) => {
-    const wasEditing = editingEmailTrigger !== null
+  const handleEmailTriggerEditComplete = async (trigger: EmailTrigger) => {
     await loadEmailTriggers()
     await loadHubIntegrations()
-    setShowEmailTriggerWizard(false)
+    setShowEmailTriggerEditWizard(false)
     setEditingEmailTrigger(null)
-    setSuccessMessage(wasEditing ? `Email trigger updated: ${trigger.integration_name}` : `Email trigger created: ${trigger.integration_name}`)
+    setSuccessMessage(`Email trigger updated: ${trigger.integration_name}`)
     setTimeout(() => setSuccessMessage(null), 3000)
   }
 
-  const handleBreadthTriggerComplete = async (trigger: JiraTrigger | ScheduleTrigger | GitHubTrigger) => {
-    await loadBreadthTriggers()
-    await loadJiraIntegrations()
-    await loadHubIntegrations()
-    setTriggerSetupTarget(null)
-    setSuccessMessage(`Trigger created: ${trigger.integration_name}`)
+  const handleTriggerCreationComplete = async (
+    kind: TriggerId,
+    _triggerId: number,
+    _flowId: number | null,
+  ) => {
+    await Promise.all([loadEmailTriggers(), loadBreadthTriggers(), loadHubIntegrations()])
+    setSuccessMessage(`${kind.charAt(0).toUpperCase()}${kind.slice(1)} trigger created`)
     setTimeout(() => setSuccessMessage(null), 3000)
   }
 
@@ -5519,7 +5498,7 @@ export default function HubPage() {
                       </Link>
                       {canWriteHub && (
                         <button
-                          onClick={openTriggerWizard}
+                          onClick={() => openTriggerWizard()}
                           className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
                         >
                           + Add Trigger
@@ -5535,7 +5514,7 @@ export default function HubPage() {
                         Create an Email, Webhook, Jira, Schedule, or GitHub trigger to wake agents from external events.
                       </p>
                       {canWriteHub && (
-                        <button onClick={openTriggerWizard} className="btn-primary px-4 py-2 text-sm">
+                        <button onClick={() => openTriggerWizard()} className="btn-primary px-4 py-2 text-sm">
                           + Add Trigger
                         </button>
                       )}
@@ -5600,7 +5579,7 @@ export default function HubPage() {
                             <button
                               onClick={() => {
                                 setEditingEmailTrigger(emailTrigger)
-                                setShowEmailTriggerWizard(true)
+                                setShowEmailTriggerEditWizard(true)
                               }}
                               className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
                             >
@@ -5779,7 +5758,7 @@ export default function HubPage() {
                   scheduleTriggers={scheduleTriggers}
                   githubTriggers={githubTriggers}
                   canWrite={canWriteHub}
-                  onCreate={(kind) => setTriggerSetupTarget(kind)}
+                  onCreate={(kind) => openTriggerWizard(kind)}
                   onChanged={loadBreadthTriggers}
                   onSuccess={(message) => {
                     setSuccessMessage(message)
@@ -7686,29 +7665,22 @@ export default function HubPage() {
         onClose={() => setShowChannelsWizard(false)}
         onChannelSelected={handleChannelsDispatch}
       />
-      <TriggerWizard
+      <TriggerCreationWizard
         key={triggerWizardSession}
         isOpen={showTriggerWizard}
         onClose={() => setShowTriggerWizard(false)}
-        onTriggerSelected={handleTriggerDispatch}
+        onCreated={handleTriggerCreationComplete}
+        initialKind={triggerWizardInitialKind}
       />
       <EmailTriggerWizard
-        isOpen={showEmailTriggerWizard}
+        isOpen={showEmailTriggerEditWizard}
         onClose={() => {
-          setShowEmailTriggerWizard(false)
+          setShowEmailTriggerEditWizard(false)
           setEditingEmailTrigger(null)
         }}
-        onComplete={handleEmailTriggerComplete}
+        onComplete={handleEmailTriggerEditComplete}
         triggerId={editingEmailTrigger?.id ?? null}
       />
-      {triggerSetupTarget && (
-        <TriggerSetupModal
-          isOpen={triggerSetupTarget !== null}
-          triggerType={triggerSetupTarget}
-          onClose={() => setTriggerSetupTarget(null)}
-          onSaved={handleBreadthTriggerComplete}
-        />
-      )}
     </div>
   )
 }
