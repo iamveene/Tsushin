@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import AgentVsFlowExplainer from '@/lib/copy/agent-vs-flow-explainer'
 import {
   api,
   type Agent,
@@ -192,6 +193,8 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!isEdit && <AgentVsFlowExplainer kind="agent" />}
+
           <div>
             <label className="mb-1 block text-sm font-medium text-tsushin-fog">Base agent</label>
             <select
