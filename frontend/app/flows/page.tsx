@@ -42,6 +42,7 @@ import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
 import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
+import AgentVsFlowExplainer from '@/lib/copy/agent-vs-flow-explainer'
 import {
   MessageIcon,
   BellIcon,
@@ -1674,6 +1675,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
         <div className="flex-1 overflow-y-auto p-6">
           {step === 'config' && (
             <div className="space-y-5">
+              <AgentVsFlowExplainer kind="flow" />
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Flow Name *</label>
                 <input
@@ -1736,6 +1738,15 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                     )
                   })}
                 </div>
+                {/* v0.7.0-fix Phase 7: per-kind hint so the operator knows
+                    what each method is for at the point of choice. */}
+                <p className="text-xs text-slate-500 mt-2">
+                  {flowData.execution_method === 'immediate' && 'Run once, right after Save. Best for ad-hoc workflows or testing the steps.'}
+                  {flowData.execution_method === 'scheduled' && 'Run once at a specific timestamp. Best for one-off future runs (e.g. send a digest tomorrow at 9am).'}
+                  {flowData.execution_method === 'recurring' && 'Run on a cron expression / RRule. Best for daily/weekly/hourly batch work.'}
+                  {flowData.execution_method === 'keyword' && 'Fires when a configured slash-command keyword is matched in chat. Best for on-demand workflows the operator triggers manually.'}
+                  {flowData.execution_method === 'triggered' && 'Bind to a Hub trigger so the flow fires when an external event arrives (Email/Jira/GitHub/Webhook).'}
+                </p>
               </div>
 
               {flowData.execution_method === 'scheduled' && (
