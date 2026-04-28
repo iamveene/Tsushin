@@ -159,7 +159,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
               onChange={(event) =>
                 setForm((prev) => ({ ...prev, channelType: event.target.value as ChannelType }))
               }
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-bg px-2 py-1.5 text-sm text-white"
+              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
             >
               {CHANNEL_TYPES.map((type) => (
                 <option key={type} value={type}>
@@ -177,7 +177,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
               onChange={(event) =>
                 setForm((prev) => ({ ...prev, channelInstanceId: event.target.value }))
               }
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-bg px-2 py-1.5 text-sm text-white"
+              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
               placeholder="e.g. 12"
             />
           </div>
@@ -188,7 +188,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
               value={form.eventType}
               maxLength={64}
               onChange={(event) => setForm((prev) => ({ ...prev, eventType: event.target.value }))}
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-bg px-2 py-1.5 text-sm text-white"
+              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
               placeholder="e.g. tick"
             />
           </div>

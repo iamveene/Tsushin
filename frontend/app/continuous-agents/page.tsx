@@ -299,33 +299,34 @@ export default function ContinuousAgentsPage() {
                   )}
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                  {/* v0.7.0-fix Phase 9.10: all three actions render as
+                      buttons (was: View detail = link, Edit = button,
+                      Delete = button) — visual hierarchy now consistent. */}
                   <Link
                     href={`/continuous-agents/${agent.id}`}
-                    className="inline-flex items-center gap-2 text-sm text-cyan-300 hover:text-cyan-200"
+                    className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
                   >
-                    <EyeIcon size={15} />
+                    <EyeIcon size={13} />
                     View detail
                   </Link>
-                  <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setEditingAgent(agent); setModalOpen(true) }}
+                    className="rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
+                  >
+                    Edit
+                  </button>
+                  {!agent.is_system_owned && (
                     <button
                       type="button"
-                      onClick={() => { setEditingAgent(agent); setModalOpen(true) }}
-                      className="rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
+                      disabled={isDeleting}
+                      onClick={() => handleDelete(agent)}
+                      className="rounded-lg border border-red-500/30 px-3 py-1 text-xs text-red-300 hover:bg-red-500/10 hover:text-red-200 disabled:opacity-40"
                     >
-                      Edit
+                      {isDeleting ? 'Deleting…' : 'Delete'}
                     </button>
-                    {!agent.is_system_owned && (
-                      <button
-                        type="button"
-                        disabled={isDeleting}
-                        onClick={() => handleDelete(agent)}
-                        className="rounded-lg border border-red-500/30 px-3 py-1 text-xs text-red-300 hover:bg-red-500/10 hover:text-red-200 disabled:opacity-40"
-                      >
-                        {isDeleting ? 'Deleting…' : 'Delete'}
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
             )

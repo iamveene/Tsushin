@@ -160,15 +160,10 @@ export default function TriggerBreadthCards({
                 </h3>
                 <p className="mt-1 text-xs text-tsushin-slate">{group.description}</p>
               </div>
-              {canWrite && (
-                <button
-                  type="button"
-                  onClick={() => onCreate(group.kind)}
-                  className={`rounded px-3 py-1.5 text-xs border ${group.actionClass}`}
-                >
-                  {group.createLabel}
-                </button>
-              )}
+              {/* v0.7.0-fix Phase 9.2: per-section "Create X Trigger" buttons
+                  retired — the top-of-tab "+ Add Trigger" launcher (which
+                  opens the unified wizard with initialKind) is the single
+                  source of trigger creation. */}
             </div>
 
             {group.items.length === 0 ? (

@@ -244,7 +244,11 @@ export default function WakeEventsPage() {
           )}
         </div>
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-2">
+          {/* v0.7.0-fix Phase 9.11: each filter row gets a leading label so
+              the user can tell Status from Kind without inferring from the
+              chip values. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-tsushin-slate">Status:</span>
             {STATUS_OPTIONS.map(option => (
               <button
                 key={option}
@@ -263,7 +267,8 @@ export default function WakeEventsPage() {
               </button>
             ))}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-tsushin-slate">Kind:</span>
             {CHANNEL_OPTIONS.map(option => (
               <button
                 key={option}

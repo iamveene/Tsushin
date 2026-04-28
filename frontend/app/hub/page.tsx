@@ -3968,16 +3968,13 @@ export default function HubPage() {
           </div>
         )}
 
-        {/* Integration Summary */}
-        <IntegrationSummary
-          providerCount={providerInstances.length}
-          whatsappCount={mcpInstances.length}
-          telegramCount={telegramInstances.length}
-          slackCount={slackIntegrations.length}
-          discordCount={discordIntegrations.length}
-          webhookCount={webhookIntegrations.length}
-          onTabSelect={(tab) => setActiveTab(tab as TabType)}
-        />
+        {/* v0.7.0-fix Phase 9.9: <IntegrationSummary> stat strip retired —
+            it enumerated 6 categories (AI Providers / WhatsApp / Telegram /
+            Slack / Discord / Webhooks) but ignored the other 5 tabs
+            (Triggers / Productivity / Tool APIs / MCP Servers / Vector
+            Stores), and the "Webhooks" count referred to webhook channels
+            rather than webhook triggers — misleading on the Triggers tab.
+            The tab strip below is the single source of truth for navigation. */}
 
         {/* Tabs */}
         <div className="glass-card rounded-xl overflow-clip">
@@ -5492,16 +5489,10 @@ export default function HubPage() {
                 </div>
 
                 <div className="space-y-4 pt-2" data-testid="hub-triggers-section">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                        <WebhookIcon size={18} className="text-cyan-400" /> Triggers
-                      </h3>
-                      <p className="text-xs text-tsushin-slate mt-1">
-                        Wake-event monitoring and the Continuous Agents that consume them live under <strong className="text-white">Watcher</strong>.
-                      </p>
-                    </div>
-                  </div>
+                  {/* v0.7.0-fix Phase 9.3: meta "Triggers inside Triggers"
+                      sub-section retired. The page-level h2 + + Add Trigger
+                      already establishes the surface; the kind sub-sections
+                      below speak for themselves. */}
 
                   {emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && (
                     <div className="card p-6 border-dashed border-tsushin-border/60">
@@ -5624,16 +5615,9 @@ export default function HubPage() {
                       </div>
                       <h3 className="text-lg font-semibold text-white mb-2">No Webhook Triggers</h3>
                       <p className="text-tsushin-slate mb-4">
-                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhook triggers
+                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhook triggers.
+                        Use the <strong className="text-white">+ Add Trigger</strong> button at the top of this tab.
                       </p>
-                      {canWriteHub && (
-                        <button
-                          onClick={() => setShowWebhookSetupModal(true)}
-                          className="btn-primary"
-                        >
-                          Create Webhook Trigger
-                        </button>
-                      )}
                     </div>
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -5834,7 +5818,10 @@ export default function HubPage() {
                         <button
                           onClick={handleGmailConnect}
                           disabled={!googleCredentials}
-                          className={`px-4 py-2 bg-red-600/20 text-red-400 border border-red-600/50 rounded hover:bg-red-600/30 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          /* v0.7.0-fix Phase 9.5: was red (same as Disconnect)
+                              — swapped to teal/cyan additive token so users
+                              can distinguish add vs delete by color. */
+                          className={`px-4 py-2 bg-cyan-600/20 text-cyan-300 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm ${!googleCredentials ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
                           + Add Gmail Account
                         </button>
@@ -6036,9 +6023,25 @@ export default function HubPage() {
             {/* ==================== DEVELOPER TOOLS TAB ==================== */}
             {activeTab === 'developer' && (
               <div className="space-y-6 animate-fade-in">
-                <div>
-                  <h2 className="text-lg font-display font-semibold text-white">Developer Tools</h2>
-                  <p className="text-sm text-tsushin-slate">Shell execution, sandboxed tools, and DevOps integrations</p>
+                {/* v0.7.0-fix Phase 9.8: section header gains a centralized
+                    "+ Add GitHub Integration" launcher to match the pattern
+                    used by every other Hub tab (AI Providers / Channels /
+                    Triggers / Productivity / Tool APIs / MCP Servers /
+                    Vector Stores). It opens the same modal that the per-
+                    GitHub-section "+ Add" button opens further down. */}
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-lg font-display font-semibold text-white">Developer Tools</h2>
+                    <p className="text-sm text-tsushin-slate">Shell execution, sandboxed tools, and DevOps integrations</p>
+                  </div>
+                  {canWriteHub && (
+                    <button
+                      onClick={openAddGitHubIntegrationModal}
+                      className="btn-primary"
+                    >
+                      + Add GitHub Integration
+                    </button>
+                  )}
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

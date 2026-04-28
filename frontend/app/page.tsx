@@ -65,8 +65,12 @@ export default function WatcherPage() {
         <p className="text-tsushin-slate">Observability & Monitoring Hub</p>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="mb-6 flex flex-wrap items-center gap-2">
+      {/* Tab Navigation — v0.7.0-fix Phase 9.6: in-page tabs and full-page
+          sub-routes (Wake Events, Continuous Agents) live in ONE glass-card
+          strip so the nav reads as a single surface instead of two bolted-
+          on strips. Sub-route entries use Link (no active-state coloring
+          since they navigate away). */}
+      <div className="mb-6">
         <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
           {visibleTabs.map((tab) => (
             <button
@@ -92,11 +96,6 @@ export default function WatcherPage() {
               </span>
             </button>
           ))}
-        </div>
-
-        {/* Watcher sub-pages — full standalone routes for monitoring views that
-            don't fit the inline-tab pattern (Wake Events, Continuous Agents). */}
-        <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
           <Link
             href="/wake-events"
             className="relative px-5 py-3 text-sm font-medium rounded-lg text-tsushin-slate hover:text-white transition-all duration-200"

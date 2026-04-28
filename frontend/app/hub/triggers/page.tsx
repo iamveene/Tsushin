@@ -156,11 +156,13 @@ export default function HubTriggersIndexPage() {
         api.listGitHubTriggers().catch(() => []),
         api.listWebhookIntegrations().catch(() => []),
       ])
+      // v0.7.0-fix Phase 9.4: render order matches the Hub Triggers tab —
+      // Email → Webhook → Jira → GitHub. Sort/filter UI overrides as usual.
       const next: TriggerRow[] = [
-        ...jira.map(jiraToRow),
         ...email.map(emailToRow),
-        ...github.map(githubToRow),
         ...webhook.map(webhookToRow),
+        ...jira.map(jiraToRow),
+        ...github.map(githubToRow),
       ]
       setRows(next)
     } catch (err) {
@@ -230,15 +232,27 @@ export default function HubTriggersIndexPage() {
             All inbound channels that can wake an agent. Jira, Email, GitHub, and Webhook in one place.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={loadAll}
-          disabled={loading}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-        >
-          <RefreshIcon size={16} />
-          Refresh
-        </button>
+        {/* v0.7.0-fix Phase 9.7: registry now exposes + Add Trigger so users
+            can create from this surface without bouncing to /hub?tab=triggers. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={loadAll}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+          >
+            <RefreshIcon size={16} />
+            Refresh
+          </button>
+          {hasPermission('hub.write') && (
+            <Link
+              href="/hub?tab=triggers"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600/20 border border-cyan-600/50 px-4 py-2 text-sm text-cyan-200 hover:text-white hover:bg-cyan-600/30"
+            >
+              + Add Trigger
+            </Link>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -261,10 +275,10 @@ export default function HubTriggersIndexPage() {
           className="rounded-lg border border-tsushin-border bg-black/30 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
         >
           <option value="">All kinds</option>
-          <option value="jira">Jira</option>
           <option value="email">Email</option>
-          <option value="github">GitHub</option>
           <option value="webhook">Webhook</option>
+          <option value="jira">Jira</option>
+          <option value="github">GitHub</option>
         </select>
         <select
           value={statusFilter}
