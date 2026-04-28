@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { api, ApiError, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { ActivityIcon, BotIcon, ClockIcon, EyeIcon, LightningIcon, RefreshIcon } from '@/components/ui/icons'
@@ -85,6 +86,17 @@ export default function ContinuousAgentsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [loadData])
+
+  // v0.7.0-fix Phase 6b: when Studio hands off here with ?new=1&agent_id=N
+  // we auto-open the setup modal pre-filled so the user lands directly on
+  // the purpose / action_kind step instead of having to click "New
+  // continuous agent" + re-pick the same base agent.
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    if (searchParams?.get('new') !== '1') return
+    setEditingAgent(null)
+    setModalOpen(true)
+  }, [searchParams])
 
   const handleDelete = useCallback(
     async (agent: ContinuousAgent) => {

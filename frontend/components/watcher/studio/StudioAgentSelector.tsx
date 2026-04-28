@@ -9,6 +9,12 @@ import { AgentAvatarIcon } from './avatars/AgentAvatars'
 import { useAudioWizard } from '@/contexts/AudioWizardContext'
 
 type NewAgentKind = 'text' | 'voice' | 'hybrid'
+// v0.7.0-fix Phase 6b: explicit wake-mode at agent creation so users
+// don't have to learn that Continuous Agents are configured separately.
+// 'conversational' = direct chat (default); 'continuous' = wakened by
+// external triggers and configured via the Continuous Agent setup modal
+// after the base agent is created.
+type WakeMode = 'conversational' | 'continuous'
 
 interface StudioAgentSelectorProps {
   agents: Agent[]
@@ -22,6 +28,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newAgentKind, setNewAgentKind] = useState<NewAgentKind>('text')
+  const [newWakeMode, setNewWakeMode] = useState<WakeMode>('conversational')
   const [newAgentName, setNewAgentName] = useState('')
   const [newAgentVendor, setNewAgentVendor] = useState('')
   const [newAgentModel, setNewAgentModel] = useState('')
@@ -108,7 +115,18 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
         keywords: [],
         is_default: false,
       } as any)
-      setShowCreateModal(false); setNewAgentName(''); onAgentCreated(agent.id)
+      setShowCreateModal(false); setNewAgentName('')
+      // v0.7.0-fix Phase 6b: when the user picks Continuous wake mode,
+      // hand off to /continuous-agents with the agent_id pre-filled so the
+      // setup modal opens with the base agent already selected — closes
+      // the loop the user complained about ("Why is this not a wizard
+      // option for new agent created via Studio?").
+      if (newWakeMode === 'continuous') {
+        router.push(`/continuous-agents?new=1&agent_id=${agent.id}`)
+        setNewWakeMode('conversational')
+        return
+      }
+      onAgentCreated(agent.id)
     } catch (err) { setCreateError(err instanceof Error ? err.message : 'Failed to create agent') }
     finally { setCreating(false) }
   }
@@ -197,6 +215,37 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
             <label className="block text-sm font-medium text-tsushin-slate mb-1">Agent Name</label>
             <input type="text" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)} placeholder="e.g., Customer Support Bot"
               className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" autoFocus />
+          </div>
+          {/* v0.7.0-fix Phase 6b: wake mode picker so users can declare
+              Continuous at agent-creation time instead of discovering it
+              later under Watcher → Continuous Agents. */}
+          <div>
+            <label className="block text-sm font-medium text-tsushin-slate mb-2">Wake mode</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['conversational', 'continuous'] as WakeMode[]).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setNewWakeMode(mode)}
+                  className={`px-3 py-2 rounded-lg border text-left transition-colors ${
+                    newWakeMode === mode
+                      ? 'border-teal-400 bg-teal-500/10 text-white'
+                      : 'border-tsushin-border bg-tsushin-deep text-tsushin-slate hover:border-white/20'
+                  }`}
+                >
+                  <div className="text-sm font-medium capitalize">{mode}</div>
+                  <div className="text-[10px] opacity-70 mt-0.5">
+                    {mode === 'conversational' && 'Replies to direct chat (default).'}
+                    {mode === 'continuous' && 'Always-on; wakes on triggers (email, Jira, GitHub, webhook).'}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {newWakeMode === 'continuous' && (
+              <p className="text-[11px] text-tsushin-slate mt-2">
+                After save, the Continuous Agent setup modal opens to define purpose + action kind.
+              </p>
+            )}
           </div>
           {newAgentKind === 'text' && (
           <div>
