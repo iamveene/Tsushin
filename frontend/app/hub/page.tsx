@@ -127,7 +127,7 @@ import {
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
 // now encapsulated inside ManagedContainerPanel.
 
-type TabType = 'ai-providers' | 'communication' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
+type TabType = 'ai-providers' | 'channels' | 'triggers' | 'productivity' | 'developer' | 'tool-apis' | 'mcp-servers' | 'vector-stores'
 
 // SVG Icons for Hub Tabs
 const BotIcon = () => (
@@ -1050,8 +1050,10 @@ export default function HubPage() {
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     if (typeof window === 'undefined') return 'ai-providers'
-    const validTabs: TabType[] = ['ai-providers', 'communication', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
-    const requested = new URLSearchParams(window.location.search).get('tab') as TabType | null
+    const validTabs: TabType[] = ['ai-providers', 'channels', 'triggers', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
+    const rawRequested = new URLSearchParams(window.location.search).get('tab')
+    // Backwards-compat: legacy ?tab=communication links resolve to the new Channels tab.
+    const requested = (rawRequested === 'communication' ? 'channels' : rawRequested) as TabType | null
     return requested && validTabs.includes(requested) ? requested : 'ai-providers'
   })
   const [showSearchWizard, setShowSearchWizard] = useState(false)
@@ -1091,8 +1093,9 @@ export default function HubPage() {
 
   // Sync activeTab with ?tab= query param when it changes (e.g., via soft nav back from sub-pages)
   useEffect(() => {
-    const validTabs: TabType[] = ['ai-providers', 'communication', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
-    const requested = searchParams?.get('tab') as TabType | null
+    const validTabs: TabType[] = ['ai-providers', 'channels', 'triggers', 'productivity', 'developer', 'tool-apis', 'mcp-servers', 'vector-stores']
+    const raw = searchParams?.get('tab') ?? null
+    const requested = (raw === 'communication' ? 'channels' : raw) as TabType | null
     if (requested && validTabs.includes(requested)) {
       setActiveTab(requested)
     }
@@ -1453,12 +1456,15 @@ export default function HubPage() {
       if (hasTenantScope) {
         loadHubIntegrations(true)
         fetchToolboxStatus()
-        if (activeTab === 'communication') {
+        if (activeTab === 'channels') {
           loadMcpInstances()
           loadTesterStatus()
           loadTelegramInstances()  // Phase 10.1.1
           loadSlackIntegrations()  // v0.6.0
           loadDiscordIntegrations()  // v0.6.0
+          loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
+        }
+        if (activeTab === 'triggers') {
           loadEmailTriggers()
           loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
           loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
@@ -3879,7 +3885,8 @@ export default function HubPage() {
 
   const tabs = [
     { key: 'ai-providers', label: 'AI Providers', Icon: BotIcon, color: 'text-tsushin-indigo', iconBg: 'bg-tsushin-indigo/10' },
-    { key: 'communication', label: 'Communication', Icon: MessageIcon, color: 'text-tsushin-accent', iconBg: 'bg-tsushin-accent/10' },
+    { key: 'channels', label: 'Channels', Icon: MessageIcon, color: 'text-tsushin-accent', iconBg: 'bg-tsushin-accent/10' },
+    { key: 'triggers', label: 'Triggers', Icon: WebhookIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'productivity', label: 'Productivity', Icon: ClipboardIcon, color: 'text-tsushin-warning', iconBg: 'bg-tsushin-warning/10' },
     { key: 'developer', label: 'Developer Tools', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
     { key: 'tool-apis', label: 'Tool APIs', Icon: WrenchIcon, color: 'text-tsushin-success', iconBg: 'bg-tsushin-success/10' },
@@ -4860,7 +4867,7 @@ export default function HubPage() {
                 The per-section "+ Create X" button inside each section (shown
                 only when at least one instance already exists) lets users add
                 another instance without going back through the wizard. */}
-            {activeTab === 'communication' && (() => {
+            {activeTab === 'channels' && (() => {
               const channelConfiguredCount =
                 mcpInstances.length +
                 telegramInstances.length +
@@ -4870,8 +4877,8 @@ export default function HubPage() {
               <div className="space-y-6 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">Communication</h2>
-                    <p className="text-sm text-tsushin-slate">Connect real-time channels and trigger-driven entry points for agent interactions.</p>
+                    <h2 className="text-lg font-display font-semibold text-white">Channels</h2>
+                    <p className="text-sm text-tsushin-slate">Real-time bidirectional channels for chat-based agent interactions (WhatsApp, Telegram, Slack, Discord).</p>
                   </div>
                   {canWriteHub && (
                     <button
@@ -5472,6 +5479,28 @@ export default function HubPage() {
                 {(slackIntegrations.length > 0 || discordIntegrations.length > 0 || webhookIntegrations.length > 0) && (
                   <PublicBaseUrlCard canEdit={canEditSettings} />
                 )}
+              </div>
+              )
+            })()}
+
+            {/* ==================== TRIGGERS TAB (v0.7.0-fix split) ==================== */}
+            {activeTab === 'triggers' && (() => {
+              return (
+              <div className="space-y-6 animate-fade-in">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h2 className="text-lg font-display font-semibold text-white">Triggers</h2>
+                    <p className="text-sm text-tsushin-slate">Event-driven entry points that wake agents from inbox activity or signed external events (Email, Jira, GitHub, Webhook).</p>
+                  </div>
+                  {canWriteHub && (
+                    <button
+                      onClick={() => openTriggerWizard()}
+                      className="btn-primary"
+                    >
+                      + Add Trigger
+                    </button>
+                  )}
+                </div>
 
                 <div className="space-y-4 pt-2" data-testid="hub-triggers-section">
                   <div className="flex items-center justify-between">
@@ -5480,30 +5509,8 @@ export default function HubPage() {
                         <WebhookIcon size={18} className="text-cyan-400" /> Triggers
                       </h3>
                       <p className="text-xs text-tsushin-slate mt-1">
-                        Event-driven entry points that wake agents from inbox activity or signed external events.
+                        Wake-event monitoring and the Continuous Agents that consume them live under <strong className="text-white">Watcher</strong>.
                       </p>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <Link
-                        href="/hub/wake-events"
-                        className="px-3 py-2 bg-gray-800/70 text-gray-200 border border-gray-700 rounded hover:bg-gray-700 text-sm"
-                      >
-                        Wake Events
-                      </Link>
-                      <Link
-                        href="/continuous-agents"
-                        className="px-3 py-2 bg-gray-800/70 text-gray-200 border border-gray-700 rounded hover:bg-gray-700 text-sm"
-                      >
-                        Continuous Agents
-                      </Link>
-                      {canWriteHub && (
-                        <button
-                          onClick={() => openTriggerWizard()}
-                          className="px-4 py-2 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded hover:bg-cyan-600/30 text-sm"
-                        >
-                          + Add Trigger
-                        </button>
-                      )}
                     </div>
                   </div>
 

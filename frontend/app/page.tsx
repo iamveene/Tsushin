@@ -11,6 +11,7 @@
  */
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardTab from '@/components/watcher/DashboardTab'
 import GraphViewTab from '@/components/watcher/GraphViewTab'
@@ -65,8 +66,8 @@ export default function WatcherPage() {
       </div>
 
       {/* Tab Navigation */}
-      <div className="mb-6">
-        <div className="glass-card rounded-xl p-1.5 inline-flex">
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
@@ -91,6 +92,29 @@ export default function WatcherPage() {
               </span>
             </button>
           ))}
+        </div>
+
+        {/* Watcher sub-pages — full standalone routes for monitoring views that
+            don't fit the inline-tab pattern (Wake Events, Continuous Agents). */}
+        <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
+          <Link
+            href="/wake-events"
+            className="relative px-5 py-3 text-sm font-medium rounded-lg text-tsushin-slate hover:text-white transition-all duration-200"
+          >
+            <span className="flex flex-col items-start">
+              <span>Wake Events</span>
+              <span className="text-2xs text-tsushin-muted">Trigger event browser</span>
+            </span>
+          </Link>
+          <Link
+            href="/continuous-agents"
+            className="relative px-5 py-3 text-sm font-medium rounded-lg text-tsushin-slate hover:text-white transition-all duration-200"
+          >
+            <span className="flex flex-col items-start">
+              <span>Continuous Agents</span>
+              <span className="text-2xs text-tsushin-muted">Always-on inventory</span>
+            </span>
+          </Link>
         </div>
       </div>
 
