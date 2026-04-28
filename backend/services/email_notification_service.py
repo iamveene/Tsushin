@@ -1,7 +1,28 @@
-"""Managed Email WhatsApp notification helpers for v0.7.0 triggers."""
+"""Managed Email WhatsApp notification helpers for v0.7.0 triggers.
+
+DEPRECATED — v0.7.0-fix Phase 4b
+================================
+v0.7.0-fix Phase 4 stripped the WhatsApp Notification card from the Email
+trigger detail UI (parity with Jira) and the API no longer emits
+``managed_notification_*`` fields on EmailTriggerRead. This module's
+``ensure_email_notification_subscription`` and
+``send_email_whatsapp_notification`` runtime path is the LEGACY surface
+that still drives the live WhatsApp send during Email polling.
+
+Migration path mirrors the Jira retirement plan documented in
+``services.jira_notification_service``: once the auto-flow Notification
+node is the sole source of truth for live tenants and an E2E WhatsApp
+regression confirms parity, this module + its callers in
+``backend/api/routes_email_triggers.py`` (the legacy
+``/{trigger_id}/notification-subscription`` endpoint) can be deleted.
+
+A DeprecationWarning is emitted at import time so the technical debt is
+visible in dev logs.
+"""
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -9,6 +30,14 @@ import re
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
+
+warnings.warn(
+    "services.email_notification_service is the legacy WhatsApp notification "
+    "path; v0.7.0-fix Phase 4b migrates it onto the auto-flow Notification "
+    "node. See module docstring for the retirement plan.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from channels.whatsapp.adapter import WhatsAppChannelAdapter
 from mcp_sender import MCPSender

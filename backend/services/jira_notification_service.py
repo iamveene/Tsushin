@@ -1,7 +1,34 @@
-"""Managed Jira notification helpers for v0.7.0 continuous agents."""
+"""Managed Jira notification helpers for v0.7.0 continuous agents.
+
+DEPRECATED — v0.7.0-fix Phase 4b
+================================
+The v0.7.0-fix sweep moved the user-facing WhatsApp Notification config
+off the Jira trigger detail UI (Phase 4) and onto the auto-flow's
+Notification node. This module's ``ensure_jira_notification_subscription``
++ ``send_jira_whatsapp_notification`` runtime path is the LEGACY surface
+that still writes the ContinuousAgent/ContinuousSubscription pair and
+emits the WhatsApp message during Jira polling.
+
+Migration path (full retirement, scheduled for the next release):
+1. ``flow_binding_service.ensure_system_managed_flow_for_trigger`` already
+   provisions the auto-flow with a Notification node carrying recipient +
+   enabled flag.
+2. The runtime ``channels.jira.trigger.JiraTrigger._process_managed_notification``
+   should route through the Flow's notification step instead of calling
+   ``send_jira_whatsapp_notification`` here.
+3. Once verified via E2E WhatsApp regression on `release/0.7.0`, this
+   module + its tests can be deleted and the per-trigger
+   ``/{trigger_id}/notification-subscription`` route on routes_jira_triggers
+   retired.
+
+Until that lands, this service stays as the source of truth for the live
+notification path. Consumers see a DeprecationWarning at import time so
+the technical debt is visible to anyone reading the logs.
+"""
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -9,6 +36,14 @@ import re
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
+
+warnings.warn(
+    "services.jira_notification_service is the legacy WhatsApp notification "
+    "path; v0.7.0-fix Phase 4b migrates it onto the auto-flow Notification "
+    "node. See module docstring for the retirement plan.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from channels.jira.utils import jira_description_to_text, jira_issue_link
 from channels.whatsapp.adapter import WhatsAppChannelAdapter

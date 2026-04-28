@@ -18,6 +18,9 @@ from hub.security import TokenEncryption
 from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, JiraChannelInstance, WakeEvent
 from services.encryption_key_service import get_webhook_encryption_key
 from services.jira_integration_service import resolve_jira_config
+# v0.7.0-fix Phase 4b TODO: migrate _process_managed_notification onto the
+# auto-flow Notification node and retire jira_notification_service. See
+# services/jira_notification_service.py module docstring for the plan.
 from services.jira_notification_service import (
     JIRA_NOTIFICATION_ACTION_TYPE,
     JIRA_NOTIFICATION_EVENT_TYPE,
