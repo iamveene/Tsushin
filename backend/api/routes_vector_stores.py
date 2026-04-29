@@ -283,6 +283,136 @@ async def test_vector_store_connection(
     return result
 
 
+# ==================== v0.7.x Wave 2-C: Test-Embedding ====================
+
+
+class TestEmbeddingRequest(BaseModel):
+    """Optional override of the sample text used for the round-trip."""
+
+    text: str = "hello world"
+
+
+class TestEmbeddingResponse(BaseModel):
+    """Diagnostic shape — never raises a 5xx on embed failure.
+
+    The operator surface (the Vector Stores page) needs to render the
+    error message inline rather than parse it out of an HTTP error
+    body. ``success=False`` together with a populated ``error`` string
+    is the contract.
+    """
+
+    success: bool
+    dims: int
+    sample_norm: float
+    latency_ms: int
+    provider: str
+    model: str
+    error: Optional[str] = None
+
+
+@router.post(
+    "/vector-stores/{instance_id}/test-embedding",
+    tags=["Vector Stores"],
+    response_model=TestEmbeddingResponse,
+)
+async def test_vector_store_embedding(
+    instance_id: int,
+    body: Optional[TestEmbeddingRequest] = None,
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    """Round-trip a sample text through the instance's embedding contract.
+
+    Used by Group E success criteria — operators verify a Gemini
+    instance can actually embed before binding it to an agent. Returns
+    HTTP 200 even on failure so the UI can surface the error message
+    in-line; only tenant isolation / not-found returns 404.
+    """
+    import math
+    import time
+
+    from services.vector_store_instance_service import VectorStoreInstanceService
+    from services.case_embedding_resolver import EmbeddingContract
+
+    instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Vector store instance not found")
+
+    extra = instance.extra_config or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    provider = str(extra.get("embedding_provider") or "local")
+    model = str(extra.get("embedding_model") or (
+        "gemini-embedding-001" if provider == "gemini" else "all-MiniLM-L6-v2"
+    ))
+    try:
+        dims = int(extra.get("embedding_dims") or (1536 if provider == "gemini" else 384))
+    except (TypeError, ValueError):
+        dims = 1536 if provider == "gemini" else 384
+
+    sample_text = (body.text if body is not None else None) or "hello world"
+
+    started = time.monotonic()
+    try:
+        credentials = VectorStoreInstanceService.resolve_credentials(instance, db)
+
+        contract = EmbeddingContract(
+            provider=provider,
+            model=model,
+            dimensions=dims,
+            metric=str(extra.get("metric") or "cosine"),
+            task=extra.get("embedding_task"),
+            task_document=str(extra.get("embedding_task_document") or "RETRIEVAL_DOCUMENT"),
+            task_query=str(extra.get("embedding_task_query") or "RETRIEVAL_QUERY"),
+            vector_store_instance_id=instance.id,
+        )
+
+        from agent.memory.embedding_service import get_shared_embedding_service
+
+        embedder = get_shared_embedding_service(
+            contract=contract,
+            credentials=credentials,
+        )
+        vector = embedder.embed_text(sample_text, task_type="RETRIEVAL_DOCUMENT")
+        if vector is None:
+            raise ValueError("embedder returned None")
+
+        actual_dims = len(vector)
+        # L2 norm — gives operators a quick sanity-check that the
+        # vector isn't all-zeros.
+        sq = 0.0
+        for v in vector:
+            sq += float(v) * float(v)
+        sample_norm = math.sqrt(sq)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return TestEmbeddingResponse(
+            success=True,
+            dims=actual_dims,
+            sample_norm=sample_norm,
+            latency_ms=latency_ms,
+            provider=provider,
+            model=model,
+            error=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostic path
+        latency_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "test_vector_store_embedding failed for tenant=%s instance=%s: %s",
+            ctx.tenant_id,
+            instance_id,
+            type(exc).__name__,
+        )
+        return TestEmbeddingResponse(
+            success=False,
+            dims=0,
+            sample_norm=0.0,
+            latency_ms=latency_ms,
+            provider=provider,
+            model=model,
+            error=str(exc),
+        )
+
+
 @router.get("/vector-stores/{instance_id}/stats", tags=["Vector Stores"])
 async def get_vector_store_stats(
     instance_id: int,

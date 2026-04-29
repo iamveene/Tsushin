@@ -1361,6 +1361,28 @@ export interface TriggerCatalogEntry {
   tenant_has_configured: boolean
 }
 
+export interface WizardKindDependency {
+  kind: string
+  label: string
+  create_endpoint: string
+  required_dependency?: string | null
+  dependency_endpoint?: string | null
+  dependency_create_endpoint?: string | null
+  request_field?: string | null
+  notes?: string | null
+}
+
+export interface WizardManifest {
+  id: string
+  label: string
+  component_path: string
+  catalog_endpoint: string
+  catalog_module: string
+  dispatches_to: string[]
+  integration_required?: string | null
+  kind_dependencies: WizardKindDependency[]
+}
+
 export interface DefaultAgentOption {
   id: number
   name: string
@@ -1437,15 +1459,6 @@ export interface EmailTrigger {
   last_health_check?: string | null
   last_activity_at?: string | null
   last_cursor?: string | null
-  managed_notification_enabled?: boolean
-  managed_notification_status?: JiraManagedNotificationStatus | null
-  notification_subscription_status?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_agent_id?: number | null
-  managed_notification_agent_name?: string | null
-  managed_notification_recipient_preview?: string | null
-  managed_notification_continuous_agent_id?: number | null
-  managed_notification_subscription_id?: number | null
   created_at: string
   updated_at?: string | null
   auto_flow_id?: number | null
@@ -1459,8 +1472,6 @@ export interface EmailTriggerCreateRequest {
   trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   is_active?: boolean
-  notification_recipient?: string | null
-  notification_enabled?: boolean
 }
 
 export interface EmailTriggerUpdateRequest {
@@ -1481,22 +1492,6 @@ export interface EmailTriageSubscription {
   created_agent: boolean
   created_subscription: boolean
   status: string
-}
-
-export interface EmailNotificationSubscriptionRequest {
-  recipient_phone?: string
-  recipient?: string
-  agent_id?: number | null
-}
-
-export interface EmailNotificationSubscriptionResponse {
-  email_trigger_id: number
-  continuous_agent_id: number
-  continuous_subscription_id: number
-  agent_id: number
-  recipient_preview: string
-  created_agent: boolean
-  created_subscription: boolean
 }
 
 export interface EmailTestQueryRequest {
@@ -1559,44 +1554,25 @@ export interface JiraTrigger extends TriggerInstanceBase {
   site_url: string
   project_key?: string | null
   jql: string
-  auth_email?: string | null
-  api_token_preview?: string | null
   poll_interval_seconds: number
-  managed_notification_enabled?: boolean
-  managed_notification_status?: JiraManagedNotificationStatus | null
-  notification_subscription_status?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_recipient_preview?: string | null
-  managed_notification_agent_id?: number | null
-  managed_notification_agent_name?: string | null
-  managed_notification_continuous_agent_id?: number | null
-  managed_notification_subscription_id?: number | null
 }
 
 export interface JiraTriggerCreateRequest {
   integration_name: string
-  jira_integration_id?: number | null
-  site_url?: string | null
+  jira_integration_id: number
   project_key?: string | null
   jql: string
-  auth_email?: string | null
-  api_token?: string | null
   trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   default_agent_id?: number | null
   is_active?: boolean
-  notification_recipient?: string | null
-  notification_enabled?: boolean
 }
 
 export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
 
 export interface JiraTriggerTestQueryRequest {
   jira_integration_id?: number | null
-  site_url?: string | null
   jql?: string | null
-  auth_email?: string | null
-  api_token?: string | null
   max_results?: number
 }
 
@@ -1666,39 +1642,8 @@ export interface JiraTriggerTestQueryResponse {
   issue_count?: number | null
   issues?: JiraIssuePreview[]
   sample_issues?: JiraIssuePreview[]
-  recipient_preview?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_status?: JiraManagedNotificationStatus | null
   error?: string | null
   message?: string | null
-}
-
-export interface JiraNotificationSubscriptionRequest {
-  recipient_phone?: string
-  recipient?: string
-  agent_id?: number | null
-}
-
-export interface JiraManagedNotificationStatus {
-  status?: string | null
-  recipient_preview?: string | null
-  agent_id?: number | null
-  agent_name?: string | null
-  continuous_agent_id?: number | null
-  continuous_subscription_id?: number | null
-  created_agent?: boolean
-  created_subscription?: boolean
-  message?: string | null
-}
-
-export interface JiraNotificationSubscriptionResponse extends JiraManagedNotificationStatus {
-  jira_trigger_id?: number
-  agent_id?: number
-  recipient_preview?: string
-  continuous_agent_id?: number
-  continuous_subscription_id?: number
-  created_agent?: boolean
-  created_subscription?: boolean
 }
 
 export interface JiraPollNowResponse {
@@ -1761,8 +1706,6 @@ export interface GitHubTriggerCreateRequest {
   trigger_criteria?: TriggerCriteria | null
   default_agent_id?: number | null
   is_active?: boolean
-  notification_recipient?: string | null
-  notification_enabled?: boolean
 }
 
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
@@ -1771,9 +1714,8 @@ export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
 // is verified at the integration level (Hub → Developer Tools), not per trigger.
 
 // v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
-// shared PAT + default owner/repo so the code_repository skill and GitHub
-// triggers can reuse one connection per tenant.
-export type GitHubProviderMode = 'programmatic' | 'agentic'
+// shared GitHub connection + default owner/repo so the code_repository skill
+// and GitHub triggers can reuse one connection per tenant.
 
 export interface GitHubIntegration {
   id: number
@@ -1782,9 +1724,7 @@ export interface GitHubIntegration {
   name?: string | null
   default_owner?: string | null
   default_repo?: string | null
-  pat_token_preview?: string | null
   is_active: boolean
-  provider_mode?: GitHubProviderMode
   health_status?: string | null
   health_status_reason?: string | null
   last_health_check?: string | null
@@ -1802,7 +1742,6 @@ export interface GitHubIntegrationCreateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
-  provider_mode?: GitHubProviderMode
 }
 
 export interface GitHubIntegrationUpdateRequest {
@@ -1811,26 +1750,6 @@ export interface GitHubIntegrationUpdateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
-  provider_mode?: GitHubProviderMode
-}
-
-export interface GitHubIntegrationTestConnectionRequest {
-  pat_token?: string | null
-  owner?: string | null
-  repo?: string | null
-}
-
-export interface GitHubIntegrationTestConnectionResponse {
-  success: boolean
-  ok?: boolean
-  status?: string
-  status_code?: number | null
-  detail?: string | null
-  message?: string | null
-  error?: string | null
-  repository?: string | null
-  full_name?: string | null
-  default_branch?: string | null
 }
 
 // v0.7.0: PR Submitted criteria envelope — matches the backend canonical
@@ -2739,6 +2658,45 @@ export interface TelegramHealthStatus {
 }
 
 // v0.6.0: Webhook-as-a-Channel Integration (v0.7.1 adds human-readable slug)
+// ==================== v0.7.x Wave 2-C — Per-trigger Memory Recap config ====================
+//
+// Mirrors backend `TriggerRecapConfigRead`/`TriggerRecapConfigWrite` shapes
+// (see backend/api/routes_trigger_recap.py and the per-kind trigger routers).
+// One config row per trigger instance regardless of kind.
+export interface TriggerRecapConfig {
+  id?: number
+  enabled: boolean
+  query_template: string
+  scope: 'agent' | 'trigger_kind' | 'trigger_instance'
+  k: number
+  min_similarity: number
+  vector_kind: 'problem' | 'action' | 'outcome' | 'any'
+  include_failed: boolean
+  format_template: string
+  inject_position: 'prepend_user_msg' | 'system_addendum'
+  max_recap_chars: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface TriggerRecapTestResult {
+  rendered_text: string | null
+  cases_used: number
+  config_snapshot: Record<string, unknown>
+  elapsed_ms: number
+  used_sample: boolean
+}
+
+export interface VectorStoreEmbeddingTestResult {
+  success: boolean
+  dims: number
+  sample_norm: number
+  latency_ms: number
+  provider: string
+  model: string
+  error?: string | null
+}
+
 export interface WebhookIntegration {
   id: number
   tenant_id: string
@@ -2775,8 +2733,6 @@ export interface WebhookIntegrationCreate {
   max_payload_bytes?: number
   default_agent_id?: number | null
   trigger_criteria?: TriggerCriteria | null
-  notification_recipient?: string | null
-  notification_enabled?: boolean
 }
 
 export interface WebhookIntegrationUpdate {
@@ -4704,6 +4660,12 @@ export const api = {
     return res.json()
   },
 
+  async getWizardManifests(): Promise<WizardManifest[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/wizards/manifests`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wizard manifests')
+    return res.json()
+  },
+
   async getContinuousAgents(params: ContinuousAgentListParams = {}): Promise<PageResponse<ContinuousAgent>> {
     const query = new URLSearchParams()
     if (params.limit !== undefined) query.set('limit', String(params.limit))
@@ -6270,16 +6232,6 @@ export const api = {
     return res.json()
   },
 
-  async createEmailNotificationSubscription(id: number, data: EmailNotificationSubscriptionRequest): Promise<EmailNotificationSubscriptionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/notification-subscription`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to enable email notification subscription')
-    return res.json()
-  },
-
   async pollEmailTriggerNow(id: number): Promise<EmailPollNowResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/poll-now`, {
       method: 'POST',
@@ -6400,16 +6352,6 @@ export const api = {
     return res.json()
   },
 
-  async createJiraNotificationSubscription(id: number, data: JiraNotificationSubscriptionRequest): Promise<JiraNotificationSubscriptionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/notification-subscription`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to enable Jira notification subscription')
-    return res.json()
-  },
-
   async pollJiraTriggerNow(id: number): Promise<JiraPollNowResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/poll-now`, {
       method: 'POST',
@@ -6457,10 +6399,7 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
   },
 
-  // testGitHubTriggerConnection retired in v0.7.0-fix Phase 3 — verify at
-  // the integration level via api.testGitHubConnection / Hub > Developer Tools.
-
-  // ---- v0.7.0: GitHub Hub Integrations (shared PAT, mirrors Jira) ----
+  // ---- v0.7.0: GitHub Hub Integrations (mirrors Jira) ----
 
   async listGitHubIntegrations(): Promise<GitHubIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`)
@@ -6495,26 +6434,6 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
   },
 
-  async testGitHubConnection(data: GitHubIntegrationTestConnectionRequest): Promise<GitHubIntegrationTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
-
-  async testGitHubConnectionForId(id: number, data: GitHubIntegrationTestConnectionRequest = {}): Promise<GitHubIntegrationTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
-
   // PR Submitted criteria evaluator. Posts the criteria + an optional sample
   // payload to the backend, which runs the same matcher used by the
   // production webhook dispatcher and returns `{matched, reason}`.
@@ -6543,7 +6462,6 @@ export const api = {
       email: `/api/triggers/email/${id}`,
       webhook: `/api/triggers/webhook/${id}`,
       jira: `/api/triggers/jira/${id}`,
-      schedule: `/api/triggers/schedule/${id}`,
       github: `/api/triggers/github/${id}`,
     }
     const path = pathByKind[kind]
@@ -6611,6 +6529,95 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
+    return res.json()
+  },
+
+  // v0.7.x Wave 2-C/D — per-trigger Memory Recap config CRUD + test endpoint.
+  // Single endpoint family per kind: /api/triggers/{kind}/{id}/recap-config and
+  // /api/triggers/{kind}/{id}/test-recap. Backend returns 404 when no row
+  // exists for GET; we surface that as `null` so callers can render defaults.
+  async getTriggerRecapConfig(kind: string, id: number): Promise<TriggerRecapConfig | null> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`)
+    if (res.status === 404) return null
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger recap config')
+    return res.json()
+  },
+
+  async putTriggerRecapConfig(
+    kind: string,
+    id: number,
+    config: Partial<TriggerRecapConfig>,
+  ): Promise<TriggerRecapConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save trigger recap config')
+    return res.json()
+  },
+
+  async deleteTriggerRecapConfig(kind: string, id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`, {
+      method: 'DELETE',
+    })
+    if (!res.ok && res.status !== 404) {
+      await handleApiError(res, 'Failed to delete trigger recap config')
+    }
+  },
+
+  async testTriggerRecap(
+    kind: string,
+    id: number,
+    body: { query?: string; sample_payload?: unknown },
+  ): Promise<TriggerRecapTestResult> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/test-recap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to run test recap')
+    return res.json()
+  },
+
+  async testEmbedding(instanceId: number, text: string): Promise<VectorStoreEmbeddingTestResult> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/vector-store-instances/${instanceId}/test-embedding`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      },
+    )
+    if (!res.ok) {
+      // Surface backend error body when present so the inline panel can
+      // render `error ✗ | <message>` without throwing the whole UI.
+      try {
+        const data = await res.json()
+        const message = typeof data?.detail === 'string'
+          ? data.detail
+          : (typeof data?.error === 'string' ? data.error : 'Failed to test embedding')
+        return {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: message,
+        }
+      } catch {
+        return {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: `HTTP ${res.status}`,
+        }
+      }
+    }
     return res.json()
   },
 

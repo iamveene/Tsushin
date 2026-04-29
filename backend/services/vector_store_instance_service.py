@@ -93,6 +93,15 @@ class VectorStoreInstanceService:
         if vendor not in SUPPORTED_VENDORS:
             raise ValueError(f"Unsupported vendor: {vendor}. Must be one of: {SUPPORTED_VENDORS}")
 
+        # v0.7.x Wave 2-C: validate the embedding contract on create so an
+        # operator can't persist ``provider=gemini, dims=384`` (or any
+        # other invalid combo) and discover the inconsistency only at
+        # case-write time. The same helper guards updates further down.
+        if extra_config is not None:
+            from services.case_embedding_resolver import validate_extra_config_embedding
+
+            validate_extra_config_embedding(extra_config)
+
         # SSRF validate base_url (skip for mongodb+srv:// which uses a non-HTTP scheme)
         if base_url:
             from urllib.parse import urlparse
@@ -267,6 +276,25 @@ class VectorStoreInstanceService:
                     raise ValueError(f"URL validation failed: {e}")
             elif parsed.scheme not in ("mongodb", "mongodb+srv"):
                 raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
+        # v0.7.x Wave 1-B: validate the new embedding contract + reject
+        # mid-stream provider/model/dims mutation when cases already
+        # reference this instance. Both helpers raise ``ValueError`` so
+        # the FastAPI route handler converts to a 400.
+        if "extra_config" in kwargs and kwargs["extra_config"] is not None:
+            from services.case_embedding_resolver import (
+                reject_post_data_contract_mutation,
+                validate_extra_config_embedding,
+            )
+
+            new_extra = kwargs["extra_config"] or {}
+            validate_extra_config_embedding(new_extra)
+            reject_post_data_contract_mutation(
+                db,
+                tenant_id=tenant_id,
+                instance_id=instance_id,
+                new_extra_config=new_extra,
+            )
 
         # Handle credentials update
         if "credentials" in kwargs:

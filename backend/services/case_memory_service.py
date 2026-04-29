@@ -354,17 +354,60 @@ def _run_status(run_obj: Any) -> Optional[str]:
     return getattr(run_obj, "status", None)
 
 
-def _embed_texts(texts: List[str]) -> List[List[float]]:
-    """Run the shared SentenceTransformer embedder over a small batch.
+def _embed_texts(
+    texts: List[str],
+    contract: Optional[Any] = None,
+    credentials: Optional[dict] = None,
+) -> List[List[float]]:
+    """Run the resolved embedder over a small batch.
 
-    Defaults to MiniLM/384. The bridge handles vendor-specific embedders
-    via its own ``embedding_service``; we use the local shared instance
-    here for the case-memory MVP.
+    When ``contract`` is supplied with ``provider="gemini"``, dispatches
+    to the Gemini provider with task hint ``RETRIEVAL_DOCUMENT``.
+    Otherwise falls back to the shared local SentenceTransformer
+    (MiniLM/384) — i.e. preserves the v0.7.0 MVP behaviour for any
+    caller that doesn't pass a contract.
     """
     from agent.memory.embedding_service import get_shared_embedding_service
 
-    embedder = get_shared_embedding_service()
-    return embedder.embed_batch_chunked(texts, batch_size=8, force_gc=False)
+    embedder = get_shared_embedding_service(contract=contract, credentials=credentials)
+    task = getattr(contract, "task_document", None) or "RETRIEVAL_DOCUMENT"
+    return embedder.embed_batch_chunked(
+        texts, batch_size=8, force_gc=False, task_type=task
+    )
+
+
+def _resolve_credentials_for_contract(
+    db: Session, *, tenant_id: str, contract: Any
+) -> Optional[dict]:
+    """Decrypt the VectorStoreInstance credentials when the contract
+    actually needs them (Gemini today; future remote providers tomorrow).
+
+    Returns ``None`` for the local provider so the embedding service can
+    skip the credential lookup entirely.
+    """
+    if contract is None:
+        return None
+    provider = (getattr(contract, "provider", None) or "").lower()
+    if provider in ("local", ""):
+        return None
+    instance_id = getattr(contract, "vector_store_instance_id", None)
+    if instance_id is None:
+        return None
+
+    try:
+        from services.vector_store_instance_service import VectorStoreInstanceService
+
+        instance = VectorStoreInstanceService.get_instance(instance_id, tenant_id, db)
+        if instance is None:
+            return None
+        return VectorStoreInstanceService.resolve_credentials(instance, db)
+    except Exception:  # noqa: BLE001 — never break indexing on credential lookup
+        logger.exception(
+            "case_memory: failed to resolve credentials for instance=%s tenant=%s",
+            instance_id,
+            tenant_id,
+        )
+        return None
 
 
 async def _write_vectors_via_bridge(
@@ -571,8 +614,11 @@ def index_case(
     action_text = build_action_text(run_obj)
     outcome_text = build_outcome_text(run_obj, outcome_label=outcome_label)
 
-    # 4) Resolve contract.
+    # 4) Resolve contract + (optionally) credentials.
     contract = resolve_for_agent(db, tenant_id=tenant_id, agent_id=agent_id)
+    credentials = _resolve_credentials_for_contract(
+        db, tenant_id=tenant_id, contract=contract
+    )
 
     # Decide which vectors to attempt. Problem is mandatory; action /
     # outcome are best-effort and degrade to fallback when empty.
@@ -590,7 +636,7 @@ def index_case(
     # 5) Embed + dim-validate.
     texts_only = [t for _, t in vector_targets]
     try:
-        embeddings = _embed_texts(texts_only)
+        embeddings = _embed_texts(texts_only, contract=contract, credentials=credentials)
     except Exception:
         logger.exception(
             "case_memory: embedding failed (tenant=%s agent=%s origin=%s run=%s)",
@@ -857,6 +903,7 @@ def search_similar_cases(
     from agent.memory.providers.bridge import ProviderBridgeStore
     from agent.memory.providers.registry import VectorStoreRegistry
     from agent.memory.providers.resolver import VectorStoreResolver
+    from services.case_embedding_resolver import resolve_for_agent
 
     if not query or not query.strip():
         return []
@@ -887,7 +934,46 @@ def search_similar_cases(
     backend_root = Path(__file__).resolve().parents[1]
     persist_directory = str(backend_root / "data" / "memory" / f"agent_{agent.id}")
 
-    embedder = get_shared_embedding_service()
+    # Resolve the embedding contract for the search side, then pre-embed
+    # the query with the right task hint (RETRIEVAL_QUERY for Gemini,
+    # ignored for local). Without this step, Gemini-configured tenants
+    # would silently fall back to local 384-dim embeddings here while
+    # writing 1536-dim Gemini vectors — guaranteeing zero recall.
+    contract = resolve_for_agent(db, tenant_id=tenant_id, agent_id=agent.id)
+    credentials = _resolve_credentials_for_contract(
+        db, tenant_id=tenant_id, contract=contract
+    )
+    try:
+        embedder = get_shared_embedding_service(
+            contract=contract, credentials=credentials
+        )
+    except Exception:
+        logger.exception(
+            "case_memory: failed to resolve contract-aware embedder for "
+            "tenant=%s agent=%s — falling back to local default",
+            tenant_id,
+            agent.id,
+        )
+        embedder = get_shared_embedding_service()
+
+    try:
+        query_embedding = embedder.embed_text(
+            query, task_type=contract.task_query
+        )
+    except TypeError:
+        # Some legacy stand-ins (test fakes) don't accept task_type.
+        query_embedding = embedder.embed_text(query)
+    except Exception:
+        logger.exception(
+            "case_memory: query embedding failed (tenant=%s agent=%s)",
+            tenant_id,
+            agent.id,
+        )
+        return []
+
+    if not query_embedding:
+        return []
+
     resolver = VectorStoreResolver()
     resolved = resolver.resolve(
         agent_id=agent.id,
@@ -923,8 +1009,12 @@ def search_similar_cases(
         loop_is_running = False
 
     def _make_coro():
-        return bridge.search_similar(
-            query_text=query, limit=over_fetch, sender_key=None
+        # Use the embedding-aware path so we don't double-embed the
+        # query under the bridge's own embedding_service.
+        return bridge.search_similar_by_embedding(
+            query_embedding=query_embedding,
+            limit=over_fetch,
+            sender_key=None,
         )
 
     try:

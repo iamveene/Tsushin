@@ -29,6 +29,21 @@ from channels.github.trigger import (
 from channels.trigger_criteria import validate_criteria
 from db import get_db
 from models import Agent, Contact, GitHubChannelInstance, GitHubIntegration
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+)
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -281,6 +296,7 @@ def _load_github_integration(
         .filter(
             GitHubIntegration.id == integration_id,
             GitHubIntegration.tenant_id == tenant_id,
+            GitHubIntegration.type == "github",
         )
         .first()
     )
@@ -308,11 +324,13 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
     return row.friendly_name if row else None
 
 
-def _integration_name(db: Session, integration_id: Optional[int]) -> Optional[str]:
+def _integration_name(db: Session, integration_id: Optional[int], tenant_id: str) -> Optional[str]:
     if not integration_id:
         return None
     row = db.query(GitHubIntegration.display_name, GitHubIntegration.name).filter(
-        GitHubIntegration.id == integration_id
+        GitHubIntegration.id == integration_id,
+        GitHubIntegration.tenant_id == tenant_id,
+        GitHubIntegration.type == "github",
     ).first()
     if not row:
         return None
@@ -340,7 +358,7 @@ def _to_read(db: Session, instance: GitHubChannelInstance) -> GitHubTriggerRead:
         tenant_id=instance.tenant_id,
         integration_name=instance.integration_name,
         github_integration_id=instance.github_integration_id,
-        github_integration_name=_integration_name(db, instance.github_integration_id),
+        github_integration_name=_integration_name(db, instance.github_integration_id, instance.tenant_id),
         repo_owner=instance.repo_owner,
         repo_name=instance.repo_name,
         webhook_secret_preview=instance.webhook_secret_preview,
@@ -573,6 +591,98 @@ def delete_github_trigger(
     db: Session = Depends(get_db),
 ) -> None:
     instance = _load_github_trigger(db, ctx, trigger_id)
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
     db.delete(instance)
     db.commit()
     return None
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def get_github_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_github_trigger(db, ctx, trigger_id)
+    return get_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+
+
+@router.put("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def put_github_trigger_recap_config(
+    trigger_id: int,
+    payload: TriggerRecapConfigWrite,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_github_trigger(db, ctx, trigger_id)
+    return put_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{trigger_id}/recap-config", status_code=status.HTTP_204_NO_CONTENT)
+def delete_github_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> None:
+    _load_github_trigger(db, ctx, trigger_id)
+    delete_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    return None
+
+
+@router.post("/{trigger_id}/test-recap", response_model=TriggerRecapTestResponse)
+def post_github_trigger_test_recap(
+    trigger_id: int,
+    payload: TriggerRecapTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _load_github_trigger(db, ctx, trigger_id)
+    return run_test_recap_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+        body=payload,
+    )

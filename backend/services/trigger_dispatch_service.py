@@ -292,6 +292,52 @@ class TriggerDispatchService:
                 matched_agent_id=agent_id,
             )
 
+        # v0.7.x Wave 1-A — Trigger Memory Recap (default-off behind
+        # ``TSN_CASE_MEMORY_ENABLED``). Build the recap once, then attach
+        # it to BOTH the continuous_task queue payload AND the
+        # flow_run_triggered ``trigger_context.source.memory_recap``. The
+        # recap is best-effort — any failure swallows + logs and yields
+        # ``None`` (recap omitted, dispatch proceeds normally).
+        recap: Optional[dict] = None
+        try:
+            recap_agent_id = self._resolve_recap_agent_id(
+                runs_to_enqueue=runs_to_enqueue,
+                bindings=bindings,
+                fallback_agent_id=agent_id,
+            )
+            if recap_agent_id is not None:
+                payload_doc = self._read_payload_ref(payload_ref) or {}
+                if not payload_doc:
+                    # Last-resort fallback — _read_payload_ref returns None
+                    # only on missing file / parse error. We still want
+                    # the recap to render against the in-memory event for
+                    # tests + dev ergonomics; this branch is never hit on
+                    # the prod path because _write_payload_ref ran above.
+                    payload_doc = {
+                        "trigger_type": trigger_type,
+                        "instance_id": event.instance_id,
+                        "event_type": event.event_type,
+                        "dedupe_key": event.dedupe_key,
+                        "payload": event.payload,
+                    }
+                from services import trigger_recap_service
+
+                recap = trigger_recap_service.build_memory_recap(
+                    db=self.db,
+                    tenant_id=tenant_id,
+                    agent_id=recap_agent_id,
+                    trigger_kind=trigger_type,
+                    trigger_instance_id=event.instance_id,
+                    payload_doc=payload_doc,
+                )
+        except Exception:  # noqa: BLE001 — recap NEVER aborts dispatch
+            logger.exception(
+                "trigger_dispatch: recap build failed (non-fatal) for %s/%s",
+                trigger_type,
+                event.instance_id,
+            )
+            recap = None
+
         # v0.7.0 Wave 3 — fan out to bound Flows alongside the legacy path.
         # Reads ``flow_trigger_binding`` for (kind, instance), enqueues one
         # ``flow_run_triggered`` MessageQueue item per active binding. The
@@ -312,6 +358,7 @@ class TriggerDispatchService:
                     agent_id=agent_id,  # v0.7.0 fix: required for the
                     # message_queue.agent_id NOT NULL column. Caught by
                     # release-finishing dispatch E2E test.
+                    memory_recap=recap,
                 )
             except Exception:  # pragma: no cover — never abort dispatch on fan-out errors
                 logger.exception(
@@ -353,6 +400,7 @@ class TriggerDispatchService:
             event=event,
             payload_ref=payload_ref,
             runs=runs_to_enqueue,
+            memory_recap=recap,
         )
 
         return TriggerDispatchResult(
@@ -375,11 +423,18 @@ class TriggerDispatchService:
         event: TriggerDispatchInput,
         payload_ref: Optional[str],
         runs: list[tuple[ContinuousRun, ContinuousSubscription, ContinuousAgent]],
+        memory_recap: Optional[dict] = None,
     ) -> None:
         """BUG-702: enqueue ``continuous_task`` MessageQueue rows for runs.
 
         System-owned subscriptions are skipped — they are dispatched inline
         by the channel adapter (e.g. ``_process_managed_actions``).
+
+        ``memory_recap`` (v0.7.x Wave 1-A) — optional pre-built recap dict
+        produced by ``trigger_recap_service.build_memory_recap``. When
+        present, it is attached to the queue payload under the
+        ``memory_recap`` key so ``QueueRouter._dispatch_continuous_task``
+        can inject it into the agent's first-turn user message.
         """
         if not runs:
             return
@@ -402,6 +457,8 @@ class TriggerDispatchService:
                     "importance": self._normalize_importance(event.importance),
                     "payload_ref": payload_ref,
                 }
+                if isinstance(memory_recap, dict) and memory_recap.get("rendered_text"):
+                    payload["memory_recap"] = memory_recap
                 mqs.enqueue(
                     channel="continuous",
                     tenant_id=tenant_id,
@@ -426,6 +483,7 @@ class TriggerDispatchService:
         payload_ref: Optional[str],
         bindings: list[FlowTriggerBinding],
         agent_id: int,
+        memory_recap: Optional[dict] = None,
     ) -> list[int]:
         """v0.7.0 Wave 3 — fan a wake event out to every bound Flow.
 
@@ -454,6 +512,22 @@ class TriggerDispatchService:
         enqueued_binding_ids: list[int] = []
 
         for binding in bindings:
+            source_block: dict[str, Any] = {
+                "trigger_kind": trigger_type,
+                "instance_id": instance_id,
+                "event_type": event.event_type,
+                "dedupe_key": event.dedupe_key,
+                "occurred_at": event.occurred_at.isoformat() + "Z",
+                "wake_event_id": wake_event.id,
+                "binding_id": binding.id,
+                "payload": source_payload,
+            }
+            # v0.7.x Wave 1-A — Trigger Memory Recap rides under
+            # source.memory_recap so flow Source steps can reference
+            # {{source.memory_recap.rendered_text}} for free (FlowEngine
+            # already exposes nested {{source.*}} variables).
+            if isinstance(memory_recap, dict) and memory_recap.get("rendered_text"):
+                source_block["memory_recap"] = memory_recap
             queue_payload = {
                 "flow_definition_id": binding.flow_definition_id,
                 "binding_id": binding.id,
@@ -464,18 +538,7 @@ class TriggerDispatchService:
                 # Nested under "source" so SourceStepHandler + the variable
                 # resolver can expose {{source.payload.*}}, {{source.trigger_kind}},
                 # etc. Schema must match what flow_engine.SourceStepHandler reads.
-                "trigger_context": {
-                    "source": {
-                        "trigger_kind": trigger_type,
-                        "instance_id": instance_id,
-                        "event_type": event.event_type,
-                        "dedupe_key": event.dedupe_key,
-                        "occurred_at": event.occurred_at.isoformat() + "Z",
-                        "wake_event_id": wake_event.id,
-                        "binding_id": binding.id,
-                        "payload": source_payload,
-                    }
-                },
+                "trigger_context": {"source": source_block},
             }
             mqs.enqueue(
                 channel="flow",
@@ -500,6 +563,41 @@ class TriggerDispatchService:
             )
 
         return enqueued_binding_ids
+
+    def _resolve_recap_agent_id(
+        self,
+        *,
+        runs_to_enqueue: list[
+            tuple[ContinuousRun, ContinuousSubscription, ContinuousAgent]
+        ],
+        bindings: list[FlowTriggerBinding],
+        fallback_agent_id: Optional[int],
+    ) -> Optional[int]:
+        """Pick an agent_id to scope the recap's vector search.
+
+        The recap config is per-trigger (tenant + kind + instance_id), but
+        ``case_memory_service.search_similar_cases`` needs an agent_id to
+        resolve the vector store. We pick:
+
+          1. The first matched continuous_agent.agent_id when at least
+             one ContinuousRun was created — the recap will be injected
+             into that subscription's queue payload.
+          2. Otherwise, the resolved trigger agent_id (fallback) — used
+             for bound flows that don't go through ContinuousRun.
+          3. ``None`` when neither is available — caller skips recap.
+        """
+        for _run, _subscription, continuous_agent in runs_to_enqueue:
+            agent_id_attr = getattr(continuous_agent, "agent_id", None)
+            if isinstance(agent_id_attr, int):
+                return agent_id_attr
+        if isinstance(fallback_agent_id, int):
+            return fallback_agent_id
+        # bindings don't carry an agent_id directly — they reference
+        # FlowDefinition. Without a fallback agent_id we can't scope the
+        # search, so skip recap entirely.
+        if bindings:
+            return None
+        return None
 
     def _read_payload_ref(self, payload_ref: Optional[str]) -> Optional[dict]:
         """Read the redacted payload JSON written to disk by ``_write_payload_ref``.
