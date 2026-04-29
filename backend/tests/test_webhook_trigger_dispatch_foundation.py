@@ -31,6 +31,7 @@ from models import (  # noqa: E402
     Contact,
     ContinuousAgent,
     ContinuousSubscription,
+    FlowTriggerBinding,
     MessageQueue,
     WebhookIntegration,
 )
@@ -62,6 +63,7 @@ def db_session():
             ChannelEventDedupe.__table__,
             ContinuousAgent.__table__,
             ContinuousSubscription.__table__,
+            FlowTriggerBinding.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)

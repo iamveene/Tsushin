@@ -805,26 +805,30 @@ def test_channels_wizard_fallback_matches_backend():
 def test_trigger_wizard_fallback_matches_backend():
     """
     The Hub trigger launcher keeps a static fallback in
-    ``frontend/components/triggers/TriggerWizard.tsx`` for degraded mode.
-    That fallback must stay aligned with ``TRIGGER_CATALOG`` so Email and
-    Webhook remain discoverable even if ``/api/triggers`` is temporarily
-    unavailable.
+    ``frontend/components/triggers/TriggerCreationWizard.tsx`` (the
+    ``KIND_CATALOG`` array) for degraded mode. That fallback must stay
+    aligned with ``TRIGGER_CATALOG`` so Email/Webhook/Jira/GitHub remain
+    discoverable even if ``/api/triggers`` is temporarily unavailable.
+
+    Note: ``TriggerWizard.tsx`` was retired in v0.7.0 (commit 5c154d3)
+    and replaced by ``TriggerCreationWizard.tsx`` with ``KIND_CATALOG``
+    as the canonical fallback constant.
     """
     from channels.catalog import TRIGGER_CATALOG
 
     backend_ids = {entry.id for entry in TRIGGER_CATALOG if entry.requires_setup}
 
-    wizard_path = FRONTEND / "components" / "triggers" / "TriggerWizard.tsx"
-    assert wizard_path.exists(), f"TriggerWizard.tsx not found at {wizard_path}"
+    wizard_path = FRONTEND / "components" / "triggers" / "TriggerCreationWizard.tsx"
+    assert wizard_path.exists(), f"TriggerCreationWizard.tsx not found at {wizard_path}"
     text = _read(wizard_path)
 
     fallback_match = re.search(
-        r"const FALLBACK_TRIGGERS[^=]*=\s*\[(.*?)\n\]",
+        r"const KIND_CATALOG[^=]*=\s*\[(.*?)\n\]",
         text,
         re.DOTALL,
     )
     assert fallback_match, (
-        "Fallback FALLBACK_TRIGGERS array not found in TriggerWizard.tsx. "
+        "Fallback KIND_CATALOG array not found in TriggerCreationWizard.tsx. "
         "If you refactored the fallback shape, update this regex too."
     )
     frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
@@ -834,14 +838,14 @@ def test_trigger_wizard_fallback_matches_backend():
 
     assert not missing_in_frontend, (
         f"Triggers registered in backend TRIGGER_CATALOG are missing from "
-        f"TriggerWizard.tsx: {sorted(missing_in_frontend)}. Add matching "
-        f"entries so offline mode still renders them."
+        f"TriggerCreationWizard.tsx KIND_CATALOG: {sorted(missing_in_frontend)}. "
+        f"Add matching entries so offline mode still renders them."
     )
     assert not extra_in_frontend, (
-        f"Triggers present in TriggerWizard.tsx but not in backend "
-        f"TRIGGER_CATALOG: {sorted(extra_in_frontend)}. Either register "
-        f"them in backend/channels/catalog.py or remove them from the "
-        f"frontend fallback."
+        f"Triggers present in TriggerCreationWizard.tsx KIND_CATALOG but not "
+        f"in backend TRIGGER_CATALOG: {sorted(extra_in_frontend)}. Either "
+        f"register them in backend/channels/catalog.py or remove them from "
+        f"the frontend fallback."
     )
 
 
