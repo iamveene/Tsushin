@@ -57,8 +57,27 @@ def flows_backfill_suppress_legacy() -> bool:
     return _bool_env("TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY", default=False)
 
 
+def case_memory_enabled() -> bool:
+    """v0.7.0 — Trigger Case Memory MVP gate.
+
+    When False (default), no ``case_index`` queue items are enqueued by
+    the queue router after terminal ContinuousRuns or trigger-origin
+    FlowRuns; no ``CaseMemory`` rows are written; the
+    ``find_similar_past_cases`` skill is not registered; and the
+    ``/api/case-memory/*`` admin/debug endpoints return ``503``. Existing
+    trigger runtime behavior is unchanged.
+
+    When True, the indexer hook fires after each terminal trigger-driven
+    run and writes a compact ``CaseMemory`` row + up to 3 vectors
+    (problem/action/outcome) into the tenant's resolved vector store
+    using the embedding contract pinned on each row.
+    """
+    return _bool_env("TSN_CASE_MEMORY_ENABLED", default=False)
+
+
 __all__ = [
     "flows_trigger_binding_enabled",
     "flows_auto_generation_enabled",
     "flows_backfill_suppress_legacy",
+    "case_memory_enabled",
 ]

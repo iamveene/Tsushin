@@ -1462,6 +1462,59 @@ Decay factor: `e^(-lambda * days_since_access)`. MMR (Maximum Marginal Relevance
 
 ---
 
+### 10.6 Trigger Case Memory (MVP, experimental)
+
+Default-off primitive shipped in v0.7.0 that lets trigger-driven agents (incident response on Jira, support email, GitHub issues, generic webhooks) recall what was done last time for similar trigger payloads. Spec: `.private/TRIGGER_MEMORY_RESEARCH.md`. Changelog entry: see *"Release 0.7.0 — Trigger Case Memory MVP"* in `docs/changelog.md`.
+
+**Scope.** A *case* is one terminal trigger-driven execution: `WakeEvent + (ContinuousRun | trigger-origin FlowRun) + compact problem/action/outcome text`. Cases are not chat memory or KB content — they are a tenant/agent-scoped execution record indexed for similarity recall.
+
+**Feature flag.** `TSN_CASE_MEMORY_ENABLED` (default `false`) — see `backend/config/feature_flags.py:case_memory_enabled`. When false: no `case_index` queue rows, no `case_memory` rows, the skill is unregistered, and `/api/case-memory/*` is not mounted. Existing trigger runtime behavior is identical to v0.7.0-fix. Flipping the flag requires a backend restart.
+
+**Data model.** Table `case_memory` (alembic `0075_case_memory_mvp`):
+- Tenant/agent isolation: `tenant_id` (RESTRICT), `agent_id` (CASCADE), partial-unique on `continuous_run_id` and `flow_run_id` (Postgres only; SQLite test fixtures fall back to non-unique helpers and rely on the indexer's idempotency guard).
+- Correlation: `wake_event_id` (SET NULL), `continuous_run_id` (SET NULL), `flow_run_id` (SET NULL).
+- Content: `origin_kind` (`continuous_run | flow_run`), `trigger_kind` (`email | webhook | jira | github`), `subject_digest`, `problem_summary`, `action_summary`, `outcome_summary`, `outcome_label` (`resolved | failed | skipped | escalated | unknown`).
+- Embedding contract pinned at write time: `vector_store_instance_id` (SET NULL), `embedding_provider`, `embedding_model`, `embedding_dims`, `embedding_metric`, optional `embedding_task` (for hosted-provider task formatting). Stamped on every vector's metadata too, so a tenant that later switches their default `VectorStoreInstance` does not retroactively invalidate older cases.
+- Bookkeeping: `vector_refs_json` (`[{kind, vector_id}]`), `index_status` (`pending | indexed | partial | failed | skipped`), `summary_status` (`generated | fallback | unavailable`), `occurred_at`, `indexed_at`, `last_recalled_at`, `created_at`, `updated_at`.
+
+The migration also extends `ck_message_queue_message_type` to permit `'case_index'`.
+
+**Write path.** The queue router (`backend/services/queue_router.py`) enqueues a `case_index` message after:
+- A `_dispatch_continuous_task` finally-block when `run.status in {"succeeded","failed"}`.
+- A `_dispatch_flow_run_triggered` after `FlowEngine.run_flow()` returns a terminal status (`completed | completed_with_errors | failed`) and `flow_run.trigger_event_id IS NOT NULL`. Manual / scheduled FlowRuns are intentionally skipped per MVP scope.
+
+The `case_index` handler calls `case_memory_service.index_case`, which is idempotent on `(continuous_run_id|flow_run_id)`: it loads the wake event + agent + run tenant-scoped, reads the redacted `payload_ref` written by `TriggerDispatchService._write_payload_ref`, builds problem/action/outcome text, resolves the embedding contract via `case_embedding_resolver.resolve_for_agent`, validates each generated vector against `embedding_dims`, and writes up to three vectors via the existing `ProviderBridgeStore` with deterministic ids `case_{origin_kind}_{run_id}_{kind}` and rich metadata. The original trigger run is never modified, even when indexing fails.
+
+**Failure semantics.**
+- Embedding-dimension mismatch → case marked `failed`, queue item marked failed with `retry_count = max_retries` (no retry).
+- Vector-store outage → `partial` (problem vector landed) or `failed` (problem vector did not).
+- Broken `payload_ref` / missing run / cross-tenant attempt → caller returns without writing; original run is untouched.
+- Summary builder failure (no `outcome_state.answer`, parsing error, etc.) → `summary_status='fallback'`, problem vector still indexed.
+
+**Retrieval skill.** `find_similar_past_cases` (`backend/agent/skills/find_similar_past_cases.py`), tool-mode, registered only when the flag is on. Single tool with inputs `query` (required), `scope` (`agent | trigger_kind | tenant`, default chosen by invocation context), `k` (1–50), `min_similarity` (0–1), `trigger_kind`, `include_failed`. Returns ranked cases with `case_id`, `similarity`, problem/action/outcome summaries, `outcome_label`, origin/run pointers. Default scope: `trigger_kind` when invoked under a trigger context, `agent` for chat.
+
+**API.** Mounted only when the flag is on. All endpoints require `agents.read` and enforce strict tenant isolation via `TenantContext`:
+- `GET  /api/case-memory` — filters: `agent_id`, `trigger_kind`, `origin_kind`, `limit` (≤200), `offset`.
+- `GET  /api/case-memory/{case_id}`.
+- `POST /api/case-memory/search` — body: `query`, `scope`, `k`, `min_similarity`, `vector` (`problem | action | outcome | any`), `trigger_kind`, `include_failed`, optional `agent_id`.
+
+**Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the tenant's default `VectorStoreInstance` carries `extra_config.embedding_dims` (e.g. 768/1536/3072 for Gemini-style hosted embeddings), the contract is read from `extra_config` and pinned on the case row. Changing `embedding_dims` after data exists is rejected by `case_embedding_resolver.reject_post_data_dims_mutation` (defensive helper available for op tooling — the underlying `vector_store_instance_service.update_instance` still allows the column-level change today, so callers should invoke the helper before mutating).
+
+**Limitations / out-of-scope for 0.7.0** (see §3 of `.private/TRIGGER_MEMORY_RESEARCH.md`):
+- No deletion / retention / compliance workflow.
+- No billing or vendor-cost accounting.
+- No dedicated case-memory vector-store routing (cases share the agent's existing instance).
+- No embedding-provider management UI; hosted Gemini/OpenAI embedding adapters require future work on `EmbeddingService`.
+- No four-vendor metadata-delete parity.
+- No frontend case explorer; the API is operator/debug only.
+- No automatic prompt injection of cases into agent context — invocation is via the explicit skill tool only.
+- No OKG bridge or `continuous_run.memory_refs` closure.
+- No case clustering, procedural extraction, or analytics.
+
+These are deliberately deferred to a post-0.7.0 hardening pass.
+
+---
+
 ## 11. Vector Stores
 
 Multi-vendor vector DB support. Each tenant can register one or more `VectorStoreInstance` rows and designate a default; agents can override per-agent via `agent.vector_store_instance_id`.
