@@ -4302,6 +4302,90 @@ class VectorStoreInstance(Base):
     )
 
 
+class CaseMemory(Base):
+    """
+    v0.7.0 Trigger Case Memory MVP — compact post-execution case record.
+
+    Each row is one terminal trigger-driven execution. Up to three vectors
+    (problem/action/outcome) are stored in the configured vector store with
+    deterministic IDs ``case_{origin_kind}_{run_id}_{kind}`` and metadata
+    that joins back to this row via ``case_id``. The embedding contract
+    (provider/model/dims/metric/task) used at write time is stamped here so
+    a tenant that later switches their default ``VectorStoreInstance`` to a
+    different model does not retroactively invalidate older cases.
+
+    Default-off behind ``TSN_CASE_MEMORY_ENABLED``. The schema lives even
+    when the flag is off so a flip-on can write rows immediately without a
+    schema migration round-trip.
+    """
+
+    __tablename__ = "case_memory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    agent_id = Column(
+        Integer,
+        ForeignKey("agent.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    wake_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    continuous_run_id = Column(
+        Integer,
+        ForeignKey("continuous_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    flow_run_id = Column(
+        Integer,
+        ForeignKey("flow_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    origin_kind = Column(String(24), nullable=False)  # continuous_run | flow_run
+    trigger_kind = Column(String(32), nullable=True)  # email | webhook | jira | github
+    subject_digest = Column(String(128), nullable=True)
+    problem_summary = Column(Text, nullable=True)
+    action_summary = Column(Text, nullable=True)
+    outcome_summary = Column(Text, nullable=True)
+    outcome_label = Column(String(24), nullable=False, default="unknown")
+    # ^ resolved | failed | skipped | escalated | unknown
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    embedding_provider = Column(String(32), nullable=True)
+    embedding_model = Column(String(128), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(24), nullable=True)
+    embedding_task = Column(String(64), nullable=True)
+    vector_refs_json = Column(JSON, nullable=True)
+    index_status = Column(String(16), nullable=False, default="pending")
+    # ^ pending | indexed | partial | failed | skipped
+    summary_status = Column(String(16), nullable=False, default="generated")
+    # ^ generated | fallback | unavailable
+    occurred_at = Column(DateTime, nullable=True)
+    indexed_at = Column(DateTime, nullable=True)
+    last_recalled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_case_memory_tenant_agent_occurred", "tenant_id", "agent_id", "occurred_at"),
+    )
+
+
 class OKGMemoryAuditLog(Base):
     """
     v0.6.0 Item 3: Audit trail for OKG Term Memory operations.

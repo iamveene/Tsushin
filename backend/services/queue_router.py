@@ -31,6 +31,9 @@ class QueueRouter:
         if message_type == "flow_run_triggered":
             # v0.7.0 Wave 3 — Triggers↔Flows Unification.
             return await self._dispatch_flow_run_triggered(worker, db, item)
+        if message_type == "case_index":
+            # v0.7.0 Trigger Case Memory MVP (default-off).
+            return await self._dispatch_case_index(worker, db, item)
         raise ValueError(f"Unknown message_type: {message_type}")
 
     async def _dispatch_inbound_message(self, worker: Any, db: Any, item: Any) -> Any:
@@ -304,6 +307,36 @@ class QueueRouter:
             run.finished_at = datetime.utcnow()
             db.add(run)
             db.commit()
+            # v0.7.0 Trigger Case Memory MVP — enqueue a `case_index` job
+            # after the run reaches a terminal status. Default-off; the
+            # try/except guards the original run from any case-memory
+            # bookkeeping failure.
+            try:
+                from config.feature_flags import case_memory_enabled
+
+                if case_memory_enabled() and run.status in ("succeeded", "failed"):
+                    wake_event_ids_list = run.wake_event_ids or []
+                    case_wake_event_id = wake_event_ids_list[0] if wake_event_ids_list else wake_event_id
+                    if case_wake_event_id is not None:
+                        from services.message_queue_service import MessageQueueService
+
+                        MessageQueueService(db).enqueue(
+                            channel="case_memory",
+                            tenant_id=item.tenant_id,
+                            agent_id=agent.id,
+                            sender_key=f"case:continuous_run:{run.id}",
+                            payload={
+                                "origin_kind": "continuous_run",
+                                "continuous_run_id": run.id,
+                                "wake_event_id": case_wake_event_id,
+                            },
+                            message_type="case_index",
+                        )
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to enqueue case_index for continuous_run %s",
+                    getattr(run, "id", None),
+                )
             try:
                 emit_agent_processing_async(
                     tenant_id=run.tenant_id,
@@ -372,6 +405,40 @@ class QueueRouter:
                 trigger_event_id=trigger_event_id,
                 binding_id=binding_id,
             )
+            # v0.7.0 Trigger Case Memory MVP — enqueue a `case_index` job
+            # for trigger-origin FlowRuns once they reach a terminal
+            # state. Manual / scheduled flows have trigger_event_id=None
+            # and are intentionally skipped per MVP scope (§3 of the
+            # research doc).
+            try:
+                from config.feature_flags import case_memory_enabled
+
+                if (
+                    case_memory_enabled()
+                    and getattr(flow_run, "trigger_event_id", None) is not None
+                    and getattr(flow_run, "status", None)
+                    in ("completed", "completed_with_errors", "failed")
+                ):
+                    from services.message_queue_service import MessageQueueService
+
+                    MessageQueueService(db).enqueue(
+                        channel="case_memory",
+                        tenant_id=item.tenant_id,
+                        agent_id=item.agent_id,
+                        sender_key=f"case:flow_run:{flow_run.id}",
+                        payload={
+                            "origin_kind": "flow_run",
+                            "flow_run_id": flow_run.id,
+                            "wake_event_id": flow_run.trigger_event_id,
+                        },
+                        message_type="case_index",
+                    )
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to enqueue case_index for flow_run %s",
+                    getattr(flow_run, "id", None),
+                )
+
             return {
                 "status": flow_run.status,
                 "flow_run_id": flow_run.id,
@@ -391,6 +458,76 @@ class QueueRouter:
                 "binding_id": binding_id,
                 "reason": "flow_engine_error",
             }
+
+    async def _dispatch_case_index(self, worker: Any, db: Any, item: Any) -> Any:
+        """v0.7.0 Trigger Case Memory MVP — handle a ``case_index`` queue row.
+
+        Reads ``origin_kind``, the matching run id, and the wake event
+        id from ``item.payload`` and calls
+        ``case_memory_service.index_case``. Outcomes:
+          * Success → ``mqs.mark_completed`` with a small result blob.
+          * ``EmbeddingDimensionMismatch`` → ``mqs.mark_failed`` with no
+            retry (we set retry_count to max so it lands in dead_letter
+            on the next claim).
+          * Any other exception → ``mqs.mark_failed`` (normal retry +
+            dead-letter).
+        """
+        from services.case_embedding_resolver import EmbeddingDimensionMismatch
+        from services.case_memory_service import index_case
+        from services.message_queue_service import MessageQueueService
+
+        payload = item.payload or {}
+        origin_kind = payload.get("origin_kind")
+        run_id = payload.get("continuous_run_id") or payload.get("flow_run_id")
+        wake_event_id = payload.get("wake_event_id")
+
+        if origin_kind not in ("continuous_run", "flow_run") or run_id is None:
+            MessageQueueService(db).mark_failed(
+                item.id, error="case_index_payload_invalid"
+            )
+            return {"status": "failed", "reason": "case_index_payload_invalid"}
+
+        try:
+            case = index_case(
+                db,
+                tenant_id=item.tenant_id,
+                agent_id=item.agent_id,
+                origin_kind=origin_kind,
+                run_id=int(run_id),
+                wake_event_id=int(wake_event_id) if wake_event_id is not None else None,
+            )
+        except EmbeddingDimensionMismatch as exc:
+            # No retry: bump retry_count to max_retries before marking failed
+            # so the next claim moves the row to dead_letter.
+            try:
+                fresh = db.get(type(item), item.id)
+                if fresh is not None:
+                    fresh.retry_count = fresh.max_retries or 3
+                    db.add(fresh)
+                    db.commit()
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to bump retry_count after dim mismatch"
+                )
+            MessageQueueService(db).mark_failed(
+                item.id, error=f"embedding_dimension_mismatch:{exc}"
+            )
+            return {"status": "failed", "reason": "embedding_dimension_mismatch"}
+        except Exception as exc:  # noqa: BLE001 — last-resort error path
+            logger.exception(
+                "case_memory: case-index handler failed (queue_item=%s)",
+                getattr(item, "id", None),
+            )
+            MessageQueueService(db).mark_failed(item.id, error=str(exc))
+            return {"status": "failed", "reason": "indexer_error"}
+
+        result = {
+            "status": "completed",
+            "case_id": getattr(case, "id", None) if case else None,
+            "index_status": getattr(case, "index_status", None) if case else None,
+        }
+        MessageQueueService(db).mark_completed(item.id, result=result)
+        return result
 
 
 def self_fail_run(db: Any, run: Any, reason: str) -> None:
