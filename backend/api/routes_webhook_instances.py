@@ -27,7 +27,22 @@ from auth_dependencies import TenantContext, get_tenant_context, require_permiss
 from channels.trigger_criteria import evaluate_payload_criteria, validate_criteria
 from db import get_db
 from models import Agent, Contact, WebhookIntegration
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+)
 from utils.ssrf_validator import SSRFValidationError, validate_url
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -609,13 +624,116 @@ async def delete_webhook_integration(
     if integration is None or not context.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Webhook integration not found")
 
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
     # Unbind from any agents (defensive — DB onDelete=SET NULL will also do this)
     db.query(Agent).filter(
         Agent.webhook_integration_id == integration_id,
         Agent.tenant_id == integration.tenant_id,
     ).update({"webhook_integration_id": None})
 
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
     db.delete(integration)
     db.commit()
     logger.info(f"Deleted webhook integration {integration_id}")
     return {"status": "deleted", "id": integration_id}
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+def _require_webhook_in_tenant(
+    db: Session, *, integration_id: int, context: TenantContext
+) -> WebhookIntegration:
+    integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
+    if integration is None or not context.can_access_resource(integration.tenant_id):
+        raise HTTPException(status_code=404, detail="Webhook integration not found")
+    return integration
+
+
+@router.get("/{integration_id}/recap-config", response_model=TriggerRecapConfigRead)
+async def get_webhook_recap_config(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return get_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
+
+@router.put("/{integration_id}/recap-config", response_model=TriggerRecapConfigRead)
+async def put_webhook_recap_config(
+    integration_id: int,
+    payload: TriggerRecapConfigWrite,
+    _: None = Depends(require_permission("integrations.webhook.write")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return put_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{integration_id}/recap-config", status_code=204)
+async def delete_webhook_recap_config(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.write")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> None:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    delete_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+    return None
+
+
+@router.post("/{integration_id}/test-recap", response_model=TriggerRecapTestResponse)
+async def post_webhook_test_recap(
+    integration_id: int,
+    payload: TriggerRecapTestRequest,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return run_test_recap_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+        body=payload,
+    )

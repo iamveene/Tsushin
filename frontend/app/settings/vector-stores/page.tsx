@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, VectorStoreInstance } from '@/lib/client'
+import { api, VectorStoreInstance, VectorStoreEmbeddingTestResult } from '@/lib/client'
 
 const VENDOR_LABELS: Record<string, string> = {
   mongodb: 'MongoDB',
@@ -29,6 +29,10 @@ export default function VectorStoresSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  // v0.7.x Wave 2-D — per-instance embedding probe. Keyed by instance.id so a
+  // future iteration that lists multiple rows can render results inline.
+  const [embeddingTesting, setEmbeddingTesting] = useState<number | null>(null)
+  const [embeddingResults, setEmbeddingResults] = useState<Record<number, VectorStoreEmbeddingTestResult>>({})
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -81,6 +85,34 @@ export default function VectorStoresSettingsPage() {
       setTestResult({ success: false, message: e.message || 'Test failed' })
     } finally {
       setTesting(false)
+    }
+  }
+
+  const handleTestEmbedding = async (instanceId: number) => {
+    setEmbeddingTesting(instanceId)
+    setEmbeddingResults((prev) => {
+      const next = { ...prev }
+      delete next[instanceId]
+      return next
+    })
+    try {
+      const result = await api.testEmbedding(instanceId, 'OAuth token refresh failure')
+      setEmbeddingResults((prev) => ({ ...prev, [instanceId]: result }))
+    } catch (e: any) {
+      setEmbeddingResults((prev) => ({
+        ...prev,
+        [instanceId]: {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: e?.message || 'Embedding test failed',
+        },
+      }))
+    } finally {
+      setEmbeddingTesting(null)
     }
   }
 
@@ -189,7 +221,53 @@ export default function VectorStoresSettingsPage() {
             <p>Health: <span className={selectedInstance.health_status === 'healthy' ? 'text-emerald-400' : 'text-gray-300'}>
               {selectedInstance.health_status}
             </span></p>
+            {/* v0.7.x Wave 2-D: surface the embedding provider/dims pair so
+                operators can see what model the recap loop will use without
+                cracking open extra_config raw JSON. */}
+            <p>Embedding: <span className="text-gray-300">
+              {selectedInstance.extra_config?.embedding_provider || '—'}
+              {selectedInstance.extra_config?.embedding_dims
+                ? ` · ${selectedInstance.extra_config.embedding_dims}d`
+                : ''}
+            </span></p>
           </div>
+
+          {/* v0.7.x Wave 2-D: Test Embedding button — probes the configured
+              embedding provider with a short test phrase and reports
+              dims/provider/model/latency or surfaces an inline error. */}
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={() => handleTestEmbedding(selectedInstance.id)}
+              disabled={embeddingTesting === selectedInstance.id}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 transition-colors"
+            >
+              {embeddingTesting === selectedInstance.id ? 'Testing embedding…' : 'Test Embedding'}
+            </button>
+          </div>
+
+          {embeddingResults[selectedInstance.id] && (
+            <div
+              className={`mt-3 p-3 rounded-lg text-xs ${
+                embeddingResults[selectedInstance.id].success
+                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                  : 'bg-red-500/10 border border-red-500/20 text-red-300'
+              }`}
+            >
+              {embeddingResults[selectedInstance.id].success ? (
+                <span>
+                  success ✓ | dims={embeddingResults[selectedInstance.id].dims}
+                  {' | '}
+                  provider={embeddingResults[selectedInstance.id].provider}
+                  {' | '}
+                  model={embeddingResults[selectedInstance.id].model}
+                  {' | '}
+                  latency_ms={embeddingResults[selectedInstance.id].latency_ms}
+                </span>
+              ) : (
+                <span>error ✗ | {embeddingResults[selectedInstance.id].error || 'unknown error'}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

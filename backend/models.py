@@ -4386,6 +4386,73 @@ class CaseMemory(Base):
     )
 
 
+class TriggerRecapConfig(Base):
+    """
+    v0.7.x Trigger Memory Recap — per-trigger configuration row.
+
+    One row per ``(tenant_id, trigger_kind, trigger_instance_id)``. When
+    ``enabled=True`` and ``TSN_CASE_MEMORY_ENABLED`` is set, the trigger
+    dispatcher expands ``query_template`` (Jinja2 sandboxed) against the
+    redacted wake event payload, calls
+    ``case_memory_service.search_similar_cases`` with the configured
+    scope/k/min_similarity/vector_kind, renders ``format_template``, and
+    attaches the rendered text to the queue payload under
+    ``memory_recap``. The queue worker injects the recap into the
+    agent's first-turn user message (or as a system addendum, depending
+    on ``inject_position``) so the LLM cannot ignore relevant past
+    cases by cherry-picking the wrong tool result.
+
+    ``trigger_instance_id`` is a *semantic* FK into the per-kind channel
+    tables (email_channel_instance / jira_channel_instance /
+    github_channel_instance / webhook_integration). Cleanup on trigger
+    DELETE is the caller's responsibility.
+
+    Default-off behind ``TSN_CASE_MEMORY_ENABLED``.
+    """
+
+    __tablename__ = "trigger_recap_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'email' | 'jira' | 'github' | 'webhook' (semantic FK).
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+    # Jinja2 template expanded against the redacted payload.
+    query_template = Column(Text, nullable=False, default="")
+    # 'agent' | 'trigger_kind' | 'trigger_instance'
+    scope = Column(String(24), nullable=False, default="trigger_instance")
+    k = Column(Integer, nullable=False, default=3)
+    min_similarity = Column(Float, nullable=False, default=0.35)
+    vector_kind = Column(String(16), nullable=False, default="problem")
+    include_failed = Column(Boolean, nullable=False, default=True)
+    format_template = Column(Text, nullable=False, default="")
+    # 'prepend_user_msg' | 'system_addendum'
+    inject_position = Column(String(24), nullable=False, default="prepend_user_msg")
+    max_recap_chars = Column(Integer, nullable=False, default=1500)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_trigger_recap_config_unique",
+        ),
+        Index(
+            "ix_trigger_recap_config_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id",
+        ),
+    )
+
+
 class OKGMemoryAuditLog(Base):
     """
     v0.6.0 Item 3: Audit trail for OKG Term Memory operations.

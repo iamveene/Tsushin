@@ -243,6 +243,43 @@ class QueueRouter:
             importance=payload.get("importance"),
         )
 
+        # v0.7.x Wave 1-A — Trigger Memory Recap injection. The dispatcher
+        # built a recap dict (or omitted it) and stored it under
+        # ``payload.memory_recap``. When ``inject_position == "system_addendum"``
+        # the recap is exposed to AgentService as a system override; otherwise
+        # (default ``prepend_user_msg``) the recap is prepended to the first
+        # user turn so the LLM cannot ignore it. Failure here MUST NOT abort
+        # the run — recap is enrichment, not load-bearing.
+        system_addendum: Optional[str] = None
+        try:
+            recap = payload.get("memory_recap") if isinstance(payload, dict) else None
+            if isinstance(recap, dict):
+                rendered_text = recap.get("rendered_text")
+                if isinstance(rendered_text, str) and rendered_text.strip():
+                    snapshot = recap.get("config_snapshot") or {}
+                    inject_position = (
+                        snapshot.get("inject_position")
+                        if isinstance(snapshot, dict)
+                        else None
+                    ) or "prepend_user_msg"
+                    if inject_position == "system_addendum":
+                        system_addendum = rendered_text
+                    else:
+                        user_message = rendered_text + "\n\n---\n\n" + user_message
+                    logger.info(
+                        "continuous_task: injected memory_recap "
+                        "(run_id=%s mode=%s chars=%d cases=%s)",
+                        run.id,
+                        inject_position,
+                        len(rendered_text),
+                        recap.get("cases_used"),
+                    )
+        except Exception:
+            logger.exception(
+                "continuous_task: failed to inject memory_recap (run_id=%s)",
+                getattr(run, "id", None),
+            )
+
         # BUG #26: emit Watcher Graph View activity around the wake-driven
         # invocation. AgentService.process_message bypasses agent/router.py
         # (which is the only path that emits agent_processing for chat-driven
@@ -267,14 +304,20 @@ class QueueRouter:
             pass
 
         try:
-            result = await _invoke_agent_for_continuous_run(
-                db=db,
-                agent=agent,
-                continuous_agent=continuous_agent,
-                run=run,
-                sender_key=sender_key,
-                message_text=user_message,
-            )
+            invoke_kwargs: dict = {
+                "db": db,
+                "agent": agent,
+                "continuous_agent": continuous_agent,
+                "run": run,
+                "sender_key": sender_key,
+                "message_text": user_message,
+            }
+            # Only pass ``system_addendum`` when set so older test stubs
+            # that monkey-patch ``_invoke_agent_for_continuous_run`` with a
+            # narrower signature still work.
+            if system_addendum:
+                invoke_kwargs["system_addendum"] = system_addendum
+            result = await _invoke_agent_for_continuous_run(**invoke_kwargs)
             answer = (result or {}).get("answer") or ""
             error_text = (result or {}).get("error")
             if error_text:
@@ -651,18 +694,34 @@ async def _invoke_agent_for_continuous_run(
     run: Any,
     sender_key: str,
     message_text: str,
+    system_addendum: Optional[str] = None,
 ) -> dict:
     """Invoke ``AgentService.process_message`` for a continuous run.
 
     Kept as a free function so tests can monkeypatch a stub without having to
     construct a full AgentService graph.
+
+    ``system_addendum`` (v0.7.x Wave 1-A) — optional extra text appended to
+    the agent's ``system_prompt`` for this single invocation. Used by the
+    Trigger Memory Recap injector when ``inject_position == "system_addendum"``.
+    Empty / None → no change to the system prompt.
     """
     from agent.agent_service import AgentService
+
+    base_system_prompt = agent.system_prompt or ""
+    if system_addendum:
+        effective_system_prompt = (
+            f"{base_system_prompt}\n\n---\n\n{system_addendum}"
+            if base_system_prompt
+            else system_addendum
+        )
+    else:
+        effective_system_prompt = base_system_prompt
 
     config = {
         "model_provider": agent.model_provider,
         "model_name": agent.model_name,
-        "system_prompt": agent.system_prompt,
+        "system_prompt": effective_system_prompt,
         "memory_size": getattr(agent, "memory_size", None) or 1000,
         "context_message_count": getattr(agent, "context_message_count", None) or 10,
         "context_char_limit": getattr(agent, "context_char_limit", None) or 1000,

@@ -25,10 +25,12 @@ import {
   type PRSubmittedCriteria,
   type TriggerCatalogEntry,
   type TriggerCriteria,
+  type TriggerRecapConfig,
   type WebhookIntegration,
   type WebhookIntegrationCreate,
   type WebhookIntegrationCreateResponse,
 } from '@/lib/client'
+import MemoryRecapStep, { DEFAULT_RECAP_CONFIG } from '@/components/triggers/MemoryRecapStep'
 import {
   buildCriteriaTemplate,
   emailSourceFromSearchQuery,
@@ -65,7 +67,7 @@ const WIZARD_STEPS: WizardStep[] = [
   { id: 'kind', label: 'Trigger', description: 'Choose the event source.' },
   { id: 'source', label: 'Source', description: 'Connect credentials or configure the source.' },
   { id: 'criteria', label: 'Criteria', description: 'Define what events to match.' },
-  { id: 'notification', label: 'Notification', description: 'Optional WhatsApp alert on match.' },
+  { id: 'memory_recap', label: 'Memory Recap', description: 'Configure recall of past similar cases.' },
   { id: 'confirm', label: 'Confirm', description: 'Review, save, and open the auto-flow.' },
 ]
 
@@ -102,7 +104,7 @@ const KIND_CATALOG: KindEntry[] = [
     id: 'jira',
     display_name: 'Jira',
     description: 'Watch Jira issues with JQL and wake agents from matching issues.',
-    setup_hint: 'Connect Jira credentials under Hub → Tool APIs first.',
+    setup_hint: 'Select a Hub Jira connection, or create one from the source step.',
     Icon: CodeIcon,
     iconClass: 'text-blue-300',
     iconBg: 'bg-blue-500/10',
@@ -111,7 +113,7 @@ const KIND_CATALOG: KindEntry[] = [
     id: 'github',
     display_name: 'GitHub',
     description: 'Receive signed repository events and wake agents from matching activity.',
-    setup_hint: 'Wire a GitHub webhook with the secret shown after save.',
+    setup_hint: 'Select a Hub GitHub connection, then wire the webhook secret shown after save.',
     Icon: GitHubIcon,
     iconClass: 'text-violet-300',
     iconBg: 'bg-violet-500/10',
@@ -140,10 +142,6 @@ function gmailCapabilityLabel(integration: { can_send: boolean; can_draft?: bool
   if (integration.can_send && integration.can_draft) return 'Read + send/draft'
   if (integration.can_send) return 'Read + send/reply'
   return 'Read-only'
-}
-
-function isValidPhone(value: string): boolean {
-  return /^\+?[0-9\s\-()]{6,}$/.test(value.trim())
 }
 
 function splitList(text: string): string[] | null {
@@ -204,10 +202,14 @@ export default function TriggerCreationWizard({
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentsLoaded, setAgentsLoaded] = useState(false)
 
-  // Notification step (universal)
-  const [notificationEnabled, setNotificationEnabled] = useState(false)
-  const [notificationRecipient, setNotificationRecipient] = useState('')
-  const [notificationMessageTemplate, setNotificationMessageTemplate] = useState('')
+  // v0.7.x Wave 2-D — per-trigger Memory Recap config. Persisted only when
+  // `recapConfig.enabled === true`; the backend leaves the row absent
+  // otherwise, so we don't fire the PUT in that branch.
+  const [recapConfig, setRecapConfig] = useState<TriggerRecapConfig>(DEFAULT_RECAP_CONFIG)
+  // TODO(v0.7.x post-2D): replace with `/api/feature-flags` lookup once the
+  // tenant-scoped flag endpoint lands. Hardcoded `true` matches the QA env
+  // where `case_memory_enabled` is on.
+  const caseMemoryEnabled = true
 
   // Email-specific state
   const [emailIntegrationId, setEmailIntegrationId] = useState<number | null>(null)
@@ -238,7 +240,7 @@ export default function TriggerCreationWizard({
   const [jiraTestResult, setJiraTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
 
   // GitHub-specific state — v0.7.0-fix Phase 3: integration linkage required;
-  // no per-trigger PAT, no auth_method toggle, no installation_id, no
+  // no per-trigger credentials, auth-method toggle, installation id, or
   // per-trigger test-connection.
   const [githubIntegrationName, setGithubIntegrationName] = useState('GitHub repository events')
   const [githubIntegrations, setGithubIntegrations] = useState<GitHubIntegration[]>([])
@@ -273,9 +275,6 @@ export default function TriggerCreationWizard({
     setSaveError(null)
     setDefaultAgentId(null)
     setIsActive(true)
-    setNotificationEnabled(false)
-    setNotificationRecipient('')
-    setNotificationMessageTemplate('')
 
     setEmailIntegrationId(null)
     setEmailIntegrationName('')
@@ -316,6 +315,8 @@ export default function TriggerCreationWizard({
     setPrSamplePayloadText('')
     setPrCriteriaResult(null)
     setPrCriteriaTesting(false)
+
+    setRecapConfig(DEFAULT_RECAP_CONFIG)
   }, [initialKind, isOpen])
 
   // Pull live trigger catalog descriptions when the wizard opens.
@@ -484,7 +485,8 @@ export default function TriggerCreationWizard({
     }
     if (kind === 'github') {
       return Boolean(
-        githubIntegrationName.trim() &&
+        selectedGithubIntegrationId &&
+          githubIntegrationName.trim() &&
           repoOwner.trim() &&
           repoName.trim() &&
           githubEvents.length > 0,
@@ -505,6 +507,7 @@ export default function TriggerCreationWizard({
     kind,
     repoName,
     repoOwner,
+    selectedGithubIntegrationId,
     webhookName,
   ])
 
@@ -515,8 +518,6 @@ export default function TriggerCreationWizard({
     }
     return true
   }, [kind, prSelectedActions.length])
-
-  const notificationValid = !notificationEnabled || isValidPhone(notificationRecipient)
 
   const handleClose = useCallback(() => {
     if (saveState === 'saving') return
@@ -615,6 +616,23 @@ export default function TriggerCreationWizard({
     setSaveError(null)
     setSaveState('saving')
 
+    // v0.7.x Wave 2-D — best-effort persistence of the per-trigger Memory
+    // Recap config. Failures here must NOT block trigger creation; we surface
+    // the error via `saveError` after the success status flip so the operator
+    // sees both signals (trigger created, recap save failed).
+    const persistRecapIfNeeded = async (
+      kindForRecap: 'email' | 'webhook' | 'jira' | 'github',
+      triggerId: number,
+    ): Promise<string | null> => {
+      if (!recapConfig.enabled) return null
+      try {
+        await api.putTriggerRecapConfig(kindForRecap, triggerId, recapConfig)
+        return null
+      } catch (err: unknown) {
+        return getErrorMessage(err, 'Failed to save Memory Recap config')
+      }
+    }
+
     try {
       switch (kind) {
         case 'email': {
@@ -639,13 +657,13 @@ export default function TriggerCreationWizard({
             trigger_criteria,
             poll_interval_seconds: emailPollValue,
             is_active: isActive,
-            notification_recipient: notificationEnabled ? notificationRecipient.trim() : null,
-            notification_enabled: notificationEnabled,
           })
           const flowId = result.auto_flow_id ?? null
+          const recapErr = await persistRecapIfNeeded('email', result.id)
           setSavedTrigger(result)
           setAutoFlowId(flowId)
           setSaveState('success')
+          if (recapErr) setSaveError(`Trigger created, but Memory Recap save failed: ${recapErr}`)
           onCreated?.('email', result.id, flowId)
           return
         }
@@ -675,15 +693,15 @@ export default function TriggerCreationWizard({
             rate_limit_rpm: Number.isFinite(rateLimitValue) && rateLimitValue > 0 ? rateLimitValue : 60,
             default_agent_id: defaultAgentId,
             trigger_criteria: parsedCriteria,
-            notification_recipient: notificationEnabled ? notificationRecipient.trim() : null,
-            notification_enabled: notificationEnabled,
           }
           const result: WebhookIntegrationCreateResponse = await api.createWebhookIntegration(payload)
           const flowId = result.integration.auto_flow_id ?? null
+          const recapErr = await persistRecapIfNeeded('webhook', result.integration.id)
           setSavedTrigger(result.integration)
           setWebhookSecret(result.api_secret)
           setAutoFlowId(flowId)
           setSaveState('success')
+          if (recapErr) setSaveError(`Trigger created, but Memory Recap save failed: ${recapErr}`)
           onCreated?.('webhook', result.integration.id, flowId)
           return
         }
@@ -718,13 +736,13 @@ export default function TriggerCreationWizard({
             poll_interval_seconds: jiraPollValue,
             default_agent_id: defaultAgentId,
             is_active: isActive,
-            notification_recipient: notificationEnabled ? notificationRecipient.trim() : null,
-            notification_enabled: notificationEnabled,
           })
           const flowId = result.auto_flow_id ?? null
+          const recapErr = await persistRecapIfNeeded('jira', result.id)
           setSavedTrigger(result)
           setAutoFlowId(flowId)
           setSaveState('success')
+          if (recapErr) setSaveError(`Trigger created, but Memory Recap save failed: ${recapErr}`)
           onCreated?.('jira', result.id, flowId)
           return
         }
@@ -759,13 +777,13 @@ export default function TriggerCreationWizard({
             trigger_criteria: criteria,
             default_agent_id: defaultAgentId,
             is_active: isActive,
-            notification_recipient: notificationEnabled ? notificationRecipient.trim() : null,
-            notification_enabled: notificationEnabled,
           })
           const flowId = result.auto_flow_id ?? null
+          const recapErr = await persistRecapIfNeeded('github', result.id)
           setSavedTrigger(result)
           setAutoFlowId(flowId)
           setSaveState('success')
+          if (recapErr) setSaveError(`Trigger created, but Memory Recap save failed: ${recapErr}`)
           onCreated?.('github', result.id, flowId)
           return
         }
@@ -796,11 +814,10 @@ export default function TriggerCreationWizard({
     jiraPollValue,
     jiraProjectKey,
     kind,
-    notificationEnabled,
-    notificationRecipient,
     onCreated,
     pathFiltersText,
     prSelectedActions.length,
+    recapConfig,
     repoName,
     repoOwner,
     selectedGithubIntegrationId,
@@ -1055,7 +1072,7 @@ export default function TriggerCreationWizard({
         currentStep={3}
         tone={tone}
         stepTitle="Match the events that should wake your agents"
-        stepDescription="Refine which messages, payloads, or schedules count as a hit. Leave defaults to receive everything from the chosen source."
+        stepDescription="Refine which messages, payloads, or repository events count as a hit. Leave defaults to receive everything from the chosen source."
         footer={renderFooter(
           <>
             <div className="flex items-center gap-2">
@@ -1080,7 +1097,7 @@ export default function TriggerCreationWizard({
               disabled={!criteriaValid}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-40 ${accentButtonClass}`}
             >
-              Continue to Notification
+              Configure Memory
             </button>
           </>,
         )}
@@ -1145,7 +1162,7 @@ export default function TriggerCreationWizard({
     )
   }
 
-  // ---------------------------------------------------------------- step 4 (Notification)
+  // ---------------------------------------------------------------- step 4 (Memory Recap)
   if (step === 4 && kind) {
     return (
       <Wizard
@@ -1155,8 +1172,8 @@ export default function TriggerCreationWizard({
         steps={WIZARD_STEPS}
         currentStep={4}
         tone={tone}
-        stepTitle="Notify someone on WhatsApp when this trigger fires"
-        stepDescription="Optional. The notification step pre-configures the auto-flow's notification node — you can edit it later in the Flow editor."
+        stepTitle="Recall past similar cases on every wake"
+        stepDescription="When this trigger fires, run a recall query against case memory and inject snippets of similar past cases into the agent's prompt. Off by default."
         footer={renderFooter(
           <>
             <div className="flex items-center gap-2">
@@ -1178,22 +1195,19 @@ export default function TriggerCreationWizard({
             <button
               type="button"
               onClick={() => setStep(5)}
-              disabled={!notificationValid}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-40 ${accentButtonClass}`}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity ${accentButtonClass}`}
             >
               Review &amp; Save
             </button>
           </>,
         )}
       >
-        <NotificationStepBody
-          enabled={notificationEnabled}
-          onEnabledChange={setNotificationEnabled}
-          recipient={notificationRecipient}
-          onRecipientChange={setNotificationRecipient}
-          messageTemplate={notificationMessageTemplate}
-          onMessageTemplateChange={setNotificationMessageTemplate}
-          recipientValid={notificationValid}
+        <MemoryRecapStep
+          triggerKind={kind}
+          initialConfig={recapConfig}
+          onChange={setRecapConfig}
+          triggerInstanceId={(savedTrigger as { id?: number } | null)?.id ?? null}
+          caseMemoryEnabled={caseMemoryEnabled}
         />
       </Wizard>
     )
@@ -1220,8 +1234,6 @@ export default function TriggerCreationWizard({
             webhookSecret={webhookSecret}
             secretCopied={secretCopied}
             onCopySecret={handleCopySecret}
-            notificationEnabled={notificationEnabled}
-            notificationRecipient={notificationRecipient}
           />
         )}
         footer={renderFooter(
@@ -1312,8 +1324,6 @@ export default function TriggerCreationWizard({
             agents={agents}
             defaultAgentId={defaultAgentId}
             isActive={isActive}
-            notificationEnabled={notificationEnabled}
-            notificationRecipient={notificationRecipient}
             email={{
               integrationName: emailIntegrationName,
               account: selectedGmailAccount?.email_address || null,
@@ -1380,7 +1390,7 @@ function sourceStepDescription(kind: TriggerId): string {
     case 'jira':
       return 'Pick a configured Jira connection and the JQL the trigger should poll.'
     case 'github':
-      return 'Wire a GitHub webhook so repository events fire this trigger.'
+      return 'Pick a Hub GitHub integration, then wire a webhook so repository events fire this trigger.'
   }
 }
 
@@ -1899,10 +1909,27 @@ function JiraSourceBody({
           </select>
           <p className="text-xs text-tsushin-slate">
             {selected
-              ? `${selected.site_url} · ${selected.auth_email || 'No auth email reported'}`
-              : 'Add or edit Jira credentials in Hub > Tool APIs.'}
+              ? selected.site_url
+              : 'Add a Jira connection in Hub > Tool APIs, then return here and refresh the wizard.'}
           </p>
         </div>
+
+        {!integrationsLoading && integrations.length === 0 && (
+          <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 md:col-span-2">
+            <div className="text-sm font-medium text-white">No Jira connections yet</div>
+            <p className="mt-1 text-xs text-tsushin-slate">
+              Jira triggers require a Hub Jira connection. Create one in Tool APIs, then come back to select it here.
+            </p>
+            <a
+              href="/hub?tab=tool-apis"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-100 hover:text-white"
+            >
+              Create Jira connection
+            </a>
+          </div>
+        )}
 
         <div className="space-y-2">
           <label htmlFor={projectKeyId} className="block text-sm font-medium text-white">Project Key</label>
@@ -2164,6 +2191,23 @@ function GitHubSourceBody({
             if none exist yet.
           </p>
         </div>
+
+        {!integrationsLoading && integrations.length === 0 && (
+          <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 md:col-span-2">
+            <div className="text-sm font-medium text-white">No GitHub connections yet</div>
+            <p className="mt-1 text-xs text-tsushin-slate">
+              GitHub triggers require a Hub GitHub connection. Create one in Developer Tools, then return here and select it before continuing.
+            </p>
+            <a
+              href="/hub?tab=developer"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex rounded-lg border border-violet-400/40 bg-violet-500/10 px-3 py-1.5 text-xs text-violet-100 hover:text-white"
+            >
+              Create GitHub connection
+            </a>
+          </div>
+        )}
 
         <div className="space-y-2">
           <label htmlFor={repoOwnerId} className="block text-sm font-medium text-white">
@@ -2505,87 +2549,6 @@ function GitHubCriteriaBody({
 }
 
 // ============================================================================
-// Universal Notification step body
-// ============================================================================
-
-interface NotificationStepBodyProps {
-  enabled: boolean
-  onEnabledChange: (value: boolean) => void
-  recipient: string
-  onRecipientChange: (value: string) => void
-  messageTemplate: string
-  onMessageTemplateChange: (value: string) => void
-  recipientValid: boolean
-}
-
-function NotificationStepBody({
-  enabled,
-  onEnabledChange,
-  recipient,
-  onRecipientChange,
-  messageTemplate,
-  onMessageTemplateChange,
-  recipientValid,
-}: NotificationStepBodyProps) {
-  const idPrefix = useId()
-  const recipientId = `${idPrefix}-recipient`
-  const messageTemplateId = `${idPrefix}-message`
-  return (
-    <div className="space-y-5">
-      <label className="flex items-start gap-3 rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => onEnabledChange(event.target.checked)}
-          className="mt-1 h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-tsushin-accent focus:ring-tsushin-accent"
-        />
-        <div>
-          <div className="text-sm font-medium text-white">Send a WhatsApp notification on each match</div>
-          <p className="mt-1 text-xs text-tsushin-slate">
-            Pre-configures the auto-flow's notification node. You can edit it later in the Flow editor.
-          </p>
-        </div>
-      </label>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <label htmlFor={recipientId} className="block text-sm font-medium text-white">
-            Recipient phone {enabled && <span className="text-red-400">*</span>}
-          </label>
-          <input
-            id={recipientId}
-            type="tel"
-            value={recipient}
-            onChange={(event) => onRecipientChange(event.target.value)}
-            disabled={!enabled}
-            placeholder="+15551234567"
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-tsushin-accent focus:outline-none focus:ring-2 focus:ring-tsushin-accent/30 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          {enabled && !recipientValid && recipient.length > 0 && (
-            <p className="text-xs text-red-300">Enter a phone number with country code, e.g. +15551234567.</p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <label htmlFor={messageTemplateId} className="block text-sm font-medium text-white">Message hint (optional)</label>
-          <input
-            id={messageTemplateId}
-            type="text"
-            value={messageTemplate}
-            onChange={(event) => onMessageTemplateChange(event.target.value)}
-            disabled={!enabled}
-            placeholder="New {{trigger_kind}} event matched: {{summary}}"
-            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-tsushin-accent focus:outline-none focus:ring-2 focus:ring-tsushin-accent/30 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <p className="text-xs text-tsushin-slate">
-            Currently informational. The flow editor lets you edit the full template later.
-          </p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ============================================================================
 // Pre-save and post-save summaries
 // ============================================================================
 
@@ -2594,8 +2557,6 @@ interface PreSaveSummaryProps {
   agents: Agent[]
   defaultAgentId: number | null
   isActive: boolean
-  notificationEnabled: boolean
-  notificationRecipient: string
   email: {
     integrationName: string
     account: string | null
@@ -2631,8 +2592,6 @@ function PreSaveSummary({
   agents,
   defaultAgentId,
   isActive,
-  notificationEnabled,
-  notificationRecipient,
   email,
   webhook,
   jira,
@@ -2644,10 +2603,6 @@ function PreSaveSummary({
   cells.push(['Kind', displayKind(kind)])
   cells.push(['Default agent', agentLabel])
   cells.push(['Status on save', isActive ? 'Active' : 'Paused'])
-  cells.push([
-    'Notification',
-    notificationEnabled ? `WhatsApp → ${notificationRecipient || '(missing)'}` : 'Disabled',
-  ])
 
   if (kind === 'email') {
     cells.push(['Trigger name', email.integrationName || '—'])
@@ -2693,8 +2648,6 @@ interface PostSaveSummaryProps {
   webhookSecret: string | null
   secretCopied: boolean
   onCopySecret: () => void
-  notificationEnabled: boolean
-  notificationRecipient: string
 }
 
 function PostSaveSummary({
@@ -2704,8 +2657,6 @@ function PostSaveSummary({
   webhookSecret,
   secretCopied,
   onCopySecret,
-  notificationEnabled,
-  notificationRecipient,
 }: PostSaveSummaryProps) {
   const summaryRows: Array<[string, string]> = []
   summaryRows.push(['Trigger', triggerLabel(savedTrigger)])
@@ -2729,14 +2680,10 @@ function PostSaveSummary({
   } else if (kind === 'github') {
     const github = savedTrigger as GitHubTrigger
     summaryRows.push(['Repository', `${github.repo_owner}/${github.repo_name}`])
-    summaryRows.push(['Auth method', github.auth_method === 'pat' ? 'Personal access token' : 'GitHub App'])
+    summaryRows.push(['Hub integration', github.github_integration_name || `#${github.github_integration_id}`])
     summaryRows.push(['Events', (github.events || []).join(', ') || '—'])
     if (github.inbound_url) summaryRows.push(['Inbound URL', github.inbound_url])
   }
-  if (notificationEnabled && notificationRecipient) {
-    summaryRows.push(['Notification', `WhatsApp → ${notificationRecipient}`])
-  }
-
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
@@ -2778,7 +2725,7 @@ function PostSaveSummary({
           <div className="text-xs uppercase tracking-[0.18em] text-emerald-200">Wired flow</div>
           <p className="mt-2 text-sm text-emerald-50">
             An auto-generated flow (ID #{autoFlowId}) is wired to this trigger. Open the Flow editor to inspect or
-            customize the matching logic and notification node.
+            customize the matching and routing logic.
           </p>
         </div>
       ) : (
