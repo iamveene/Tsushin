@@ -145,6 +145,11 @@ services:
       - tsushin-images:/tmp/tsushin_images
       # User guide (served via /api/user-guide)
       - ./docs/user-guide.md:/app/USER_GUIDE.md:ro
+      # Frontend tree (read-only) — needed by backend wizard-drift tests that
+      # cross-check frontend fallback constants against backend registries.
+      # Without this mount, every wizard_drift assertion that resolves
+      # /frontend from inside the container short-circuits as "skip".
+      - ./frontend:/frontend:ro
     security_opt:
       - label:disable
     environment:

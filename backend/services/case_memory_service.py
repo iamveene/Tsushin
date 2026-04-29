@@ -827,7 +827,12 @@ def search_similar_cases(
     query: str,
     scope: str = "agent",
     k: int = 3,
-    min_similarity: float = 0.65,
+    # 0.35 default matches the empirical distance distribution of the local
+    # MiniLM/L2 ChromaDB collection (un-normalized 384-dim vectors yield
+    # distances ~1.0-2.0 for related text → sim ~0.33-0.5 via 1/(1+d)).
+    # The earlier 0.65 default was cosine-scale and silently rejected every
+    # real recall hit when the resolver fell back to the local store.
+    min_similarity: float = 0.35,
     vector: str = "problem",
     trigger_kind: Optional[str] = None,
     include_failed: bool = True,
@@ -905,25 +910,38 @@ def search_similar_cases(
     bridge = ProviderBridgeStore(provider=provider, embedding_service=embedder)
 
     over_fetch = max(k * 4, k + 4)
+    # Decide BEFORE creating the coroutine whether we can use asyncio.run
+    # directly or need a thread. Creating the coroutine first and letting
+    # asyncio.run raise RuntimeError leaves a dangling coroutine that emits
+    # "coroutine was never awaited" — which surfaced as the live-Playground
+    # recall regression on 2026-04-29 (skill invoked, returned 0 cases).
+    import asyncio
     try:
-        import asyncio
+        asyncio.get_running_loop()
+        loop_is_running = True
+    except RuntimeError:
+        loop_is_running = False
 
-        try:
-            results = asyncio.run(
-                bridge.search_similar(query_text=query, limit=over_fetch, sender_key=None)
-            )
-        except RuntimeError:
-            # Inside an existing event loop (e.g. FastAPI sync route running in starlette's threadpool
-            # actually has no loop, but some test harnesses do). Use a fresh thread.
+    def _make_coro():
+        return bridge.search_similar(
+            query_text=query, limit=over_fetch, sender_key=None
+        )
+
+    try:
+        if loop_is_running:
+            # Caller is inside an active event loop (e.g. FastAPI websocket
+            # handler driving the agent runtime). asyncio.run requires a
+            # fresh loop — run in a worker thread so we don't conflict.
             import concurrent.futures
 
-            def _run() -> List[dict]:
-                return asyncio.run(
-                    bridge.search_similar(query_text=query, limit=over_fetch, sender_key=None)
-                )
+            def _runner():
+                return asyncio.run(_make_coro())
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                results = executor.submit(_run).result()
+                results = executor.submit(_runner).result()
+        else:
+            # No running loop in this thread — asyncio.run is safe.
+            results = asyncio.run(_make_coro())
     except Exception:
         logger.exception("case_memory: search failed")
         return []

@@ -29,7 +29,10 @@ from models import (  # noqa: E402
     ContinuousSubscription,
     DeliveryPolicy,
     EmailChannelInstance,
+    FlowDefinition,
+    FlowTriggerBinding,
     GitHubChannelInstance,
+    GitHubIntegration,
     GmailIntegration,
     HubIntegration,
     JiraChannelInstance,
@@ -61,6 +64,7 @@ def db_session():
             HubIntegration.__table__,
             GmailIntegration.__table__,
             JiraIntegration.__table__,
+            GitHubIntegration.__table__,
             EmailChannelInstance.__table__,
             JiraChannelInstance.__table__,
             GitHubChannelInstance.__table__,
@@ -73,6 +77,8 @@ def db_session():
             WakeEvent.__table__,
             ContinuousRun.__table__,
             ChannelEventDedupe.__table__,
+            FlowDefinition.__table__,
+            FlowTriggerBinding.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -169,11 +175,26 @@ def _seed_jira(db, *, instance_id: int, tenant_id: str, created_by: int, default
 
 
 def _seed_github(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
+    # v0.7.0-fix Phase 3: GitHubChannelInstance.github_integration_id is NOT NULL —
+    # seed a parent GitHubIntegration so the trigger row satisfies the constraint.
+    integration = GitHubIntegration(
+        id=instance_id,
+        type="github",
+        name=f"GitHub Hub {tenant_id}",
+        tenant_id=tenant_id,
+        is_active=True,
+        provider="github",
+        auth_method="pat",
+        provider_mode="programmatic",
+    )
+    db.add(integration)
+    db.flush()
     db.add(
         GitHubChannelInstance(
             id=instance_id,
             tenant_id=tenant_id,
             integration_name=f"GitHub {tenant_id}",
+            github_integration_id=integration.id,
             repo_owner="octo",
             repo_name="repo",
             default_agent_id=default_agent_id,

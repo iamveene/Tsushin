@@ -171,8 +171,13 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
 }
 
-/** Skills that should never be shown (removed from system, or alias for an already-rendered skill) */
-export const HIDDEN_SKILLS = new Set<string>(['weather', 'web_scraping', 'scheduler'])
+/** Skills that should never be shown (removed from system, or alias for an already-rendered skill).
+ * `find_similar_past_cases` is the v0.7.0 Trigger Case Memory MVP skill —
+ * it has no UI in the MVP per `.private/TRIGGER_MEMORY_RESEARCH.md` §3.
+ * It registers in the backend SkillManager only when TSN_CASE_MEMORY_ENABLED
+ * is true and is intentionally not rendered in Studio's skill picker; listing
+ * it here keeps the wizard-drift test green regardless of the flag state. */
+export const HIDDEN_SKILLS = new Set<string>(['weather', 'web_scraping', 'scheduler', 'find_similar_past_cases'])
 
 /** Skills rendered as a composite group (Audio = TTS + Transcript) */
 export const COMPOSITE_SKILLS: Record<string, { displayName: string; skillTypes: string[]; icon: React.FC<IconProps>; description: string }> = {
