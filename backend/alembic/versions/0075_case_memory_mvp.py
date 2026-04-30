@@ -47,6 +47,64 @@ _OLD_TYPES = (
 _NEW_TYPES = (*_OLD_TYPES, "case_index")
 
 
+def _has_table(table_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return table_name in inspector.get_table_names()
+
+
+def _indexes(table_name: str) -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return set()
+    return {idx["name"] for idx in inspector.get_indexes(table_name)}
+
+
+def _has_column(table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
+    return any(col["name"] == column_name for col in inspector.get_columns(table_name))
+
+
+def _create_index_if_missing(
+    name: str,
+    table_name: str,
+    columns: list[str],
+    **kwargs,
+) -> None:
+    if _has_table(table_name) and name not in _indexes(table_name):
+        op.create_index(name, table_name, columns, **kwargs)
+
+
+def _drop_index_if_exists(name: str, table_name: str) -> None:
+    if _has_table(table_name) and name in _indexes(table_name):
+        op.drop_index(name, table_name=table_name)
+
+
+def _sync_case_memory_server_defaults() -> None:
+    """Make 0001-baseline-created tables match the explicit 0075 schema."""
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql" or not _has_table("case_memory"):
+        return
+
+    defaults: dict[str, tuple[sa.types.TypeEngine, str]] = {
+        "outcome_label": (sa.String(length=24), "'unknown'"),
+        "index_status": (sa.String(length=16), "'pending'"),
+        "summary_status": (sa.String(length=16), "'generated'"),
+        "created_at": (sa.DateTime(), "CURRENT_TIMESTAMP"),
+        "updated_at": (sa.DateTime(), "CURRENT_TIMESTAMP"),
+    }
+    for column_name, (existing_type, default_sql) in defaults.items():
+        if _has_column("case_memory", column_name):
+            op.alter_column(
+                "case_memory",
+                column_name,
+                existing_type=existing_type,
+                existing_nullable=False,
+                server_default=sa.text(default_sql),
+            )
+
+
 def _constraint_exists(table: str, name: str) -> bool:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
@@ -70,93 +128,96 @@ def upgrade() -> None:
     # ---------------------------------------------------------------
     # 1) Create the case_memory table.
     # ---------------------------------------------------------------
-    op.create_table(
-        "case_memory",
-        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column(
-            "tenant_id",
-            sa.String(length=50),
-            sa.ForeignKey("tenant.id", ondelete="RESTRICT"),
-            nullable=False,
-        ),
-        sa.Column(
-            "agent_id",
-            sa.Integer(),
-            sa.ForeignKey("agent.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "wake_event_id",
-            sa.Integer(),
-            sa.ForeignKey("wake_event.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-        sa.Column(
-            "continuous_run_id",
-            sa.Integer(),
-            sa.ForeignKey("continuous_run.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-        sa.Column(
-            "flow_run_id",
-            sa.Integer(),
-            sa.ForeignKey("flow_run.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-        sa.Column("origin_kind", sa.String(length=24), nullable=False),
-        sa.Column("trigger_kind", sa.String(length=32), nullable=True),
-        sa.Column("subject_digest", sa.String(length=128), nullable=True),
-        sa.Column("problem_summary", sa.Text(), nullable=True),
-        sa.Column("action_summary", sa.Text(), nullable=True),
-        sa.Column("outcome_summary", sa.Text(), nullable=True),
-        sa.Column("outcome_label", sa.String(length=24), nullable=False, server_default="unknown"),
-        sa.Column(
-            "vector_store_instance_id",
-            sa.Integer(),
-            sa.ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-        sa.Column("embedding_provider", sa.String(length=32), nullable=True),
-        sa.Column("embedding_model", sa.String(length=128), nullable=True),
-        sa.Column("embedding_dims", sa.Integer(), nullable=True),
-        sa.Column("embedding_metric", sa.String(length=24), nullable=True),
-        sa.Column("embedding_task", sa.String(length=64), nullable=True),
-        sa.Column("vector_refs_json", sa.JSON(), nullable=True),
-        sa.Column("index_status", sa.String(length=16), nullable=False, server_default="pending"),
-        sa.Column("summary_status", sa.String(length=16), nullable=False, server_default="generated"),
-        sa.Column("occurred_at", sa.DateTime(), nullable=True),
-        sa.Column("indexed_at", sa.DateTime(), nullable=True),
-        sa.Column("last_recalled_at", sa.DateTime(), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
-    )
+    if not _has_table("case_memory"):
+        op.create_table(
+            "case_memory",
+            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+            sa.Column(
+                "tenant_id",
+                sa.String(length=50),
+                sa.ForeignKey("tenant.id", ondelete="RESTRICT"),
+                nullable=False,
+            ),
+            sa.Column(
+                "agent_id",
+                sa.Integer(),
+                sa.ForeignKey("agent.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column(
+                "wake_event_id",
+                sa.Integer(),
+                sa.ForeignKey("wake_event.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            sa.Column(
+                "continuous_run_id",
+                sa.Integer(),
+                sa.ForeignKey("continuous_run.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            sa.Column(
+                "flow_run_id",
+                sa.Integer(),
+                sa.ForeignKey("flow_run.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            sa.Column("origin_kind", sa.String(length=24), nullable=False),
+            sa.Column("trigger_kind", sa.String(length=32), nullable=True),
+            sa.Column("subject_digest", sa.String(length=128), nullable=True),
+            sa.Column("problem_summary", sa.Text(), nullable=True),
+            sa.Column("action_summary", sa.Text(), nullable=True),
+            sa.Column("outcome_summary", sa.Text(), nullable=True),
+            sa.Column("outcome_label", sa.String(length=24), nullable=False, server_default="unknown"),
+            sa.Column(
+                "vector_store_instance_id",
+                sa.Integer(),
+                sa.ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+            sa.Column("embedding_provider", sa.String(length=32), nullable=True),
+            sa.Column("embedding_model", sa.String(length=128), nullable=True),
+            sa.Column("embedding_dims", sa.Integer(), nullable=True),
+            sa.Column("embedding_metric", sa.String(length=24), nullable=True),
+            sa.Column("embedding_task", sa.String(length=64), nullable=True),
+            sa.Column("vector_refs_json", sa.JSON(), nullable=True),
+            sa.Column("index_status", sa.String(length=16), nullable=False, server_default="pending"),
+            sa.Column("summary_status", sa.String(length=16), nullable=False, server_default="generated"),
+            sa.Column("occurred_at", sa.DateTime(), nullable=True),
+            sa.Column("indexed_at", sa.DateTime(), nullable=True),
+            sa.Column("last_recalled_at", sa.DateTime(), nullable=True),
+            sa.Column(
+                "created_at",
+                sa.DateTime(),
+                nullable=False,
+                server_default=sa.text("CURRENT_TIMESTAMP"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(),
+                nullable=False,
+                server_default=sa.text("CURRENT_TIMESTAMP"),
+            ),
+        )
 
-    op.create_index(
+    _sync_case_memory_server_defaults()
+
+    _create_index_if_missing(
         "ix_case_memory_tenant_id",
         "case_memory",
         ["tenant_id"],
     )
-    op.create_index(
+    _create_index_if_missing(
         "ix_case_memory_agent_id",
         "case_memory",
         ["agent_id"],
     )
-    op.create_index(
+    _create_index_if_missing(
         "ix_case_memory_wake_event_id",
         "case_memory",
         ["wake_event_id"],
     )
-    op.create_index(
+    _create_index_if_missing(
         "ix_case_memory_tenant_agent_occurred",
         "case_memory",
         ["tenant_id", "agent_id", "occurred_at"],
@@ -168,14 +229,14 @@ def upgrade() -> None:
     # (uniqueness is still enforced in app code via the idempotency guard
     # in case_memory_service.index_case).
     if dialect == "postgresql":
-        op.create_index(
+        _create_index_if_missing(
             "uq_case_memory_continuous_run",
             "case_memory",
             ["continuous_run_id"],
             unique=True,
             postgresql_where=sa.text("continuous_run_id IS NOT NULL"),
         )
-        op.create_index(
+        _create_index_if_missing(
             "uq_case_memory_flow_run",
             "case_memory",
             ["flow_run_id"],
@@ -183,12 +244,12 @@ def upgrade() -> None:
             postgresql_where=sa.text("flow_run_id IS NOT NULL"),
         )
     else:
-        op.create_index(
+        _create_index_if_missing(
             "ix_case_memory_continuous_run",
             "case_memory",
             ["continuous_run_id"],
         )
-        op.create_index(
+        _create_index_if_missing(
             "ix_case_memory_flow_run",
             "case_memory",
             ["flow_run_id"],
@@ -200,6 +261,9 @@ def upgrade() -> None:
     #    in-memory schema is built from models.py without those CHECKs.
     # ---------------------------------------------------------------
     if dialect != "postgresql":
+        return
+
+    if not _has_table("message_queue"):
         return
 
     if _constraint_exists("message_queue", "ck_message_queue_message_type"):
@@ -221,7 +285,7 @@ def downgrade() -> None:
     dialect = bind.dialect.name
 
     # 1) Restore the previous CHECK constraint (drop case_index).
-    if dialect == "postgresql":
+    if dialect == "postgresql" and _has_table("message_queue"):
         if _constraint_exists("message_queue", "ck_message_queue_message_type"):
             op.drop_constraint(
                 "ck_message_queue_message_type",
@@ -237,14 +301,15 @@ def downgrade() -> None:
 
     # 2) Drop indexes + table.
     if dialect == "postgresql":
-        op.drop_index("uq_case_memory_flow_run", table_name="case_memory")
-        op.drop_index("uq_case_memory_continuous_run", table_name="case_memory")
+        _drop_index_if_exists("uq_case_memory_flow_run", "case_memory")
+        _drop_index_if_exists("uq_case_memory_continuous_run", "case_memory")
     else:
-        op.drop_index("ix_case_memory_flow_run", table_name="case_memory")
-        op.drop_index("ix_case_memory_continuous_run", table_name="case_memory")
-    op.drop_index("ix_case_memory_tenant_agent_occurred", table_name="case_memory")
-    op.drop_index("ix_case_memory_wake_event_id", table_name="case_memory")
-    op.drop_index("ix_case_memory_agent_id", table_name="case_memory")
-    op.drop_index("ix_case_memory_tenant_id", table_name="case_memory")
+        _drop_index_if_exists("ix_case_memory_flow_run", "case_memory")
+        _drop_index_if_exists("ix_case_memory_continuous_run", "case_memory")
+    _drop_index_if_exists("ix_case_memory_tenant_agent_occurred", "case_memory")
+    _drop_index_if_exists("ix_case_memory_wake_event_id", "case_memory")
+    _drop_index_if_exists("ix_case_memory_agent_id", "case_memory")
+    _drop_index_if_exists("ix_case_memory_tenant_id", "case_memory")
 
-    op.drop_table("case_memory")
+    if _has_table("case_memory"):
+        op.drop_table("case_memory")
