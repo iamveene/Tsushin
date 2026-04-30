@@ -209,22 +209,14 @@ def _health_reason(detail: Any) -> str:
 
 
 def _to_read(db: Session, integration: GitHubIntegration) -> GitHubIntegrationRead:
-    # Count GitHub triggers using this integration's repo as a rough usage
-    # signal. Today GitHubChannelInstance does NOT have a github_integration_id
-    # FK (the trigger row stores its own PAT/owner/repo), so we match by
-    # tenant + (default_owner, default_repo) when both are set. This is best-
-    # effort — not authoritative — and is purely informational for the UI.
-    trigger_count = 0
-    if integration.default_owner and integration.default_repo:
-        trigger_count = (
-            db.query(GitHubChannelInstance.id)
-            .filter(
-                GitHubChannelInstance.tenant_id == integration.tenant_id,
-                GitHubChannelInstance.repo_owner == integration.default_owner,
-                GitHubChannelInstance.repo_name == integration.default_repo,
-            )
-            .count()
+    trigger_count = (
+        db.query(GitHubChannelInstance.id)
+        .filter(
+            GitHubChannelInstance.tenant_id == integration.tenant_id,
+            GitHubChannelInstance.github_integration_id == integration.id,
         )
+        .count()
+    )
     display_name = integration.display_name or integration.name
     return GitHubIntegrationRead(
         id=integration.id,
@@ -462,28 +454,22 @@ def delete_github_integration(
 
     tenant_id = _require_tenant(ctx)
     integration = _load_integration_or_404(db, tenant_id, integration_id)
-    # GitHubChannelInstance does not yet have a direct FK to github_integration,
-    # so we match by tenant + repo coordinates when the integration has a
-    # default owner/repo set.
-    if integration.default_owner and integration.default_repo:
-        in_use_trigger = (
-            db.query(GitHubChannelInstance.id)
-            .filter(
-                GitHubChannelInstance.tenant_id == tenant_id,
-                GitHubChannelInstance.repo_owner == integration.default_owner,
-                GitHubChannelInstance.repo_name == integration.default_repo,
-            )
-            .first()
+    in_use_trigger = (
+        db.query(GitHubChannelInstance.id)
+        .filter(
+            GitHubChannelInstance.tenant_id == tenant_id,
+            GitHubChannelInstance.github_integration_id == integration.id,
         )
-        if in_use_trigger is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "GitHub integration is referenced by one or more triggers "
-                    f"on {integration.default_owner}/{integration.default_repo}. "
-                    "Detach the triggers first."
-                ),
-            )
+        .first()
+    )
+    if in_use_trigger is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GitHub integration is referenced by one or more triggers. "
+                "Detach the triggers first."
+            ),
+        )
     in_use_skill = (
         db.query(AgentSkillIntegration.id)
         .filter(

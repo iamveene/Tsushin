@@ -104,7 +104,7 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
   // (e.g. {{step_1.payload.issue.key}} for Jira, {{step_1.payload.subject}} for Email).
   source: [
     { field: 'payload', label: 'Payload', description: 'Raw event payload object (use deep paths below or your own)', type: 'object' },
-    { field: 'trigger_kind', label: 'Trigger Kind', description: 'jira|email|github|schedule|webhook', type: 'string' },
+    { field: 'trigger_kind', label: 'Trigger Kind', description: 'jira|email|github|webhook', type: 'string' },
     { field: 'instance_id', label: 'Instance ID', description: 'Which trigger fired (DB id)', type: 'number' },
     { field: 'event_type', label: 'Event Type', description: 'Underlying event type', type: 'string' },
     { field: 'dedupe_key', label: 'Dedupe Key', description: 'Source-provided idempotency key', type: 'string' },
@@ -118,7 +118,7 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
 // v0.7.0 Wave 5/finishing: per-kind Source-step deep payload paths
 // ============================================================
 //
-// When the Source step is bound to a Jira / Email / GitHub / Schedule / Webhook
+// When the Source step is bound to a Jira / Email / GitHub / Webhook
 // trigger, the wake-event payload has a kind-specific shape. Downstream steps
 // (Notification, Conversation, Gate, etc.) typically want to reference deep
 // fields like `{{source.payload.issue.key}}` (Jira ticket key) or
@@ -129,10 +129,9 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
 //
 // Reference shapes:
 //   Jira  — Atlassian webhook envelope: { webhookEvent, issue: { key, fields: {...} } }
-//   Email — Gmail dispatch payload (services/email_notification_service): subject,
+//   Email — Gmail dispatch payload: subject,
 //           sender_email, sender_name, snippet, body_preview, received_at, message_id, thread_id
 //   GitHub — PR-Submitted criteria envelope: pull_request:{ title, body, user.login, ... }
-//   Schedule — { fired_at, cron_expression, instance_name, payload_template }
 //   Webhook — arbitrary JSON. Last-5-captures inference is wired in
 //             SourceStepConfig (Wave 5); the static list here only carries the
 //             well-known wrapper fields.
@@ -186,13 +185,6 @@ const SOURCE_PAYLOAD_FIELDS_BY_KIND: Record<string, StepVariable[]> = {
     { field: 'payload.pull_request.deletions', label: 'Deletions', description: 'Lines removed', type: 'number' },
     { field: 'payload.repository.full_name', label: 'Repository', description: 'e.g. "owner/repo"', type: 'string' },
     { field: 'payload.sender.login', label: 'Sender', description: 'GitHub user that triggered the event', type: 'string' },
-  ],
-  schedule: [
-    { field: 'payload.fired_at', label: 'Fired At', description: 'When the schedule fired (ISO)', type: 'string' },
-    { field: 'payload.cron_expression', label: 'Cron Expression', description: 'The schedule that fired this run', type: 'string' },
-    { field: 'payload.instance_name', label: 'Schedule Name', description: 'Operator-set integration name', type: 'string' },
-    { field: 'payload.timezone', label: 'Timezone', description: 'IANA timezone the cron evaluates in', type: 'string' },
-    { field: 'payload.payload_template', label: 'Payload Template', description: 'Operator-defined static payload (object)', type: 'object' },
   ],
   webhook: [
     { field: 'payload.message_text', label: 'Message Text', description: 'Inbound message body (string)', type: 'string' },

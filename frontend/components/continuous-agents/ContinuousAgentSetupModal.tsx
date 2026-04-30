@@ -31,6 +31,7 @@ interface Props {
   onClose: () => void
   onSaved: (agent: ContinuousAgent) => void
   existing?: ContinuousAgent | null
+  initialAgentId?: number | null
 }
 
 interface FormState {
@@ -55,7 +56,7 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
-export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }: Props) {
+export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, initialAgentId = null }: Props) {
   const isEdit = Boolean(existing)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [agents, setAgents] = useState<Agent[]>([])
@@ -76,9 +77,12 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
             executionMode: (existing.execution_mode as ExecutionMode) || 'hybrid',
             status: (existing.status as AgentStatus) || 'active',
           }
-        : EMPTY_FORM,
+        : {
+            ...EMPTY_FORM,
+            agentId: initialAgentId ?? '',
+          },
     )
-  }, [isOpen, existing])
+  }, [initialAgentId, isOpen, existing])
 
   useEffect(() => {
     if (!isOpen) return
@@ -148,7 +152,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
       }
       onSaved(saved)
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to save continuous agent'))
+      setError(getErrorMessage(err, 'Failed to save Watcher monitor'))
     } finally {
       setSubmitting(false)
     }
@@ -167,12 +171,11 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-semibold text-white">
-              {isEdit ? 'Edit Continuous Agent' : 'Create Continuous Agent'}
+              {isEdit ? 'Edit Watcher Monitor' : 'Create Watcher Monitor'}
             </h2>
             <p className="mt-1 text-sm text-tsushin-slate">
-              Always-on wrapper around an existing agent. Wakes when an external event fires
-              (email, Jira, GitHub, webhook). For a multi-step workflow on a schedule or
-              keyword instead, create a <strong className="text-white">Flow</strong>.
+              Create the always-on monitor for an agent built in Studio. It wakes when an external event fires
+              (email, Jira, GitHub, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong>.
             </p>
           </div>
           <button
@@ -215,6 +218,9 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
             </select>
             {isEdit && (
               <p className="mt-1 text-xs text-tsushin-slate">Base agent cannot be changed after creation.</p>
+            )}
+            {!isEdit && initialAgentId && (
+              <p className="mt-1 text-xs text-cyan-200">Preselected from Studio handoff.</p>
             )}
           </div>
 

@@ -10,7 +10,7 @@
  * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
  *           Replaced with a "You're all set" message pointing to the checklist.
  * BUG-321: Channels step action button launches WhatsApp wizard directly (not just /hub nav).
- * BUG-323: Channels step navigates to /hub?tab=communication, not /hub.
+ * BUG-323: Channels step navigates to the Hub Channels tab, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
  * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
@@ -286,8 +286,8 @@ export default function OnboardingWizard() {
         'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
       ],
       actionButton: {
-        label: 'Open Hub → Communication',
-        action: () => router.push('/hub?tab=communication')
+        label: 'Open Hub → Channels',
+        action: () => router.push('/hub?tab=channels')
       }
     },
     {
@@ -376,10 +376,10 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
+      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to the Hub Channels tab.
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Custom HTTP events are configured later as Triggers, not conversational channels.',
+      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to Hub → Channels. Custom HTTP events are configured later as Triggers, not conversational channels.',
       highlightFeatures: [
         'WhatsApp: scan QR code to connect your phone',
         'Telegram: add your bot token',
@@ -480,7 +480,7 @@ export default function OnboardingWizard() {
       // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
       title: 'New in v0.7.0 - Triggers & Continuous Agents',
       targetSelector: '[data-testid="hub-triggers-section"]',
-      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email, Webhook, Jira, Schedule, and GitHub triggers live in the Hub Communication tab; Wake Events and Continuous Agents are linked directly from that Triggers section.',
+      content: 'Triggers are separate from conversational channels, and continuous agents expose the Watcher control plane for always-on work. Email, Webhook, Jira, and GitHub triggers live in Hub → Triggers; Wake Events and Continuous Agents live under Watcher.',
       highlightFeatures: [
         'Trigger detail pages use the new /api/triggers namespace',
         'Wake Events browser shows payload_ref instead of raw payload JSON',
@@ -489,7 +489,7 @@ export default function OnboardingWizard() {
       ],
       actionButton: {
         label: 'Open Hub Triggers',
-        action: () => router.push('/hub?tab=communication')
+        action: () => router.push('/hub?tab=channels')
       }
     },
     {
@@ -501,7 +501,7 @@ export default function OnboardingWizard() {
       highlightFeatures: [
         'Default agents are already configured',
         'Getting Started checklist tracks your progress on the dashboard',
-        'Connect a channel via the checklist or Hub → Communication tab',
+        'Connect a channel via the checklist or Hub → Channels tab',
         'Access this tour anytime via the ? button'
       ],
       actionButton: {

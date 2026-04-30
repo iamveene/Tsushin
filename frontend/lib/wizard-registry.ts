@@ -35,6 +35,43 @@ export interface WizardDescriptor {
   catalogModule: string
   /** The sub-wizards / modals this wizard dispatches to after step 1. */
   dispatchesTo: readonly string[]
+  /** Wizard-wide integration requirement, if the whole flow needs one. */
+  integrationRequired?: string | null
+  /** Per-kind dependencies surfaced by the backend wizard manifest API. */
+  kindDependencies?: readonly WizardKindDependencyDescriptor[]
+}
+
+export interface WizardKindDependencyDescriptor {
+  kind: string
+  label: string
+  createEndpoint: string
+  requiredDependency?: string | null
+  dependencyEndpoint?: string | null
+  dependencyCreateEndpoint?: string | null
+  requestField?: string | null
+  notes?: string | null
+}
+
+export interface WizardManifestKindDependency {
+  kind: string
+  label: string
+  create_endpoint: string
+  required_dependency?: string | null
+  dependency_endpoint?: string | null
+  dependency_create_endpoint?: string | null
+  request_field?: string | null
+  notes?: string | null
+}
+
+export interface WizardManifest {
+  id: string
+  label: string
+  component_path: string
+  catalog_endpoint: string
+  catalog_module: string
+  dispatches_to: string[]
+  integration_required?: string | null
+  kind_dependencies?: WizardManifestKindDependency[]
 }
 
 export const WIZARDS: readonly WizardDescriptor[] = [
@@ -49,6 +86,17 @@ export const WIZARDS: readonly WizardDescriptor[] = [
       'frontend/components/integrations/GoogleCalendarSetupWizard.tsx',
       'hub.page.tsx#handleAsanaConnect',
     ],
+    integrationRequired: null,
+    kindDependencies: [
+      {
+        kind: 'gmail',
+        label: 'Gmail',
+        createEndpoint: '/api/google/gmail/oauth/authorize',
+        requiredDependency: null,
+        dependencyEndpoint: '/api/google/gmail/integrations',
+        notes: 'Creates the Gmail integration that Email trigger creation later requires.',
+      },
+    ],
   },
   {
     id: 'channels',
@@ -62,6 +110,7 @@ export const WIZARDS: readonly WizardDescriptor[] = [
       'frontend/components/SlackSetupWizard.tsx',
       'frontend/components/DiscordSetupWizard.tsx',
     ],
+    integrationRequired: null,
   },
   {
     id: 'triggers',
@@ -69,8 +118,42 @@ export const WIZARDS: readonly WizardDescriptor[] = [
     componentPath: 'frontend/components/triggers/TriggerCreationWizard.tsx',
     catalogEndpoint: '/api/triggers',
     catalogModule: 'backend/channels/catalog.py',
-    dispatchesTo: [
-      'frontend/components/triggers/EmailTriggerWizard.tsx',
+    dispatchesTo: [],
+    integrationRequired: null,
+    kindDependencies: [
+      {
+        kind: 'email',
+        label: 'Email',
+        createEndpoint: '/api/triggers/email',
+        requiredDependency: 'gmail_integration',
+        dependencyEndpoint: '/api/google/gmail/integrations',
+        dependencyCreateEndpoint: '/api/google/gmail/oauth/authorize',
+        requestField: 'gmail_integration_id',
+      },
+      {
+        kind: 'webhook',
+        label: 'Webhook',
+        createEndpoint: '/api/triggers/webhook',
+        requiredDependency: null,
+      },
+      {
+        kind: 'jira',
+        label: 'Jira',
+        createEndpoint: '/api/triggers/jira',
+        requiredDependency: 'jira_integration',
+        dependencyEndpoint: '/api/hub/jira-integrations',
+        dependencyCreateEndpoint: '/api/hub/jira-integrations',
+        requestField: 'jira_integration_id',
+      },
+      {
+        kind: 'github',
+        label: 'GitHub',
+        createEndpoint: '/api/triggers/github',
+        requiredDependency: 'github_integration',
+        dependencyEndpoint: '/api/hub/github-integrations',
+        dependencyCreateEndpoint: '/api/hub/github-integrations',
+        requestField: 'github_integration_id',
+      },
     ],
   },
   {
@@ -84,6 +167,7 @@ export const WIZARDS: readonly WizardDescriptor[] = [
       'frontend/components/integrations/AddIntegrationWizard.tsx#searxng_autoprovision',
       'frontend/components/integrations/AddIntegrationWizard.tsx#amadeus',
     ],
+    integrationRequired: null,
   },
   {
     id: 'provider',
@@ -96,9 +180,77 @@ export const WIZARDS: readonly WizardDescriptor[] = [
       'frontend/components/provider-wizard/steps/StepHosting.tsx',
       'frontend/components/provider-wizard/steps/StepContainerProvision.tsx',
     ],
+    integrationRequired: null,
+  },
+  {
+    id: 'flows',
+    label: '+ Create Flow',
+    componentPath: 'frontend/app/flows/page.tsx#CreateFlowModal',
+    catalogEndpoint: '/api/flows/templates',
+    catalogModule: 'backend/api/routes_flows.py',
+    dispatchesTo: [
+      'frontend/app/flows/page.tsx#CreateFlowModal',
+      'frontend/app/flows/page.tsx#SourceStepConfig',
+    ],
+    integrationRequired: null,
+    kindDependencies: [
+      {
+        kind: 'flow',
+        label: 'Flow',
+        createEndpoint: '/api/flows/create',
+        requiredDependency: null,
+        dependencyEndpoint: '/api/agents',
+        requestField: 'default_agent_id',
+        notes: 'Agent selection is optional; triggered flows bind to email/webhook/jira/github through /api/flow-trigger-bindings.',
+      },
+    ],
+  },
+  {
+    id: 'continuous-agents',
+    label: '+ New Continuous Agent',
+    componentPath: 'frontend/components/continuous-agents/ContinuousAgentSetupModal.tsx',
+    catalogEndpoint: '/api/agents',
+    catalogModule: 'backend/api/routes_continuous.py',
+    dispatchesTo: [
+      'frontend/components/continuous-agents/ContinuousAgentSetupModal.tsx',
+    ],
+    integrationRequired: null,
+    kindDependencies: [
+      {
+        kind: 'continuous_agent',
+        label: 'Continuous Agent',
+        createEndpoint: '/api/continuous-agents',
+        requiredDependency: 'agent',
+        dependencyEndpoint: '/api/agents',
+        requestField: 'agent_id',
+        notes: 'Creation must also provide purpose and action_kind.',
+      },
+    ],
   },
 ] as const
 
 export function getWizardById(id: string): WizardDescriptor | undefined {
   return WIZARDS.find(w => w.id === id)
+}
+
+export function wizardDescriptorFromManifest(manifest: WizardManifest): WizardDescriptor {
+  return {
+    id: manifest.id,
+    label: manifest.label,
+    componentPath: manifest.component_path,
+    catalogEndpoint: manifest.catalog_endpoint,
+    catalogModule: manifest.catalog_module,
+    dispatchesTo: manifest.dispatches_to,
+    integrationRequired: manifest.integration_required ?? null,
+    kindDependencies: (manifest.kind_dependencies || []).map((dependency) => ({
+      kind: dependency.kind,
+      label: dependency.label,
+      createEndpoint: dependency.create_endpoint,
+      requiredDependency: dependency.required_dependency ?? null,
+      dependencyEndpoint: dependency.dependency_endpoint ?? null,
+      dependencyCreateEndpoint: dependency.dependency_create_endpoint ?? null,
+      requestField: dependency.request_field ?? null,
+      notes: dependency.notes ?? null,
+    })),
+  }
 }

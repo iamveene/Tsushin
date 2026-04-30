@@ -435,7 +435,7 @@ def test_email_trigger_processes_system_owned_triage_subscription(monkeypatch):
         db.close()
 
 
-def test_email_trigger_processes_system_owned_whatsapp_notification(monkeypatch):
+def test_email_trigger_skips_legacy_system_owned_whatsapp_notification():
     db = _db()
     try:
         _seed(db)
@@ -495,8 +495,6 @@ def test_email_trigger_processes_system_owned_whatsapp_notification(monkeypatch)
         fake_gmail = FakeGmail(
             [_message("msg-new", 2000, subject="Keyword XYZ", sender="New <new@example.com>")]
         )
-        notification_calls = []
-
         class NotificationDispatcher:
             def dispatch(self, event):
                 return TriggerDispatchResult(
@@ -507,20 +505,6 @@ def test_email_trigger_processes_system_owned_whatsapp_notification(monkeypatch)
                     continuous_run_ids=[702],
                     continuous_subscription_ids=[602],
                 )
-
-        async def fake_send_email_notification(_db, **kwargs):
-            notification_calls.append(kwargs)
-            return {
-                "success": True,
-                "recipient_preview": "+5527...6279",
-                "message_id_source": "msg-new",
-                "action": "whatsapp_notification",
-            }
-
-        monkeypatch.setattr(
-            "channels.email.trigger.send_email_whatsapp_notification",
-            fake_send_email_notification,
-        )
 
         result = asyncio.run(
             EmailTrigger.poll_active(
@@ -534,14 +518,11 @@ def test_email_trigger_processes_system_owned_whatsapp_notification(monkeypatch)
         wake = db.query(WakeEvent).filter(WakeEvent.id == 802).one()
         assert result.status == "ok"
         assert result.dispatched_count == 1
-        assert result.processed_count == 1
+        assert result.processed_count == 0
         assert result.failed_count == 0
-        assert len(notification_calls) == 1
-        assert notification_calls[0]["email_payload"]["message"]["subject"] == "Keyword XYZ"
-        assert notification_calls[0]["recipient_phone"] == "+5527999616279"
-        assert run.status == "succeeded"
-        assert run.outcome_state["email_whatsapp_notification"]["message_id_source"] == "msg-new"
-        assert wake.status == "processed"
+        assert run.status == "queued"
+        assert run.outcome_state in (None, {})
+        assert wake.status == "pending"
     finally:
         db.close()
 

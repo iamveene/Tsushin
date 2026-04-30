@@ -1,9 +1,11 @@
 # Case Memory v2 — Comprehensive Evidence Table
 
-**Branch:** `release/0.7.0`
-**Validated against:** working tree on top of commit `630cf85` + the v2 hardening commit (this delivery)
-**Pytest:** `1039 passed, 29 skipped, 0 failed, 0 errors` (full backend suite)
-**UI driver:** Playwright via the qa-tester subagent on `https://localhost`
+**Branch:** `feature/trigger-parity-recap`
+**Validated against:** working tree on `feature/trigger-parity-recap` after the trigger detail parity follow-up (2026-04-30)
+**Last full Pytest baseline:** `1039 passed, 29 skipped, 0 failed, 0 errors` (case-memory v2 hardening full backend suite)
+**Parity follow-up Pytest:** `80 passed, 1145 warnings` for the trigger recap/dispatch/routes slice; focused recap suite `31 passed, 533 warnings`
+**Trigger recap E2E question probes:** `2/2 PASS` via authenticated Playwright browser login + page-context `POST /test-recap` calls (`email/18`, `jira/9`)
+**UI driver:** Playwright via the qa-tester subagent plus local Playwright automation on `https://localhost`
 **Tenant under test:** `tenant_20260406004333855618_c58c99` (`test@example.com` — Tenant Owner)
 **Default agent:** **Tsushin** (id=1)
 **External vector store:** `VectorStoreInstance id=19` ("gemini-1536") — vendor=qdrant, embedding_provider=gemini, embedding_dims=1536, healthy
@@ -94,6 +96,8 @@ For each: log in as Tenant Owner → `/playground` → select Tsushin → **+ Ne
 | **S-1** | Trigger detail page recap edit affordance | `/hub/triggers/jira/9` renders Memory Recap section with saved config; Edit → change min_similarity → Save persists across reload. | `surfaces/trigger-detail-recap-edit.png` | ✅ PASS |
 | **S-2** | Wizard fetches `/api/feature-flags` and conditionally renders Memory Recap step | Wizard makes `GET /api/feature-flags` on mount; with `case_memory_enabled:true` the Memory Recap step renders; with `false` the step is skipped (covered by F-1 negative path). | (Network panel + wizard step list) | ✅ PASS |
 | **S-3** | `/api/feature-flags` returns the four flags | `fetch('/api/feature-flags')` → `{case_memory_enabled:true, case_memory_recap_enabled:true, trigger_binding_enabled:true, auto_generation_enabled:true}`. | `surfaces/feature-flags-endpoint.png` | ✅ PASS |
+| **S-4** | Hub trigger cards share one interaction model across all trigger kinds | Hub > Triggers renders Email, Webhook, Jira, and GitHub through `TriggerBreadthCards`; configured cards expose Details + Pause/Resume only. The old Email Edit modal and Webhook setup/edit/reveal modal entry-points are no longer imported by the Hub page. | `output/playwright/trigger-parity/hub-triggers.png` | ✅ PASS |
+| **S-5** | Dispatch recap propagation covered for every trigger kind | Parametrized regression covers `email`, `jira`, `github`, and `webhook`; each dispatched event attaches `memory_recap` to both the continuous-task queue payload and bound-flow `trigger_context.source.memory_recap`. | `backend/tests/test_trigger_dispatch_service.py::test_dispatch_attaches_memory_recap_to_queue_payloads_for_all_trigger_kinds` | ✅ PASS |
 
 ---
 
@@ -115,6 +119,17 @@ For each: log in as Tenant Owner → `/playground` → select Tsushin → **+ Ne
 
 ---
 
+## Trigger Memory Recap E2E Questions
+
+Authenticated Playwright browser session (`test@example.com`) logged in to `https://localhost`, then executed page-context `fetch` calls so the browser cookies and tenant auth path matched the UI. Full raw responses are captured in `trigger-recap-e2e-questions.json`.
+
+| ID | Trigger | Question | Observed response excerpt | Evidence | Verdict |
+|---|---|---|---|---|---|
+| **G-1** | Gmail/email trigger `email/18` | "Gmail trigger email: user says 'I can't login after password reset, getting 401'. Which past email case should be recalled and what did we do?" | `cases_used=2`; top match `Help: cannot login to my account` at `sim=0.526`; action says `Verified user account active; reset password manually; user confirmed login restored.` This corresponds to seeded case `EMAIL-6001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
+| **G-2** | Jira trigger `jira/9` | "New Jira pentest ticket PT-4099: SQL injection in /api/login endpoint -- CVSS 9.1. Which similar Jira case and fix should be recalled?" | `cases_used=1`; matched the seeded SQL injection pentest case at `sim=0.464`; action says `Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.` The saved format template omits ticket keys, but the seeded corpus maps this SQLi case to `PT-4001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
+
+---
+
 ## Verdict aggregation
 
 | Group | Criteria | Status |
@@ -125,9 +140,10 @@ For each: log in as Tenant Owner → `/playground` → select Tsushin → **+ Ne
 | D — Vector backend variations | 4/4 | ✅ ALL PASS |
 | E — Gemini API integration | 4/4 | ✅ ALL PASS |
 | F — Per-tenant SaaS toggles (replaces env vars) | 2/2 | ✅ ALL PASS |
-| Surfaces — new UX | 3/3 | ✅ ALL PASS |
+| Surfaces — new UX | 5/5 | ✅ ALL PASS |
 | Semantic search quality probe | 7/7 | ✅ ALL PASS |
-| **Total** | **32/32** | **✅ ALL PASS** |
+| Trigger Memory Recap E2E questions | 2/2 | ✅ ALL PASS |
+| **Total** | **36/36** | **✅ ALL PASS** |
 
 ---
 

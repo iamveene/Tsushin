@@ -880,6 +880,8 @@ def update_continuous_agent(
 
     for field in (
         "name",
+        "purpose",
+        "action_kind",
         "execution_mode",
         "delivery_policy_id",
         "budget_policy_id",

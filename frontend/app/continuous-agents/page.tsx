@@ -34,22 +34,23 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-300">
         <BotIcon size={24} />
       </div>
-      <h2 className="text-lg font-semibold text-white">No continuous agents yet</h2>
+      <h2 className="text-lg font-semibold text-white">No Watcher monitors yet</h2>
       <p className="mx-auto mt-2 max-w-xl text-sm text-tsushin-slate">
-        Wrap one of your existing agents to make it always-on. Continuous agents wake on triggers, run autonomously, and persist their run history.
+        Wrap one of your existing Studio agents to make it always-on. Watcher monitors wake on triggers and persist their run history.
       </p>
       <button
         type="button"
         onClick={onCreate}
         className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-400"
       >
-        Create continuous agent
+        Create Watcher monitor
       </button>
     </div>
   )
 }
 
 export default function ContinuousAgentsPage() {
+  const searchParams = useSearchParams()
   const [agentsPage, setAgentsPage] = useState<PageResponse<ContinuousAgent> | null>(null)
   const [runsPage, setRunsPage] = useState<PageResponse<ContinuousRun> | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
@@ -60,6 +61,11 @@ export default function ContinuousAgentsPage() {
   const [editingAgent, setEditingAgent] = useState<ContinuousAgent | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const pageSize = 50
+  const initialAgentId = useMemo(() => {
+    const raw = searchParams?.get('agent_id')
+    const parsed = raw ? Number(raw) : NaN
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }, [searchParams])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -76,22 +82,18 @@ export default function ContinuousAgentsPage() {
       setAgentsPage(agents)
       setRunsPage(runs)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to load continuous agents'))
+      setError(getErrorMessage(err, 'Failed to load Watcher monitors'))
     } finally {
       setLoading(false)
     }
   }, [offset, statusFilter])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData()
   }, [loadData])
 
   // v0.7.0-fix Phase 6b: when Studio hands off here with ?new=1&agent_id=N
-  // we auto-open the setup modal pre-filled so the user lands directly on
-  // the purpose / action_kind step instead of having to click "New
-  // continuous agent" + re-pick the same base agent.
-  const searchParams = useSearchParams()
+  // we auto-open the setup modal with that base agent already selected.
   useEffect(() => {
     if (searchParams?.get('new') !== '1') return
     setEditingAgent(null)
@@ -102,7 +104,7 @@ export default function ContinuousAgentsPage() {
     async (agent: ContinuousAgent) => {
       if (typeof window !== 'undefined') {
         const confirmed = window.confirm(
-          `Delete continuous agent "${agent.name || `#${agent.id}`}"? This also removes its subscriptions.`,
+          `Delete Watcher monitor "${agent.name || `#${agent.id}`}"? This also removes its monitored trigger links.`,
         )
         if (!confirmed) return
       }
@@ -135,7 +137,7 @@ export default function ContinuousAgentsPage() {
         }
         await loadData()
       } catch (err: unknown) {
-        setError(getErrorMessage(err, 'Failed to delete continuous agent'))
+        setError(getErrorMessage(err, 'Failed to delete Watcher monitor'))
       } finally {
         setDeletingId(null)
       }
@@ -167,11 +169,11 @@ export default function ContinuousAgentsPage() {
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
             <Link href="/" className="hover:text-white">Watcher</Link>
             <span>/</span>
-            <span>Continuous Agents</span>
+            <span>Watcher Monitors</span>
           </div>
-          <h1 className="text-3xl font-display font-bold text-white">Continuous Agents</h1>
+          <h1 className="text-3xl font-display font-bold text-white">Watcher Monitors</h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Always-on agent inventory, run history, and subscription readiness from the A2 read contracts.
+            Always-on monitors for Studio agents, their run history, and trigger readiness from Watcher.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -192,7 +194,7 @@ export default function ContinuousAgentsPage() {
             }}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-400"
           >
-            + New continuous agent
+            + New Watcher monitor
           </button>
         </div>
       </div>
@@ -251,7 +253,7 @@ export default function ContinuousAgentsPage() {
 
       {loading ? (
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/50 p-10 text-center text-tsushin-slate">
-          Loading continuous agents...
+          Loading Watcher monitors...
         </div>
       ) : agents.length === 0 ? (
         <EmptyState onCreate={() => { setEditingAgent(null); setModalOpen(true) }} />
@@ -272,7 +274,7 @@ export default function ContinuousAgentsPage() {
                       href={`/continuous-agents/${agent.id}`}
                       className="block truncate text-lg font-semibold text-white hover:text-cyan-300"
                     >
-                      {agent.name || agent.agent_name || `Continuous Agent #${agent.id}`}
+                      {agent.name || agent.agent_name || `Watcher Monitor #${agent.id}`}
                     </Link>
                     <p className="mt-1 text-xs text-tsushin-slate">
                       Agent #{agent.agent_id}{agent.agent_name ? ` - ${agent.agent_name}` : ''}
@@ -289,7 +291,7 @@ export default function ContinuousAgentsPage() {
                     <div className="text-sm text-white">{agent.execution_mode}</div>
                   </div>
                   <div>
-                    <div className="text-xs text-tsushin-slate">Subscriptions</div>
+                    <div className="text-xs text-tsushin-slate">Monitored triggers</div>
                     <div className="text-sm text-white">{agent.subscription_count}</div>
                   </div>
                   <div>
@@ -369,6 +371,7 @@ export default function ContinuousAgentsPage() {
       <ContinuousAgentSetupModal
         isOpen={modalOpen}
         existing={editingAgent}
+        initialAgentId={editingAgent ? null : initialAgentId}
         onClose={() => {
           setModalOpen(false)
           setEditingAgent(null)
