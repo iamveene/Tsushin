@@ -156,7 +156,7 @@ def _seed_schedule_instance(db, *, tenant_id: str, user_id: int = 1, instance_id
 
 def test_create_continuous_agent_happy_path(db_session):
     _seed_tenant(db_session, tenant_id="acme")
-    payload = ContinuousAgentCreate(agent_id=1, name="Watcher", execution_mode="hybrid")
+    payload = ContinuousAgentCreate(agent_id=1, name="Watcher", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid")
     out = create_continuous_agent(payload, caller=_caller("acme"), db=db_session)
     assert out.id is not None
     assert out.tenant_id == "acme"
@@ -169,7 +169,7 @@ def test_create_continuous_agent_happy_path(db_session):
 def test_create_continuous_agent_cross_tenant_agent_id(db_session):
     _seed_tenant(db_session, tenant_id="acme", user_id=1, agent_id=1, contact_id=1)
     _seed_tenant(db_session, tenant_id="other", user_id=2, agent_id=2, contact_id=2)
-    payload = ContinuousAgentCreate(agent_id=2, name="X", execution_mode="hybrid")
+    payload = ContinuousAgentCreate(agent_id=2, name="X", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid")
     with pytest.raises(HTTPException) as exc:
         create_continuous_agent(payload, caller=_caller("acme"), db=db_session)
     assert exc.value.status_code == 403
@@ -177,18 +177,18 @@ def test_create_continuous_agent_cross_tenant_agent_id(db_session):
 
 def test_create_invalid_execution_mode_rejected(db_session):
     with pytest.raises(ValueError):
-        ContinuousAgentCreate(agent_id=1, execution_mode="bogus")
+        ContinuousAgentCreate(agent_id=1, purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="bogus")
 
 
 def test_create_status_error_rejected(db_session):
     with pytest.raises(ValueError):
-        ContinuousAgentCreate(agent_id=1, status="error")
+        ContinuousAgentCreate(agent_id=1, purpose="Handle tenant wake events from configured triggers", action_kind="react_only", status="error")
 
 
 def test_patch_partial_update(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -200,6 +200,26 @@ def test_patch_partial_update(db_session):
     )
     assert out.name == "B"
     assert out.execution_mode == "hybrid"
+
+
+def test_patch_updates_purpose_and_action_kind(db_session):
+    _seed_tenant(db_session, tenant_id="acme")
+    created = create_continuous_agent(
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
+        caller=_caller("acme"),
+        db=db_session,
+    )
+    out = update_continuous_agent(
+        created.id,
+        ContinuousAgentUpdate(
+            purpose="Send an operator notification when configured trigger events arrive",
+            action_kind="send_message",
+        ),
+        caller=_caller("acme"),
+        db=db_session,
+    )
+    assert out.purpose == "Send an operator notification when configured trigger events arrive"
+    assert out.action_kind == "send_message"
 
 
 def test_patch_system_owned_disable_blocked(db_session):
@@ -227,7 +247,7 @@ def test_patch_system_owned_disable_blocked(db_session):
 def test_delete_happy_path(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -256,7 +276,7 @@ def test_delete_system_owned_blocked(db_session):
 def test_delete_pending_wake_events_409(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -283,7 +303,7 @@ def test_delete_pending_wake_events_409(db_session):
 def test_delete_pending_wake_events_force(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -314,7 +334,7 @@ def test_subscription_create_happy_path(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     _seed_schedule_instance(db_session, tenant_id="acme", instance_id=200)
     created_agent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -334,7 +354,7 @@ def test_subscription_create_dedupe_409(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     _seed_schedule_instance(db_session, tenant_id="acme", instance_id=200)
     created_agent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -349,7 +369,7 @@ def test_subscription_create_dedupe_409(db_session):
 def test_subscription_create_unsupported_channel_type(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created_agent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -367,7 +387,7 @@ def test_subscription_create_unsupported_channel_type(db_session):
 def test_subscription_create_missing_channel_instance(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     created_agent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -386,7 +406,7 @@ def test_subscription_delete_system_owned_blocked(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     _seed_schedule_instance(db_session, tenant_id="acme", instance_id=200)
     parent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -412,7 +432,7 @@ def test_subscription_list_returns_paginated(db_session):
     _seed_schedule_instance(db_session, tenant_id="acme", instance_id=200)
     _seed_schedule_instance(db_session, tenant_id="acme", user_id=1, instance_id=201)
     parent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )
@@ -437,7 +457,7 @@ def test_subscription_update_changes_status(db_session):
     _seed_tenant(db_session, tenant_id="acme")
     _seed_schedule_instance(db_session, tenant_id="acme", instance_id=200)
     parent = create_continuous_agent(
-        ContinuousAgentCreate(agent_id=1, name="A", execution_mode="hybrid"),
+        ContinuousAgentCreate(agent_id=1, name="A", purpose="Handle tenant wake events from configured triggers", action_kind="react_only", execution_mode="hybrid"),
         caller=_caller("acme"),
         db=db_session,
     )

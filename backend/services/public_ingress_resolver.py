@@ -7,12 +7,12 @@ Before v0.6.1 three features each answered this question differently:
      consumed directly by SlackSetupWizard / DiscordSetupWizard.
   2. Global Remote Access tunnel (`CloudflareTunnelService.public_url`) —
      live tunnel URL only visible to global admins on /system/remote-access.
-  3. WebhookSetupModal — used `window.location.origin` client-side, which
-     silently broke when an admin browsed via LAN IP.
+  3. Legacy Webhook setup surfaces — used `window.location.origin`
+     client-side, which silently broke when an admin browsed via LAN IP.
 
 This resolver returns an authoritative `IngressResult` with a `source` field
-so every consumer (Slack/Discord wizards, Webhook modal, PublicBaseUrlCard)
-renders the same URL, with a clear provenance badge.
+so every consumer (Slack/Discord wizards, Webhook trigger setup/detail,
+PublicBaseUrlCard) renders the same URL, with a clear provenance badge.
 
 Precedence (highest to lowest):
   1. override — tenant.public_base_url, if set and format-valid

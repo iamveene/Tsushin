@@ -1,14 +1,14 @@
 /**
  * AgentVsFlowExplainer
  *
- * v0.7.0-fix Phase 7 — single source of truth for the "when do I use a
- * Continuous Agent vs a Flow?" copy. The user complained that operators
- * had to guess which one solves their problem when configuring; this
- * panel renders identically at the top of both creation surfaces so the
- * comparison is unmistakable.
+ * v0.7.0-fix Phase 7 — retained for Watcher monitor setup copy. The Flow
+ * creation modal intentionally does not render this comparison anymore:
+ * Flow configuration is the valid creation surface there, and Watcher
+ * monitors should not be implied as a selectable Flow option.
  *
- * Render via either <AgentVsFlowExplainer kind="agent" /> or
- * kind="flow" — only the highlight changes; the copy stays in lock-step.
+ * Current production callers use <AgentVsFlowExplainer kind="agent" />.
+ * Keep the prop shape stable for older local branches, but do not add it
+ * back to Flow creation without revisiting the product model.
  */
 
 import type { ReactNode } from 'react'

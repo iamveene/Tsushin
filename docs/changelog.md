@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Trigger detail parity follow-up (2026-04-30)
+
+- Hub Email and Webhook trigger cards now use the same Details + Pause/Resume card path as Jira/GitHub instead of opening legacy edit/setup modals. Memory Recap, Wired Flows, source criteria, routing, manual fire/poll actions, secret rotation, and danger actions are all reached from `/hub/triggers/{kind}/{id}`.
+- Removed the legacy `frontend/components/triggers/EmailTriggerWizard.tsx` module, retired dead Hub webhook setup/edit/reveal modals, and cleared stale wizard-manifest references; the unified `TriggerCreationWizard` remains the only trigger creation flow.
+- Added a dispatcher regression that parametrizes `email`, `jira`, `github`, and `webhook` to assert `memory_recap` is attached to both `continuous_task.payload.memory_recap` and bound-flow `trigger_context.source.memory_recap`.
+- Hub trigger creation refreshes Email, Webhook, Jira, GitHub, and integration state after a new trigger is created, so the Triggers tab reflects all four kinds immediately.
+
 ### Release 0.7.0 — Case Memory v2 hardening: tenant-scoped SaaS gates + Qdrant read-path closure (2026-04-30)
 
 Closes every open item from `630cf85` and converts the case-memory feature gates from environment variables to per-tenant DB columns surfaced in the tenant settings UI — matching Tsushin's SaaS architecture (no env-var configuration for tenant-affecting features).

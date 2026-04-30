@@ -5,7 +5,7 @@
  *
  * Wave 1 of the Triggers ↔ Flows unification (release/0.7.0). Closes the
  * 404 + redirect-loop bug where visiting /hub/triggers had no destination
- * page. Lists all 5 trigger kinds (jira, email, github, schedule, webhook)
+ * page. Lists all active trigger kinds (jira, email, github, webhook)
  * in a single table with kind / status / search filters.
  *
  * Wave 2-3 will likely embed source/routing/outputs sections per trigger,
@@ -178,7 +178,6 @@ export default function HubTriggersIndexPage() {
       return
     }
     loadAll()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead])
 
   const filtered = useMemo(() => {
@@ -306,10 +305,10 @@ export default function HubTriggersIndexPage() {
           {rows.length === 0 && (
             <p className="mt-2 text-sm text-tsushin-slate">
               Configure a new trigger from the{' '}
-              <Link href="/hub?tab=communication" className="text-cyan-300 hover:text-white">
+              <Link href="/hub?tab=triggers" className="text-cyan-300 hover:text-white">
                 Hub
               </Link>{' '}
-              communication tab.
+              triggers tab.
             </p>
           )}
         </div>

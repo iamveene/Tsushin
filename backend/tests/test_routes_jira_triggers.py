@@ -44,10 +44,8 @@ from api.routes_jira_integrations import (  # noqa: E402
 )
 from api.routes_jira_triggers import (  # noqa: E402
     JiraTestQueryRequest,
-    JiraNotificationSubscriptionRequest,
     JiraTriggerCreate,
     JiraTriggerUpdate,
-    create_jira_notification_subscription,
     create_jira_trigger,
     delete_jira_trigger,
     list_jira_triggers,
@@ -68,6 +66,11 @@ from models import (  # noqa: E402
     ContinuousRun,
     ContinuousSubscription,
     DeliveryPolicy,
+    FlowDefinition,
+    FlowNode,
+    FlowNodeRun,
+    FlowRun,
+    FlowTriggerBinding,
     HubIntegration,
     JiraChannelInstance,
     JiraIntegration,
@@ -76,7 +79,6 @@ from models import (  # noqa: E402
     WhatsAppMCPInstance,
 )
 from models_rbac import Tenant, User  # noqa: E402
-from services.jira_notification_service import build_jira_notification_message  # noqa: E402
 from services import jira_integration_service  # noqa: E402
 
 
@@ -99,6 +101,11 @@ def db_session(monkeypatch):
             SentinelProfile.__table__,
             DeliveryPolicy.__table__,
             BudgetPolicy.__table__,
+            FlowDefinition.__table__,
+            FlowNode.__table__,
+            FlowRun.__table__,
+            FlowNodeRun.__table__,
+            FlowTriggerBinding.__table__,
             HubIntegration.__table__,
             JiraIntegration.__table__,
             ContinuousAgent.__table__,
@@ -210,21 +217,30 @@ def test_create_jira_integration_encrypts_token_and_lists_preview_only(db_sessio
     assert [row.id for row in listed] == [created.id]
 
 
-def test_create_jira_trigger_encrypts_token_and_lists_preview_only(db_session):
+def test_create_jira_trigger_links_integration_and_lists_preview_only(db_session):
     db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
     _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
     _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
     _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
     db_session.commit()
+    integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Jira Production",
+            site_url="https://example.atlassian.net/jira/",
+            auth_email="jira@example.com",
+            api_token="secret-token-1234",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
 
     created = create_jira_trigger(
         payload=JiraTriggerCreate(
             integration_name="Jira Support",
-            site_url="https://example.atlassian.net/jira/",
+            jira_integration_id=integration.id,
             project_key="help",
             jql="project = HELP ORDER BY updated DESC",
-            auth_email="jira@example.com",
-            api_token="secret-token-1234",
             default_agent_id=201,
         ),
         ctx=_ctx("tenant-a"),
@@ -234,18 +250,16 @@ def test_create_jira_trigger_encrypts_token_and_lists_preview_only(db_session):
 
     stored = db_session.query(JiraChannelInstance).filter(JiraChannelInstance.id == created.id).first()
     listed = list_jira_triggers(ctx=_ctx("tenant-a"), _user=SimpleNamespace(id=1), db=db_session)
-    decrypted = TokenEncryption(TEST_MASTER_KEY.encode()).decrypt(
-        stored.api_token_encrypted,
-        "tenant-a",
-    )
 
+    assert created.jira_integration_id == integration.id
+    assert created.jira_integration_name == "Jira Production"
     assert created.site_url == "https://example.atlassian.net"
     assert created.project_key == "HELP"
-    assert created.api_token_preview == "secr...1234"
     assert created.default_agent_name == "Alpha"
     assert not hasattr(created, "api_token")
-    assert stored.api_token_encrypted != "secret-token-1234"
-    assert decrypted == "secret-token-1234"
+    assert not hasattr(created, "api_token_preview")
+    assert stored.jira_integration_id == integration.id
+    assert stored.api_token_encrypted is None
     assert [row.integration_name for row in listed] == ["Jira Support"]
 
 
@@ -305,8 +319,8 @@ def test_create_jira_trigger_uses_hub_jira_integration_credentials(db_session, m
     assert created.jira_integration_id == integration.id
     assert created.jira_integration_name == "Jira Production"
     assert created.site_url == "https://example.atlassian.net"
-    assert created.auth_email == "jira@example.com"
-    assert created.api_token_preview == "secr...oken"
+    assert not hasattr(created, "auth_email")
+    assert not hasattr(created, "api_token_preview")
     assert captured == {
         "site_url": "https://example.atlassian.net",
         "jql": "project = HELP",
@@ -365,12 +379,23 @@ def test_create_jira_trigger_rejects_foreign_default_agent(db_session):
     _seed_contact(db_session, contact_id=202, tenant_id="tenant-b", friendly_name="Beta")
     _seed_agent(db_session, agent_id=302, tenant_id="tenant-b", contact_id=202)
     db_session.commit()
+    integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Tenant A Jira",
+            site_url="https://a.atlassian.net",
+            auth_email="jira@example.com",
+            api_token="secret-token",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         create_jira_trigger(
             payload=JiraTriggerCreate(
                 integration_name="Jira Support",
-                site_url="https://example.atlassian.net",
+                jira_integration_id=integration.id,
                 jql="project = HELP",
                 default_agent_id=302,
             ),
@@ -383,12 +408,36 @@ def test_create_jira_trigger_rejects_foreign_default_agent(db_session):
     assert exc_info.value.detail == "Agent not found"
 
 
-def test_update_jira_trigger_rotates_and_clears_token(db_session):
+def test_update_jira_trigger_relinks_integration_and_pauses(db_session):
     db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
     _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    db_session.commit()
+    first_integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Jira Production",
+            site_url="https://example.atlassian.net",
+            auth_email="jira@example.com",
+            api_token="secret-token",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+    second_integration = create_jira_integration(
+        payload=JiraIntegrationCreate(
+            integration_name="Jira Support",
+            site_url="https://support.atlassian.net",
+            auth_email="support@example.com",
+            api_token="rotated-token",
+        ),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
     trigger = JiraChannelInstance(
         tenant_id="tenant-a",
-        integration_name="Jira Support",
+        integration_name="Jira Trigger",
+        jira_integration_id=first_integration.id,
         site_url="https://example.atlassian.net",
         project_key="HELP",
         jql="project = HELP",
@@ -399,30 +448,18 @@ def test_update_jira_trigger_rotates_and_clears_token(db_session):
 
     updated = update_jira_trigger(
         trigger_id=trigger.id,
-        payload=JiraTriggerUpdate(api_token="rotated-token-5678", is_active=False),
+        payload=JiraTriggerUpdate(jira_integration_id=second_integration.id, is_active=False),
         ctx=_ctx("tenant-a"),
         _user=SimpleNamespace(id=1),
         db=db_session,
     )
     stored = db_session.query(JiraChannelInstance).filter(JiraChannelInstance.id == trigger.id).first()
-    decrypted = TokenEncryption(TEST_MASTER_KEY.encode()).decrypt(
-        stored.api_token_encrypted,
-        "tenant-a",
-    )
 
-    assert updated.api_token_preview == "rota...5678"
+    assert updated.jira_integration_id == second_integration.id
+    assert updated.jira_integration_name == "Jira Support"
+    assert updated.site_url == "https://support.atlassian.net"
     assert updated.status == "paused"
-    assert decrypted == "rotated-token-5678"
-
-    cleared = update_jira_trigger(
-        trigger_id=trigger.id,
-        payload=JiraTriggerUpdate(api_token=None),
-        ctx=_ctx("tenant-a"),
-        _user=SimpleNamespace(id=1),
-        db=db_session,
-    )
-
-    assert cleared.api_token_preview is None
+    assert stored.jira_integration_id == second_integration.id
     assert stored.api_token_encrypted is None
 
 
@@ -627,190 +664,3 @@ def test_jira_trigger_normalizes_issue_to_dispatch_input(db_session):
     assert dispatch_input.sender_key == "reporter-1"
     assert dispatch_input.source_id == "HELP-1"
     assert dispatch_input.payload["jira"]["project_key"] == "HELP"
-
-
-def test_jira_notification_message_formats_link_title_and_adf_description(db_session):
-    trigger_row = JiraChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Jira Support",
-        site_url="https://example.atlassian.net/jira",
-        project_key="HELP",
-        jql="project = HELP",
-        created_by=1,
-    )
-    issue_payload = {
-        "issue": {
-            "id": "10001",
-            "key": "HELP-1",
-            "fields": {
-                "summary": "First issue",
-                "description": {
-                    "type": "doc",
-                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Quick context"}]}],
-                },
-                "status": {"name": "To Do"},
-                "issuetype": {"name": "Pen Test"},
-                "project": {"key": "HELP"},
-            },
-        }
-    }
-
-    message = build_jira_notification_message(trigger_row, issue_payload)
-
-    assert "HELP-1 - First issue" in message
-    assert "Type: Pen Test" in message
-    assert "Status: To Do" in message
-    assert "Link: https://example.atlassian.net/browse/HELP-1" in message
-    assert "Description: Quick context" in message
-
-
-def test_jira_notification_subscription_creates_managed_agent_and_action_config(db_session):
-    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a", max_agents=10))
-    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
-    _seed_whatsapp_instance(db_session, instance_id=501, tenant_id="tenant-a", user_id=1)
-    trigger_row = JiraChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Jira Support",
-        site_url="https://example.atlassian.net",
-        project_key="HELP",
-        jql="project = HELP",
-        created_by=1,
-    )
-    db_session.add(trigger_row)
-    db_session.commit()
-
-    response = create_jira_notification_subscription(
-        trigger_id=trigger_row.id,
-        payload=JiraNotificationSubscriptionRequest(recipient_phone="+5527999616279"),
-        ctx=_ctx("tenant-a"),
-        current_user=SimpleNamespace(id=1),
-        db=db_session,
-    )
-
-    db_session.refresh(trigger_row)
-    subscription = db_session.query(ContinuousSubscription).one()
-
-    assert response.created_agent is True
-    assert response.created_subscription is True
-    assert response.recipient_preview == "+5527...6279"
-    assert trigger_row.default_agent_id == response.agent_id
-    assert subscription.action_config == {
-        "action_type": "whatsapp_notification",
-        "channel": "whatsapp",
-        "recipient_phone": "+5527999616279",
-    }
-    assert db_session.query(Contact).filter(Contact.friendly_name == "Jira Agent").count() == 1
-
-
-def test_jira_notification_subscription_requires_recipient(db_session):
-    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a", max_agents=10))
-    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
-    _seed_whatsapp_instance(db_session, instance_id=501, tenant_id="tenant-a", user_id=1)
-    trigger_row = JiraChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Jira Support",
-        site_url="https://example.atlassian.net",
-        project_key="HELP",
-        jql="project = HELP",
-        created_by=1,
-    )
-    db_session.add(trigger_row)
-    db_session.commit()
-
-    with pytest.raises(HTTPException) as exc:
-        create_jira_notification_subscription(
-            trigger_id=trigger_row.id,
-            payload=JiraNotificationSubscriptionRequest(),
-            ctx=_ctx("tenant-a"),
-            current_user=SimpleNamespace(id=1),
-            db=db_session,
-        )
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "WhatsApp recipient is required"
-    assert db_session.query(ContinuousSubscription).count() == 0
-
-
-def test_jira_poll_now_sends_notification_once_per_issue(db_session, monkeypatch):
-    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a", max_agents=10))
-    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
-    _seed_whatsapp_instance(db_session, instance_id=501, tenant_id="tenant-a", user_id=1)
-    trigger_row = JiraChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Jira Support",
-        site_url="https://example.atlassian.net/jira",
-        project_key="HELP",
-        jql="project = HELP",
-        created_by=1,
-    )
-    db_session.add(trigger_row)
-    db_session.commit()
-
-    create_jira_notification_subscription(
-        trigger_id=trigger_row.id,
-        payload=JiraNotificationSubscriptionRequest(recipient_phone="+5527999616279"),
-        ctx=_ctx("tenant-a"),
-        current_user=SimpleNamespace(id=1),
-        db=db_session,
-    )
-
-    issue = {
-        "id": "10001",
-        "key": "HELP-1",
-        "fields": {
-            "summary": "First issue",
-            "description": {
-                "type": "doc",
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Quick context"}]}],
-            },
-            "status": {"name": "To Do"},
-            "issuetype": {"name": "Pen Test"},
-            "project": {"key": "HELP"},
-            "updated": "2026-04-20T10:00:00.000+0000",
-        },
-    }
-
-    async def fake_fetch_issues(**kwargs):
-        return [issue]
-
-    sent: list[dict] = []
-
-    async def fake_send_notification(*args, **kwargs):
-        sent.append({"args": args, "kwargs": kwargs})
-        return {
-            "success": True,
-            "recipient_preview": "+5527...6279",
-            "issue_key": "HELP-1",
-            "action": "whatsapp_notification",
-        }
-
-    monkeypatch.setattr(JiraTrigger, "_fetch_issues", staticmethod(fake_fetch_issues))
-    monkeypatch.setattr(jira_integration_service, "get_webhook_encryption_key", lambda db: TEST_MASTER_KEY)
-    monkeypatch.setattr("channels.jira.trigger.send_jira_whatsapp_notification", fake_send_notification)
-
-    first = asyncio.run(
-        poll_jira_trigger_now(
-            trigger_id=trigger_row.id,
-            ctx=_ctx("tenant-a"),
-            _user=SimpleNamespace(id=1),
-            db=db_session,
-        )
-    )
-    second = asyncio.run(
-        poll_jira_trigger_now(
-            trigger_id=trigger_row.id,
-            ctx=_ctx("tenant-a"),
-            _user=SimpleNamespace(id=1),
-            db=db_session,
-        )
-    )
-
-    assert first.status == "ok"
-    assert first.dispatched_count == 1
-    assert first.processed_count == 1
-    assert second.duplicate_count == 1
-    assert second.processed_count == 0
-    assert len(sent) == 1
-    assert db_session.query(WakeEvent).one().status == "processed"
-    assert db_session.query(ContinuousRun).one().status == "succeeded"
-    assert db_session.query(ChannelEventDedupe).one().dedupe_key == "jira_issue:HELP-1"

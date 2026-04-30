@@ -10,10 +10,9 @@
  * CTA that deep-links into the Flows editor with the trigger pre-wired
  * as a Source step.
  *
- * Lives inside `OutputsSection`, directly below the Managed Notification
- * card (when present) and above the Manual Poll card. For kinds that
- * have no managed outputs (github / webhook), this card
- * carries the empty-state messaging.
+ * Lives inside `OutputsSection` next to any per-kind manual tools. For kinds
+ * that have no managed outputs (github / webhook), this card carries the
+ * empty-state messaging.
  *
  * Permission model:
  *   - read: `flows.read` (silently rendered as empty if missing)
@@ -48,8 +47,7 @@ interface Props {
   triggerId: number
   /**
    * Optional callback fired after the bindings list mutates (toggle /
-   * unbind / refresh). The parent uses this so the suppress-default
-   * banner on the Managed Notification card stays in sync.
+   * unbind / refresh).
    */
   onBindingsChange?: (bindings: FlowTriggerBinding[]) => void
 }
@@ -114,7 +112,7 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       })
       setBindings(items)
       onBindingsChange?.(items)
-    } catch (err) {
+    } catch {
       // Backend endpoint may not be merged yet — stay quiet, just empty.
       setBindings([])
       onBindingsChange?.([])
@@ -308,9 +306,9 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
         message={
           unbindTarget ? (
             <>
-              <span className="font-mono text-white">"{unbindTarget.flow_name || 'this flow'}"</span>
+              <span className="font-mono text-white">{unbindTarget.flow_name || 'this flow'}</span>
               {' '}will no longer wake when this trigger fires. The flow itself
-              is not deleted — you can re-wire it from the Flows editor at any
+              is not deleted; you can re-wire it from the Flows editor at any
               time.
             </>
           ) : 'The flow will no longer wake when the trigger fires.'
@@ -318,7 +316,11 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
         confirmLabel="Unbind flow"
         danger
         isBusy={unbindTarget !== null && busyId === unbindTarget.id}
-        onConfirm={() => unbindTarget && performUnbind(unbindTarget)}
+        onConfirm={() => {
+          if (unbindTarget) {
+            return performUnbind(unbindTarget)
+          }
+        }}
         onCancel={() => setUnbindTarget(null)}
       />
     </div>
