@@ -29,6 +29,7 @@ interface Props {
   kind: RecapTriggerKind
   triggerId: number
   canWriteHub: boolean
+  caseMemoryEnabled: boolean
 }
 
 const cardClass = 'rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5'
@@ -56,7 +57,7 @@ function injectPositionLabel(pos: TriggerRecapConfig['inject_position']): string
   return pos === 'system_addendum' ? 'system addendum' : 'prepend user msg'
 }
 
-export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props) {
+export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemoryEnabled }: Props) {
   const [loading, setLoading] = useState(true)
   const [config, setConfig] = useState<TriggerRecapConfig | null>(null)
   const [draft, setDraft] = useState<TriggerRecapConfig>(DEFAULT_RECAP_CONFIG)
@@ -69,6 +70,13 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props)
   const [testError, setTestError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
+    if (!caseMemoryEnabled) {
+      setLoading(false)
+      setConfig(null)
+      setEditing(false)
+      setError(null)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -80,7 +88,7 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props)
     } finally {
       setLoading(false)
     }
-  }, [kind, triggerId])
+  }, [caseMemoryEnabled, kind, triggerId])
 
   useEffect(() => {
     refresh()
@@ -92,10 +100,11 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props)
   }, [])
 
   const handleEnable = useCallback(() => {
+    if (!caseMemoryEnabled) return
     setDraft({ ...DEFAULT_RECAP_CONFIG, enabled: true })
     setEditing(true)
     setError(null)
-  }, [])
+  }, [caseMemoryEnabled])
 
   const handleEdit = useCallback(() => {
     setDraft(config ?? DEFAULT_RECAP_CONFIG)
@@ -195,7 +204,7 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props)
           initialConfig={draft}
           onChange={setDraft}
           triggerInstanceId={triggerId}
-          caseMemoryEnabled={true}
+          caseMemoryEnabled={caseMemoryEnabled}
         />
         {canWriteHub && (
           <div className="mt-5 flex flex-wrap gap-2">
@@ -229,10 +238,12 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub }: Props)
           <div className="min-w-0">
             <h3 className="text-base font-semibold text-white">Memory Recap</h3>
             <p className="mt-1 text-sm text-tsushin-slate">
-              Memory Recap is not configured for this trigger.
+              {caseMemoryEnabled
+                ? 'Memory Recap is not configured for this trigger.'
+                : 'Memory Recap is disabled for this tenant.'}
             </p>
           </div>
-          {canWriteHub && (
+          {canWriteHub && caseMemoryEnabled && (
             <button
               type="button"
               onClick={handleEnable}

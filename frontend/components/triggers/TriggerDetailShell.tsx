@@ -288,6 +288,7 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [emailPollResult, setEmailPollResult] = useState<EmailPollNowResponse | null>(null)
   const [emailQueryTesting, setEmailQueryTesting] = useState(false)
   const [emailQueryResult, setEmailQueryResult] = useState<EmailTestQueryResponse | null>(null)
+  const [caseMemoryRecapAvailable, setCaseMemoryRecapAvailable] = useState(true)
 
   // Webhook-specific state
   const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
@@ -330,6 +331,23 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
     loadData()
   }, [hasValidId, loadData, router])
+
+  useEffect(() => {
+    let cancelled = false
+    api.getFeatureFlags()
+      .then((flags) => {
+        if (cancelled) return
+        setCaseMemoryRecapAvailable(
+          Boolean(flags.case_memory_enabled && (flags.case_memory_recap_enabled ?? true)),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setCaseMemoryRecapAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const events = useMemo(
     () => (eventsPage?.items || []).filter((event) => event.channel_instance_id === triggerId),
@@ -649,7 +667,12 @@ export default function TriggerDetailShell({ kind }: Props) {
           title="Memory Recap"
           subtitle="Recall snippets from past similar cases when this trigger fires."
         />
-        <MemoryRecapCard kind={kind} triggerId={trigger.id} canWriteHub={canWriteHub} />
+        <MemoryRecapCard
+          kind={kind}
+          triggerId={trigger.id}
+          canWriteHub={canWriteHub}
+          caseMemoryEnabled={caseMemoryRecapAvailable}
+        />
       </div>
     )
   }

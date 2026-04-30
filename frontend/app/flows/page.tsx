@@ -422,6 +422,7 @@ export default function FlowsPage() {
       // Read-only users can't create flows; surface a toast and clear the params.
       toast.warning('Insufficient permissions', 'You need flows.write to create flows from a trigger.')
       prefillConsumedRef.current = true
+      clearPrefillParams()
       return
     }
     // Wait for trigger name to resolve so the auto-filled flow name carries

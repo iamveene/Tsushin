@@ -333,6 +333,69 @@ def test_email_trigger_rejects_invalid_trigger_criteria():
         )
 
 
+def test_update_email_trigger_syncs_managed_flow_default_agent(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    _seed_contact(db_session, contact_id=102, tenant_id="tenant-a", friendly_name="Beta")
+    _seed_agent(db_session, agent_id=202, tenant_id="tenant-a", contact_id=102)
+    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    flow = FlowDefinition(
+        id=801,
+        tenant_id="tenant-a",
+        name="Email: Inbox Watcher",
+        execution_method="triggered",
+        default_agent_id=201,
+        is_system_owned=True,
+    )
+    conversation = FlowNode(
+        id=802,
+        flow_definition_id=801,
+        type="conversation",
+        position=3,
+        name="Default agent",
+        agent_id=201,
+        config_json="{}",
+    )
+    binding = FlowTriggerBinding(
+        id=803,
+        tenant_id="tenant-a",
+        flow_definition_id=801,
+        trigger_kind="email",
+        trigger_instance_id=1,
+        is_system_managed=True,
+        is_active=True,
+        suppress_default_agent=False,
+    )
+    db_session.add_all([trigger, flow, conversation, binding])
+    db_session.flush()
+    binding.trigger_instance_id = trigger.id
+    db_session.commit()
+
+    updated = update_email_trigger(
+        trigger_id=trigger.id,
+        payload=EmailTriggerUpdate(default_agent_id=202),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    db_session.refresh(flow)
+    db_session.refresh(conversation)
+    assert updated.default_agent_id == 202
+    assert flow.default_agent_id == 202
+    assert conversation.agent_id == 202
+
+
 def test_delete_email_trigger_is_tenant_scoped(db_session):
     db_session.add_all(
         [

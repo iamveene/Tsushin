@@ -504,8 +504,20 @@ class TriggerDispatchService:
 
         from services.message_queue_service import MessageQueueService
 
-        # Read the redacted payload once and reuse for all bindings.
-        source_payload = self._read_payload_ref(payload_ref) or event.payload
+        # Read the redacted payload once and reuse for all bindings. The Flow
+        # source contract exposes the original trigger payload under
+        # source.payload, not the wake-event document wrapper.
+        payload_document = self._read_payload_ref(payload_ref)
+        if isinstance(payload_document, dict) and isinstance(payload_document.get("payload"), dict):
+            source_payload = payload_document["payload"]
+        else:
+            logger.warning(
+                "Falling back to in-memory redacted payload for %s trigger %s; payload_ref=%s",
+                trigger_type,
+                instance_id,
+                payload_ref,
+            )
+            source_payload = self._redact(event.payload)
 
         mqs = MessageQueueService(self.db)
         sender_key_root = event.sender_key or f"{trigger_type}:{instance_id}"
@@ -602,25 +614,44 @@ class TriggerDispatchService:
     def _read_payload_ref(self, payload_ref: Optional[str]) -> Optional[dict]:
         """Read the redacted payload JSON written to disk by ``_write_payload_ref``.
 
-        Returns None on missing file / parse error so callers can fall
-        back to the in-memory event.payload (which is the un-redacted
-        original — only used as a last resort when the on-disk redacted
-        file is unavailable).
+        Returns None on missing file / parse error so callers can use a
+        redacted in-memory fallback. ``_write_payload_ref`` stores a stable
+        repo-relative ref (``backend/data/wake_events/<file>.json``), while
+        tests and deployments can configure ``payload_dir`` to a different
+        root, so we normalize legacy and current refs back to that directory.
         """
         if not payload_ref:
             return None
         try:
-            path = Path(payload_ref)
-            if not path.is_absolute():
-                # Stored as a basename — relative to the configured payload_dir.
-                path = self._payload_dir / path
-            if not path.exists():
+            path = self._resolve_payload_ref_path(payload_ref)
+            if path is None or not path.exists():
+                return None
+            payload_root = self._payload_dir.resolve()
+            try:
+                path.resolve().relative_to(payload_root)
+            except ValueError:
+                logger.warning("Ignoring payload_ref outside payload_dir: %s", payload_ref)
                 return None
             with path.open("r", encoding="utf-8") as fh:
                 return json.load(fh)
         except Exception:
             logger.exception("Failed to re-read payload_ref %s", payload_ref)
             return None
+
+    def _resolve_payload_ref_path(self, payload_ref: str) -> Optional[Path]:
+        path = Path(payload_ref)
+        if path.is_absolute():
+            return path
+
+        parts = path.parts
+        if len(parts) >= 4 and parts[-4:-1] == ("backend", "data", "wake_events"):
+            return self._payload_dir / path.name
+        if len(parts) >= 3 and parts[-3:-1] == ("data", "wake_events"):
+            return self._payload_dir / path.name
+        if len(parts) == 1:
+            return self._payload_dir / path.name
+
+        return Path.cwd() / path
 
     def _load_instance(self, trigger_type: str, instance_id: int) -> Any | None:
         model = self._INSTANCE_MODELS[trigger_type]

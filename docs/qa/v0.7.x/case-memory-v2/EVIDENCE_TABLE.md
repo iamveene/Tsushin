@@ -1,11 +1,11 @@
 # Case Memory v2 — Comprehensive Evidence Table
 
-**Branch:** `feature/trigger-parity-recap`
-**Validated against:** working tree on `feature/trigger-parity-recap` after the trigger detail parity follow-up (2026-04-30)
-**Last full Pytest baseline:** `1039 passed, 29 skipped, 0 failed, 0 errors` (case-memory v2 hardening full backend suite)
-**Parity follow-up Pytest:** `80 passed, 1145 warnings` for the trigger recap/dispatch/routes slice; focused recap suite `31 passed, 533 warnings`
-**Trigger recap E2E question probes:** `2/2 PASS` via authenticated Playwright browser login + page-context `POST /test-recap` calls (`email/18`, `jira/9`)
-**UI driver:** Playwright via the qa-tester subagent plus local Playwright automation on `https://localhost`
+**Branch:** `release/0.7.0`
+**Validated against:** working tree on `release/0.7.0` after the trigger parity hardening and final release E2E pass (2026-04-30)
+**Last full Pytest baseline:** `1046 passed, 29 skipped, 0 failed, 0 errors` in the rebuilt backend container (excluding the documented long-running shell E2E files)
+**Focused hardening Pytest:** `37 passed, 1 warning` in the rebuilt backend container for recap routes/service, trigger dispatch, flow bindings, default-agent sync, and tenant-scoped recipient resolution
+**Trigger recap E2E question probes:** `3/3 PASS` via authenticated API probes after Browser Use UI automation (`email/18`, `jira/9`, plus a Jira no-match negative probe)
+**UI driver:** Browser Use in-app browser (`iab` backend) plus authenticated API probes on `https://localhost`
 **Tenant under test:** `tenant_20260406004333855618_c58c99` (`test@example.com` — Tenant Owner)
 **Default agent:** **Tsushin** (id=1)
 **External vector store:** `VectorStoreInstance id=19` ("gemini-1536") — vendor=qdrant, embedding_provider=gemini, embedding_dims=1536, healthy
@@ -48,7 +48,7 @@
 |---|---|---|---|---|---|
 | **B-1** | Wake-event payload contains `memory_recap` | Trigger fires with `recap_config.enabled=true`. | Wake event payload `memory_recap` block: `rendered_text` (markdown table of past cases), `cases_used` (int), `config_snapshot` (the exact gates used at render time), `used_sample` (bool, true when test-recap synthesized a payload), `elapsed_ms` (int). | `B-1/test-recap-empty-vs-sample.png` | ✅ PASS |
 | **B-2** | Recap text bounded by `max_recap_chars` | Default `max_recap_chars=1500`. Render against the seeded 14-case corpus with `k=10`. | Rendered text length stayed below the cap; truncation appends "…" sentinel. Verified via the test-recap response payload (`elapsed_ms=40`, response body well under 4096 chars). | (Inline, response body in A-4 evidence) | ✅ PASS |
-| **B-3** | Empty result renders an explicit "no past cases" block | Fire trigger for a brand-new tenant or query with no matches. | `cases_used:0, rendered_text:"## Past Cases (0 matches)\n\nNo past cases found above similarity threshold (0.00)."`. The string IS present (not silent absence). | (Inline — covered by Group F-2 evidence below) | ✅ PASS |
+| **B-3** | Empty result renders an explicit "no past cases" block | Jira no-match negative probe: cookie-dough question through `/api/triggers/jira/9/test-recap` with the saved `min_similarity=0.40`. | `cases_used:0, rendered_text:"## Past Cases (0 matches)\nNo past cases found above similarity threshold (0.40)."`. The string IS present (not silent absence). | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` (`G-3`) | ✅ PASS |
 | **B-4** | Recap failure does NOT fail the trigger run | Force a `query_template` with broken Jinja2 (e.g. `{{`). | Recap returns `None` (silently swallowed in `build_memory_recap`); ContinuousRun finishes terminal status normally; backend log: `WARNING trigger_recap: query_template render failed`; original trigger run path untouched. Unit test `test_build_recap_swallows_template_error` PASS. | (covered by `test_trigger_recap_service.py::test_build_recap_swallows_template_error` — 12/12 PASS) | ✅ PASS |
 
 ## Group C — Multi-scenario UI recall validation (Playground, load-bearing)
@@ -98,6 +98,7 @@ For each: log in as Tenant Owner → `/playground` → select Tsushin → **+ Ne
 | **S-3** | `/api/feature-flags` returns the four flags | `fetch('/api/feature-flags')` → `{case_memory_enabled:true, case_memory_recap_enabled:true, trigger_binding_enabled:true, auto_generation_enabled:true}`. | `surfaces/feature-flags-endpoint.png` | ✅ PASS |
 | **S-4** | Hub trigger cards share one interaction model across all trigger kinds | Hub > Triggers renders Email, Webhook, Jira, and GitHub through `TriggerBreadthCards`; configured cards expose Details + Pause/Resume only. The old Email Edit modal and Webhook setup/edit/reveal modal entry-points are no longer imported by the Hub page. | `output/playwright/trigger-parity/hub-triggers.png` | ✅ PASS |
 | **S-5** | Dispatch recap propagation covered for every trigger kind | Parametrized regression covers `email`, `jira`, `github`, and `webhook`; each dispatched event attaches `memory_recap` to both the continuous-task queue payload and bound-flow `trigger_context.source.memory_recap`. | `backend/tests/test_trigger_dispatch_service.py::test_dispatch_attaches_memory_recap_to_queue_payloads_for_all_trigger_kinds` | ✅ PASS |
+| **S-6** | Flow wiring visible and API-backed for Gmail + Jira | Browser pass verified `/hub/triggers/email/18`, `/hub/triggers/jira/9`, `/flows?edit=100`, and `/flows?source_trigger_kind=email&source_trigger_id=18`; API returned one Email binding and two Jira bindings. | `output/playwright/release-0.7-trigger-e2e/`, `trigger-recap-e2e-questions.json` | ✅ PASS |
 
 ---
 
@@ -121,12 +122,13 @@ For each: log in as Tenant Owner → `/playground` → select Tsushin → **+ Ne
 
 ## Trigger Memory Recap E2E Questions
 
-Authenticated Playwright browser session (`test@example.com`) logged in to `https://localhost`, then executed page-context `fetch` calls so the browser cookies and tenant auth path matched the UI. Full raw responses are captured in `trigger-recap-e2e-questions.json`.
+Browser Use authenticated as `test@example.com` on `https://localhost`, then the same seeded tenant was exercised through authenticated API probes. Response excerpts in `trigger-recap-e2e-questions.json` are sanitized where lower-ranked live email payload text was unrelated to the assertion.
 
 | ID | Trigger | Question | Observed response excerpt | Evidence | Verdict |
 |---|---|---|---|---|---|
-| **G-1** | Gmail/email trigger `email/18` | "Gmail trigger email: user says 'I can't login after password reset, getting 401'. Which past email case should be recalled and what did we do?" | `cases_used=2`; top match `Help: cannot login to my account` at `sim=0.526`; action says `Verified user account active; reset password manually; user confirmed login restored.` This corresponds to seeded case `EMAIL-6001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
-| **G-2** | Jira trigger `jira/9` | "New Jira pentest ticket PT-4099: SQL injection in /api/login endpoint -- CVSS 9.1. Which similar Jira case and fix should be recalled?" | `cases_used=1`; matched the seeded SQL injection pentest case at `sim=0.464`; action says `Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.` The saved format template omits ticket keys, but the seeded corpus maps this SQLi case to `PT-4001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
+| **G-1** | Gmail/email trigger `email/18` | "Gmail trigger email: user says 'I can't login after password reset, getting 401'. Which past email case should be recalled and what did we do?" | `cases_used=3`; top match `Help: cannot login to my account`; action says `Verified user account active; reset password manually; user confirmed login restored.` This corresponds to seeded case `EMAIL-6001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
+| **G-2** | Jira trigger `jira/9` | "New Jira pentest ticket PT-4099: SQL injection in /api/login endpoint -- CVSS 9.1. Which similar Jira case and fix should be recalled?" | `cases_used=1`; matched the seeded SQL injection pentest case above the saved `0.40` floor; action says `Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.` The saved format template omits ticket keys, but the seeded corpus maps this SQLi case to `PT-4001`. | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
+| **G-3** | Jira trigger `jira/9` | "Off-topic negative probe: chocolate chip cookie refrigeration should not recall a Jira case above the 0.40 threshold." | `cases_used=0`; rendered the explicit no-match block: `No past cases found above similarity threshold (0.40).` | `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json` | ✅ PASS |
 
 ---
 
@@ -140,10 +142,10 @@ Authenticated Playwright browser session (`test@example.com`) logged in to `http
 | D — Vector backend variations | 4/4 | ✅ ALL PASS |
 | E — Gemini API integration | 4/4 | ✅ ALL PASS |
 | F — Per-tenant SaaS toggles (replaces env vars) | 2/2 | ✅ ALL PASS |
-| Surfaces — new UX | 5/5 | ✅ ALL PASS |
+| Surfaces — new UX | 6/6 | ✅ ALL PASS |
 | Semantic search quality probe | 7/7 | ✅ ALL PASS |
-| Trigger Memory Recap E2E questions | 2/2 | ✅ ALL PASS |
-| **Total** | **36/36** | **✅ ALL PASS** |
+| Trigger Memory Recap E2E questions | 3/3 | ✅ ALL PASS |
+| **Total** | **38/38** | **✅ ALL PASS** |
 
 ---
 
@@ -169,10 +171,23 @@ $ docker exec tsushin-backend pytest tests/ --no-cov -p no:cacheprovider -q \
     --ignore=tests/comprehensive_e2e.py \
     --ignore=tests/e2e_skills_test.py \
     --ignore=tests/test_api_v1_e2e.py
-========== 1039 passed, 29 skipped, 0 failed, 0 errors in 107s ==========
+========== 1046 passed, 29 skipped, 0 failed, 0 errors in 107.18s ==========
 ```
 
-Includes the 28+ new tests added in this session: 12 trigger_recap_service, 16 gemini_embedding_provider, 21 routes_trigger_recap + routes_test_embedding, 5 routes_feature_flags, 3 routes_tenant_case_memory_config, 2 case_memory_external_qdrant_recall.
+The final release hardening slice also passed the focused rebuilt-container suite:
+
+```
+$ docker exec tsushin-backend pytest tests/test_trigger_dispatch_service.py::test_dispatch_creates_redacted_payload_ref_for_email_instance \
+    tests/test_trigger_dispatch_service.py::test_dispatch_attaches_memory_recap_to_queue_payloads_for_all_trigger_kinds \
+    tests/test_routes_email_triggers.py::test_update_email_trigger_syncs_managed_flow_default_agent \
+    tests/test_routes_jira_triggers.py::test_update_jira_trigger_syncs_managed_flow_default_agent \
+    tests/test_flow_completed_steps_counter.py::test_resolve_recipient_is_tenant_scoped \
+    tests/test_routes_trigger_recap.py tests/test_trigger_recap_service.py tests/test_routes_flow_trigger_bindings.py \
+    --no-cov -p no:cacheprovider -q
+========== 37 passed, 1 warning in 2.29s ==========
+```
+
+Includes the prior 28+ case-memory tests plus the final hardening regressions for redacted Flow source payloads, Email/Jira managed Flow default-agent sync, and tenant-scoped contact recipient resolution.
 
 ## Errors observed during this session
 
@@ -181,5 +196,6 @@ Includes the 28+ new tests added in this session: 12 trigger_recap_service, 16 g
 | Container restart after migration `0077` | `[DB] FATAL: Alembic migration failed: Can't locate revision identified by '0077'` (file was on host but not yet baked into image) | Rebuilt backend with `--no-cache` so 0077 lands in the image. Backend healthy at head. |
 | Code-review P0 | Duplicate `deleteVectorStoreInstance` in `client.ts` would fail `tsc --noEmit` | Removed the no-arg duplicate (line 9205); kept the `removeVolume`-aware version (line 9244). |
 | Code-review P1 | Stale env-var reference in `trigger_recap_service` module docstring | Replaced with the per-tenant gate description. |
+| Final release pass | Repo-wide `npm run typecheck` and broad legacy ESLint still report pre-existing unrelated errors outside this trigger slice. | Focused ESLint on the compact changed trigger files passed; production frontend Docker build passed; full rebuilt-container backend suite passed. |
 
-**Zero errors remain.**
+**Zero release-blocking errors remain in the Gmail/Jira trigger, memory recap, or flow wiring scope covered by this table.**

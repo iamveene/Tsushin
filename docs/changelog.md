@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Gmail/Jira trigger parity hardening + final E2E sign-off (2026-04-30)
+
+- Fixed the release-blocking Flow payload contract: bound Flow runs now receive the redacted trigger payload under `trigger_context.source.payload`, not the wake-event document wrapper, and the fallback path also redacts before enqueueing. Payload refs are normalized back to the configured wake-event payload directory and guarded against path escape.
+- Email and Jira trigger `default_agent_id` updates now synchronize the generated system-managed FlowDefinition and Conversation node, so changing routing on the trigger changes the actual execution path.
+- Flow `@Contact` recipient resolution now requires tenant context and filters contacts by tenant before resolving names, closing the cross-tenant lookup risk in notification/conversation steps.
+- Trigger UI failure states now fail visibly instead of silently looking empty: Wired Flows shows a retryable load error; Hub trigger surfaces report partial load failures; Memory Recap detail cards honor tenant case-memory gates; Email triage disables when Gmail compose authorization cannot be verified.
+- Browser Use E2E on `https://localhost` covered Hub trigger cards, `/hub/triggers`, `/hub/triggers/email/18`, `/hub/triggers/jira/9`, `/flows?edit=100`, and `/flows?source_trigger_kind=email&source_trigger_id=18` with zero console errors. Authenticated API probes verified feature flags, recap configs, flow bindings, Gmail login recap (`EMAIL-6001`), Jira pentest recap (`PT-4001`), and a Jira no-match negative probe. Sanitized artifact: `docs/qa/v0.7.x/case-memory-v2/trigger-recap-e2e-questions.json`.
+- Final validation: rebuilt backend+frontend with `docker-compose build --no-cache backend frontend && docker-compose up -d backend frontend`; health OK (`version=0.7.0`); focused rebuilt-container suite `37 passed`; full rebuilt-container backend suite `1046 passed, 29 skipped`; focused frontend ESLint passed for changed trigger components; production frontend Docker build passed.
+
 ### Release 0.7.0 — Trigger detail parity follow-up (2026-04-30)
 
 - Hub Email and Webhook trigger cards now use the same Details + Pause/Resume card path as Jira/GitHub instead of opening legacy edit/setup modals. Memory Recap, Wired Flows, source criteria, routing, manual fire/poll actions, secret rotation, and danger actions are all reached from `/hub/triggers/{kind}/{id}`.

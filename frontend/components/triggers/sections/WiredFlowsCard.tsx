@@ -39,6 +39,7 @@ import {
   ExternalLinkIcon,
   LightningIcon,
   PlusIcon,
+  RefreshIcon,
   TrashIcon,
 } from '@/components/ui/icons'
 
@@ -90,6 +91,7 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
 
   const [bindings, setBindings] = useState<FlowTriggerBinding[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
 
   const createHref = useMemo(
@@ -100,11 +102,13 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
   async function refresh() {
     if (!canRead || !triggerId) {
       setBindings([])
+      setLoadError(null)
       onBindingsChange?.([])
       setLoading(false)
       return
     }
     setLoading(true)
+    setLoadError(null)
     try {
       const items = await api.listFlowTriggerBindings({
         trigger_kind: triggerKind,
@@ -112,8 +116,9 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       })
       setBindings(items)
       onBindingsChange?.(items)
-    } catch {
-      // Backend endpoint may not be merged yet — stay quiet, just empty.
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to load wired flows'
+      setLoadError(msg)
       setBindings([])
       onBindingsChange?.([])
     } finally {
@@ -209,7 +214,22 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           </div>
         )}
 
-        {!loading && bindings.length === 0 && (
+        {!loading && loadError && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>{loadError}</span>
+              <button
+                type="button"
+                onClick={refresh}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-300/40 bg-red-500/10 px-2.5 py-1 text-xs text-red-100 hover:text-white"
+              >
+                <RefreshIcon size={12} /> Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && !loadError && bindings.length === 0 && (
           <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-surface/40 px-4 py-6 text-center">
             <p className="text-sm text-tsushin-slate">
               No custom flows are wired to this trigger yet.
@@ -225,7 +245,7 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           </div>
         )}
 
-        {!loading && bindings.map((b) => {
+        {!loading && !loadError && bindings.map((b) => {
           const pill = statusPill(b)
           const lastWhen = formatRelative(b.last_run_at)
           const editHref = `/flows?edit=${b.flow_definition_id}`

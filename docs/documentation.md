@@ -1462,11 +1462,11 @@ Decay factor: `e^(-lambda * days_since_access)`. MMR (Maximum Marginal Relevance
 
 ### 10.6 Trigger Case Memory (MVP, experimental)
 
-Default-off primitive shipped in v0.7.0 that lets trigger-driven agents (incident response on Jira, support email, GitHub issues, generic webhooks) recall what was done last time for similar trigger payloads. Spec: `.private/TRIGGER_MEMORY_RESEARCH.md`. Changelog entry: see *"Release 0.7.0 — Trigger Case Memory MVP"* in `docs/changelog.md`.
+Experimental primitive shipped in v0.7.0 that lets trigger-driven agents (incident response on Jira, support email, GitHub issues, generic webhooks) recall what was done last time for similar trigger payloads. Spec: `.private/TRIGGER_MEMORY_RESEARCH.md`. Changelog entry: see *"Release 0.7.0 — Trigger Case Memory MVP"* in `docs/changelog.md`.
 
 **Scope.** A *case* is one terminal trigger-driven execution: `WakeEvent + (ContinuousRun | trigger-origin FlowRun) + compact problem/action/outcome text`. Cases are not chat memory or KB content — they are a tenant/agent-scoped execution record indexed for similarity recall.
 
-**Feature flag.** `TSN_CASE_MEMORY_ENABLED` (default `false`) — see `backend/config/feature_flags.py:case_memory_enabled`. When false: no `case_index` queue rows, no `case_memory` rows, the skill is unregistered, and `/api/case-memory/*` is not mounted. Existing trigger runtime behavior is identical to v0.7.0-fix. Flipping the flag requires a backend restart.
+**Tenant feature gates.** v0.7.0 now uses tenant-scoped DB flags instead of environment-variable rollout gates. `Tenant.case_memory_enabled` controls indexing, retrieval skill registration, and `/api/case-memory/*` availability for that tenant. `Tenant.case_memory_recap_enabled` independently gates trigger recap injection while leaving indexing available. Tenant owners can edit both from Core > Organization > Case Memory, and `/api/feature-flags` returns the effective `{case_memory_enabled, case_memory_recap_enabled, trigger_binding_enabled, auto_generation_enabled}` values used by the trigger wizard and detail pages.
 
 **Data model.** Table `case_memory` (alembic `0075_case_memory_mvp`):
 - Tenant/agent isolation: `tenant_id` (RESTRICT), `agent_id` (CASCADE), partial-unique on `continuous_run_id` and `flow_run_id` (Postgres only; SQLite test fixtures fall back to non-unique helpers and rely on the indexer's idempotency guard).
@@ -1491,10 +1491,12 @@ The `case_index` handler calls `case_memory_service.index_case`, which is idempo
 
 **Retrieval skill.** `find_similar_past_cases` (`backend/agent/skills/find_similar_past_cases.py`), tool-mode, registered only when the flag is on. Single tool with inputs `query` (required), `scope` (`agent | trigger_kind | tenant`, default chosen by invocation context), `k` (1–50), `min_similarity` (0–1), `trigger_kind`, `include_failed`. Returns ranked cases with `case_id`, `similarity`, problem/action/outcome summaries, `outcome_label`, origin/run pointers. Default scope: `trigger_kind` when invoked under a trigger context, `agent` for chat.
 
-**API.** Mounted only when the flag is on. All endpoints require `agents.read` and enforce strict tenant isolation via `TenantContext`:
+**API.** All endpoints require `agents.read`, enforce strict tenant isolation via `TenantContext`, and fail closed for tenants with `case_memory_enabled=false`:
 - `GET  /api/case-memory` — filters: `agent_id`, `trigger_kind`, `origin_kind`, `limit` (≤200), `offset`.
 - `GET  /api/case-memory/{case_id}`.
 - `POST /api/case-memory/search` — body: `query`, `scope`, `k`, `min_similarity`, `vector` (`problem | action | outcome | any`), `trigger_kind`, `include_failed`, optional `agent_id`.
+
+**Per-trigger Memory Recap.** Each Email, Jira, GitHub, and Webhook trigger can carry a `trigger_recap_config` row exposed at `/api/triggers/{kind}/{id}/recap-config`, with a matching `/test-recap` preview endpoint. The trigger wizard includes a Memory Recap step whenever `case_memory_enabled=true`; trigger detail pages render a Memory Recap section for editing, disabling, and previewing saved configs. Dispatch injects recap output into both the default-agent continuous-task path and bound Flow `trigger_context.source.memory_recap`.
 
 **Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the tenant's default `VectorStoreInstance` carries `extra_config.embedding_dims` (e.g. 768/1536/3072 for Gemini-style hosted embeddings), the contract is read from `extra_config` and pinned on the case row. Changing `embedding_dims` after data exists is rejected by `case_embedding_resolver.reject_post_data_dims_mutation` (defensive helper available for op tooling — the underlying `vector_store_instance_service.update_instance` still allows the column-level change today, so callers should invoke the helper before mutating).
 
@@ -1849,7 +1851,7 @@ A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It 
 | 1 | **Kind** | yes | 4-tile `role="radiogroup"` (Email / Webhook / Jira / GitHub) with `role="radio"` + `aria-checked`. Skipped when an entry-point passes `initialKind`. |
 | 2 | **Source** | per-kind | Per-kind input grid: Jira (linked Hub Tool API connection + project key + JQL + poll interval + default agent + name), GitHub (linked Hub Tool API integration + owner + repo + events checklist + default agent + name), Email (Gmail account + saved query / label / from-address filters + default agent + name), Webhook (name + slug mode + callback URL + IP allowlist + rate limit). All inputs have `htmlFor`/`id` associations. Continue is gated on per-kind required fields. |
 | 3 | **Criteria** | per-kind | Jira: read-only JQL preview + "Test Query" button. GitHub: full event/action/filters builder via `CriteriaBuilder` with raw envelope JSON preview + "Test against sample payload" dry-run. Email: saved-query test against the connected mailbox. Webhook: JSONPath payload criteria tester. |
-| 4 | **Flow output** | yes | Creates or wires the system-managed Flow that owns downstream output behavior. Notifications are edited on that Flow's Notification node, not on a trigger-local managed-notification card. |
+| 4 | **Memory Recap** | conditional | Rendered only when `/api/feature-flags.case_memory_enabled=true`. Configures recap enablement, query template, scope, k, similarity floor, vector kind, failed-case inclusion, injection position, and max recap length. Skipped entirely when case memory is disabled for the tenant. |
 | 5 | **Confirmation** | yes | Pre-save: summary cards (Kind / Default Agent / Status on Save / Trigger Name / per-kind specifics). Post-save: "Trigger created" panel + saved trigger card + **Wired Flow card** (auto-flow ID + status + "Open Flow Editor" CTA) when an auto-flow was minted. The CTA links to `/flows?edit=<auto_flow_id>`. |
 
 **Auto-flow handoff (steps 4 -> 5):**
@@ -1857,6 +1859,8 @@ A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It 
 When `TSN_FLOWS_AUTO_GENERATION_ENABLED=true`, the trigger CREATE endpoints call `flow_binding_service.ensure_system_managed_flow_for_trigger(...)` in the same transaction as the trigger row, minting a 4-node Source -> Gate -> Conversation -> Notification auto-flow with `is_system_owned=true, editable_by_tenant=true, deletable_by_tenant=false`. Output configuration writes through to that flow's Notification node via `flow_binding_service.update_auto_flow_notification(...)`, setting the engine-correct `recipient` field (older code wrote `recipient_phone`, which the engine ignored; see §13.4).
 
 The auto-flow ID is surfaced on every trigger Read schema (`JiraTriggerRead.auto_flow_id`, `EmailTriggerRead.auto_flow_id`, `GitHubTriggerRead.auto_flow_id`, `WebhookTriggerRead.auto_flow_id`). The Confirmation step reads it and renders the Wired Flow card; if no auto-flow was generated (older trigger, or feature flag off), the card falls back to a "Wire a custom Flow" CTA that deep-links to `/flows?source_trigger_kind=<kind>&source_trigger_id=<id>` (the Wave 4 deep-link prefill path).
+
+Trigger default-agent edits keep the generated system-managed Flow aligned: the trigger `default_agent_id`, the FlowDefinition default agent, and the generated Conversation node's `agent_id` are synchronized for Email and Jira updates.
 
 **Retired components:**
 

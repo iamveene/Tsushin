@@ -1157,7 +1157,7 @@ class ConversationStepHandler(FlowStepHandler):
     Enhancement 2026-01-07: Added contact reference resolution for auto-discovery.
     """
 
-    def _resolve_recipient(self, recipient: str) -> str:
+    def _resolve_recipient(self, recipient: str, tenant_id: Optional[str] = None) -> str:
         """
         Resolve @ContactName or phone to best WhatsApp identifier.
 
@@ -1179,8 +1179,16 @@ class ConversationStepHandler(FlowStepHandler):
             contact_name = recipient[1:]  # Remove @ prefix
 
             try:
+                if not tenant_id:
+                    logger.warning(
+                        "Cannot resolve @%s without tenant context; using recipient as-is.",
+                        contact_name,
+                    )
+                    return recipient
+
                 contact = self.db.query(Contact).filter(
-                    Contact.friendly_name == contact_name
+                    Contact.friendly_name == contact_name,
+                    Contact.tenant_id == tenant_id,
                 ).first()
 
                 if contact:
@@ -1267,7 +1275,7 @@ class ConversationStepHandler(FlowStepHandler):
 
         # Enhancement 2026-01-07: Resolve contact references (@ContactName) to WhatsApp IDs
         # This allows users to use friendly names instead of cryptic WhatsApp Business IDs
-        recipient = self._resolve_recipient(recipient)
+        recipient = self._resolve_recipient(recipient, tenant_id=(flow_run.tenant_id if flow_run else None))
 
         # Variable replacement
         recipient = self._replace_variables(recipient, input_data)

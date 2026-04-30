@@ -1,18 +1,213 @@
 {
-  "generated_at": "2026-04-30T07:37:23.820Z",
+  "generated_at": "2026-04-30T08:15:07.791Z",
+  "branch": "release/0.7.0",
   "base_url": "https://localhost",
   "auth_user": "test@example.com",
-  "method": "Playwright browser login + page-context fetch with cookies",
-  "console_errors": [],
+  "tenant_id": "tenant_20260406004333855618_c58c99",
+  "method": "Browser Use UI automation + authenticated API probes; auth token intentionally omitted from artifact.",
+  "browser": {
+    "tool": "Browser Use in-app browser via node_repl browser-client (iab backend)",
+    "base_url": "https://localhost",
+    "authenticated_user": "test@example.com",
+    "screenshots_dir": "output/playwright/release-0.7-trigger-e2e",
+    "pages": [
+      {
+        "path": "/hub?tab=triggers",
+        "assertions": [
+          "Email/Jira trigger cards expose Details + Pause only on Hub card surface",
+          "No legacy Email Edit modal opened",
+          "console_errors=0"
+        ],
+        "screenshot": "hub-triggers-loaded.png"
+      },
+      {
+        "path": "/hub/triggers",
+        "assertions": [
+          "Email and Jira rows link to dedicated detail pages",
+          "registry loaded without console errors"
+        ],
+        "screenshot": "trigger-registry.png"
+      },
+      {
+        "path": "/hub/triggers/email/18",
+        "assertions": [
+          "Memory Recap section visible",
+          "Wired Flows section visible",
+          "Gmail compose warning gates triage",
+          "console_errors=0"
+        ],
+        "screenshot": "email-18-detail-loaded.png"
+      },
+      {
+        "path": "/hub/triggers/jira/9",
+        "assertions": [
+          "Memory Recap section visible",
+          "Wired Flows section visible",
+          "system-managed + custom flow bindings visible",
+          "console_errors=0"
+        ],
+        "screenshot": "jira-9-detail.png"
+      },
+      {
+        "path": "/flows?edit=100",
+        "assertions": [
+          "Triggered Flow row opens editor",
+          "Source step remains locked at top",
+          "console_errors=0"
+        ],
+        "screenshot": "jira-bound-flow-100-loaded.png"
+      },
+      {
+        "path": "/flows?source_trigger_kind=email&source_trigger_id=18",
+        "assertions": [
+          "Create flow prefilled from Gmail trigger 18",
+          "Source step locks after Continue",
+          "no save/submit performed"
+        ],
+        "screenshot": "email-flow-prefill-source-step.png"
+      }
+    ],
+    "console_errors": []
+  },
+  "feature_flags": {
+    "status": 200,
+    "data": {
+      "case_memory_enabled": true,
+      "case_memory_recap_enabled": true,
+      "trigger_binding_enabled": true,
+      "auto_generation_enabled": true
+    }
+  },
+  "recap_configs": {
+    "email": {
+      "status": 200,
+      "data": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "trigger_kind": "email",
+        "trigger_instance_id": 18,
+        "enabled": true,
+        "query_template": "{{ subject }} {{ body_preview }}",
+        "scope": "trigger_kind",
+        "k": 5,
+        "min_similarity": 0,
+        "vector_kind": "problem",
+        "include_failed": true,
+        "format_template": "",
+        "inject_position": "prepend_user_msg",
+        "max_recap_chars": 1500,
+        "created_at": "2026-04-29T21:39:07.817410",
+        "updated_at": "2026-04-30T07:32:44.574284"
+      }
+    },
+    "jira": {
+      "status": 200,
+      "data": {
+        "id": 1,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "trigger_kind": "jira",
+        "trigger_instance_id": 9,
+        "enabled": true,
+        "query_template": "{{ issue.fields.summary }} {{ issue.fields.description }}",
+        "scope": "trigger_kind",
+        "k": 5,
+        "min_similarity": 0.4,
+        "vector_kind": "problem",
+        "include_failed": true,
+        "format_template": "",
+        "inject_position": "prepend_user_msg",
+        "max_recap_chars": 1500,
+        "created_at": "2026-04-29T21:39:07.813935",
+        "updated_at": "2026-04-30T06:19:08.279472"
+      }
+    }
+  },
+  "flow_bindings": {
+    "email": {
+      "status": 200,
+      "count": 1,
+      "data": [
+        {
+          "id": 16,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "flow_definition_id": 101,
+          "flow_name": "QA 070 Flow Gmail Triggered 1777425183136",
+          "trigger_kind": "email",
+          "trigger_instance_id": 18,
+          "source_node_id": 255,
+          "suppress_default_agent": true,
+          "is_active": true,
+          "is_system_managed": false,
+          "created_at": "2026-04-29T01:13:04.188391",
+          "updated_at": "2026-04-29T01:13:04.188393",
+          "last_run_status": "completed",
+          "last_run_at": "2026-04-30T03:36:01.712962"
+        }
+      ]
+    },
+    "jira": {
+      "status": 200,
+      "count": 2,
+      "data": [
+        {
+          "id": 15,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "flow_definition_id": 100,
+          "flow_name": "QA 070 Flow Jira Triggered 1777424893185",
+          "trigger_kind": "jira",
+          "trigger_instance_id": 9,
+          "source_node_id": 254,
+          "suppress_default_agent": true,
+          "is_active": true,
+          "is_system_managed": false,
+          "created_at": "2026-04-29T01:08:27.598236",
+          "updated_at": "2026-04-29T01:08:27.598239",
+          "last_run_status": "completed",
+          "last_run_at": "2026-04-29T13:33:52.676489"
+        },
+        {
+          "id": 14,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "flow_definition_id": 99,
+          "flow_name": "Jira: QA E2E Jira → Vini",
+          "trigger_kind": "jira",
+          "trigger_instance_id": 9,
+          "source_node_id": 250,
+          "suppress_default_agent": false,
+          "is_active": true,
+          "is_system_managed": true,
+          "created_at": "2026-04-28T00:41:48.141650",
+          "updated_at": "2026-04-28T00:41:48.141651",
+          "last_run_status": "completed",
+          "last_run_at": "2026-04-29T13:33:52.650151"
+        }
+      ]
+    }
+  },
   "results": [
     {
       "id": "G-1",
       "trigger_kind": "email",
       "trigger_id": 18,
       "endpoint": "/api/triggers/email/18/test-recap",
+      "mapped_seed_key": "EMAIL-6001",
       "question": "Gmail trigger email: user says 'I can't login after password reset, getting 401'. Which past email case should be recalled and what did we do?",
+      "request_body": {
+        "sample_payload": {
+          "subject": "Help: cannot login after password reset, getting 401",
+          "body_preview": "I tried password reset, but the next login attempt still gets HTTP 401. Please help me restore account access.",
+          "from": "qa-customer@example.com",
+          "received_at": "2026-04-30T08:15:07.791Z"
+        }
+      },
+      "expected_terms": [
+        "Help: cannot login",
+        "reset password manually",
+        "401"
+      ],
       "status": 200,
-      "cases_used": 2,
+      "elapsed_ms": 148,
+      "cases_used": 3,
       "config_snapshot": {
         "scope": "trigger_kind",
         "k": 5,
@@ -21,21 +216,45 @@
         "inject_position": "prepend_user_msg",
         "query_template_hash": "0646ceb5cb5fd98bd267e70d"
       },
-      "rendered_text": "## Past Cases (2 matches)\n\n- **[resolved]** sim=0.526 | [email:email.message.received] Help: cannot login to my account\n\n{\n  \"body_preview\": \"Tried password reset, still failing on next login attempt with 401.\",\n  \"from\": \"wave4-fixture@example.com\",\n  \"received_at\": \"2026-04-29T21:39:07.292180Z\",\n  \"subject\": \"Help: cannot login to my account\"\n}\n  Action: Verified user account active; reset password manually; user confirmed login restored.\n\n- **[resolved]** sim=0.410 | [email:email.message.received] Integration with Salesforce not working\n\n{\n  \"body_preview\": \"OAuth flow returns 403 invalid_grant after consent screen.\",\n  \"from\": \"wave4-fixture@example.com\",\n  \"received_at\": \"2026-04-29T21:39:07.612425Z\",\n  \"subject\": \"Integration with Salesforce not working\"\n}\n  Action: User had stale refresh token; revoked + re-authorized; integration green.",
-      "expected_any": [
-        "EMAIL-6001",
-        "reset password manually",
-        "cannot login"
-      ],
-      "verdict": "PASS"
+      "used_sample": true,
+      "rendered_text": "SANITIZED EXCERPT: ## Past Cases (3 matches)\n\n- Top match sim=0.549 | [email:email.message.received] Help: cannot login to my account\n  Action: Verified user account active; reset password manually; user confirmed login restored.\n\nAdditional lower-ranked matches were returned by the live index and are intentionally omitted from the committed artifact.",
+      "verdict": "PASS",
+      "redaction_note": "Full response contained lower-ranked live email payload text; committed evidence preserves the asserted top match and action only."
     },
     {
       "id": "G-2",
       "trigger_kind": "jira",
       "trigger_id": 9,
       "endpoint": "/api/triggers/jira/9/test-recap",
+      "mapped_seed_key": "PT-4001",
       "question": "New Jira pentest ticket PT-4099: SQL injection in /api/login endpoint -- CVSS 9.1. Which similar Jira case and fix should be recalled?",
+      "request_body": {
+        "sample_payload": {
+          "issue": {
+            "key": "PT-4099",
+            "fields": {
+              "summary": "SQL injection in /api/login endpoint -- CVSS 9.1",
+              "description": "Pen test found UNION-based SQL injection in /api/login; time-blind extraction also feasible via username=' OR pg_sleep(5)--.",
+              "issuetype": {
+                "name": "Pen Test"
+              },
+              "priority": {
+                "name": "High"
+              },
+              "status": {
+                "name": "Open"
+              }
+            }
+          }
+        }
+      },
+      "expected_terms": [
+        "Parameterized",
+        "auth_service.login",
+        "sqlmap"
+      ],
       "status": 200,
+      "elapsed_ms": 65,
       "cases_used": 1,
       "config_snapshot": {
         "scope": "trigger_kind",
@@ -45,13 +264,60 @@
         "inject_position": "prepend_user_msg",
         "query_template_hash": "7cf41dfbde3feadc4b0e4d1a"
       },
-      "rendered_text": "## Past Cases (1 match)\n\n- **[resolved]** sim=0.464 | [jira:jira.issue.updated]\n\n{\n  \"issue\": {\n    \"fields\": {\n      \"description\": \"UNION-based, time-blind feasible. Reproducer: ?username=' UNION SELECT 1,2,3-- attempts.\",\n      \"issuetype\": {\n        \"name\": \"Pen Test\"\n      },\n      \"priority\": {\n        \"name\": \"High\"\n      },\n      \"status\": {\n  \n  Action: Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.",
-      "expected_any": [
-        "PT-4001",
-        "Parameterized",
-        "sqlmap"
+      "used_sample": true,
+      "rendered_text": "SANITIZED EXCERPT: ## Past Cases (1 match)\n\n- Top match above the 0.40 threshold | [jira:jira.issue.updated] SQL injection pentest case\n  Action: Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.",
+      "verdict": "PASS"
+    },
+    {
+      "id": "G-3",
+      "trigger_kind": "jira",
+      "trigger_id": 9,
+      "endpoint": "/api/triggers/jira/9/test-recap",
+      "mapped_seed_key": null,
+      "question": "Off-topic negative probe: chocolate chip cookie refrigeration should not recall a Jira case above the 0.40 threshold.",
+      "request_body": {
+        "sample_payload": {
+          "issue": {
+            "key": "PT-COOKIE",
+            "fields": {
+              "summary": "Chocolate chip cookie dough refrigeration timing",
+              "description": "Question about whether cookie dough should rest overnight before baking for better texture.",
+              "issuetype": {
+                "name": "Question"
+              },
+              "priority": {
+                "name": "Low"
+              },
+              "status": {
+                "name": "Open"
+              }
+            }
+          }
+        }
+      },
+      "expected_terms": [
+        "No past cases found"
       ],
+      "status": 200,
+      "elapsed_ms": 57,
+      "cases_used": 0,
+      "config_snapshot": {
+        "scope": "trigger_kind",
+        "k": 5,
+        "min_similarity": 0.4,
+        "vector_kind": "problem",
+        "inject_position": "prepend_user_msg",
+        "query_template_hash": "7cf41dfbde3feadc4b0e4d1a"
+      },
+      "used_sample": true,
+      "rendered_text": "## Past Cases (0 matches)\nNo past cases found above similarity threshold (0.40).",
       "verdict": "PASS"
     }
-  ]
+  ],
+  "aggregate": {
+    "trigger_recap_questions": "3/3",
+    "flow_binding_api": "PASS",
+    "feature_flags": "PASS",
+    "recap_configs": "PASS"
+  }
 }

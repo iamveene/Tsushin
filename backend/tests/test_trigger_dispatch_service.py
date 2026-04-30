@@ -491,11 +491,13 @@ def test_dispatch_creates_redacted_payload_ref_for_email_instance(db_session, tm
     assert result.payload_ref.startswith("backend/data/wake_events/")
     payload_file = tmp_path / result.payload_ref
     document = json.loads(payload_file.read_text(encoding="utf-8"))
+    readback = _service(db_session, tmp_path)._read_payload_ref(result.payload_ref)
     assert document["trigger_type"] == "email"
     assert document["sender_key"] == "client@example.com"
     assert document["payload"]["headers"]["Authorization"] == "[REDACTED]"
     assert document["payload"]["headers"]["X-Trace"] == "abc"
     assert document["payload"]["access_token"] == "[REDACTED]"
+    assert readback == document
     assert db_session.query(WakeEvent).one().payload_ref == result.payload_ref
     assert db_session.query(ContinuousRun).one().status == "queued"
 
@@ -636,7 +638,10 @@ def test_dispatch_attaches_memory_recap_to_queue_payloads_for_all_trigger_kinds(
     continuous = next(row for row in queue_rows if row.message_type == "continuous_task")
     flow_item = next(row for row in queue_rows if row.message_type == "flow_run_triggered")
     assert continuous.payload["memory_recap"] == fake_recap
-    assert flow_item.payload["trigger_context"]["source"]["memory_recap"] == fake_recap
+    source = flow_item.payload["trigger_context"]["source"]
+    assert source["memory_recap"] == fake_recap
+    assert source["payload"]["subject"] == f"{trigger_type} incident"
+    assert source["payload"]["secret"] == "[REDACTED]"
 
 
 def test_dispatch_filters_webhook_payload_when_trigger_criteria_misses(db_session, tmp_path):

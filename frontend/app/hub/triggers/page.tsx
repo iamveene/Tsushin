@@ -150,12 +150,24 @@ export default function HubTriggersIndexPage() {
     setLoading(true)
     setError(null)
     try {
+      const failures: string[] = []
+      const listOrFailure = async <T,>(label: string, promise: Promise<T[]>): Promise<T[]> => {
+        try {
+          return await promise
+        } catch {
+          failures.push(label)
+          return []
+        }
+      }
       const [jira, email, github, webhook] = await Promise.all([
-        api.listJiraTriggers().catch(() => []),
-        api.listEmailTriggers().catch(() => []),
-        api.listGitHubTriggers().catch(() => []),
-        api.listWebhookIntegrations().catch(() => []),
+        listOrFailure('Jira', api.listJiraTriggers()),
+        listOrFailure('Email', api.listEmailTriggers()),
+        listOrFailure('GitHub', api.listGitHubTriggers()),
+        listOrFailure('Webhook', api.listWebhookIntegrations()),
       ])
+      if (failures.length) {
+        setError(`Could not load ${failures.join(', ')} trigger data. Showing the sources that responded.`)
+      }
       // v0.7.0-fix Phase 9.4: render order matches the Hub Triggers tab —
       // Email → Webhook → Jira → GitHub. Sort/filter UI overrides as usual.
       const next: TriggerRow[] = [

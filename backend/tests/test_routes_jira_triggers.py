@@ -463,6 +463,69 @@ def test_update_jira_trigger_relinks_integration_and_pauses(db_session):
     assert stored.api_token_encrypted is None
 
 
+def test_update_jira_trigger_syncs_managed_flow_default_agent(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    _seed_contact(db_session, contact_id=102, tenant_id="tenant-a", friendly_name="Beta")
+    _seed_agent(db_session, agent_id=202, tenant_id="tenant-a", contact_id=102)
+    trigger = JiraChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Jira Trigger",
+        site_url="https://example.atlassian.net",
+        project_key="HELP",
+        jql="project = HELP",
+        default_agent_id=201,
+        created_by=1,
+    )
+    flow = FlowDefinition(
+        id=901,
+        tenant_id="tenant-a",
+        name="Jira: Jira Trigger",
+        execution_method="triggered",
+        default_agent_id=201,
+        is_system_owned=True,
+    )
+    conversation = FlowNode(
+        id=902,
+        flow_definition_id=901,
+        type="conversation",
+        position=3,
+        name="Default agent",
+        agent_id=201,
+        config_json="{}",
+    )
+    binding = FlowTriggerBinding(
+        id=903,
+        tenant_id="tenant-a",
+        flow_definition_id=901,
+        trigger_kind="jira",
+        trigger_instance_id=1,
+        is_system_managed=True,
+        is_active=True,
+        suppress_default_agent=False,
+    )
+    db_session.add_all([trigger, flow, conversation, binding])
+    db_session.flush()
+    binding.trigger_instance_id = trigger.id
+    db_session.commit()
+
+    updated = update_jira_trigger(
+        trigger_id=trigger.id,
+        payload=JiraTriggerUpdate(default_agent_id=202),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    db_session.refresh(flow)
+    db_session.refresh(conversation)
+    assert updated.default_agent_id == 202
+    assert flow.default_agent_id == 202
+    assert conversation.agent_id == 202
+
+
 def test_delete_jira_trigger_is_tenant_scoped(db_session):
     db_session.add_all(
         [

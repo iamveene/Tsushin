@@ -1010,6 +1010,7 @@ export default function HubPage() {
   const [webhookIntegrations, setWebhookIntegrations] = useState<WebhookIntegration[]>([])
   const [emailTriggers, setEmailTriggers] = useState<EmailTrigger[]>([])
   const [jiraTriggers, setJiraTriggers] = useState<JiraTrigger[]>([])
+  const [triggerLoadErrors, setTriggerLoadErrors] = useState<string[]>([])
   const [jiraIntegrations, setJiraIntegrations] = useState<JiraIntegration[]>([])
   const [jiraIntegrationsLoading, setJiraIntegrationsLoading] = useState(false)
   const [editingJiraIntegration, setEditingJiraIntegration] = useState<JiraIntegration | null>(null)
@@ -1169,6 +1170,15 @@ export default function HubPage() {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
+  const markTriggerLoadError = useCallback((label: string, failed: boolean) => {
+    setTriggerLoadErrors((current) => {
+      const next = new Set(current)
+      if (failed) next.add(label)
+      else next.delete(label)
+      return Array.from(next)
+    })
+  }, [])
+
   const [systemConfig, setSystemConfig] = useState<Config | null>(null)
   const [whatsappDelaySeconds, setWhatsappDelaySeconds] = useState<string>('5')
   const [savingWhatsappDelay, setSavingWhatsappDelay] = useState(false)
@@ -1241,8 +1251,10 @@ export default function HubPage() {
     try {
       const data = await api.listJiraTriggers()
       setJiraTriggers(data)
+      markTriggerLoadError('Jira', false)
     } catch (err) {
       console.error('Failed to load Jira triggers:', err)
+      markTriggerLoadError('Jira', true)
     }
   }
 
@@ -1274,8 +1286,10 @@ export default function HubPage() {
     try {
       const data = await api.listGitHubTriggers()
       setGithubTriggers(data)
+      markTriggerLoadError('GitHub', false)
     } catch (err) {
       console.error('Failed to load GitHub triggers:', err)
+      markTriggerLoadError('GitHub', true)
     }
   }
 
@@ -3192,19 +3206,23 @@ export default function HubPage() {
     try {
       const data = await api.listEmailTriggers()
       setEmailTriggers(data)
+      markTriggerLoadError('Email', false)
     } catch (err) {
       console.error('Failed to load email triggers:', err)
+      markTriggerLoadError('Email', true)
     }
-  }, [])
+  }, [markTriggerLoadError])
 
   const loadWebhookIntegrations = useCallback(async () => {
     try {
       const data = await api.listWebhookIntegrations()
       setWebhookIntegrations(data)
+      markTriggerLoadError('Webhook', false)
     } catch (err) {
       console.error('Failed to load webhook integrations:', err)
+      markTriggerLoadError('Webhook', true)
     }
-  }, [])
+  }, [markTriggerLoadError])
 
   // v0.6.1: fetch the resolver-computed public ingress URL so all inbound-URL
   // displays (webhook cards, setup modal) share the same authoritative value.
@@ -5160,7 +5178,16 @@ export default function HubPage() {
                       already establishes the surface; the kind sub-sections
                       below speak for themselves. */}
 
-                  {emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && (
+                  {triggerLoadErrors.length > 0 && (
+                    <div className="card p-4 border-tsushin-vermilion/30 bg-tsushin-vermilion/10">
+                      <h4 className="text-tsushin-vermilion font-semibold mb-1">Some trigger data did not load</h4>
+                      <p className="text-sm text-tsushin-vermilion/90">
+                        Could not load {triggerLoadErrors.join(', ')} trigger data. Showing the sources that responded.
+                      </p>
+                    </div>
+                  )}
+
+                  {triggerLoadErrors.length === 0 && emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && (
                     <div className="card p-6 border-dashed border-tsushin-border/60">
                       <h4 className="text-white font-semibold mb-1">No triggers configured yet</h4>
                       <p className="text-sm text-tsushin-slate mb-4">
