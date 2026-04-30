@@ -450,8 +450,8 @@ export default function DefaultAgentsSettingsPage() {
             'Channel-instance defaults apply when a message arrives through a configured communication channel and nothing more specific matches first.',
             <div className="rounded-xl border border-white/5 bg-black/10 px-4 py-5 text-sm text-tsushin-slate">
               No channel instances are configured yet. Set them up in{' '}
-              <Link href="/hub?tab=communication" className="text-teal-400 hover:underline">
-                Hub &gt; Communication
+              <Link href="/hub?tab=channels" className="text-teal-400 hover:underline">
+                Hub &gt; Channels
               </Link>.
             </div>,
             settings?.channel_defaults || [],
@@ -462,8 +462,8 @@ export default function DefaultAgentsSettingsPage() {
             'Trigger defaults let each inbound trigger route to its own fallback agent before the tenant-wide default is used.',
             <div className="rounded-xl border border-white/5 bg-black/10 px-4 py-5 text-sm text-tsushin-slate">
               No trigger instances are configured yet. Create them in{' '}
-              <Link href="/hub?tab=communication" className="text-teal-400 hover:underline">
-                Hub &gt; Communication
+              <Link href="/hub?tab=triggers" className="text-teal-400 hover:underline">
+                Hub &gt; Triggers
               </Link>.
             </div>,
             settings?.trigger_defaults || [],

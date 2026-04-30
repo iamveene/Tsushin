@@ -292,8 +292,8 @@ def update_auto_flow_notification(
     match the key NotificationStepHandler reads at flow_engine.py:362.
 
     Mirrors the API contract of the existing
-    ``ensure_jira_notification_subscription`` so the
-    notification-subscription endpoints can shim cleanly.
+    the trigger creation wizard and Flow editor so notification delivery stays
+    on the auto-flow path.
     """
     flow = find_system_managed_flow_for_trigger(
         db,
@@ -497,6 +497,67 @@ def delete_bindings_for_trigger(
                     db.delete(flow)
 
     return len(bindings)
+
+
+def delete_system_owned_continuous_artifacts_for_trigger(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+) -> int:
+    """Remove system-owned ContinuousSubscription rows for a deleted trigger.
+
+    The legacy Jira/Email notification and triage paths created system-owned
+    ContinuousAgent/ContinuousSubscription artifacts keyed by
+    ``(channel_type, channel_instance_id)``. Trigger deletion owns those rows
+    even after the public notification endpoints are retired. User-owned
+    subscriptions are deliberately left untouched.
+    """
+    from models import ContinuousAgent, ContinuousSubscription
+
+    subscriptions = (
+        db.query(ContinuousSubscription)
+        .filter(
+            ContinuousSubscription.tenant_id == tenant_id,
+            ContinuousSubscription.channel_type == trigger_kind,
+            ContinuousSubscription.channel_instance_id == trigger_instance_id,
+            ContinuousSubscription.is_system_owned.is_(True),
+        )
+        .all()
+    )
+    if not subscriptions:
+        return 0
+
+    continuous_agent_ids = {sub.continuous_agent_id for sub in subscriptions}
+    for subscription in subscriptions:
+        db.delete(subscription)
+    db.flush()
+
+    for continuous_agent_id in continuous_agent_ids:
+        remaining_subscription = (
+            db.query(ContinuousSubscription.id)
+            .filter(
+                ContinuousSubscription.tenant_id == tenant_id,
+                ContinuousSubscription.continuous_agent_id == continuous_agent_id,
+            )
+            .first()
+        )
+        if remaining_subscription is not None:
+            continue
+        continuous_agent = (
+            db.query(ContinuousAgent)
+            .filter(
+                ContinuousAgent.id == continuous_agent_id,
+                ContinuousAgent.tenant_id == tenant_id,
+                ContinuousAgent.is_system_owned.is_(True),
+            )
+            .first()
+        )
+        if continuous_agent is not None:
+            db.delete(continuous_agent)
+
+    return len(subscriptions)
 
 
 def find_source_node_id(

@@ -5,10 +5,10 @@
  *
  * BUG-320: Hidden when the onboarding tour is active (tour modal and checklist competed for attention).
  * BUG-322: "Connect a Channel" item now calls forceOpenWizard() directly instead of linking to
- *          /hub?tab=communication, ensuring the guided wizard always launches (even after dismissal).
+ *          /hub?tab=channels, ensuring the guided wizard always launches (even after dismissal).
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { useSetupProgress } from '@/hooks/useSetupProgress'
 import { useOnboarding } from '@/contexts/OnboardingContext'
@@ -27,13 +27,12 @@ interface ChecklistItem {
 
 export default function GettingStartedChecklist() {
   const progress = useSetupProgress()
-  const [dismissed, setDismissed] = useState(true) // default hidden until we check
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return localStorage.getItem(DISMISSED_KEY) === 'true'
+  })
   const { state: onboardingState } = useOnboarding()
   const { forceOpenWizard } = useWhatsAppWizard()
-
-  useEffect(() => {
-    setDismissed(localStorage.getItem(DISMISSED_KEY) === 'true')
-  }, [])
 
   // BUG-320: Hide checklist while onboarding tour is active — they compete for attention
   if (onboardingState.isActive) return null
@@ -49,7 +48,7 @@ export default function GettingStartedChecklist() {
       completedKey: 'hasAgents',
     },
     {
-      // BUG-322: Use forceOpenWizard instead of linking to /hub?tab=communication
+      // BUG-322: Use forceOpenWizard instead of linking directly to Hub.
       title: 'Connect a Channel',
       subtitle: 'Set up WhatsApp, Telegram, or other channels',
       actionLabel: 'Launch Setup Wizard',

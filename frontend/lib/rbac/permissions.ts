@@ -69,7 +69,7 @@ export const PERMISSIONS = {
   FLOWS_EXECUTE: 'flows.execute',
   FLOWS_ALL: 'flows.*',
 
-  // Triggers (jira/email/github/schedule/webhook channels)
+  // Triggers (jira/email/github/webhook sources)
   TRIGGERS_READ: 'triggers.read',
   TRIGGERS_WRITE: 'triggers.write',
   TRIGGERS_DELETE: 'triggers.delete',

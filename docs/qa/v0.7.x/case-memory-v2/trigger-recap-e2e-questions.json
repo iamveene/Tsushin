@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-04-30T07:37:23.820Z",
+  "base_url": "https://localhost",
+  "auth_user": "test@example.com",
+  "method": "Playwright browser login + page-context fetch with cookies",
+  "console_errors": [],
+  "results": [
+    {
+      "id": "G-1",
+      "trigger_kind": "email",
+      "trigger_id": 18,
+      "endpoint": "/api/triggers/email/18/test-recap",
+      "question": "Gmail trigger email: user says 'I can't login after password reset, getting 401'. Which past email case should be recalled and what did we do?",
+      "status": 200,
+      "cases_used": 2,
+      "config_snapshot": {
+        "scope": "trigger_kind",
+        "k": 5,
+        "min_similarity": 0,
+        "vector_kind": "problem",
+        "inject_position": "prepend_user_msg",
+        "query_template_hash": "0646ceb5cb5fd98bd267e70d"
+      },
+      "rendered_text": "## Past Cases (2 matches)\n\n- **[resolved]** sim=0.526 | [email:email.message.received] Help: cannot login to my account\n\n{\n  \"body_preview\": \"Tried password reset, still failing on next login attempt with 401.\",\n  \"from\": \"wave4-fixture@example.com\",\n  \"received_at\": \"2026-04-29T21:39:07.292180Z\",\n  \"subject\": \"Help: cannot login to my account\"\n}\n  Action: Verified user account active; reset password manually; user confirmed login restored.\n\n- **[resolved]** sim=0.410 | [email:email.message.received] Integration with Salesforce not working\n\n{\n  \"body_preview\": \"OAuth flow returns 403 invalid_grant after consent screen.\",\n  \"from\": \"wave4-fixture@example.com\",\n  \"received_at\": \"2026-04-29T21:39:07.612425Z\",\n  \"subject\": \"Integration with Salesforce not working\"\n}\n  Action: User had stale refresh token; revoked + re-authorized; integration green.",
+      "expected_any": [
+        "EMAIL-6001",
+        "reset password manually",
+        "cannot login"
+      ],
+      "verdict": "PASS"
+    },
+    {
+      "id": "G-2",
+      "trigger_kind": "jira",
+      "trigger_id": 9,
+      "endpoint": "/api/triggers/jira/9/test-recap",
+      "question": "New Jira pentest ticket PT-4099: SQL injection in /api/login endpoint -- CVSS 9.1. Which similar Jira case and fix should be recalled?",
+      "status": 200,
+      "cases_used": 1,
+      "config_snapshot": {
+        "scope": "trigger_kind",
+        "k": 5,
+        "min_similarity": 0.4,
+        "vector_kind": "problem",
+        "inject_position": "prepend_user_msg",
+        "query_template_hash": "7cf41dfbde3feadc4b0e4d1a"
+      },
+      "rendered_text": "## Past Cases (1 match)\n\n- **[resolved]** sim=0.464 | [jira:jira.issue.updated]\n\n{\n  \"issue\": {\n    \"fields\": {\n      \"description\": \"UNION-based, time-blind feasible. Reproducer: ?username=' UNION SELECT 1,2,3-- attempts.\",\n      \"issuetype\": {\n        \"name\": \"Pen Test\"\n      },\n      \"priority\": {\n        \"name\": \"High\"\n      },\n      \"status\": {\n  \n  Action: Parameterized the query in auth_service.login; added input validation; deployed; verified with sqlmap.",
+      "expected_any": [
+        "PT-4001",
+        "Parameterized",
+        "sqlmap"
+      ],
+      "verdict": "PASS"
+    }
+  ]
+}

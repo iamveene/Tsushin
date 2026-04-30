@@ -11,7 +11,7 @@
  * `{{source.payload.field}}` references with confidence.
  *
  * Source step config_json shape (set by Wave 2 SourceStepHandler):
- *   { trigger_kind: 'jira'|'email'|'github'|'schedule'|'webhook',
+ *   { trigger_kind: 'jira'|'email'|'github'|'webhook',
  *     trigger_instance_id: number }
  *
  * Sample payload sourcing:
@@ -21,7 +21,7 @@
  *     descent, max depth 4, max 50 paths) to render clickable JSON-path
  *     chips. Clicking a chip copies `{{source.payload.<path>}}` to the
  *     clipboard. Empty state shows curl + "How to test" expander.
- *   - jira / email / github / schedule: most recent WakeEvent for the
+ *   - jira / email / github: most recent WakeEvent for the
  *     bound trigger via `getWakeEvents` + `getWakeEventPayload`.
  *
  * The component degrades quietly if the backend hasn't merged the
@@ -43,7 +43,6 @@ import {
   LightningIcon,
   WebhookIcon,
   WrenchIcon,
-  CalendarIcon,
   EnvelopeIcon,
   GlobeIcon,
   CopyIcon,
@@ -53,14 +52,13 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatRelative } from '@/lib/dateUtils'
 
 interface Props {
-  config: Record<string, any>
+  config: Record<string, unknown>
 }
 
 const KIND_LABELS: Record<TriggerKind, string> = {
   jira: 'Jira',
   email: 'Email',
   github: 'GitHub',
-  schedule: 'Schedule',
   webhook: 'Webhook',
 }
 
@@ -68,7 +66,6 @@ function KindIcon({ kind, size = 16 }: { kind: TriggerKind; size?: number }) {
   if (kind === 'webhook') return <WebhookIcon size={size} />
   if (kind === 'jira') return <WrenchIcon size={size} />
   if (kind === 'github') return <GlobeIcon size={size} />
-  if (kind === 'schedule') return <CalendarIcon size={size} />
   if (kind === 'email') return <EnvelopeIcon size={size} />
   return <LightningIcon size={size} />
 }
@@ -165,7 +162,6 @@ export default function SourceStepConfig({ config }: Props) {
       .catch(() => { if (!cancelled) setTrigger(null) })
       .finally(() => { if (!cancelled) setLoadingTrigger(false) })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [triggerKind, triggerInstanceId, isValid])
 
   async function loadSamplePayload() {

@@ -397,7 +397,7 @@ export default function GraphViewTab() {
                   {run.channelType && <span className="text-cyan-300/70">{run.channelType}</span>}
                   {run.wakeEventIds.length > 0 && (
                     <Link
-                      href={`/hub/wake-events?highlight=${run.wakeEventIds[0]}`}
+                      href={`/wake-events?highlight=${run.wakeEventIds[0]}`}
                       className="text-cyan-100 underline-offset-2 hover:underline"
                     >
                       wake #{run.wakeEventIds[0]}
