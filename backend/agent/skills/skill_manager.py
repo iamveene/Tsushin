@@ -164,21 +164,11 @@ class SkillManager:
             from agent.skills.code_repository_skill import CodeRepositorySkill
             self.register_skill(CodeRepositorySkill)
 
-            # v0.7.0: Trigger Case Memory MVP — feature-flag-gated.
-            # Only register when TSN_CASE_MEMORY_ENABLED=true so default-off
-            # tenants don't see the tool descriptor in their LLM tool list.
-            # Without this registration the skill_context_service warns
-            # "Skill type 'find_similar_past_cases' not in registry" for every
-            # turn and the seeded cases stay invisible to the agent at
-            # inference time, even with the AgentSkill row enabled.
-            try:
-                from config.feature_flags import case_memory_enabled
-                if case_memory_enabled():
-                    from agent.skills.find_similar_past_cases import FindSimilarPastCasesSkill
-                    self.register_skill(FindSimilarPastCasesSkill)
-                    logger.info("Built-in skill registered (flag-gated): find_similar_past_cases")
-            except Exception as _flag_err:  # noqa: BLE001
-                logger.debug("case-memory skill flag check failed: %s", _flag_err)
+            # v0.7.x: Trigger Case Memory — find_similar_past_cases always
+            # registered. Per-tenant opt-in is via Agent.vector_store_instance_id
+            # and per-trigger TriggerRecapConfig.enabled.
+            from agent.skills.find_similar_past_cases import FindSimilarPastCasesSkill
+            self.register_skill(FindSimilarPastCasesSkill)
 
             logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository")
         except Exception as e:

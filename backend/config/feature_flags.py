@@ -57,22 +57,51 @@ def flows_backfill_suppress_legacy() -> bool:
     return _bool_env("TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY", default=False)
 
 
-def case_memory_enabled() -> bool:
-    """v0.7.0 — Trigger Case Memory MVP gate.
+def case_memory_enabled(tenant_id: str | None = None, db=None) -> bool:
+    """v0.7.x — per-tenant case-memory gate. Reads ``tenant.case_memory_enabled``.
 
-    When False (default), no ``case_index`` queue items are enqueued by
-    the queue router after terminal ContinuousRuns or trigger-origin
-    FlowRuns; no ``CaseMemory`` rows are written; the
-    ``find_similar_past_cases`` skill is not registered; and the
-    ``/api/case-memory/*`` admin/debug endpoints return ``503``. Existing
-    trigger runtime behavior is unchanged.
+    SaaS configuration: settable via the tenant settings UI, NOT env vars.
+    Default True (the column itself defaults TRUE in alembic 0077 so any
+    new tenant gets the feature out of the box).
 
-    When True, the indexer hook fires after each terminal trigger-driven
-    run and writes a compact ``CaseMemory`` row + up to 3 vectors
-    (problem/action/outcome) into the tenant's resolved vector store
-    using the embedding contract pinned on each row.
+    Returns ``True`` when:
+      - ``tenant_id`` / ``db`` is omitted (defensive default — no DB
+        lookup performed), OR
+      - the row's ``case_memory_enabled`` column is True.
     """
-    return _bool_env("TSN_CASE_MEMORY_ENABLED", default=False)
+    if tenant_id is None or db is None:
+        return True
+    try:
+        from models_rbac import Tenant
+
+        row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if row is None:
+            return True
+        return bool(getattr(row, "case_memory_enabled", True))
+    except Exception:
+        # Defensive — never block dispatch on a flag-lookup failure.
+        return True
+
+
+def case_memory_recap_enabled(tenant_id: str | None = None, db=None) -> bool:
+    """v0.7.x — per-tenant recap injection gate.
+
+    SaaS configuration: settable via the tenant settings UI. Default True.
+    When False, ``trigger_recap_service.build_memory_recap`` returns
+    ``None`` for this tenant regardless of per-trigger config. The
+    case-memory indexer (write-side) is unaffected.
+    """
+    if tenant_id is None or db is None:
+        return True
+    try:
+        from models_rbac import Tenant
+
+        row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if row is None:
+            return True
+        return bool(getattr(row, "case_memory_recap_enabled", True))
+    except Exception:
+        return True
 
 
 __all__ = [
@@ -80,4 +109,5 @@ __all__ = [
     "flows_auto_generation_enabled",
     "flows_backfill_suppress_legacy",
     "case_memory_enabled",
+    "case_memory_recap_enabled",
 ]

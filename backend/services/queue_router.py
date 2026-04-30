@@ -355,9 +355,7 @@ class QueueRouter:
             # try/except guards the original run from any case-memory
             # bookkeeping failure.
             try:
-                from config.feature_flags import case_memory_enabled
-
-                if case_memory_enabled() and run.status in ("succeeded", "failed"):
+                if run.status in ("succeeded", "failed"):
                     wake_event_ids_list = run.wake_event_ids or []
                     case_wake_event_id = wake_event_ids_list[0] if wake_event_ids_list else wake_event_id
                     if case_wake_event_id is not None:
@@ -454,11 +452,8 @@ class QueueRouter:
             # and are intentionally skipped per MVP scope (§3 of the
             # research doc).
             try:
-                from config.feature_flags import case_memory_enabled
-
                 if (
-                    case_memory_enabled()
-                    and getattr(flow_run, "trigger_event_id", None) is not None
+                    getattr(flow_run, "trigger_event_id", None) is not None
                     and getattr(flow_run, "status", None)
                     in ("completed", "completed_with_errors", "failed")
                 ):

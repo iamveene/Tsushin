@@ -4314,9 +4314,9 @@ class CaseMemory(Base):
     a tenant that later switches their default ``VectorStoreInstance`` to a
     different model does not retroactively invalidate older cases.
 
-    Default-off behind ``TSN_CASE_MEMORY_ENABLED``. The schema lives even
-    when the flag is off so a flip-on can write rows immediately without a
-    schema migration round-trip.
+    Per-tenant gate via ``Tenant.case_memory_enabled`` (DB column, settable
+    from the tenant settings UI; defaults TRUE so every tenant gets the
+    feature out of the box). Opting out is a tenant-level decision.
     """
 
     __tablename__ = "case_memory"
@@ -4391,9 +4391,9 @@ class TriggerRecapConfig(Base):
     v0.7.x Trigger Memory Recap — per-trigger configuration row.
 
     One row per ``(tenant_id, trigger_kind, trigger_instance_id)``. When
-    ``enabled=True`` and ``TSN_CASE_MEMORY_ENABLED`` is set, the trigger
-    dispatcher expands ``query_template`` (Jinja2 sandboxed) against the
-    redacted wake event payload, calls
+    ``enabled=True`` and the parent tenant has ``case_memory_recap_enabled``
+    set TRUE, the trigger dispatcher expands ``query_template`` (Jinja2
+    sandboxed) against the redacted wake event payload, calls
     ``case_memory_service.search_similar_cases`` with the configured
     scope/k/min_similarity/vector_kind, renders ``format_template``, and
     attaches the rendered text to the queue payload under
@@ -4407,7 +4407,10 @@ class TriggerRecapConfig(Base):
     github_channel_instance / webhook_integration). Cleanup on trigger
     DELETE is the caller's responsibility.
 
-    Default-off behind ``TSN_CASE_MEMORY_ENABLED``.
+    Master tenant gate: ``Tenant.case_memory_recap_enabled`` (DB column,
+    settable from the tenant settings UI). Per-trigger ``enabled`` field
+    defaults FALSE so existing triggers don't get recap retroactively;
+    operators opt in by toggling on the trigger detail page or wizard.
     """
 
     __tablename__ = "trigger_recap_config"

@@ -15,8 +15,6 @@ import {
   type EmailTrigger,
   type GitHubTrigger,
   type JiraIssuePreview,
-  type JiraManagedNotificationStatus,
-  type JiraNotificationSubscriptionResponse,
   type JiraPollNowResponse,
   type JiraTrigger,
   type PageResponse,
@@ -53,6 +51,7 @@ import Divider from '@/components/triggers/Divider'
 import SourceSection from '@/components/triggers/sections/SourceSection'
 import RoutingSection from '@/components/triggers/sections/RoutingSection'
 import OutputsSection from '@/components/triggers/sections/OutputsSection'
+import MemoryRecapCard from '@/components/triggers/sections/MemoryRecapCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
 
 // Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
@@ -89,7 +88,7 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
   },
   email: {
     label: 'Email Trigger',
-    description: 'Gmail-backed wake source with managed notification + triage outputs.',
+    description: 'Gmail-backed wake source with manual poll and triage outputs.',
     Icon: EnvelopeIcon,
     iconClass: 'text-emerald-300',
     accentClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
@@ -138,21 +137,6 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-function JsonBlock({ value, emptyLabel }: { value: unknown; emptyLabel: string }) {
-  if (!value) {
-    return (
-      <div className="rounded-xl border border-dashed border-tsushin-border p-6 text-sm text-tsushin-slate">
-        {emptyLabel}
-      </div>
-    )
-  }
-  return (
-    <pre className="max-h-96 overflow-auto rounded-xl border border-tsushin-border bg-black/30 p-4 text-xs text-cyan-100">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  )
-}
-
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -162,34 +146,12 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
-function formatJsonText(value: Record<string, unknown> | null | undefined): string {
-  return value ? JSON.stringify(value, null, 2) : ''
-}
-
-function parseJsonObjectText(text: string, label: string): Record<string, unknown> | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  const parsed = JSON.parse(trimmed)
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return parsed as Record<string, unknown>
-}
-
 function splitList(text?: string | null): string[] | null {
   const values = (text || '')
     .split(/[\n,]/)
     .map((value) => value.trim())
     .filter(Boolean)
   return values.length > 0 ? values : null
-}
-
-function jiraManagedNotificationFromTrigger(_trigger: JiraTrigger): JiraManagedNotificationStatus | null {
-  // v0.7.0-fix Phase 4: managed-notification fields no longer come from the
-  // backend. Notification config lives on the auto-flow's Notification node.
-  // This helper is kept as a stub to preserve callsite signatures until the
-  // OutputsSection wiring is fully unwound in Phase 4b.
-  return null
 }
 
 function pollResultSummary(result: JiraPollNowResponse): string {
@@ -318,14 +280,9 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
   const [jiraPolling, setJiraPolling] = useState(false)
   const [jiraPollResult, setJiraPollResult] = useState<JiraPollNowResponse | null>(null)
-  const [jiraNotificationLoading, setJiraNotificationLoading] = useState(false)
-  const [jiraNotificationStatus, setJiraNotificationStatus] = useState<JiraManagedNotificationStatus | null>(null)
-  const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
   // Email-specific state
   const [gmailIntegrations, setGmailIntegrations] = useState<EmailGmailIntegrationSummary[]>([])
-  const [emailNotificationRecipient, setEmailNotificationRecipient] = useState('')
-  const [emailNotificationLoading, setEmailNotificationLoading] = useState(false)
   const [emailTriageLoading, setEmailTriageLoading] = useState(false)
   const [emailPolling, setEmailPolling] = useState(false)
   const [emailPollResult, setEmailPollResult] = useState<EmailPollNowResponse | null>(null)
@@ -354,7 +311,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       ])
       const nextTrigger = triggerData as BreadthTrigger
       setTrigger(nextTrigger)
-      setJiraNotificationStatus(kind === 'jira' ? jiraManagedNotificationFromTrigger(nextTrigger as JiraTrigger) : null)
       setCriteriaText(formatCriteriaText(nextTrigger.trigger_criteria))
       setSourceDraft(sourceFromTrigger(kind, nextTrigger))
       setEventsPage(wakeEvents)
@@ -369,7 +325,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   useEffect(() => {
     if (!hasValidId) {
-      router.replace('/hub?tab=communication')
+      router.replace('/hub?tab=triggers')
       return
     }
     loadData()
@@ -418,39 +374,6 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
-  const enableJiraNotification = async (target: JiraTrigger): Promise<JiraNotificationSubscriptionResponse | null> => {
-    const recipient = jiraNotificationRecipient.trim()
-    if (!recipient) {
-      setError('WhatsApp recipient is required to enable Jira notifications')
-      return null
-    }
-    const result = await api.createJiraNotificationSubscription(target.id, {
-      recipient_phone: recipient,
-    })
-    setJiraNotificationStatus({
-      ...result,
-      status: 'active',
-    })
-    setJiraNotificationRecipient('')
-    return result
-  }
-
-  const handleEnableJiraNotification = async () => {
-    if (!trigger || kind !== 'jira') return
-    setJiraNotificationLoading(true)
-    setError(null)
-    try {
-      const result = await enableJiraNotification(trigger as JiraTrigger)
-      if (!result) return
-      setSuccess(result?.created_subscription ? 'Jira WhatsApp notification enabled' : 'Jira WhatsApp notification is active')
-      setTimeout(() => setSuccess(null), 3000)
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to enable Jira WhatsApp notification'))
-    } finally {
-      setJiraNotificationLoading(false)
-    }
-  }
-
   const handleJiraPollNow = async () => {
     if (!trigger || kind !== 'jira') return
     setJiraPolling(true)
@@ -492,29 +415,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       setJiraTestMessage(getErrorMessage(err, 'Failed to test Jira query'))
     } finally {
       setJiraTesting(false)
-    }
-  }
-
-  const handleEnableEmailNotification = async () => {
-    if (!trigger || kind !== 'email') return
-    const recipient = emailNotificationRecipient.trim()
-    if (!recipient) {
-      setError('WhatsApp recipient is required to enable email notifications')
-      return
-    }
-    setEmailNotificationLoading(true)
-    setError(null)
-    try {
-      const result = await api.createEmailNotificationSubscription(trigger.id, { recipient_phone: recipient })
-      setSuccess(result.created_subscription ? 'Email WhatsApp notification enabled' : 'Email WhatsApp notification is already active')
-      setEmailNotificationRecipient('')
-      const refreshed = await api.getEmailTrigger(trigger.id)
-      setTrigger(refreshed)
-      setTimeout(() => setSuccess(null), 3000)
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to enable email WhatsApp notification'))
-    } finally {
-      setEmailNotificationLoading(false)
     }
   }
 
@@ -694,9 +594,6 @@ export default function TriggerDetailShell({ kind }: Props) {
   // email, and webhook.
   const renderOverview = () => {
     if (!trigger) return null
-    const status = kind === 'jira'
-      ? jiraNotificationStatus || jiraManagedNotificationFromTrigger(trigger as JiraTrigger)
-      : null
     return (
       <div className="space-y-6">
         <SectionHeader title="Source" subtitle="Where events come from." />
@@ -735,25 +632,24 @@ export default function TriggerDetailShell({ kind }: Props) {
           kind={kind}
           trigger={trigger}
           canWriteHub={canWriteHub}
-          jiraNotificationStatus={status}
-          jiraPhoneInput={jiraNotificationRecipient}
-          onJiraPhoneChange={setJiraNotificationRecipient}
-          onEnableJiraNotification={handleEnableJiraNotification}
-          jiraNotificationLoading={jiraNotificationLoading}
           jiraPollResult={jiraPollResult}
           onJiraPollNow={handleJiraPollNow}
           jiraPolling={jiraPolling}
           emailGmailIntegration={kind === 'email' ? gmailIntegration : null}
-          emailPhoneInput={emailNotificationRecipient}
-          onEmailPhoneChange={setEmailNotificationRecipient}
-          onEnableEmailNotification={handleEnableEmailNotification}
-          emailNotificationLoading={emailNotificationLoading}
           emailPollResult={emailPollResult}
           onEmailPollNow={handleEmailPollNow}
           emailPolling={emailPolling}
           onEnableEmailTriage={handleEnableEmailTriage}
           emailTriageLoading={emailTriageLoading}
         />
+
+        <Divider />
+
+        <SectionHeader
+          title="Memory Recap"
+          subtitle="Recall snippets from past similar cases when this trigger fires."
+        />
+        <MemoryRecapCard kind={kind} triggerId={trigger.id} canWriteHub={canWriteHub} />
       </div>
     )
   }
@@ -884,7 +780,7 @@ export default function TriggerDetailShell({ kind }: Props) {
         <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
           <BellIcon size={18} /> Recent wake events
         </h2>
-        <Link href={`/hub/wake-events?channel_type=${kind}`} className="text-sm text-cyan-200 hover:text-white">
+        <Link href={`/wake-events?channel_type=${kind}`} className="text-sm text-cyan-200 hover:text-white">
           Open browser
         </Link>
       </div>
@@ -907,7 +803,7 @@ export default function TriggerDetailShell({ kind }: Props) {
               {events.map((event) => (
                 <tr key={event.id} className="border-b border-tsushin-border/60">
                   <td className="px-3 py-2">
-                    <Link href={`/hub/wake-events?highlight=${event.id}`} className="font-mono text-cyan-200 hover:text-white">#{event.id}</Link>
+                    <Link href={`/wake-events?highlight=${event.id}`} className="font-mono text-cyan-200 hover:text-white">#{event.id}</Link>
                     <div className="text-xs text-tsushin-slate">{event.event_type}</div>
                   </td>
                   <td className="px-3 py-2 text-white">{event.status}</td>
@@ -984,7 +880,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/hub?tab=communication" className="hover:text-white">Hub</Link>
+            <Link href="/hub?tab=triggers" className="hover:text-white">Hub</Link>
             <span>/</span>
             <span>{config.label}</span>
           </div>
@@ -1129,7 +1025,7 @@ export default function TriggerDetailShell({ kind }: Props) {
           trigger ? (
             <>
               You are about to permanently delete the trigger
-              {' '}<span className="font-mono text-white">"{trigger.integration_name}"</span>.
+              {' '}<span className="font-mono text-white">&quot;{trigger.integration_name}&quot;</span>.
               {' '}This removes the saved source binding, all wake-event history,
               and any auto-generated default Flow attached to it. This cannot be undone.
             </>

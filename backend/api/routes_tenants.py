@@ -67,6 +67,10 @@ class TenantResponse(BaseModel):
     user_count: int = 0
     agent_count: int = 0
     remote_access_enabled: bool = False  # v0.6.0: Cloudflare tunnel entitlement
+    # v0.7.x Trigger Case Memory — per-tenant gates surfaced so the
+    # Organization settings UI can render the toggles on this same payload.
+    case_memory_enabled: bool = True
+    case_memory_recap_enabled: bool = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -145,6 +149,8 @@ def tenant_to_response(tenant: Tenant, db: Session) -> TenantResponse:
         user_count=user_count,
         agent_count=agent_count,
         remote_access_enabled=bool(getattr(tenant, "remote_access_enabled", False)),
+        case_memory_enabled=bool(getattr(tenant, "case_memory_enabled", True)),
+        case_memory_recap_enabled=bool(getattr(tenant, "case_memory_recap_enabled", True)),
         created_at=tenant.created_at.isoformat() if tenant.created_at else None,
         updated_at=tenant.updated_at.isoformat() if tenant.updated_at else None,
     )
