@@ -19,6 +19,7 @@ from models import Agent, Contact, EmailChannelInstance, GmailIntegration
 from services.flow_binding_service import (
     delete_bindings_for_trigger,
     delete_system_owned_continuous_artifacts_for_trigger,
+    sync_system_managed_flow_default_agent,
 )
 from services.email_triage_service import ensure_email_triage_subscription
 from api.routes_trigger_recap import (
@@ -607,6 +608,13 @@ def update_email_trigger(
         if data["default_agent_id"] is not None:
             _load_active_agent(db, ctx.tenant_id, data["default_agent_id"])
         instance.default_agent_id = data["default_agent_id"]
+        sync_system_managed_flow_default_agent(
+            db,
+            tenant_id=ctx.tenant_id,
+            trigger_kind="email",
+            trigger_instance_id=instance.id,
+            default_agent_id=instance.default_agent_id,
+        )
     if "integration_name" in data:
         instance.integration_name = data["integration_name"]
     if "search_query" in data:

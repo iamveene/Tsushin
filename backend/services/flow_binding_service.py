@@ -117,6 +117,53 @@ def find_system_managed_flow_for_trigger(
     return db.query(FlowDefinition).filter(FlowDefinition.id == binding.flow_definition_id).first()
 
 
+def sync_system_managed_flow_default_agent(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+    default_agent_id: Optional[int],
+) -> bool:
+    """Keep the generated trigger Flow aligned with the trigger's default agent.
+
+    Trigger PATCH endpoints own ``default_agent_id``. The system-managed
+    Flow mirrors that value both on the FlowDefinition and on its generated
+    Conversation node, so a trigger edit changes the actual execution path.
+    """
+    flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    if flow is None:
+        return False
+
+    changed = False
+    if flow.default_agent_id != default_agent_id:
+        flow.default_agent_id = default_agent_id
+        changed = True
+
+    conversation_nodes = (
+        db.query(FlowNode)
+        .filter(
+            FlowNode.flow_definition_id == flow.id,
+            FlowNode.type == "conversation",
+        )
+        .all()
+    )
+    for node in conversation_nodes:
+        if node.agent_id != default_agent_id:
+            node.agent_id = default_agent_id
+            node.updated_at = datetime.utcnow()
+            changed = True
+
+    if changed:
+        flow.updated_at = datetime.utcnow()
+    return changed
+
+
 def ensure_system_managed_flow_for_trigger(
     db: Session,
     *,

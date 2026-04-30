@@ -363,6 +363,7 @@ export default function TriggerCreationWizard({
   // off, the Memory Recap step is omitted and step navigation skips
   // straight from Criteria (step 3) to Confirm (step 5).
   const wizardSteps = getWizardSteps(caseMemoryEnabled)
+  const finalWizardStep = wizardSteps.length
 
   // Defensive: if the flags resolve to off AFTER the user already
   // advanced to step 4, route them forward to step 5 so they don't see
@@ -1282,7 +1283,7 @@ export default function TriggerCreationWizard({
         onClose={handleClose}
         title="Create Trigger"
         steps={wizardSteps}
-        currentStep={5}
+        currentStep={finalWizardStep}
         tone={tone}
         status="success"
         statusTitle={`${displayKind(kind)} trigger created`}
@@ -1333,7 +1334,7 @@ export default function TriggerCreationWizard({
         onClose={handleClose}
         title="Create Trigger"
         steps={wizardSteps}
-        currentStep={5}
+        currentStep={finalWizardStep}
         tone={tone}
         status={saveState === 'saving' ? 'loading' : 'idle'}
         statusTitle={saveState === 'saving' ? 'Saving trigger…' : undefined}

@@ -72,9 +72,10 @@ def _compile_jsonb_sqlite(_type, _compiler, **_kw):
 
 
 import models_rbac  # noqa: E402, F401  # registers User/Role models so FK resolution works
-from flows.flow_engine import FlowEngine  # noqa: E402
+from flows.flow_engine import ConversationStepHandler, FlowEngine  # noqa: E402
 from models import (  # noqa: E402
     Base,
+    Contact,
     FlowDefinition,
     FlowNode,
     FlowNodeRun,
@@ -100,6 +101,22 @@ def db_session(db_engine):
     session = Session()
     yield session
     session.close()
+
+
+def test_resolve_recipient_is_tenant_scoped(db_session):
+    db_session.add_all(
+        [
+            Contact(id=101, tenant_id="tenant-a", friendly_name="Alex", whatsapp_id="wa-a"),
+            Contact(id=102, tenant_id="tenant-b", friendly_name="Alex", whatsapp_id="wa-b"),
+        ]
+    )
+    db_session.commit()
+
+    handler = ConversationStepHandler(db_session, MagicMock())
+
+    assert handler._resolve_recipient("@Alex", tenant_id="tenant-a") == "wa-a@lid"
+    assert handler._resolve_recipient("@Alex", tenant_id="tenant-b") == "wa-b@lid"
+    assert handler._resolve_recipient("@Alex") == "@Alex"
 
 
 def _make_flow_with_three_message_steps(db_session) -> int:

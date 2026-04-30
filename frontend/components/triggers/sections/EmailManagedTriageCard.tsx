@@ -31,7 +31,9 @@ export default function EmailManagedTriageCard({
   enabling,
   canWriteHub,
 }: Props) {
+  const gmailScopeUnknown = !gmailIntegration
   const missingDraftScope = Boolean(gmailIntegration && !gmailIntegration.can_draft)
+  const triageUnavailable = !trigger.default_agent_id || gmailScopeUnknown || missingDraftScope
   return (
     <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
       <h3 className="flex items-center gap-2 text-base font-semibold text-white">
@@ -52,11 +54,16 @@ export default function EmailManagedTriageCard({
           <code className="font-mono">gmail.compose</code> before draft creation can run.
         </p>
       )}
+      {gmailScopeUnknown && (
+        <p className="mt-3 text-sm text-yellow-200">
+          Gmail authorization could not be verified. Reconnect the account before enabling triage.
+        </p>
+      )}
       {canWriteHub && (
         <button
           type="button"
           onClick={onEnable}
-          disabled={enabling || !trigger.default_agent_id || missingDraftScope}
+          disabled={enabling || triageUnavailable}
           className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           <SparklesIcon size={16} />
