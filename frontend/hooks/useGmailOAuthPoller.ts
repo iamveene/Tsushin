@@ -38,8 +38,7 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 
 /**
  * Encapsulates the Gmail OAuth popup-and-poll flow used by the trigger
- * creation wizard. Mirrors the original logic from EmailTriggerWizard so the
- * unified wizard can absorb email-source behavior without duplicating state.
+ * creation wizard so email-source behavior stays shared without duplicating state.
  */
 export default function useGmailOAuthPoller({
   enabled,

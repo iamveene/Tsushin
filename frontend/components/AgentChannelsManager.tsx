@@ -274,7 +274,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
           {telegramInstances.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Telegram bots available.</p>
-              <p className="text-sm mt-1">Go to Hub → Communication to create one.</p>
+              <p className="text-sm mt-1">Go to Hub → Channels to create one.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -327,13 +327,13 @@ export default function AgentChannelsManager({ agentId }: Props) {
             Slack Integration
           </h2>
           <p className="text-sm text-tsushin-slate mb-4">
-            Select which Slack workspace this agent should use to send and receive messages. Create the integration in Hub → Communication → Slack first.
+            Select which Slack workspace this agent should use to send and receive messages. Create the integration in Hub → Channels → Slack first.
           </p>
 
           {slackIntegrations.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Slack integrations available.</p>
-              <p className="text-sm mt-1">Go to Hub → Communication → Slack to create one.</p>
+              <p className="text-sm mt-1">Go to Hub → Channels → Slack to create one.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -393,7 +393,7 @@ export default function AgentChannelsManager({ agentId }: Props) {
           {discordIntegrations.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Discord bots available.</p>
-              <p className="text-sm mt-1">Go to Hub → Communication → Discord to create one.</p>
+              <p className="text-sm mt-1">Go to Hub → Channels → Discord to create one.</p>
             </div>
           ) : (
             <div className="space-y-3">

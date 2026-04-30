@@ -5,7 +5,8 @@
  *
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
- * - Communication: WhatsApp, Telegram, Discord, Slack, Email, Webhook, Jira, Schedule, and GitHub Triggers
+ * - Channels: WhatsApp, Telegram, Discord, and Slack
+ * - Triggers: Email, Webhook, Jira, and GitHub
  * - Productivity: Asana, Google Calendar
  * - Developer Tools: Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus
@@ -39,16 +40,10 @@ const TriggerCreationWizard = dynamic(
   () => import('@/components/triggers/TriggerCreationWizard'),
   { ssr: false },
 )
-// Email edit flow still uses the legacy EmailTriggerWizard until the unified
-// wizard adds an Edit mode (planned in a follow-up task).
-const EmailTriggerWizard = dynamic(
-  () => import('@/components/triggers/EmailTriggerWizard'),
-  { ssr: false },
-)
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, WebhookIntegrationCreate, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -61,9 +56,6 @@ import TelegramBotModal from '@/components/TelegramBotModal'
 import SlackSetupModal from '@/components/SlackSetupWizard'
 import DiscordSetupModal from '@/components/DiscordSetupWizard'
 import PublicBaseUrlCard from '@/components/PublicBaseUrlCard'
-import WebhookSetupModal from '@/components/WebhookSetupModal'
-import WebhookSecretRevealModal from '@/components/WebhookSecretRevealModal'
-import WebhookEditModal from '@/components/WebhookEditModal'
 import TriggerBreadthCards from '@/components/triggers/TriggerBreadthCards'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ChannelRoutingRulesPanel from '@/components/hub/ChannelRoutingRulesPanel'
@@ -115,13 +107,10 @@ import {
   SlackIcon,
   DiscordIcon,
   WebhookIcon,
-  CopyIcon,
   CloudIcon,
   ChevronRightIcon,
   CodeIcon,
   GitHubIcon,
-  CheckIcon,
-  XIcon,
   type IconProps
 } from '@/components/ui/icons'
 // ToggleSwitch — formerly used for the Ollama panel-level Enable toggle;
@@ -235,6 +224,7 @@ interface HubIntegration {
   health_status_reason?: string
   workspace_gid?: string
   workspace_name?: string
+  can_draft?: boolean | null
 }
 
 interface ModalData {
@@ -319,12 +309,6 @@ type JiraIntegrationDraft = {
 
 function jiraIntegrationName(integration: JiraIntegration): string {
   return integration.integration_name || integration.name || `Jira connection #${integration.id}`
-}
-
-function safeTokenPreview(preview?: string | null): string {
-  if (!preview) return 'Stored token hidden'
-  const hasMask = /[*•]/.test(preview) || preview.includes('...')
-  return hasMask ? preview : 'Stored token hidden'
 }
 
 function jiraStatusClasses(status?: string | null): string {
@@ -577,8 +561,8 @@ function JiraIntegrationsPanel({
                     </div>
                     <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
                       <span className="min-w-0 truncate font-mono text-tsushin-accent">{integration.site_url}</span>
-                      <span className="min-w-0 truncate">{integration.auth_email || 'Auth email not reported'}</span>
-                      <span className="min-w-0 truncate font-mono">{safeTokenPreview(integration.api_token_preview)}</span>
+                      <span>{integration.project_key ? `Default project: ${integration.project_key}` : 'JQL controls project scope'}</span>
+                      <span>Triggers: {integration.trigger_count ?? 0}</span>
                       <span>{integration.last_tested_at || integration.last_health_check ? `Checked ${new Date(integration.last_tested_at || integration.last_health_check || '').toLocaleString()}` : 'Not tested yet'}</span>
                     </div>
                     {integration.health_status_reason && (
@@ -640,9 +624,9 @@ function JiraIntegrationsPanel({
 
 // =============================================================================
 // v0.7.0: GitHub Integration (Hub-side, mirrors Jira pair).
-// Shared PAT + default owner/repo so both the GitHub trigger and the new
-// generic `code_repository` skill (provider=github) can reuse one connection
-// per tenant. Mounted under the Developer Tools tab.
+// Shared GitHub connection + default owner/repo so both the GitHub trigger and
+// the generic `code_repository` skill can reuse one connection per tenant.
+// Mounted under the Developer Tools tab.
 // =============================================================================
 
 type GitHubIntegrationDraft = {
@@ -651,7 +635,6 @@ type GitHubIntegrationDraft = {
   default_owner: string
   default_repo: string
   is_active: boolean
-  provider_mode: 'programmatic' | 'agentic'
 }
 
 function githubIntegrationName(integration: GitHubIntegration): string {
@@ -673,7 +656,6 @@ function githubIntegrationDraftFromTarget(target: GitHubIntegration | null): Git
     default_owner: target?.default_owner || '',
     default_repo: target?.default_repo || '',
     is_active: target?.is_active ?? true,
-    provider_mode: (target?.provider_mode as 'programmatic' | 'agentic') || 'programmatic',
   }
 }
 
@@ -691,43 +673,14 @@ function GitHubIntegrationModal({
   onSave: (draft: GitHubIntegrationDraft) => void
 }) {
   const [draft, setDraft] = useState<GitHubIntegrationDraft>(() => githubIntegrationDraftFromTarget(target))
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
 
-  // PAT is required on create, optional on edit (leave blank to keep the
-  // server-stored token). `default_owner`/`default_repo` are always optional.
+  // Access token is required on create, optional on edit (leave blank to keep
+  // the server-stored token). `default_owner`/`default_repo` are optional.
   const canSave = Boolean(
     draft.integration_name.trim()
       && (target || draft.pat_token.trim())
       && !saving
   )
-
-  const handleTest = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      // For new connections we send the PAT inline. For existing connections
-      // with no replacement PAT, the backend uses the stored token via the
-      // /:id/test-connection endpoint — but the modal doesn't have an `id`
-      // to use mid-edit, so we always go through the unsaved test path with
-      // the PAT the user just typed (or fail if neither PAT nor edit target).
-      const result = await api.testGitHubConnection({
-        pat_token: draft.pat_token.trim() || null,
-        owner: draft.default_owner.trim() || null,
-        repo: draft.default_repo.trim() || null,
-      })
-      setTestResult({
-        success: result.success,
-        message: result.success
-          ? `Connected${result.full_name ? ` — Repository: ${result.full_name}` : result.repository ? ` — Repository: ${result.repository}` : ''}${result.default_branch ? ` (default branch: ${result.default_branch})` : ''}`
-          : result.error || result.message || result.detail || 'GitHub connection failed',
-      })
-    } catch (err) {
-      setTestResult({ success: false, message: err instanceof Error ? err.message : 'GitHub connection failed' })
-    } finally {
-      setTesting(false)
-    }
-  }
 
   return (
     <Modal
@@ -769,7 +722,7 @@ function GitHubIntegrationModal({
           </div>
           <div>
             <label className="mb-2 block text-sm font-medium text-gray-300">
-              GitHub PAT {target ? <span className="text-xs text-tsushin-slate">(leave blank to keep current)</span> : null}
+              GitHub access token {target ? <span className="text-xs text-tsushin-slate">(leave blank to keep current)</span> : null}
             </label>
             <input
               type="password"
@@ -780,7 +733,7 @@ function GitHubIntegrationModal({
               autoComplete="new-password"
             />
             <p className="mt-1 text-xs text-tsushin-slate">
-              Fine-grained PAT recommended. Required scopes depend on the capabilities you enable on the skill (e.g. `repo:read`, `issues:write`).
+              Required scopes depend on the capabilities you enable on the skill (e.g. repository read or issue write access).
             </p>
           </div>
           <div>
@@ -807,73 +760,6 @@ function GitHubIntegrationModal({
         <p className="text-xs text-tsushin-slate">
           Default owner/repo are used by the Code Repository skill when the LLM does not specify a target — they make tool calls shorter for single-repo agents.
         </p>
-        <div>
-          <label className="mb-2 block text-sm font-medium text-gray-300">Connection mode</label>
-          <div className="grid gap-2 md:grid-cols-2">
-            <label
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${draft.provider_mode === 'programmatic' ? 'border-teal-500 bg-teal-500/10' : 'border-tsushin-border bg-tsushin-ink/40'}`}
-            >
-              <input
-                type="radio"
-                name="github-provider-mode"
-                value="programmatic"
-                checked={draft.provider_mode === 'programmatic'}
-                onChange={() => setDraft((current) => ({ ...current, provider_mode: 'programmatic' }))}
-                className="mt-1"
-              />
-              <div>
-                <div className="text-sm font-medium text-white">Programmatic (PAT, REST API)</div>
-                <div className="text-xs text-tsushin-slate">Direct GitHub REST API calls with the PAT above. Available now.</div>
-              </div>
-            </label>
-            <label
-              className="flex cursor-not-allowed items-start gap-3 rounded-lg border border-tsushin-border bg-tsushin-ink/20 px-3 py-2 opacity-60"
-              title="Coming soon — GitHub App + OAuth"
-            >
-              <input
-                type="radio"
-                name="github-provider-mode"
-                value="agentic"
-                checked={false}
-                disabled
-                className="mt-1"
-              />
-              <div>
-                <div className="flex items-center gap-2 text-sm font-medium text-white">
-                  Agentic (GitHub App + OAuth)
-                  <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">Coming soon</span>
-                </div>
-                <div className="text-xs text-tsushin-slate">Per-user OAuth via a GitHub App, no PAT to rotate. Pending v0.8.0.</div>
-              </div>
-            </label>
-          </div>
-        </div>
-        <div className="rounded-lg border border-tsushin-border bg-tsushin-ink/30 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-medium text-white">Test connection</div>
-            <button
-              type="button"
-              onClick={handleTest}
-              disabled={testing || (!target && !draft.pat_token.trim())}
-              className="rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {testing ? 'Testing...' : 'Test Connection'}
-            </button>
-          </div>
-          {testResult && (
-            <div className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
-              testResult.success ? 'border-green-500/30 bg-green-500/10 text-green-200' : 'border-red-500/30 bg-red-500/10 text-red-200'
-            }`}>
-              {testResult.success ? <CheckIcon size={14} className="mt-0.5 shrink-0" /> : <XIcon size={14} className="mt-0.5 shrink-0" />}
-              <span>{testResult.message}</span>
-            </div>
-          )}
-          {!testResult && (
-            <p className="mt-2 text-xs text-tsushin-slate">
-              Validates the PAT against `GET /user` (and `GET /repos/{`{owner}/{repo}`}` when both default fields are set).
-            </p>
-          )}
-        </div>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -890,23 +776,17 @@ function GitHubIntegrationModal({
 function GitHubIntegrationsPanel({
   integrations,
   loading,
-  testingId,
-  testResults,
   canWriteHub,
   onAdd,
   onEdit,
   onDelete,
-  onTest,
 }: {
   integrations: GitHubIntegration[]
   loading: boolean
-  testingId: number | null
-  testResults: Record<number, { success: boolean; message: string }>
   canWriteHub: boolean
   onAdd: () => void
   onEdit: (integration: GitHubIntegration) => void
   onDelete: (integration: GitHubIntegration) => void
-  onTest: (integration: GitHubIntegration) => void
 }) {
   return (
     <div className="card p-5 hover-glow group border-violet-700/30">
@@ -917,7 +797,7 @@ function GitHubIntegrationsPanel({
           </div>
           <div>
             <h3 className="font-semibold text-white">GitHub</h3>
-            <p className="text-xs text-tsushin-slate">Shared GitHub PAT for the Code Repository skill and PR triggers</p>
+            <p className="text-xs text-tsushin-slate">Shared GitHub connection for the Code Repository skill and PR triggers</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -948,7 +828,6 @@ function GitHubIntegrationsPanel({
         <div className="space-y-3">
           {integrations.map((integration) => {
             const status = integration.health_status || integration.last_test_status || (integration.is_active ? 'active' : 'inactive')
-            const result = testResults[integration.id]
             const repoFull = integration.default_owner && integration.default_repo
               ? `${integration.default_owner}/${integration.default_repo}`
               : integration.default_owner || ''
@@ -959,13 +838,9 @@ function GitHubIntegrationsPanel({
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-sm font-medium text-white">{githubIntegrationName(integration)}</span>
                       <span className={`rounded-full border px-2 py-0.5 text-[11px] ${githubStatusClasses(status)}`}>{status}</span>
-                      <span className="rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">
-                        {integration.provider_mode === 'agentic' ? 'Agentic' : 'Programmatic'}
-                      </span>
                     </div>
                     <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
                       <span className="min-w-0 truncate font-mono text-tsushin-accent">{repoFull || 'No default repo'}</span>
-                      <span className="min-w-0 truncate font-mono">{safeTokenPreview(integration.pat_token_preview)}</span>
                       <span className="min-w-0">
                         Triggers: {integration.trigger_count ?? 0} · Skills: {integration.skill_attached_count ?? 0}
                       </span>
@@ -977,14 +852,6 @@ function GitHubIntegrationsPanel({
                   </div>
                   {canWriteHub && (
                     <div className="flex shrink-0 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onTest(integration)}
-                        disabled={testingId === integration.id}
-                        className="rounded-lg border border-blue-400/40 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-100 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {testingId === integration.id ? 'Testing...' : 'Test'}
-                      </button>
                       <button
                         type="button"
                         onClick={() => onEdit(integration)}
@@ -1002,13 +869,6 @@ function GitHubIntegrationsPanel({
                     </div>
                   )}
                 </div>
-                {result && (
-                  <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
-                    result.success ? 'border-green-500/30 bg-green-500/10 text-green-200' : 'border-red-500/30 bg-red-500/10 text-red-200'
-                  }`}>
-                    {result.message}
-                  </div>
-                )}
               </div>
             )
           })}
@@ -1163,11 +1023,8 @@ export default function HubPage() {
   const [githubIntegrationsLoading, setGithubIntegrationsLoading] = useState(false)
   const [editingGithubIntegration, setEditingGithubIntegration] = useState<GitHubIntegration | null>(null)
   const [showGithubIntegrationModal, setShowGithubIntegrationModal] = useState(false)
-  const [githubIntegrationTestingId, setGithubIntegrationTestingId] = useState<number | null>(null)
-  const [githubIntegrationTestResults, setGithubIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
-  const [showWebhookSetupModal, setShowWebhookSetupModal] = useState(false)
 
-  // v0.7.0: Guided wizards for the Productivity + Communication tabs. These
+  // v0.7.0: Guided wizards for the Productivity + Channels tabs. These
   // dispatchers replace the "+ Configure" / per-placeholder-card CTAs with a
   // single "+ Add ..." launcher per tab. See the wizard components for the
   // picker UX; they delegate to the existing per-service/per-channel setup
@@ -1179,13 +1036,6 @@ export default function HubPage() {
   const [showTriggerWizard, setShowTriggerWizard] = useState(false)
   const [triggerWizardSession, setTriggerWizardSession] = useState(0)
   const [triggerWizardInitialKind, setTriggerWizardInitialKind] = useState<TriggerId | null>(null)
-  const [editingEmailTrigger, setEditingEmailTrigger] = useState<EmailTrigger | null>(null)
-  const [showEmailTriggerEditWizard, setShowEmailTriggerEditWizard] = useState(false)
-  const [webhookRotateModal, setWebhookRotateModal] = useState<
-    { open: boolean; secret: string; inboundUrl: string } | null
-  >(null)
-  const [webhookEditTarget, setWebhookEditTarget] = useState<WebhookIntegration | null>(null)
-  const [webhookSaving, setWebhookSaving] = useState(false)
 
   // v0.6.1: resolved public ingress info — authoritative source for inbound
   // webhook URL display (replaces window.location.origin fallback).
@@ -1456,7 +1306,7 @@ export default function HubPage() {
         if (activeTab === 'triggers') {
           loadEmailTriggers()
           loadWebhookIntegrations()  // v0.6.0: Webhook-as-Channel
-          loadBreadthTriggers()  // v0.7.0: Jira, Schedule, GitHub triggers
+          loadBreadthTriggers()  // v0.7.0: Jira and GitHub triggers
           loadPublicIngress()  // v0.6.1: resolver-backed inbound URL
         }
         if (activeTab === 'tool-apis') {
@@ -1653,7 +1503,7 @@ export default function HubPage() {
         loadJiraIntegrations(),
         loadGitHubIntegrations(),  // v0.7.0: GitHub Hub integrations
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
-        loadBreadthTriggers(),  // v0.7.0: Jira, Schedule, GitHub triggers
+        loadBreadthTriggers(),  // v0.7.0: Jira and GitHub triggers
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
         fetchToolboxStatus(),
         loadGoogleCredentials(),
@@ -2680,7 +2530,6 @@ export default function HubPage() {
           default_owner: draft.default_owner.trim() || null,
           default_repo: draft.default_repo.trim() || null,
           is_active: draft.is_active,
-          provider_mode: draft.provider_mode,
         })
       } else {
         await api.createGitHubIntegration({
@@ -2689,7 +2538,6 @@ export default function HubPage() {
           default_owner: draft.default_owner.trim() || null,
           default_repo: draft.default_repo.trim() || null,
           is_active: draft.is_active,
-          provider_mode: draft.provider_mode,
         })
       }
       await Promise.all([loadGitHubIntegrations(), loadBreadthTriggers()])
@@ -2717,38 +2565,6 @@ export default function HubPage() {
       setError(err instanceof Error ? err.message : 'Failed to remove GitHub connection')
     } finally {
       setSaving(false)
-    }
-  }
-
-  const testGitHubIntegrationConnection = async (integration: GitHubIntegration) => {
-    setGithubIntegrationTestingId(integration.id)
-    setGithubIntegrationTestResults((current) => {
-      const next = { ...current }
-      delete next[integration.id]
-      return next
-    })
-    try {
-      const result = await api.testGitHubConnectionForId(integration.id)
-      setGithubIntegrationTestResults((current) => ({
-        ...current,
-        [integration.id]: {
-          success: result.success,
-          message: result.success
-            ? `Connected${result.full_name ? ` — ${result.full_name}` : result.repository ? ` — ${result.repository}` : ''}${result.default_branch ? ` (default: ${result.default_branch})` : ''}`
-            : result.error || result.message || result.detail || 'GitHub connection test failed',
-        },
-      }))
-      await loadGitHubIntegrations()
-    } catch (err: unknown) {
-      setGithubIntegrationTestResults((current) => ({
-        ...current,
-        [integration.id]: {
-          success: false,
-          message: err instanceof Error ? err.message : 'Failed to test GitHub connection',
-        },
-      }))
-    } finally {
-      setGithubIntegrationTestingId(null)
     }
   }
 
@@ -3402,57 +3218,6 @@ export default function HubPage() {
     }
   }, [])
 
-  const handleCreateWebhookIntegration = async (data: WebhookIntegrationCreate) => {
-    setWebhookSaving(true)
-    try {
-      const response = await api.createWebhookIntegration(data)
-      setSuccessMessage('Webhook integration created successfully!')
-      setTimeout(() => setSuccessMessage(null), 3000)
-      loadWebhookIntegrations()
-      return { api_secret: response.api_secret, inbound_url: response.integration.inbound_url }
-    } catch (err: any) {
-      setError(err.message || 'Failed to create webhook integration')
-      return null
-    } finally {
-      setWebhookSaving(false)
-    }
-  }
-
-  const handleDeleteWebhookIntegration = async (id: number) => {
-    if (!confirm('Delete this webhook integration? Any agent bound to it will be unbound.')) return
-    try {
-      await api.deleteWebhookIntegration(id)
-      setSuccessMessage('Webhook integration deleted')
-      setTimeout(() => setSuccessMessage(null), 3000)
-      loadWebhookIntegrations()
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete webhook integration')
-    }
-  }
-
-  const handleToggleWebhookActive = async (integration: WebhookIntegration) => {
-    const next = !integration.is_active
-    try {
-      await api.updateWebhookIntegration(integration.id, { is_active: next })
-      setSuccessMessage(next ? `"${integration.integration_name}" is now active` : `"${integration.integration_name}" paused — slug remains reserved`)
-      setTimeout(() => setSuccessMessage(null), 4000)
-      loadWebhookIntegrations()
-    } catch (err: any) {
-      setError(err.message || 'Failed to toggle webhook')
-    }
-  }
-
-  const handleRotateWebhookSecret = async (id: number, inboundUrl: string) => {
-    if (!confirm('Rotate the HMAC secret? Your external system will need the new secret before the next request.')) return
-    try {
-      const result = await api.rotateWebhookSecret(id)
-      setWebhookRotateModal({ open: true, secret: result.api_secret, inboundUrl })
-      loadWebhookIntegrations()
-    } catch (err: any) {
-      setError(err.message || 'Failed to rotate webhook secret')
-    }
-  }
-
   // Asana handlers
   const handleAsanaConnect = async () => {
     const workspaceName = prompt('Enter your Asana workspace name:', 'My Workspace')
@@ -3633,21 +3398,12 @@ export default function HubPage() {
     }
   }
 
-  const handleEmailTriggerEditComplete = async (trigger: EmailTrigger) => {
-    await loadEmailTriggers()
-    await loadHubIntegrations()
-    setShowEmailTriggerEditWizard(false)
-    setEditingEmailTrigger(null)
-    setSuccessMessage(`Email trigger updated: ${trigger.integration_name}`)
-    setTimeout(() => setSuccessMessage(null), 3000)
-  }
-
   const handleTriggerCreationComplete = async (
     kind: TriggerId,
     _triggerId: number,
     _flowId: number | null,
   ) => {
-    await Promise.all([loadEmailTriggers(), loadBreadthTriggers(), loadHubIntegrations()])
+    await Promise.all([loadEmailTriggers(), loadWebhookIntegrations(), loadBreadthTriggers(), loadHubIntegrations()])
     setSuccessMessage(`${kind.charAt(0).toUpperCase()}${kind.slice(1)} trigger created`)
     setTimeout(() => setSuccessMessage(null), 3000)
   }
@@ -4843,16 +4599,16 @@ export default function HubPage() {
               </div>
             )}
 
-            {/* ==================== COMMUNICATION TAB ==================== */}
+            {/* ==================== CHANNELS TAB ==================== */}
             {/* v0.7.0 rework — single "+ Add Channel" launcher opens
                 ChannelsWizard, which dispatches to the existing per-channel
                 setup modal (WhatsApp / Telegram / Slack / Discord). Email now
                 lives in the trigger path below, alongside webhook triggers.
                 Per-channel sections are hidden when they
                 contain zero instances so empty shells don't dominate the tab.
-                The per-section "+ Create X" button inside each section (shown
-                only when at least one instance already exists) lets users add
-                another instance without going back through the wizard. */}
+                The header-level "+ Add Channel" launcher is the only create
+                entry point; per-section cards keep operational controls for
+                existing instances only. */}
             {activeTab === 'channels' && (() => {
               const channelConfiguredCount =
                 mcpInstances.length +
@@ -4886,12 +4642,9 @@ export default function HubPage() {
                       Connect WhatsApp, Telegram, Slack, or Discord so users can reach your agents on the platforms they already use.
                     </p>
                     {canWriteHub && (
-                      <button
-                        onClick={openChannelsWizard}
-                        className="btn-primary px-4 py-2 text-sm"
-                      >
-                        + Add Channel
-                      </button>
+                      <p className="text-xs text-tsushin-slate">
+                        Use the + Add Channel button above to connect your first channel.
+                      </p>
                     )}
                   </div>
                 )}
@@ -4907,14 +4660,6 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <MessageIconSvg size={18} /> WhatsApp Instances
                     </h3>
-                    {canWriteHub && (
-                      <button
-                        onClick={() => setShowCreateModeSelector(true)}
-                        className="px-4 py-2 bg-green-600/20 text-green-400 border border-green-600/50 rounded hover:bg-green-600/30 text-sm"
-                      >
-                        + Create Instance
-                      </button>
-                    )}
                   </div>
 
                   {agentMcpInstances.length === 0 && testerMcpInstances.length > 0 && (
@@ -5185,42 +4930,16 @@ export default function HubPage() {
 
                 {/* Phase 10.1.1: Telegram Bot Instances — v0.7.0: section
                     rendered only when the tenant already has at least one
-                    bot. The "+ Add Channel" launcher covers the 0-instance
-                    case; per-section "+ Create Bot" stays for adding a 2nd. */}
+                    bot. The "+ Add Channel" launcher covers all creation. */}
                 {telegramInstances.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <PlaneIcon size={18} /> Telegram Bots
                     </h3>
-                    {canWriteHub && (
-                      <button
-                        onClick={() => setShowTelegramModal(true)}
-                        className="px-4 py-2 bg-blue-600/20 text-blue-400 border border-blue-600/50 rounded hover:bg-blue-600/30 text-sm"
-                      >
-                        + Create Bot
-                      </button>
-                    )}
                   </div>
 
-                  {telegramInstances.length === 0 ? (
-                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
-                      <div className="empty-state-icon">
-                        <PlaneIcon size={36} className="text-blue-400" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">No Telegram Bots</h3>
-                      <p className="text-tsushin-slate mb-4">Create a bot to connect Telegram</p>
-                      {canWriteHub && (
-                        <button
-                          onClick={() => setShowTelegramModal(true)}
-                          className="btn-primary"
-                        >
-                          Create Bot
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                       {telegramInstances.map(instance => {
                         const health = telegramHealthStatuses[instance.id]
                         return (
@@ -5272,8 +4991,7 @@ export default function HubPage() {
                           </div>
                         )
                       })}
-                    </div>
-                  )}
+                  </div>
                 </div>
                 )}
 
@@ -5284,34 +5002,9 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <SlackIcon size={18} className="text-purple-400" /> Slack
                     </h3>
-                    {canWriteHub && (
-                      <button
-                        onClick={() => setShowSlackSetupModal(true)}
-                        className="px-4 py-2 bg-purple-600/20 text-purple-400 border border-purple-600/50 rounded hover:bg-purple-600/30 text-sm"
-                      >
-                        + Connect Workspace
-                      </button>
-                    )}
                   </div>
 
-                  {slackIntegrations.length === 0 ? (
-                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
-                      <div className="empty-state-icon">
-                        <SlackIcon size={36} className="text-purple-400" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">No Slack Workspaces</h3>
-                      <p className="text-tsushin-slate mb-4">Connect a Slack workspace to enable bot messaging</p>
-                      {canWriteHub && (
-                        <button
-                          onClick={() => setShowSlackSetupModal(true)}
-                          className="btn-primary"
-                        >
-                          Connect Workspace
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                       {slackIntegrations.map(integration => (
                         <div key={integration.id} className="card p-5 hover-glow">
                           <div className="flex items-start justify-between mb-3">
@@ -5364,8 +5057,7 @@ export default function HubPage() {
                           />
                         </div>
                       ))}
-                    </div>
-                  )}
+                  </div>
                 </div>
                 )}
 
@@ -5376,34 +5068,9 @@ export default function HubPage() {
                     <h3 className="text-md font-semibold text-white flex items-center gap-2">
                       <DiscordIcon size={18} className="text-indigo-400" /> Discord
                     </h3>
-                    {canWriteHub && (
-                      <button
-                        onClick={() => setShowDiscordSetupModal(true)}
-                        className="px-4 py-2 bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 rounded hover:bg-indigo-600/30 text-sm"
-                      >
-                        + Connect Bot
-                      </button>
-                    )}
                   </div>
 
-                  {discordIntegrations.length === 0 ? (
-                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
-                      <div className="empty-state-icon">
-                        <DiscordIcon size={36} className="text-indigo-400" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">No Discord Bots</h3>
-                      <p className="text-tsushin-slate mb-4">Connect a Discord bot to enable messaging in your servers</p>
-                      {canWriteHub && (
-                        <button
-                          onClick={() => setShowDiscordSetupModal(true)}
-                          className="btn-primary"
-                        >
-                          Connect Bot
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                       {discordIntegrations.map(integration => (
                         <div key={integration.id} className="card p-5 hover-glow">
                           <div className="flex items-start justify-between mb-3">
@@ -5456,8 +5123,7 @@ export default function HubPage() {
                           />
                         </div>
                       ))}
-                    </div>
-                  )}
+                  </div>
                 </div>
                 )}
 
@@ -5509,236 +5175,15 @@ export default function HubPage() {
                   )}
                 </div>
 
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                      <EnvelopeIcon size={18} className="text-red-400" /> Email Triggers
-                    </h3>
-                    <p className="text-xs text-tsushin-slate mt-1">
-                      Gmail-backed trigger rows that watch inbox activity, apply an optional search filter, and wake agents from matching messages.
-                    </p>
-                  </div>
-
-                  {emailTriggers.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-tsushin-border p-6">
-                      <div className="text-sm font-medium text-white mb-2">No email triggers yet</div>
-                      <p className="text-sm text-tsushin-slate mb-3">
-                        Email triggers reuse your connected Gmail accounts and a persisted default agent. Create one from the trigger launcher when you&apos;re ready.
-                      </p>
-                      <div className="text-xs text-tsushin-slate bg-tsushin-slate/5 border border-tsushin-border/70 rounded-lg px-3 py-2">
-                        Need a new inbox? The email trigger wizard can connect a Gmail account inline before you save the trigger.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {emailTriggers.map((emailTrigger) => (
-                        <div key={emailTrigger.id} className="card p-5 hover-glow border-red-700/30">
-                          <div className="flex items-start justify-between mb-3 gap-3">
-                            <div>
-                              <h3 className="font-semibold text-white">{emailTrigger.integration_name}</h3>
-                              <p className="text-xs text-tsushin-slate">
-                                {emailTrigger.gmail_account_email || emailTrigger.gmail_integration_name || 'Gmail inbox'}
-                              </p>
-                            </div>
-                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                              emailTrigger.is_active
-                                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                                : 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
-                            }`}>
-                              {emailTrigger.is_active ? 'Active' : 'Paused'}
-                            </span>
-                          </div>
-
-                          <div className="text-xs text-tsushin-slate space-y-1 mb-4">
-                            <p>Default agent: <span className="text-white">{emailTrigger.default_agent_name || 'None'}</span></p>
-                            <p>Search: <span className="text-white">{emailTrigger.search_query || 'Inbox default'}</span></p>
-                            <p>Poll every: <span className="text-white">{emailTrigger.poll_interval_seconds}s</span></p>
-                            <p>Health: <span className="text-white">{emailTrigger.health_status}</span></p>
-                          </div>
-
-                          <div className="grid grid-cols-3 gap-2">
-                            <Link
-                              href={`/hub/triggers/email/${emailTrigger.id}`}
-                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30 text-center"
-                            >
-                              Details
-                            </Link>
-                            <button
-                              onClick={() => {
-                                setEditingEmailTrigger(emailTrigger)
-                                setShowEmailTriggerEditWizard(true)
-                              }}
-                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await api.updateEmailTrigger(emailTrigger.id, { is_active: !emailTrigger.is_active })
-                                  await loadEmailTriggers()
-                                  setSuccessMessage(!emailTrigger.is_active ? 'Email trigger resumed' : 'Email trigger paused')
-                                  setTimeout(() => setSuccessMessage(null), 3000)
-                                } catch (err: any) {
-                                  setError(err.message || 'Failed to update email trigger')
-                                }
-                              }}
-                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"
-                            >
-                              {emailTrigger.is_active ? 'Pause' : 'Resume'}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Webhook trigger section remains visible so the trigger path
-                    is still reachable after webhook leaves the channel wizard. */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                        <WebhookIcon size={18} className="text-cyan-400" /> Webhook Triggers
-                      </h3>
-                      <p className="text-xs text-tsushin-slate mt-1">
-                        Signed external events that can wake agents or continuous flows.
-                      </p>
-                    </div>
-                  </div>
-
-                  {webhookIntegrations.length === 0 ? (
-                    <div className="empty-state py-12 border border-dashed border-tsushin-border rounded-xl">
-                      <div className="empty-state-icon">
-                        <WebhookIcon size={36} className="text-cyan-400" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">No Webhook Triggers</h3>
-                      <p className="text-tsushin-slate mb-4">
-                        Connect external HTTP systems (CRMs, Zapier, custom apps) via HMAC-signed webhook triggers.
-                        Use the <strong className="text-white">+ Add Trigger</strong> button at the top of this tab.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {webhookIntegrations.map(integration => (
-                        <div key={integration.id} className="card p-5 hover-glow">
-                          <div className="flex items-start justify-between mb-3">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center shrink-0">
-                                <WebhookIcon size={20} className="text-cyan-400" />
-                              </div>
-                              <div className="min-w-0">
-                                <h3 className="font-semibold text-white truncate">{integration.integration_name}</h3>
-                                <p className="text-xs text-tsushin-slate font-mono truncate">{integration.api_secret_preview}</p>
-                              </div>
-                            </div>
-                            <span className={`px-2 py-1 text-xs font-medium rounded-full shrink-0 ${
-                              !integration.is_active || integration.status === 'paused'
-                                ? 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
-                                : integration.circuit_breaker_state === 'open'
-                                ? 'bg-red-500/20 text-red-400 border border-red-500/50'
-                                : integration.health_status === 'healthy'
-                                ? 'bg-green-500/20 text-green-400 border border-green-500/50'
-                                : 'bg-gray-500/20 text-gray-400 border border-gray-500/50'
-                            }`}>
-                              {!integration.is_active || integration.status === 'paused'
-                                ? 'Paused'
-                                : integration.circuit_breaker_state === 'open'
-                                ? 'Circuit Open'
-                                : integration.health_status === 'healthy'
-                                ? 'Active'
-                                : 'Unknown'}
-                            </span>
-                          </div>
-
-                          <div className="text-xs text-tsushin-slate mb-3 space-y-1">
-                            <div className="flex items-center gap-1">
-                              <span>Inbound:</span>
-                              <code className="text-cyan-300 text-xs bg-gray-900 px-1 rounded truncate">{integration.inbound_url}</code>
-                              <button
-                                type="button"
-                                onClick={() => navigator.clipboard.writeText((publicIngress?.url || window.location.origin) + integration.inbound_url)}
-                                title="Copy URL"
-                                className="text-gray-500 hover:text-cyan-400 ml-auto shrink-0"
-                              >
-                                <CopyIcon size={12} />
-                              </button>
-                            </div>
-                            <p>Callback: <span className="text-white">{integration.callback_enabled ? 'Enabled' : 'Disabled'}</span></p>
-                            <p>Rate limit: <span className="text-white">{integration.rate_limit_rpm} req/min</span></p>
-                          </div>
-
-                          <label className="flex items-center justify-between gap-3 mb-3 p-2 rounded bg-gray-900/40 border border-gray-800 cursor-pointer">
-                            <div className="text-xs">
-                              <div className="text-gray-300 font-medium">
-                                {integration.is_active ? 'Enabled' : 'Paused'}
-                              </div>
-                              <div className="text-gray-500">
-                                {integration.is_active
-                                  ? 'Accepts inbound signed events.'
-                                  : 'Slug stays reserved — only deletion frees it for reuse.'}
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={integration.is_active}
-                              onClick={() => handleToggleWebhookActive(integration)}
-                              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                                integration.is_active ? 'bg-cyan-500' : 'bg-gray-600'
-                              }`}
-                              title={integration.is_active ? 'Pause webhook' : 'Enable webhook'}
-                            >
-                              <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
-                                  integration.is_active ? 'translate-x-4' : 'translate-x-0.5'
-                                }`}
-                              />
-                            </button>
-                          </label>
-
-                          <div className="grid grid-cols-4 gap-2">
-                            <Link
-                              href={`/hub/triggers/webhook/${integration.id}`}
-                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600 text-center"
-                              title="View webhook details"
-                            >
-                              Details
-                            </Link>
-                            <button
-                              onClick={() => setWebhookEditTarget(integration)}
-                              className="px-3 py-1.5 bg-gray-700 text-gray-200 border border-gray-600 rounded text-xs hover:bg-gray-600"
-                              title="Edit webhook"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleRotateWebhookSecret(integration.id, integration.inbound_url)}
-                              className="px-3 py-1.5 bg-cyan-600/20 text-cyan-400 border border-cyan-600/50 rounded text-xs hover:bg-cyan-600/30"
-                              title="Rotate HMAC secret"
-                            >
-                              Rotate
-                            </button>
-                            <button
-                              onClick={() => handleDeleteWebhookIntegration(integration.id)}
-                              className="px-3 py-1.5 bg-red-600/20 text-red-400 border border-red-600/50 rounded text-xs hover:bg-red-600/30"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
                 <TriggerBreadthCards
+                  emailTriggers={emailTriggers}
+                  webhookTriggers={webhookIntegrations}
                   jiraTriggers={jiraTriggers}
                   githubTriggers={githubTriggers}
                   canWrite={canWriteHub}
-                  onCreate={(kind) => openTriggerWizard(kind)}
-                  onChanged={loadBreadthTriggers}
+                  onChanged={async () => {
+                    await Promise.all([loadEmailTriggers(), loadWebhookIntegrations(), loadBreadthTriggers()])
+                  }}
                   onSuccess={(message) => {
                     setSuccessMessage(message)
                     setTimeout(() => setSuccessMessage(null), 3000)
@@ -6179,18 +5624,15 @@ export default function HubPage() {
 
                 </div>
 
-                {/* v0.7.0: GitHub Hub Integrations — shared PAT used by both
-                    the Code Repository skill and PR Submitted triggers. */}
+                {/* v0.7.0: GitHub Hub Integrations — shared connection used by
+                    both the Code Repository skill and PR Submitted triggers. */}
                 <GitHubIntegrationsPanel
                   integrations={githubIntegrations}
                   loading={githubIntegrationsLoading}
-                  testingId={githubIntegrationTestingId}
-                  testResults={githubIntegrationTestResults}
                   canWriteHub={canWriteHub}
                   onAdd={openAddGitHubIntegrationModal}
                   onEdit={openEditGitHubIntegrationModal}
                   onDelete={deleteGitHubIntegration}
-                  onTest={testGitHubIntegrationConnection}
                 />
 
                 {/* Info Box */}
@@ -7345,36 +6787,6 @@ export default function HubPage() {
         saving={saving}
       />
 
-      {/* v0.6.0: Webhook Setup Modal */}
-      <WebhookSetupModal
-        isOpen={showWebhookSetupModal}
-        onClose={() => setShowWebhookSetupModal(false)}
-        onSubmit={handleCreateWebhookIntegration}
-        saving={webhookSaving}
-        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
-      />
-
-      {/* v0.7.1: Webhook Rotate Secret Reveal Modal */}
-      {webhookRotateModal && (
-        <WebhookSecretRevealModal
-          isOpen={webhookRotateModal.open}
-          onClose={() => setWebhookRotateModal(null)}
-          secret={webhookRotateModal.secret}
-          inboundUrl={webhookRotateModal.inboundUrl}
-          apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
-          rotatedNotice
-        />
-      )}
-
-      {/* v0.7.1: Webhook Edit Modal */}
-      <WebhookEditModal
-        isOpen={webhookEditTarget !== null}
-        onClose={() => setWebhookEditTarget(null)}
-        onSaved={loadWebhookIntegrations}
-        integration={webhookEditTarget}
-        apiBase={publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')}
-      />
-
       {/* v0.6.0: Vector Store Config Modal */}
       <VectorStoreConfigModal
         isOpen={showVectorStoreModal}
@@ -7649,7 +7061,7 @@ export default function HubPage() {
         initialProviderId={addIntegrationInitialProvider as any}
       />
 
-      {/* v0.7.0: guided wizards for Productivity + Communication tabs. Both
+      {/* v0.7.0: guided wizards for Productivity + Channels tabs. Both
           are thin dispatchers — they pick a service/channel and hand off to
           the existing per-service sub-wizard / OAuth handler. */}
       <ProductivityWizard
@@ -7669,15 +7081,6 @@ export default function HubPage() {
         onClose={() => setShowTriggerWizard(false)}
         onCreated={handleTriggerCreationComplete}
         initialKind={triggerWizardInitialKind}
-      />
-      <EmailTriggerWizard
-        isOpen={showEmailTriggerEditWizard}
-        onClose={() => {
-          setShowEmailTriggerEditWizard(false)
-          setEditingEmailTrigger(null)
-        }}
-        onComplete={handleEmailTriggerEditComplete}
-        triggerId={editingEmailTrigger?.id ?? null}
       />
     </div>
   )

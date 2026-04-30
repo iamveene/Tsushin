@@ -118,7 +118,7 @@ export default function ContinuousAgentDetailPage() {
       setRunsPage(runData)
       setSelectedRunId(current => current ?? runData.items[0]?.id ?? null)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to load continuous agent'))
+      setError(getErrorMessage(err, 'Failed to load Watcher monitor'))
     } finally {
       setLoading(false)
     }
@@ -136,7 +136,7 @@ export default function ContinuousAgentDetailPage() {
     if (!agent) return
     if (typeof window !== 'undefined') {
       const confirmed = window.confirm(
-        `Delete continuous agent "${agent.name || `#${agent.id}`}"? Subscriptions are removed too.`,
+        `Delete Watcher monitor "${agent.name || `#${agent.id}`}"? Monitored trigger links are removed too.`,
       )
       if (!confirmed) return
     }
@@ -162,7 +162,7 @@ export default function ContinuousAgentDetailPage() {
       }
       router.replace('/continuous-agents')
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to delete continuous agent'))
+      setError(getErrorMessage(err, 'Failed to delete Watcher monitor'))
     } finally {
       setDeleting(false)
     }
@@ -225,15 +225,15 @@ export default function ContinuousAgentDetailPage() {
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/continuous-agents" className="hover:text-white">Continuous Agents</Link>
+            <Link href="/continuous-agents" className="hover:text-white">Watcher Monitors</Link>
             <span>/</span>
             <span>#{agentId}</span>
           </div>
           <h1 className="text-3xl font-display font-bold text-white">
-            {agent?.name || agent?.agent_name || `Continuous Agent #${agentId}`}
+            {agent?.name || agent?.agent_name || `Watcher Monitor #${agentId}`}
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Detail view for this continuous agent, its subscriptions, and recent run history.
+            Detail view for this Studio-created Watcher monitor, its monitored triggers, and recent run history.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -276,12 +276,12 @@ export default function ContinuousAgentDetailPage() {
 
       {loading ? (
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/50 p-10 text-center text-tsushin-slate">
-          Loading continuous agent...
+          Loading Watcher monitor...
         </div>
       ) : !agent ? (
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/50 p-10 text-center">
           <AlertTriangleIcon size={28} className="mx-auto mb-3 text-yellow-300" />
-          <div className="text-white">Continuous agent not found</div>
+          <div className="text-white">Watcher monitor not found</div>
         </div>
       ) : (
         <div className="space-y-6">
@@ -301,7 +301,7 @@ export default function ContinuousAgentDetailPage() {
             </div>
             <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
               <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
-                <ClockIcon size={14} /> Subscriptions
+                <ClockIcon size={14} /> Monitored triggers
               </div>
               <div className="mt-2 text-2xl font-semibold text-white">{agent.subscription_count}</div>
             </div>
@@ -318,8 +318,8 @@ export default function ContinuousAgentDetailPage() {
             <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold text-white">Continuous Runs</h2>
-                  <p className="text-xs text-tsushin-slate">Latest read-only runs for this continuous agent.</p>
+                  <h2 className="text-lg font-semibold text-white">Watcher Runs</h2>
+                  <p className="text-xs text-tsushin-slate">Latest read-only runs for this Watcher monitor.</p>
                 </div>
                 <span className="text-sm text-tsushin-slate">{filteredRuns.length} of {runsPage?.total || 0}</span>
               </div>
@@ -431,7 +431,7 @@ export default function ContinuousAgentDetailPage() {
                       {selectedRun.wake_event_ids.length > 0 ? selectedRun.wake_event_ids.map(id => (
                         <Link
                           key={id}
-                          href={`/hub/wake-events?highlight=${id}`}
+                          href={`/wake-events?highlight=${id}`}
                           className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200 hover:text-white"
                         >
                           #{id}
@@ -457,7 +457,7 @@ export default function ContinuousAgentDetailPage() {
                           <div key={event.id} className="rounded-lg border border-tsushin-border bg-tsushin-surface/40 p-3 text-sm">
                             <div className="flex flex-wrap items-center gap-2">
                               <Link
-                                href={`/hub/wake-events?highlight=${event.id}`}
+                                href={`/wake-events?highlight=${event.id}`}
                                 className="inline-flex items-center gap-1 font-mono text-cyan-200 hover:text-white"
                               >
                                 <LinkIcon size={13} /> #{event.id}
@@ -465,11 +465,11 @@ export default function ContinuousAgentDetailPage() {
                               <span className={`rounded-full border px-2 py-0.5 text-xs ${statusClass(event.status)}`}>{event.status}</span>
                               {event.continuous_subscription_id ? (
                                 <span className="rounded-full border border-teal-500/30 bg-teal-500/10 px-2 py-0.5 text-xs text-teal-200">
-                                  Subscription #{event.continuous_subscription_id}
+                                  Monitor link #{event.continuous_subscription_id}
                                 </span>
                               ) : (
                                 <span className="rounded-full border border-gray-500/30 bg-gray-500/10 px-2 py-0.5 text-xs text-gray-300">
-                                  No subscription
+                                  No monitor link
                                 </span>
                               )}
                             </div>

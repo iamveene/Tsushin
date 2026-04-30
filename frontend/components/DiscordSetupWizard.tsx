@@ -166,9 +166,9 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
           </h4>
           <p className="text-xs text-amber-100/80">
             {ingressWarning ? (
-              <>Tenant override is stored but invalid: {ingressWarning}. Fix it in Hub → Communication, or ask a global admin to enable Remote Access.</>
+              <>Tenant override is stored but invalid: {ingressWarning}. Fix it in Hub → Channels, or ask a global admin to enable Remote Access.</>
             ) : (
-              <>Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Ask a global admin to enable <strong>Remote Access</strong> for this tenant, or set an <strong>Ingress Override</strong> in Hub → Communication.</>
+              <>Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Ask a global admin to enable <strong>Remote Access</strong> for this tenant, or set an <strong>Ingress Override</strong> in Hub → Channels.</>
             )}
           </p>
         </div>
@@ -355,7 +355,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
       ) : (
         <div className="p-3 bg-amber-500/10 border border-amber-500/40 rounded-lg">
           <p className="text-xs text-amber-200">
-            URL preview unavailable — set your <strong>Public Base URL</strong> in Hub → Communication and recreate the integration.
+            URL preview unavailable — set your <strong>Public Base URL</strong> in Hub → Channels and recreate the integration.
           </p>
         </div>
       )}

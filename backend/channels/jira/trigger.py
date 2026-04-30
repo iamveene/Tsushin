@@ -18,14 +18,6 @@ from hub.security import TokenEncryption
 from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, JiraChannelInstance, WakeEvent
 from services.encryption_key_service import get_webhook_encryption_key
 from services.jira_integration_service import resolve_jira_config
-# v0.7.0-fix Phase 4b TODO: migrate _process_managed_notification onto the
-# auto-flow Notification node and retire jira_notification_service. See
-# services/jira_notification_service.py module docstring for the plan.
-from services.jira_notification_service import (
-    JIRA_NOTIFICATION_ACTION_TYPE,
-    JIRA_NOTIFICATION_EVENT_TYPE,
-    send_jira_whatsapp_notification,
-)
 from services.trigger_dispatch_service import TriggerDispatchInput, TriggerDispatchService
 
 
@@ -33,6 +25,7 @@ _JIRA_TZ_RE = re.compile(r"([+-]\d{2})(\d{2})$")
 _JIRA_SEARCH_TIMEOUT_SECONDS = 15.0
 _DEFAULT_MAX_EVENTS_PER_POLL = 50
 _MAX_EVENTS_PER_POLL = 100
+_JIRA_ISSUE_EVENT_TYPE = "jira.issue.detected"
 _JIRA_SEARCH_FIELDS = [
     "summary",
     "description",
@@ -170,7 +163,7 @@ class JiraTrigger(Trigger):
         return TriggerDispatchInput(
             trigger_type=self.channel_type,
             instance_id=instance.id,
-            event_type=JIRA_NOTIFICATION_EVENT_TYPE,
+            event_type=_JIRA_ISSUE_EVENT_TYPE,
             dedupe_key=dedupe_key,
             payload=payload,
             occurred_at=occurred_at,
@@ -275,14 +268,6 @@ class JiraTrigger(Trigger):
             for issue in issues:
                 dispatch_result = dispatcher.dispatch(adapter._issue_to_dispatch_input(issue, instance))
                 dispatch_statuses.append(dispatch_result.status)
-                outcomes = await cls._process_managed_notification(
-                    db=db,
-                    instance=instance,
-                    dispatch_result=dispatch_result,
-                    issue_payload={"issue": issue},
-                )
-                processed_count += sum(1 for outcome in outcomes if outcome.get("success"))
-                failed_count += sum(1 for outcome in outcomes if not outcome.get("success"))
 
             newest_cursor = _newest_cursor(issues, instance.last_cursor)
             instance.site_url = normalize_jira_site_url(instance.site_url)
@@ -422,116 +407,6 @@ class JiraTrigger(Trigger):
             reason=reason,
             cursor=instance.last_cursor,
         )
-
-    @classmethod
-    async def _process_managed_notification(
-        cls,
-        *,
-        db: Session,
-        instance: JiraChannelInstance,
-        dispatch_result: Any,
-        issue_payload: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Send WhatsApp notifications for system-owned Jira subscriptions."""
-
-        if dispatch_result.status != "dispatched":
-            return []
-        if not dispatch_result.continuous_subscription_ids or not dispatch_result.continuous_run_ids:
-            return []
-
-        outcomes: list[dict[str, Any]] = []
-        for subscription_id, run_id in zip(
-            dispatch_result.continuous_subscription_ids,
-            dispatch_result.continuous_run_ids,
-        ):
-            subscription = (
-                db.query(ContinuousSubscription)
-                .filter(
-                    ContinuousSubscription.id == subscription_id,
-                    ContinuousSubscription.tenant_id == instance.tenant_id,
-                    ContinuousSubscription.channel_type == cls.channel_type,
-                    ContinuousSubscription.channel_instance_id == instance.id,
-                    ContinuousSubscription.event_type == JIRA_NOTIFICATION_EVENT_TYPE,
-                    ContinuousSubscription.is_system_owned == True,  # noqa: E712
-                )
-                .first()
-            )
-            if subscription is None:
-                continue
-            action_config = subscription.action_config if isinstance(subscription.action_config, dict) else {}
-            if action_config.get("action_type") != JIRA_NOTIFICATION_ACTION_TYPE:
-                continue
-
-            continuous_agent = (
-                db.query(ContinuousAgent)
-                .filter(
-                    ContinuousAgent.id == subscription.continuous_agent_id,
-                    ContinuousAgent.tenant_id == instance.tenant_id,
-                    ContinuousAgent.is_system_owned == True,  # noqa: E712
-                )
-                .first()
-            )
-            run = (
-                db.query(ContinuousRun)
-                .filter(
-                    ContinuousRun.id == run_id,
-                    ContinuousRun.tenant_id == instance.tenant_id,
-                )
-                .first()
-            )
-            wake_event = (
-                db.query(WakeEvent)
-                .filter(
-                    WakeEvent.id == dispatch_result.wake_event_id,
-                    WakeEvent.tenant_id == instance.tenant_id,
-                )
-                .first()
-            )
-            if continuous_agent is None or run is None:
-                continue
-
-            run.status = "running"
-            run.started_at = run.started_at or datetime.utcnow()
-            if wake_event is not None:
-                wake_event.status = "claimed"
-                db.add(wake_event)
-            db.add(run)
-            db.commit()
-
-            try:
-                notification_result = await send_jira_whatsapp_notification(
-                    db,
-                    trigger=instance,
-                    continuous_agent=continuous_agent,
-                    issue_payload=issue_payload,
-                    recipient_phone=str(action_config.get("recipient_phone") or ""),
-                )
-                success = bool(notification_result.get("success"))
-                run.status = "succeeded" if success else "failed"
-                run.outcome_state = {"jira_whatsapp_notification": notification_result}
-                if wake_event is not None:
-                    wake_event.status = "processed" if success else "failed"
-                    db.add(wake_event)
-                outcomes.append(notification_result)
-            except Exception as exc:
-                failure = {
-                    "success": False,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "action": JIRA_NOTIFICATION_ACTION_TYPE,
-                }
-                run.status = "failed"
-                run.outcome_state = {"jira_whatsapp_notification": failure}
-                if wake_event is not None:
-                    wake_event.status = "failed"
-                    db.add(wake_event)
-                outcomes.append(failure)
-            finally:
-                run.finished_at = datetime.utcnow()
-                db.add(run)
-                db.commit()
-        return outcomes
-
 
 def _decrypt_token(db: Session, tenant_id: str, encrypted: Optional[str]) -> Optional[str]:
     if not encrypted:

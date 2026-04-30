@@ -4,27 +4,13 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   api,
   type ContinuousSubscription,
-  type ContinuousSubscriptionCreate,
 } from '@/lib/client'
 
-const CHANNEL_TYPES = ['email', 'jira', 'schedule', 'github', 'webhook', 'whatsapp'] as const
-type ChannelType = (typeof CHANNEL_TYPES)[number]
+const MANAGED_CHANNEL_TYPES = new Set(['email', 'jira', 'github', 'webhook'])
 
 interface Props {
   agentId: number
   readOnly?: boolean
-}
-
-interface NewSubForm {
-  channelType: ChannelType
-  channelInstanceId: string
-  eventType: string
-}
-
-const EMPTY_FORM: NewSubForm = {
-  channelType: 'schedule',
-  channelInstanceId: '',
-  eventType: '',
 }
 
 function getErrorMessage(err: unknown, fallback: string): string {
@@ -35,9 +21,6 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
   const [subs, setSubs] = useState<ContinuousSubscription[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState<NewSubForm>(EMPTY_FORM)
-  const [submitting, setSubmitting] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [togglingId, setTogglingId] = useState<number | null>(null)
 
@@ -46,9 +29,9 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
     setError(null)
     try {
       const page = await api.listContinuousSubscriptions(agentId, { limit: 100 })
-      setSubs(page.items)
+      setSubs(page.items.filter((sub) => MANAGED_CHANNEL_TYPES.has(sub.channel_type)))
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to load subscriptions'))
+      setError(getErrorMessage(err, 'Failed to load monitored trigger links'))
     } finally {
       setLoading(false)
     }
@@ -57,34 +40,6 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
   useEffect(() => {
     load()
   }, [load])
-
-  async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (submitting) return
-    const instanceIdParsed = Number(form.channelInstanceId)
-    if (!Number.isFinite(instanceIdParsed) || instanceIdParsed < 1) {
-      setError('Channel instance ID must be a positive integer')
-      return
-    }
-    setSubmitting(true)
-    setError(null)
-    try {
-      const payload: ContinuousSubscriptionCreate = {
-        channel_type: form.channelType,
-        channel_instance_id: instanceIdParsed,
-        event_type: form.eventType.trim() || null,
-        status: 'active',
-      }
-      await api.createContinuousSubscription(agentId, payload)
-      setForm(EMPTY_FORM)
-      setShowForm(false)
-      await load()
-    } catch (err) {
-      setError(getErrorMessage(err, 'Failed to create subscription'))
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   async function handleToggle(sub: ContinuousSubscription) {
     if (sub.is_system_owned) return
@@ -95,7 +50,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
       await api.updateContinuousSubscription(agentId, sub.id, { status: next })
       await load()
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to update subscription'))
+      setError(getErrorMessage(err, 'Failed to update monitored trigger link'))
     } finally {
       setTogglingId(null)
     }
@@ -105,7 +60,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
     if (sub.is_system_owned) return
     if (typeof window !== 'undefined') {
       const confirmed = window.confirm(
-        `Delete subscription #${sub.id} on ${sub.channel_type}/${sub.channel_instance_id}?`,
+        `Delete monitoring link #${sub.id} on ${sub.channel_type}/${sub.channel_instance_id}?`,
       )
       if (!confirmed) return
     }
@@ -115,7 +70,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
       await api.deleteContinuousSubscription(agentId, sub.id)
       await load()
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to delete subscription'))
+      setError(getErrorMessage(err, 'Failed to delete monitored trigger link'))
     } finally {
       setDeletingId(null)
     }
@@ -125,20 +80,17 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
     <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Subscriptions</h2>
+          <h2 className="text-lg font-semibold text-white">Watcher Monitoring</h2>
           <p className="text-xs text-tsushin-slate">
-            Channel instances that wake this continuous agent.
+            Trigger monitoring links that wake this Studio-created agent monitor.
           </p>
         </div>
-        {!readOnly && (
-          <button
-            type="button"
-            onClick={() => setShowForm((value) => !value)}
-            className="rounded-lg border border-tsushin-border px-3 py-1.5 text-sm text-tsushin-fog hover:text-white"
-          >
-            {showForm ? 'Cancel' : '+ Add subscription'}
-          </button>
-        )}
+        <a
+          href="/hub/triggers"
+          className="rounded-lg border border-tsushin-border px-3 py-1.5 text-sm text-tsushin-fog hover:text-white"
+        >
+          Configure triggers
+        </a>
       </div>
 
       {error && (
@@ -147,70 +99,13 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
         </div>
       )}
 
-      {showForm && !readOnly && (
-        <form
-          onSubmit={handleCreate}
-          className="mb-4 grid gap-3 rounded-lg border border-tsushin-border/70 bg-black/20 p-4 sm:grid-cols-4"
-        >
-          <div>
-            <label className="mb-1 block text-xs text-tsushin-slate">Channel</label>
-            <select
-              value={form.channelType}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, channelType: event.target.value as ChannelType }))
-              }
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
-            >
-              {CHANNEL_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-tsushin-slate">Instance ID</label>
-            <input
-              type="number"
-              min={1}
-              value={form.channelInstanceId}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, channelInstanceId: event.target.value }))
-              }
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
-              placeholder="e.g. 12"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-tsushin-slate">Event type (optional)</label>
-            <input
-              type="text"
-              value={form.eventType}
-              maxLength={64}
-              onChange={(event) => setForm((prev) => ({ ...prev, eventType: event.target.value }))}
-              className="w-full rounded-md border border-tsushin-border bg-tsushin-ink px-2 py-1.5 text-sm text-white"
-              placeholder="e.g. tick"
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-cyan-400 disabled:opacity-50"
-            >
-              {submitting ? 'Adding…' : 'Add'}
-            </button>
-          </div>
-        </form>
-      )}
-
       {loading ? (
         <div className="rounded-lg border border-tsushin-border/70 bg-black/20 p-6 text-center text-sm text-tsushin-slate">
-          Loading subscriptions…
+          Loading monitored trigger links…
         </div>
       ) : subs.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border p-6 text-center text-sm text-tsushin-slate">
-          No subscriptions yet. {!readOnly && 'Click "+ Add subscription" to wire one.'}
+          No watcher monitoring links yet. Create or edit an Email, Jira, GitHub, or Webhook trigger and choose this monitor.
         </div>
       ) : (
         <div className="overflow-x-auto">

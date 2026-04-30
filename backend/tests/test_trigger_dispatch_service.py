@@ -37,6 +37,7 @@ from models import (  # noqa: E402
     HubIntegration,
     JiraChannelInstance,
     JiraIntegration,
+    MessageQueue,
     SentinelConfig,
     SentinelProfile,
     WakeEvent,
@@ -545,6 +546,97 @@ def test_dispatch_supports_track_b_trigger_instances(
     assert wake_event.channel_type == trigger_type
     assert wake_event.channel_instance_id == instance_id
     assert db_session.query(ContinuousRun).one().status == "queued"
+
+
+@pytest.mark.parametrize(
+    ("trigger_type", "instance_id", "event_type", "seed_fn"),
+    [
+        ("email", 601, "email.message.received", _seed_email),
+        ("jira", 701, "jira.issue.created", _seed_jira),
+        ("github", 901, "github.pull_request", _seed_github),
+        ("webhook", 401, "message.created", _seed_webhook),
+    ],
+)
+def test_dispatch_attaches_memory_recap_to_queue_payloads_for_all_trigger_kinds(
+    db_session,
+    tmp_path,
+    monkeypatch,
+    trigger_type,
+    instance_id,
+    event_type,
+    seed_fn,
+):
+    Base.metadata.create_all(db_session.get_bind(), tables=[MessageQueue.__table__])
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    seed_fn(db_session, instance_id=instance_id, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type=trigger_type,
+        instance_id=instance_id,
+        event_type=event_type,
+    )
+    flow = FlowDefinition(
+        id=2000 + instance_id,
+        tenant_id="tenant-a",
+        name=f"{trigger_type} flow",
+        execution_method="triggered",
+        default_agent_id=201,
+        is_active=True,
+    )
+    db_session.add(flow)
+    db_session.add(
+        FlowTriggerBinding(
+            id=3000 + instance_id,
+            tenant_id="tenant-a",
+            flow_definition_id=flow.id,
+            trigger_kind=trigger_type,
+            trigger_instance_id=instance_id,
+            is_active=True,
+            suppress_default_agent=False,
+        )
+    )
+    db_session.commit()
+
+    fake_recap = {
+        "rendered_text": "## Past Cases (1 match)\n- prior fix",
+        "cases_used": 1,
+        "config_snapshot": {"scope": "trigger_kind", "k": 3},
+    }
+    captured: dict[str, object] = {}
+
+    def fake_build_memory_recap(db, **kwargs):
+        captured.update(kwargs)
+        return fake_recap
+
+    from services import trigger_dispatch_service as dispatch_module
+    from services import trigger_recap_service
+
+    monkeypatch.setattr(dispatch_module, "flows_trigger_binding_enabled", lambda: True)
+    monkeypatch.setattr(trigger_recap_service, "build_memory_recap", fake_build_memory_recap)
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type=trigger_type,
+            instance_id=instance_id,
+            event_type=event_type,
+            dedupe_key=f"{trigger_type}-recap-evt",
+            payload={"subject": f"{trigger_type} incident", "secret": "redact-me"},
+        )
+    )
+
+    assert result.status == "dispatched"
+    assert captured["trigger_kind"] == trigger_type
+    assert captured["trigger_instance_id"] == instance_id
+
+    queue_rows = db_session.query(MessageQueue).order_by(MessageQueue.message_type.asc()).all()
+    continuous = next(row for row in queue_rows if row.message_type == "continuous_task")
+    flow_item = next(row for row in queue_rows if row.message_type == "flow_run_triggered")
+    assert continuous.payload["memory_recap"] == fake_recap
+    assert flow_item.payload["trigger_context"]["source"]["memory_recap"] == fake_recap
 
 
 def test_dispatch_filters_webhook_payload_when_trigger_criteria_misses(db_session, tmp_path):

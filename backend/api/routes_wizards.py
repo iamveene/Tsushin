@@ -17,10 +17,23 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 router = APIRouter(prefix="/api/wizards", tags=["Wizards"])
+
+
+class WizardKindDependency(BaseModel):
+    """Dependency metadata for one creation kind inside a wizard."""
+
+    kind: str
+    label: str
+    create_endpoint: str
+    required_dependency: Optional[str] = None
+    dependency_endpoint: Optional[str] = None
+    dependency_create_endpoint: Optional[str] = None
+    request_field: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class WizardManifest(BaseModel):
@@ -37,6 +50,7 @@ class WizardManifest(BaseModel):
     # can complete (e.g. the Jira/GitHub trigger wizards both require
     # their corresponding Hub integration since v0.7.0-fix Phase 3/4).
     integration_required: Optional[str] = None
+    kind_dependencies: List[WizardKindDependency] = Field(default_factory=list)
 
 
 _WIZARD_MANIFESTS: List[WizardManifest] = [
@@ -52,6 +66,16 @@ _WIZARD_MANIFESTS: List[WizardManifest] = [
             "hub.page.tsx#handleAsanaConnect",
         ],
         integration_required=None,
+        kind_dependencies=[
+            WizardKindDependency(
+                kind="gmail",
+                label="Gmail",
+                create_endpoint="/api/google/gmail/oauth/authorize",
+                required_dependency=None,
+                dependency_endpoint="/api/google/gmail/integrations",
+                notes="Creates the Gmail integration that Email trigger creation later requires.",
+            ),
+        ],
     ),
     WizardManifest(
         id="channels",
@@ -73,14 +97,47 @@ _WIZARD_MANIFESTS: List[WizardManifest] = [
         component_path="frontend/components/triggers/TriggerCreationWizard.tsx",
         catalog_endpoint="/api/triggers",
         catalog_module="backend/channels/catalog.py",
-        dispatches_to=[
-            "frontend/components/triggers/EmailTriggerWizard.tsx",
-        ],
+        dispatches_to=[],
         # Jira and GitHub trigger sub-flows REQUIRE a Hub integration as
         # of v0.7.0-fix Phase 3/4. The wizard auto-redirects to Hub →
         # Tool APIs / Developer Tools when the user picks those kinds
         # without one configured.
         integration_required=None,
+        kind_dependencies=[
+            WizardKindDependency(
+                kind="email",
+                label="Email",
+                create_endpoint="/api/triggers/email",
+                required_dependency="gmail_integration",
+                dependency_endpoint="/api/google/gmail/integrations",
+                dependency_create_endpoint="/api/google/gmail/oauth/authorize",
+                request_field="gmail_integration_id",
+            ),
+            WizardKindDependency(
+                kind="webhook",
+                label="Webhook",
+                create_endpoint="/api/triggers/webhook",
+                required_dependency=None,
+            ),
+            WizardKindDependency(
+                kind="jira",
+                label="Jira",
+                create_endpoint="/api/triggers/jira",
+                required_dependency="jira_integration",
+                dependency_endpoint="/api/hub/jira-integrations",
+                dependency_create_endpoint="/api/hub/jira-integrations",
+                request_field="jira_integration_id",
+            ),
+            WizardKindDependency(
+                kind="github",
+                label="GitHub",
+                create_endpoint="/api/triggers/github",
+                required_dependency="github_integration",
+                dependency_endpoint="/api/hub/github-integrations",
+                dependency_create_endpoint="/api/hub/github-integrations",
+                request_field="github_integration_id",
+            ),
+        ],
     ),
     WizardManifest(
         id="tool-apis",
@@ -107,6 +164,51 @@ _WIZARD_MANIFESTS: List[WizardManifest] = [
             "frontend/components/provider-wizard/steps/StepContainerProvision.tsx",
         ],
         integration_required=None,
+    ),
+    WizardManifest(
+        id="flows",
+        label="+ Create Flow",
+        component_path="frontend/app/flows/page.tsx#CreateFlowModal",
+        catalog_endpoint="/api/flows/templates",
+        catalog_module="backend/api/routes_flows.py",
+        dispatches_to=[
+            "frontend/app/flows/page.tsx#CreateFlowModal",
+            "frontend/app/flows/page.tsx#SourceStepConfig",
+        ],
+        integration_required=None,
+        kind_dependencies=[
+            WizardKindDependency(
+                kind="flow",
+                label="Flow",
+                create_endpoint="/api/flows/create",
+                required_dependency=None,
+                dependency_endpoint="/api/agents",
+                request_field="default_agent_id",
+                notes="Agent selection is optional; triggered flows bind to email/webhook/jira/github through /api/flow-trigger-bindings.",
+            ),
+        ],
+    ),
+    WizardManifest(
+        id="continuous-agents",
+        label="+ New Continuous Agent",
+        component_path="frontend/components/continuous-agents/ContinuousAgentSetupModal.tsx",
+        catalog_endpoint="/api/agents",
+        catalog_module="backend/api/routes_continuous.py",
+        dispatches_to=[
+            "frontend/components/continuous-agents/ContinuousAgentSetupModal.tsx",
+        ],
+        integration_required=None,
+        kind_dependencies=[
+            WizardKindDependency(
+                kind="continuous_agent",
+                label="Continuous Agent",
+                create_endpoint="/api/continuous-agents",
+                required_dependency="agent",
+                dependency_endpoint="/api/agents",
+                request_field="agent_id",
+                notes="Creation must also provide purpose and action_kind.",
+            ),
+        ],
     ),
 ]
 
