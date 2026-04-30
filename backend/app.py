@@ -75,6 +75,7 @@ from scheduler.worker import start_scheduler_worker, stop_scheduler_worker
 from api.routes_flows import router as flows_router, set_engine as set_flows_engine
 from api.routes_flow_trigger_bindings import router as flow_trigger_bindings_router  # v0.7.0 Wave 4
 from api.routes_case_memory import router as case_memory_router  # v0.7.0 Trigger Case Memory MVP
+from api.routes_feature_flags import router as feature_flags_router  # v0.7.x — read-only env-flag introspection
 # Phase 6.11 Scheduled Flow Executor
 # Phase 6.11.2 WebSocket Manager
 from websocket_manager import manager as ws_manager
@@ -1334,20 +1335,14 @@ app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, 
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
 app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
 
-# v0.7.0 Trigger Case Memory MVP — default-off behind TSN_CASE_MEMORY_ENABLED.
-# Mounted conditionally at startup; flipping the flag requires a backend
-# restart (matches the other v0.7.0 flag toggles).
-try:
-    from config.feature_flags import case_memory_enabled as _case_memory_enabled
-
-    if _case_memory_enabled():
-        app.include_router(case_memory_router)
-except Exception:  # noqa: BLE001 — never fail startup on flag-eval errors
-    import logging as _logging
-
-    _logging.getLogger(__name__).exception(
-        "case_memory: failed to evaluate feature flag at startup"
-    )
+# v0.7.x Trigger Case Memory — case-memory routes are always mounted.
+# Per-tenant opt-in is via Agent.vector_store_instance_id binding +
+# TriggerRecapConfig.enabled flag — there is no global env kill-switch.
+app.include_router(case_memory_router)
+# v0.7.x — Read-only /api/feature-flags surface so the frontend can
+# gate UI affordances (e.g. case-memory wizard) on env-driven flags
+# without baking values into the build.
+app.include_router(feature_flags_router)
 app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication

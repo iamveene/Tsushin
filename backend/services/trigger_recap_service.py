@@ -1,6 +1,10 @@
 """Per-trigger Memory Recap builder.
 
-v0.7.x — Wave 1-A. Default-off behind ``TSN_CASE_MEMORY_ENABLED``.
+v0.7.x — per-tenant gate via ``Tenant.case_memory_recap_enabled``
+(DB-backed, settable from the tenant settings UI). Defaults to TRUE on
+every tenant; flipping it False globally disables recap injection for
+that tenant without touching individual ``TriggerRecapConfig`` rows.
+The case-memory indexer (write side) is unaffected.
 
 Public API:
   ``build_memory_recap(db, *, tenant_id, agent_id, trigger_kind,
@@ -263,16 +267,19 @@ def build_memory_recap(
     as "no recap, dispatch normally" — recap is a best-effort
     enrichment and never blocks the trigger run.
     """
-    # 1) Global feature flag.
+    # 1) Per-tenant gate. ``tenant.case_memory_recap_enabled`` is a SaaS
+    # setting (DB column, default TRUE) toggled via the tenant settings
+    # UI. When False, recap injection is skipped for this tenant regardless
+    # of per-trigger config. The indexer (write-side) is unaffected.
     try:
-        from config.feature_flags import case_memory_enabled
+        from config.feature_flags import case_memory_recap_enabled
 
-        if not case_memory_enabled():
+        if not case_memory_recap_enabled(tenant_id=tenant_id, db=db):
             return None
-    except Exception:  # noqa: BLE001
-        # If the flag module itself blew up, treat as disabled.
+    except Exception:  # noqa: BLE001 — gate-eval failures must not break dispatch
         logger.warning(
-            "trigger_recap: case_memory_enabled() check failed; treating as off",
+            "trigger_recap: case_memory_recap_enabled() lookup failed; "
+            "treating as off to be safe",
             exc_info=True,
         )
         return None

@@ -34,16 +34,9 @@ __all__ = [
     'ImageAnalysisSkill',
 ]
 
-# v0.7.0 Trigger Case Memory MVP — `find_similar_past_cases` is gated on
-# the `TSN_CASE_MEMORY_ENABLED` flag so the skill is invisible (and not
-# registered with SkillManager) when the feature is off. Flipping the
-# flag requires a backend restart.
-try:
-    from config.feature_flags import case_memory_enabled as _case_memory_enabled
+# v0.7.x Trigger Case Memory — find_similar_past_cases is always exported.
+# Per-tenant opt-in is via Agent.vector_store_instance_id and per-trigger
+# TriggerRecapConfig.enabled, not via a global env flag.
+from .find_similar_past_cases import FindSimilarPastCasesSkill  # noqa: F401
 
-    if _case_memory_enabled():
-        from .find_similar_past_cases import FindSimilarPastCasesSkill  # noqa: F401
-
-        __all__.append("FindSimilarPastCasesSkill")
-except Exception:  # noqa: BLE001 — never fail import on flag-eval errors
-    pass
+__all__.append("FindSimilarPastCasesSkill")

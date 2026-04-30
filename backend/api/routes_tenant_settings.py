@@ -110,6 +110,46 @@ class TenantSelfSettingsUpdate(BaseModel):
         return v.rstrip("/")
 
 
+class CaseMemoryConfigUpdate(BaseModel):
+    """Partial-update payload for the per-tenant case-memory gates.
+
+    Both fields are optional so the UI can patch one toggle at a time
+    (e.g. flipping only ``case_memory_recap_enabled`` without touching
+    the parent indexer flag). When ``case_memory_enabled`` is set to
+    False the recap flag becomes a no-op (the recap service short-
+    circuits on the parent flag), but we still allow callers to PUT
+    both fields in a single request — we don't re-derive the recap
+    value server-side.
+    """
+
+    case_memory_enabled: Optional[bool] = Field(
+        None,
+        description=(
+            "When True, terminal trigger-driven runs index a compact case "
+            "row plus problem/action/outcome vectors for the agent's "
+            "resolved vector store. Past cases become searchable via the "
+            "find_similar_past_cases skill. Default True per tenant."
+        ),
+    )
+    case_memory_recap_enabled: Optional[bool] = Field(
+        None,
+        description=(
+            "When True, the trigger dispatcher pre-builds a memory recap "
+            "from past similar cases and prepends it to the agent's "
+            "first-turn context. Disabling stops recap injection cluster-"
+            "wide for this tenant without touching individual trigger "
+            "configs. Indexer (write-side) is unaffected."
+        ),
+    )
+
+
+class CaseMemoryConfigResponse(BaseModel):
+    """Snapshot of the two per-tenant case-memory gates after a PUT."""
+
+    case_memory_enabled: bool
+    case_memory_recap_enabled: bool
+
+
 class PublicIngressResponse(BaseModel):
     """Resolver response for tenant-facing callers.
 
@@ -255,6 +295,83 @@ async def update_my_tenant_settings(
     return TenantSelfSettingsResponse(
         tenant_id=tenant.id,
         public_base_url=tenant.public_base_url,
+    )
+
+
+@router.put("/case-memory-config", response_model=CaseMemoryConfigResponse)
+async def update_my_case_memory_config(
+    payload: CaseMemoryConfigUpdate,
+    request: Request,
+    current_user: User = Depends(get_current_user_required),
+    _: None = Depends(require_permission("org.settings.write")),
+    db: Session = Depends(get_db),
+):
+    """Update the calling user's tenant case-memory gates.
+
+    Partial updates allowed — pass either or both fields. Requires the
+    ``org.settings.write`` permission (org owner / admin role). Both
+    flags default to True per tenant; the migration that introduced the
+    columns (alembic 0077) backfilled True for every existing row.
+    """
+    tenant = _load_tenant(db, current_user)
+
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        # Nothing to update — return current state without touching the row.
+        return CaseMemoryConfigResponse(
+            case_memory_enabled=bool(getattr(tenant, "case_memory_enabled", True)),
+            case_memory_recap_enabled=bool(
+                getattr(tenant, "case_memory_recap_enabled", True)
+            ),
+        )
+
+    audit_changes = {}
+    if "case_memory_enabled" in fields:
+        new_value = bool(fields["case_memory_enabled"])
+        old_value = bool(getattr(tenant, "case_memory_enabled", True))
+        if old_value != new_value:
+            tenant.case_memory_enabled = new_value
+            audit_changes["case_memory_enabled"] = {
+                "old_value": old_value,
+                "new_value": new_value,
+            }
+
+    if "case_memory_recap_enabled" in fields:
+        new_value = bool(fields["case_memory_recap_enabled"])
+        old_value = bool(getattr(tenant, "case_memory_recap_enabled", True))
+        if old_value != new_value:
+            tenant.case_memory_recap_enabled = new_value
+            audit_changes["case_memory_recap_enabled"] = {
+                "old_value": old_value,
+                "new_value": new_value,
+            }
+
+    db.commit()
+    db.refresh(tenant)
+
+    if audit_changes:
+        log_tenant_event(
+            db,
+            tenant.id,
+            current_user.id,
+            TenantAuditActions.SETTINGS_UPDATE,
+            "tenant",
+            tenant.id,
+            {"case_memory_config": audit_changes},
+            request,
+        )
+        logger.info(
+            "Tenant %s case-memory config updated by user %s: %s",
+            tenant.id,
+            current_user.id,
+            list(audit_changes.keys()),
+        )
+
+    return CaseMemoryConfigResponse(
+        case_memory_enabled=bool(getattr(tenant, "case_memory_enabled", True)),
+        case_memory_recap_enabled=bool(
+            getattr(tenant, "case_memory_recap_enabled", True)
+        ),
     )
 
 

@@ -63,13 +63,30 @@ interface Props {
   initialKind?: TriggerId | null
 }
 
-const WIZARD_STEPS: WizardStep[] = [
+// The Memory Recap step is only included when `case_memory_enabled` is true on
+// the backend. When the flag is off the step is dropped from the visible step
+// list AND skipped during navigation (step 3 → step 5) — it's not just
+// disabled, it's invisible. The numeric step indices (1..5) are kept stable
+// across both shapes so existing setStep(N) call-sites stay correct; we just
+// route around step 4 when the flag is off.
+const WIZARD_STEPS_WITH_RECAP: WizardStep[] = [
   { id: 'kind', label: 'Trigger', description: 'Choose the event source.' },
   { id: 'source', label: 'Source', description: 'Connect credentials or configure the source.' },
   { id: 'criteria', label: 'Criteria', description: 'Define what events to match.' },
   { id: 'memory_recap', label: 'Memory Recap', description: 'Configure recall of past similar cases.' },
   { id: 'confirm', label: 'Confirm', description: 'Review, save, and open the auto-flow.' },
 ]
+
+const WIZARD_STEPS_WITHOUT_RECAP: WizardStep[] = [
+  { id: 'kind', label: 'Trigger', description: 'Choose the event source.' },
+  { id: 'source', label: 'Source', description: 'Connect credentials or configure the source.' },
+  { id: 'criteria', label: 'Criteria', description: 'Define what events to match.' },
+  { id: 'confirm', label: 'Confirm', description: 'Review, save, and open the auto-flow.' },
+]
+
+function getWizardSteps(caseMemoryEnabled: boolean): WizardStep[] {
+  return caseMemoryEnabled ? WIZARD_STEPS_WITH_RECAP : WIZARD_STEPS_WITHOUT_RECAP
+}
 
 interface KindEntry {
   id: TriggerId
@@ -206,10 +223,11 @@ export default function TriggerCreationWizard({
   // `recapConfig.enabled === true`; the backend leaves the row absent
   // otherwise, so we don't fire the PUT in that branch.
   const [recapConfig, setRecapConfig] = useState<TriggerRecapConfig>(DEFAULT_RECAP_CONFIG)
-  // TODO(v0.7.x post-2D): replace with `/api/feature-flags` lookup once the
-  // tenant-scoped flag endpoint lands. Hardcoded `true` matches the QA env
-  // where `case_memory_enabled` is on.
-  const caseMemoryEnabled = true
+  // Resolved from `GET /api/feature-flags`. Defaults to `false` until the
+  // response arrives so we don't briefly show a step that may then disappear;
+  // on 404/error the client returns `{ case_memory_enabled: true }` so older
+  // backends keep the previous permissive behavior.
+  const [caseMemoryEnabled, setCaseMemoryEnabled] = useState(false)
 
   // Email-specific state
   const [emailIntegrationId, setEmailIntegrationId] = useState<number | null>(null)
@@ -318,6 +336,43 @@ export default function TriggerCreationWizard({
 
     setRecapConfig(DEFAULT_RECAP_CONFIG)
   }, [initialKind, isOpen])
+
+  // Pull tenant feature flags whenever the wizard opens. The Memory Recap
+  // step renders conditionally on `case_memory_enabled`; when the backend
+  // route is missing we get `{ case_memory_enabled: true }` from the client
+  // so older deployments keep showing the step.
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    api.getFeatureFlags()
+      .then((flags) => {
+        if (cancelled) return
+        setCaseMemoryEnabled(!!flags.case_memory_enabled)
+      })
+      .catch(() => {
+        // Defensive: getFeatureFlags already swallows errors, but keep a
+        // local catch to avoid breaking the wizard if the helper changes.
+        if (!cancelled) setCaseMemoryEnabled(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen])
+
+  // The visible step list adapts to whether case-memory is enabled. When
+  // off, the Memory Recap step is omitted and step navigation skips
+  // straight from Criteria (step 3) to Confirm (step 5).
+  const wizardSteps = getWizardSteps(caseMemoryEnabled)
+
+  // Defensive: if the flags resolve to off AFTER the user already
+  // advanced to step 4, route them forward to step 5 so they don't see
+  // an invisible step. Won't fire in the common path (forward navigation
+  // already skips step 4 when the flag is off).
+  useEffect(() => {
+    if (step === 4 && !caseMemoryEnabled) {
+      setStep(5)
+    }
+  }, [step, caseMemoryEnabled])
 
   // Pull live trigger catalog descriptions when the wizard opens.
   useEffect(() => {
@@ -841,7 +896,7 @@ export default function TriggerCreationWizard({
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={1}
         tone={tone}
         stepTitle="Pick a trigger type"
@@ -916,7 +971,7 @@ export default function TriggerCreationWizard({
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={2}
         tone={tone}
         stepTitle={sourceStepTitle(kind)}
@@ -1068,7 +1123,7 @@ export default function TriggerCreationWizard({
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={3}
         tone={tone}
         stepTitle="Match the events that should wake your agents"
@@ -1093,11 +1148,15 @@ export default function TriggerCreationWizard({
             </div>
             <button
               type="button"
-              onClick={() => setStep(4)}
+              // Skip step 4 (Memory Recap) entirely when case-memory is
+              // off — the wizard goes Criteria → Review & Save in that
+              // case, mirroring how `wizardSteps` drops the step from
+              // the visible list.
+              onClick={() => setStep(caseMemoryEnabled ? 4 : 5)}
               disabled={!criteriaValid}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-40 ${accentButtonClass}`}
             >
-              Configure Memory
+              {caseMemoryEnabled ? 'Configure Memory' : 'Review & Save'}
             </button>
           </>,
         )}
@@ -1163,13 +1222,15 @@ export default function TriggerCreationWizard({
   }
 
   // ---------------------------------------------------------------- step 4 (Memory Recap)
-  if (step === 4 && kind) {
+  // The useEffect above redirects step 4 → step 5 whenever the flag is
+  // off, so this branch only fires when caseMemoryEnabled is true.
+  if (step === 4 && kind && caseMemoryEnabled) {
     return (
       <Wizard
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={4}
         tone={tone}
         stepTitle="Recall past similar cases on every wake"
@@ -1220,7 +1281,7 @@ export default function TriggerCreationWizard({
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={5}
         tone={tone}
         status="success"
@@ -1271,7 +1332,7 @@ export default function TriggerCreationWizard({
         isOpen={isOpen}
         onClose={handleClose}
         title="Create Trigger"
-        steps={WIZARD_STEPS}
+        steps={wizardSteps}
         currentStep={5}
         tone={tone}
         status={saveState === 'saving' ? 'loading' : 'idle'}
@@ -1290,7 +1351,11 @@ export default function TriggerCreationWizard({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setStep(4)}
+                    // Mirror the forward-skip: when case-memory is off,
+                    // step 4 (Memory Recap) is invisible, so the
+                    // Confirm view's Back button must jump to step 3
+                    // (Criteria) instead.
+                    onClick={() => setStep(caseMemoryEnabled ? 4 : 3)}
                     className="rounded-lg border border-tsushin-border/70 bg-transparent px-4 py-2 text-sm text-tsushin-slate transition-colors hover:border-tsushin-border hover:text-white"
                   >
                     Back

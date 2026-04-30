@@ -410,6 +410,72 @@ def _resolve_credentials_for_contract(
         return None
 
 
+def _resolve_case_memory_provider(
+    db: Session,
+    *,
+    tenant_id: str,
+    agent: Any,
+    contract: Any,
+    persist_directory: str,
+):
+    """Resolve the right vector-store provider for case-memory I/O.
+
+    Case memory has a strict per-row embedding contract (provider /
+    model / dims). Routing the same call through ``ResolvedVectorStore``
+    (the override/complement/shadow facade) is unsafe here: its
+    circuit-breaker fallback to local ChromaDB silently swaps a
+    1536-dim Gemini collection for a 384-dim local one, producing
+    either dim-mismatch crashes (read) or 384-dim writes that Qdrant
+    rejects (write). For case memory we want the *raw* primary
+    provider when the agent has an external instance, and the local
+    ChromaDB only when the contract dims actually match.
+
+    Returns the chosen provider, or ``None`` if no usable provider
+    could be obtained.
+    """
+    from agent.memory.providers.registry import VectorStoreRegistry
+
+    registry = VectorStoreRegistry()
+    bound_instance_id = (
+        getattr(contract, "vector_store_instance_id", None)
+        or getattr(agent, "vector_store_instance_id", None)
+    )
+
+    if bound_instance_id:
+        # External instance — go straight to the raw adapter so we don't
+        # silently fall back to a different-dim store on transient errors.
+        try:
+            provider = registry.get_provider(
+                bound_instance_id, db, tenant_id=tenant_id
+            )
+            return provider
+        except Exception:
+            logger.exception(
+                "case_memory: failed to obtain external provider "
+                "(tenant=%s agent=%s instance=%s)",
+                tenant_id,
+                getattr(agent, "id", None),
+                bound_instance_id,
+            )
+            # Only fall through to ChromaDB when the contract is the
+            # local 384-dim default — otherwise we'd corrupt recall.
+            if (
+                getattr(contract, "provider", None) not in (None, "local")
+                or int(getattr(contract, "dimensions", 384) or 384) != 384
+            ):
+                return None
+
+    try:
+        return registry.get_chromadb_fallback(persist_directory)
+    except Exception:
+        logger.exception(
+            "case_memory: failed to obtain ChromaDB fallback for tenant=%s agent=%s",
+            tenant_id,
+            getattr(agent, "id", None),
+        )
+        return None
+
+
 async def _write_vectors_via_bridge(
     db: Session,
     *,
@@ -421,6 +487,7 @@ async def _write_vectors_via_bridge(
     run_id: int,
     trigger_kind: Optional[str],
     contract,
+    credentials: Optional[dict] = None,
     vectors: List[tuple[str, str, List[float]]],
 ) -> List[str]:
     """Write up to 3 case vectors via the resolved ``ProviderBridgeStore``.
@@ -428,46 +495,47 @@ async def _write_vectors_via_bridge(
     Returns the list of ``vector_kind`` values that were successfully
     written. Never raises — vector-store outages bubble back to the
     caller as a partial/failed status, not as an exception.
+
+    The embedder passed to the bridge is contract-aware so the
+    bridge's internal re-embedding produces vectors in the same
+    contract space as the precomputed batch. With a Gemini contract
+    + Qdrant 1536-dim collection, this means the bridge re-embeds via
+    Gemini and writes 1536-dim vectors. Without this wiring, the
+    bridge would default to the local 384-dim SentenceTransformer and
+    Qdrant would 400-reject every write.
     """
 
     from agent.memory.embedding_service import get_shared_embedding_service
     from agent.memory.providers.bridge import ProviderBridgeStore
-    from agent.memory.providers.resolver import VectorStoreResolver
 
     backend_root = Path(__file__).resolve().parents[1]
     persist_directory = str(backend_root / "data" / "memory" / f"agent_{getattr(agent, 'id', 0)}")
 
-    embedder = get_shared_embedding_service()
+    # Contract-aware embedder so bridge re-embedding lands in the right
+    # dimensionality. Falls back to the local default if the contract
+    # is local or unsupported.
+    try:
+        embedder = get_shared_embedding_service(
+            contract=contract, credentials=credentials
+        )
+    except Exception:
+        logger.exception(
+            "case_memory: failed to obtain contract-aware embedder "
+            "(tenant=%s agent=%s) — falling back to local default",
+            tenant_id,
+            getattr(agent, "id", None),
+        )
+        embedder = get_shared_embedding_service()
 
-    # Resolve the agent's vector store; falls back to ChromaDB local path.
-    resolver = VectorStoreResolver()
-    resolved = resolver.resolve(
-        agent_id=agent.id,
-        db=db,
-        persist_directory=persist_directory,
-        vector_store_instance_id=getattr(agent, "vector_store_instance_id", None),
-        vector_store_mode=getattr(agent, "vector_store_mode", "override") or "override",
+    provider = _resolve_case_memory_provider(
+        db,
         tenant_id=tenant_id,
+        agent=agent,
+        contract=contract,
+        persist_directory=persist_directory,
     )
-
-    if resolved is None:
-        # Local ChromaDB default — instantiate a CachedVectorStore-style
-        # provider. For MVP we lean on the bridge with a local
-        # ChromaDB backend via the registry's chromadb fallback.
-        from agent.memory.providers.registry import VectorStoreRegistry
-
-        registry = VectorStoreRegistry()
-        try:
-            provider = registry.get_chromadb_fallback(persist_directory)
-        except Exception:
-            logger.exception(
-                "case_memory: failed to obtain ChromaDB fallback for tenant=%s agent=%s",
-                tenant_id,
-                agent.id,
-            )
-            return []
-    else:
-        provider = resolved
+    if provider is None:
+        return []
 
     bridge = ProviderBridgeStore(provider=provider, embedding_service=embedder)
 
@@ -490,12 +558,10 @@ async def _write_vectors_via_bridge(
             "embedding_metric": contract.metric,
         }
         try:
-            # The bridge's add_message re-embeds via its own embedding_service;
-            # we already validated dimensions, so let it pass the precomputed
-            # embedding through where possible. The default bridge.add_message
-            # does a re-embed though — for the MVP we accept that small
-            # overhead so we can reuse the existing path. Tests inject a fake
-            # provider that records what was passed.
+            # The bridge's add_message re-embeds via its own embedding_service.
+            # We pass a contract-aware embedder above so the re-embedded
+            # vector lands in the same space as the precomputed batch
+            # (e.g. Gemini 1536-dim → Qdrant 1536-dim collection).
             await bridge.add_message(
                 message_id=message_id,
                 sender_key=sender_key,
@@ -780,6 +846,7 @@ def index_case(
                     run_id=run_id,
                     trigger_kind=trigger_kind,
                     contract=contract,
+                    credentials=credentials,
                     vectors=vectors_payload,
                 )
             )
@@ -802,6 +869,7 @@ def index_case(
                             run_id=run_id,
                             trigger_kind=trigger_kind,
                             contract=contract,
+                            credentials=credentials,
                             vectors=vectors_payload,
                         )
                     )
@@ -901,8 +969,6 @@ def search_similar_cases(
     from models import Agent, CaseMemory
     from agent.memory.embedding_service import get_shared_embedding_service
     from agent.memory.providers.bridge import ProviderBridgeStore
-    from agent.memory.providers.registry import VectorStoreRegistry
-    from agent.memory.providers.resolver import VectorStoreResolver
     from services.case_embedding_resolver import resolve_for_agent
 
     if not query or not query.strip():
@@ -974,24 +1040,21 @@ def search_similar_cases(
     if not query_embedding:
         return []
 
-    resolver = VectorStoreResolver()
-    resolved = resolver.resolve(
-        agent_id=agent.id,
-        db=db,
-        persist_directory=persist_directory,
-        vector_store_instance_id=getattr(agent, "vector_store_instance_id", None),
-        vector_store_mode=getattr(agent, "vector_store_mode", "override") or "override",
+    # Mirror the write-side routing: use the raw external provider when
+    # the agent has a bound instance, and only use ChromaDB when the
+    # contract dims match. The ResolvedVectorStore facade silently falls
+    # back to local ChromaDB on circuit-open / probe-failure, which
+    # crashes here with a 384/1536 dim mismatch instead of returning an
+    # empty result. Direct routing preserves recall correctness.
+    provider = _resolve_case_memory_provider(
+        db,
         tenant_id=tenant_id,
+        agent=agent,
+        contract=contract,
+        persist_directory=persist_directory,
     )
-
-    if resolved is None:
-        registry = VectorStoreRegistry()
-        try:
-            provider = registry.get_chromadb_fallback(persist_directory)
-        except Exception:
-            return []
-    else:
-        provider = resolved
+    if provider is None:
+        return []
 
     bridge = ProviderBridgeStore(provider=provider, embedding_service=embedder)
 

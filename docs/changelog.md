@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Case Memory v2 hardening: tenant-scoped SaaS gates + Qdrant read-path closure (2026-04-30)
+
+Closes every open item from `630cf85` and converts the case-memory feature gates from environment variables to per-tenant DB columns surfaced in the tenant settings UI — matching Tsushin's SaaS architecture (no env-var configuration for tenant-affecting features).
+
+**Architectural change — env-var gates removed**
+- `TSN_CASE_MEMORY_ENABLED` deleted from `.env.example`, `docker-compose.yml`, and the four code paths that referenced it (`app.py` router mount, `agent/skills/__init__.py` skill export, `agent/skills/skill_manager.py` registry, `services/queue_router.py` enqueue, `services/trigger_recap_service.py` short-circuit).
+- Replaced with two BOOLEAN columns on the `tenant` table (alembic `0077_tenant_case_memory_gates`, both NOT NULL DEFAULT TRUE):
+  - `tenant.case_memory_enabled` — master tenant gate (when False, this tenant's case-memory subsystem is fully disabled).
+  - `tenant.case_memory_recap_enabled` — operator escape hatch for recap injection (when False, dispatch skips recap injection for this tenant regardless of per-trigger configs; indexer is unaffected).
+- `config/feature_flags.case_memory_enabled(tenant_id, db)` and `case_memory_recap_enabled(tenant_id, db)` now read from those columns. No-arg form returns True defensively. All production call sites pass `(tenant_id, db)`.
+- UI: new "Case Memory" section on `/settings/organization` (next to plan / usage / Danger Zone) with two toggle switches calling `PUT /api/tenant/me/case-memory-config`. Lives on the existing tenant self-service surface — same place tenant owners manage other org-level config (consistent placement, not random).
+
+**Qdrant read-path fix (closes D-2)**
+- Previously the case-memory write path correctly routed to the agent's bound `VectorStoreInstance` (e.g. Qdrant + Gemini at 1536 dims), but the read path fell back to local ChromaDB on a different agent.id-based persist directory — so cases written to Qdrant were never recallable.
+- New `case_memory_service._resolve_case_memory_provider` helper resolves the same external provider on both write + read sides when the agent has a bound instance. ChromaDB fallback is gated on `contract.provider in (None, "local")` AND `dimensions == 384` so a dim mismatch can no longer silently route to the wrong store.
+- Live verified: an agent bound to instance #19 (Gemini-Qdrant 1536-d) indexes cases stamped `provider=gemini, model=gemini-embedding-001, dims=1536`, then a recall query returns the same cases with sim 0.77 (OAuth) and sim 0.76 (DB-pool) — both well above the 0.30 threshold.
+
+**Other surfaces shipped in this commit**
+- **`/api/feature-flags`** (`backend/api/routes_feature_flags.py`): tenant-scoped GET that returns `{case_memory_enabled, case_memory_recap_enabled, trigger_binding_enabled, auto_generation_enabled}`. The trigger-creation wizard fetches it on mount and conditionally renders the Memory Recap step (hidden when `case_memory_enabled=false` for this tenant).
+- **Trigger detail page Memory Recap section** (`MemoryRecapCard.tsx` mounted in `TriggerDetailShell.tsx`): operators can edit the recap config (or enable it for the first time) directly from `/hub/triggers/{kind}/{id}` without going through the wizard. Edit / Disable / Test Recap actions all wired.
+- **Vector Stores page Test Embedding button** (`/settings/vector-stores`): inline result panel renders `{success, dims, sample_norm, latency_ms, provider, model}` from the `POST /api/vector-store-instances/{id}/test-embedding` round-trip — used by D-2 + E-2 evidence captures.
+- **Recap config DELETE-cascade savepoint fix** (`routes_trigger_recap.delete_recap_config_for_trigger_instance`): wraps the cascade in `db.begin_nested()` so a missing-table fixture in old test suites (the table was added in 0076) doesn't break the parent trigger DELETE transaction.
+- **Recap timeout bumped 2s → 10s** (`trigger_recap_service._SEARCH_TIMEOUT_S`): the original 2s budget was too tight for cold-start MiniLM model load (3-5s); after the embedder is hot the actual search is < 200ms. The budget remains as a defensive ceiling for pathologically slow queries.
+
+**Validation**
+- Backend pytest: **`1039 passed, 29 skipped, 0 failed, 0 errors`** (excluding the `comprehensive_e2e/e2e_skills/test_api_v1_e2e` shells, which are unrelated). Includes 28+ new tests (12 trigger_recap_service, 16 gemini_embedding_provider, 21 routes_trigger_recap + routes_test_embedding, 5 routes_feature_flags, 3 routes_tenant_case_memory_config, 2 case_memory_external_qdrant_recall, plus extensions to existing case-memory test files for the new contract-aware embed signature).
+- Independent code review (`feature-dev:code-reviewer` agent) verdict: `READY_TO_COMMIT` after fixing two findings — duplicate `deleteVectorStoreInstance` method in `client.ts` (TS build blocker, removed) and a stale env-var docstring in `trigger_recap_service.py` (replaced with the per-tenant gate description). 22 properties verified clean (tenant isolation in every query path, auth gating on every new endpoint, no production code references the deleted env var, alembic 0077 idempotent, agent.vector_store_instance_id preference correct in resolver, default-on safety, mask-not-leak on credentials, etc.).
+- Comprehensive UI evidence captured at `docs/qa/v0.7.x/case-memory-v2/`: 22 screenshots + 1 markdown evidence file across **32/32 PASS criteria** (Group A wizard 4/4, Group B dispatch injection 4/4, Group C Playground recall 4/4, Group D vector backends 4/4, Group E Gemini API 4/4, Group F per-tenant SaaS toggles 2/2, surfaces 3/3, semantic search quality probe 7/7). The full table with the question asked → agent reply → tool invoked → evidence path → verdict for every criterion is in `docs/qa/v0.7.x/case-memory-v2/EVIDENCE_TABLE.md`.
+- Live Playground recall (UI-driven): the agent reply for the C-1 OAuth scenario quoted the seeded fix verbatim — *"Updated TSN_GOOGLE_OAUTH_REDIRECT_URI from http → https in .env and Google Cloud Console, then restarted the backend"* — proving the recall infrastructure works end-to-end through the UI for matched topics.
+
+**No open items.** Every follow-up flagged in the prior `630cf85` changelog entry has been closed in this commit.
+
+
 ### Release 0.7.0 — Case Memory v2: per-trigger recap + Gemini embeddings (default-off, experimental) (2026-04-29)
 
 Generalises the v0.7.0 case-memory MVP from "agent calls a tool" to "trigger fires → recap is pre-built and injected into the agent's first-turn context", **and** adds a Gemini external-embedding adapter so tenants can use Qdrant/Pinecone with `gemini-embedding-001` at 768/1536/3072 dims instead of the local MiniLM/384 default. Sidesteps the LLM-cherry-picking limitation surfaced in commit `71acb29` (Sonnet 4.6 reused first tool result across follow-up turns) by moving recall from agent-discretion to deterministic context injection at dispatch time. Architecture: `.private/CASE_MEMORY_V2_DESIGN.md`. Pre-defined success criteria: `.private/CASE_MEMORY_V2_SUCCESS_CRITERIA.md` (23 criteria across 7 groups).

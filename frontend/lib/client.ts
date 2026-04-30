@@ -2697,6 +2697,17 @@ export interface VectorStoreEmbeddingTestResult {
   error?: string | null
 }
 
+// v0.7.x Wave 2-D — tenant-scoped feature flags surfaced via
+// `GET /api/feature-flags`. Frontend uses these to gate optional UI
+// (e.g. the wizard's Memory Recap step). Older backends without the
+// route 404 — callers should default to permissive flags.
+export interface FeatureFlags {
+  case_memory_enabled: boolean
+  case_memory_recap_enabled?: boolean
+  trigger_binding_enabled?: boolean
+  auto_generation_enabled?: boolean
+}
+
 export interface WebhookIntegration {
   id: number
   tenant_id: string
@@ -3079,8 +3090,18 @@ export interface OrganizationData {
   status: string
   user_count: number
   agent_count: number
+  // v0.7.x Trigger Case Memory — per-tenant gates surfaced on the same
+  // payload so the Organization settings UI can render the toggles
+  // without an extra round-trip.
+  case_memory_enabled?: boolean
+  case_memory_recap_enabled?: boolean
   created_at?: string
   updated_at?: string
+}
+
+export interface CaseMemoryConfig {
+  case_memory_enabled: boolean
+  case_memory_recap_enabled: boolean
 }
 
 export interface OrganizationStats {
@@ -6580,6 +6601,26 @@ export const api = {
     return res.json()
   },
 
+  // v0.7.x Wave 2-D — tenant feature flags. Returns a permissive default
+  // when the backend route is missing (older deployments) so optional UI
+  // remains visible rather than being silently hidden.
+  async getFeatureFlags(): Promise<FeatureFlags> {
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/feature-flags`)
+      if (res.status === 404) {
+        // eslint-disable-next-line no-console
+        console.debug('[feature-flags] endpoint missing — defaulting case_memory_enabled=true')
+        return { case_memory_enabled: true }
+      }
+      if (!res.ok) await handleApiError(res, 'Failed to fetch feature flags')
+      return res.json()
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.debug('[feature-flags] fetch failed — defaulting case_memory_enabled=true', err)
+      return { case_memory_enabled: true }
+    }
+  },
+
   async testEmbedding(instanceId: number, text: string): Promise<VectorStoreEmbeddingTestResult> {
     const res = await authenticatedFetch(
       `${API_URL}/api/vector-store-instances/${instanceId}/test-embedding`,
@@ -7015,6 +7056,23 @@ export const api = {
       body: JSON.stringify(data),
     })
     if (!res.ok) await handleApiError(res, 'Failed to update organization')
+    return res.json()
+  },
+
+  // v0.7.x Trigger Case Memory — per-tenant gates. Routed through the
+  // tenant self-service settings router (org.settings.write permission).
+  // tenant_id is accepted for symmetry with other org-scoped methods,
+  // but the endpoint resolves the tenant from the authenticated session.
+  async updateOrganizationCaseMemoryConfig(
+    _tenantId: string,
+    config: { case_memory_enabled?: boolean; case_memory_recap_enabled?: boolean }
+  ): Promise<CaseMemoryConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/case-memory-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update case memory config')
     return res.json()
   },
 
@@ -9142,13 +9200,6 @@ export const api = {
     })
     if (!res.ok) await handleApiError(res, 'Failed to update vector store instance')
     return res.json()
-  },
-
-  async deleteVectorStoreInstance(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete vector store instance')
   },
 
   async testVectorStoreConnection(id: number): Promise<{ success: boolean; message: string; latency_ms?: number; vector_count?: number }> {

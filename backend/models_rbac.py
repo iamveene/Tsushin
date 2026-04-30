@@ -51,6 +51,19 @@ class Tenant(Base):
     # Orthogonal to the GLOBAL kill switch on Config.emergency_stop, which halts
     # every tenant at once and is reserved for global admins.
     emergency_stop = Column(Boolean, default=False, nullable=False, server_default="false")
+    # v0.7.x Trigger Case Memory — per-tenant gates. SaaS configuration, set
+    # via the tenant settings UI (NOT env vars).
+    # case_memory_enabled controls whether this tenant's case-memory subsystem
+    # is active at all (writes case_memory rows on terminal trigger runs +
+    # surfaces /api/case-memory* + the find_similar_past_cases skill). Default
+    # True so any tenant can use the feature out of the box.
+    case_memory_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
+    # case_memory_recap_enabled is the operator escape hatch for the *recap
+    # injection at dispatch time*. When False, the trigger dispatcher does NOT
+    # build a memory recap even if a per-trigger TriggerRecapConfig.enabled
+    # is True. Indexer (write-side) is unaffected — past cases continue to
+    # accrue and remain searchable via the agent skill / API. Default True.
+    case_memory_recap_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
