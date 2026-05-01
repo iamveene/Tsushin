@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Audit 5 local fresh-install and live-connected QA (2026-05-01)
+
+- Local fresh-install validation for target 11.2 ran from GitHub branch `release/0.7.0` at `3949de0f3a87aca4af742b84be4470ba6934d99d` using disposable local HTTP and self-signed TLS stacks. Programmatic coverage completed 46 API calls with 0 API failures; browser coverage walked 12 setup/login/Watcher/Playground/Triggers/Flows/Continuous Agents pages with 0 console errors, 0 bad HTTP responses, and 0 unexpected request failures. Fixture cleanup left 0 run-owned API/DB records and Docker cleanup left 0 run-owned containers, volumes, networks, images, or clone directories. BUG-725 tracks the remaining global helper image tag restore drift.
+- Live-connected local correction re-tested the missing continuous-agent coverage on the existing stack with run id `20260501165024`. Gmail integration 4 sent/searched/polled a live canary and emitted 1 Email wake; Jira integration 12 live-polled JSM issues and emitted 2 Jira wakes; GitHub had no live tenant integration/PAT, so signed webhook fixture coverage emitted 2 GitHub wakes after unsaved and saved PR-criteria dry-runs both matched. The QA continuous agent received 5 wake events and completed 5 continuous runs. WhatsApp tester evidence captured 3 notifications, one each for Gmail, Jira, and GitHub, after the generated flow fixture allowed notification nodes to run. The DB was backed up before the run and restored afterward from `.private/qa/audit5-live-connected-20260501165024/original-tsushin-20260501165024.dump`.
+- Known issues: BUG-725 covers disposable local installs rebuilding shared host helper tags `tsushin/whatsapp-mcp:latest` and `tsushin-toolbox:base`; BUG-726 covers generated trigger flows stopping before WhatsApp notification delivery because the auto-created Conversation node has no recipient and default stop-on-failure behavior.
+
 ### BUG-723 — HTTP fresh-install browser session persistence (2026-05-01)
 
 - Fixed HTTP-mode fresh installs where browser login could land on `/` using in-memory React auth state, but subsequent protected-route navigations lost the `tsushin_session` cookie and cascaded into `/auth/login?force=1&reason=session-recovery`.
