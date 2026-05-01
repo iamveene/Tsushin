@@ -99,6 +99,8 @@ services:
       tsushin.service: "proxy"
     volumes:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
     depends_on:
       backend:
         condition: service_healthy
@@ -255,6 +257,9 @@ services:
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
         - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
+        - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
+        - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
+        - INTERNAL_API_URL=${INTERNAL_API_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
     container_name: ${TSN_STACK_NAME:-tsushin}-frontend
     labels:
       tsushin.managed: "true"
@@ -265,9 +270,13 @@ services:
     environment:
       - NODE_ENV=production
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
-      # v0.6.1 BUG-5/7/8 fix: runtime URL the Next.js rewrites() proxy targets.
-      # Read at request time from the Node.js process (NOT a build arg).
-      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend:8081}
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
+      # v0.6.1 BUG-5/7/8 fix: backend URL used by the Next.js proxy layer.
+      # Fallback rewrites are compiled at image build time; route handlers also
+      # read the same value at runtime.
+      # BUG-723: keep this stack-scoped on the shared external tsushin-network.
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
+      - INTERNAL_API_URL=${INTERNAL_API_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
     depends_on:
       backend:
         condition: service_healthy
