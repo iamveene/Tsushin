@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed HTTP-mode fresh installs where browser login could land on `/` using in-memory React auth state, but subsequent protected-route navigations lost the `tsushin_session` cookie and cascaded into `/auth/login?force=1&reason=session-recovery`.
 - Stack-scoped the HTTP frontend/backend routing path on the shared external `tsushin-network`: `BACKEND_INTERNAL_URL`, `INTERNAL_API_URL`, Next rewrite fallback, and the base HTTP Caddyfile now target `${TSN_STACK_NAME}-backend` / `${TSN_STACK_NAME}-frontend` instead of bare `backend` / `frontend` aliases that can resolve to a sibling install.
-- Added a dedicated Next.js `/api/auth/*` route-handler proxy that forwards auth requests to the same stack-scoped backend origin, normalizes the forwarded scheme from `TSN_SSL_MODE`, and explicitly copies `Set-Cookie` response headers back to the browser. General `/api/*` and `/ws/*` traffic still uses the existing same-origin rewrite path.
+- Added a dedicated Next.js `/api/auth/*` route-handler proxy that forwards auth requests to the same stack-scoped backend origin, normalizes the forwarded scheme from `TSN_SSL_MODE`, and explicitly copies `Set-Cookie` response headers back to the browser. General `/api/*` and `/ws/*` traffic still uses the same-origin fallback rewrite path after first-party route handlers have had a chance to run.
 - Added static regression coverage for stack-scoped HTTP routing and updated the browser-to-backend transport documentation to call out the auth-cookie proxy exception and HTTP/TLS `x-forwarded-proto` behavior.
 
 ### Release 0.7.0 — Gmail/Jira trigger parity hardening + final E2E sign-off (2026-04-30)
