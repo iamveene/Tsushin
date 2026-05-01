@@ -123,9 +123,9 @@ def _seed_base(db, *, default_agent: bool = True):
     return agent, integration
 
 
-def _signed_request(payload: dict):
+def _signed_request(payload: dict, *, timestamp: str | None = None):
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    timestamp = str(int(time.time()))
+    timestamp = timestamp or str(int(time.time()))
     signed_input = f"{timestamp}.".encode("utf-8") + body
     signature = hmac.new(b"secret", signed_input, hashlib.sha256).hexdigest()
     return _RequestStub(body), f"sha256={signature}", timestamp
@@ -133,6 +133,17 @@ def _signed_request(payload: dict):
 
 def _receive(db, payload: dict, slug: str = "wh-tenant-a"):
     request, signature, timestamp = _signed_request(payload)
+    return _receive_signed(db, request=request, signature=signature, timestamp=timestamp, slug=slug)
+
+
+def _receive_signed(
+    db,
+    *,
+    request: _RequestStub,
+    signature: str,
+    timestamp: str,
+    slug: str = "wh-tenant-a",
+):
     return asyncio.run(
         inbound.receive_webhook(
             slug=slug,
@@ -190,25 +201,27 @@ def test_webhook_duplicate_signed_envelope_returns_409(
     trigger-dispatch path.
     """
     agent, _integration = _seed_base(db_session)
+    payload = {
+        "message": "Build report",
+        "sender_id": "customer-1",
+        "source_id": "evt-dup",
+    }
+    request, signature, timestamp = _signed_request(payload)
 
-    first_response = _receive(
+    first_response = _receive_signed(
         db_session,
-        {
-            "message": "Build report",
-            "sender_id": "customer-1",
-            "source_id": "evt-dup",
-        },
+        request=request,
+        signature=signature,
+        timestamp=timestamp,
     )
     assert first_response["status"] == "queued"
 
     with pytest.raises(HTTPException) as exc_info:
-        _receive(
+        _receive_signed(
             db_session,
-            {
-                "message": "Build report",
-                "sender_id": "customer-1",
-                "source_id": "evt-dup",
-            },
+            request=_RequestStub(request._body),
+            signature=signature,
+            timestamp=timestamp,
         )
     assert exc_info.value.status_code == 409
     assert "duplicate" in str(exc_info.value.detail).lower()

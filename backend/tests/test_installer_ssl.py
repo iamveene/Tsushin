@@ -209,19 +209,29 @@ def test_selfsigned_hostname_domain_emits_dns_san(installer, tmp_path, monkeypat
 # Caddyfile generation
 # ---------------------------------------------------------------------------
 
-def test_caddyfile_selfsigned_ip_uses_localhost_sni(installer, tmp_path):
+def test_caddyfile_selfsigned_ip_uses_port_only_explicit_cert(installer, tmp_path):
     installer.root_dir = tmp_path
     installer.config['SSL_MODE'] = 'selfsigned'
     installer.config['SSL_DOMAIN'] = '10.211.55.5'
     installer.config['TSN_STACK_NAME'] = 'tsushin'
+    certs_dir = tmp_path / "caddy" / "tsushin" / "certs"
+    certs_dir.mkdir(parents=True)
+    (certs_dir / "selfsigned.crt").write_text("test cert")
 
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
-    # Caddy rejects IP SNI — ensure we rewrote to localhost
-    assert "default_sni localhost" in caddyfile
+    # Caddy rejects IP SNI and clients omit SNI for IP literals. Use a
+    # port-only matcher with the installer-generated IP-SAN cert instead.
+    assert "default_sni localhost" not in caddyfile
     assert "default_sni 10.211.55.5" not in caddyfile
-    # Site block label is still the IP
-    assert "10.211.55.5 {" in caddyfile
+    assert ":443 {" in caddyfile
+    assert "10.211.55.5 {" not in caddyfile
+    assert "tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key" in caddyfile
+    assert "handle /tsushin-selfsigned-ca.pem" in caddyfile
+
+    bootstrap = tmp_path / "caddy" / "tsushin" / "beacon-selfsigned-bootstrap.sh"
+    assert bootstrap.exists()
+    assert "REQUESTS_CA_BUNDLE" in bootstrap.read_text()
 
 
 def test_caddyfile_selfsigned_hostname_uses_hostname_sni(installer, tmp_path):
@@ -229,10 +239,15 @@ def test_caddyfile_selfsigned_hostname_uses_hostname_sni(installer, tmp_path):
     installer.config['SSL_MODE'] = 'selfsigned'
     installer.config['SSL_DOMAIN'] = 'tsushin.local'
     installer.config['TSN_STACK_NAME'] = 'tsushin'
+    certs_dir = tmp_path / "caddy" / "tsushin" / "certs"
+    certs_dir.mkdir(parents=True)
+    (certs_dir / "selfsigned.crt").write_text("test cert")
 
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
     assert "default_sni tsushin.local" in caddyfile
+    assert "tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key" in caddyfile
+    assert "handle /tsushin-selfsigned-ca.pem" in caddyfile
 
 
 def test_caddyfile_letsencrypt_production_has_no_acme_ca(installer, tmp_path):
@@ -259,6 +274,41 @@ def test_caddyfile_letsencrypt_staging_emits_acme_ca(installer, tmp_path):
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
     assert "acme_ca https://acme-staging-v02.api.letsencrypt.org/directory" in caddyfile
+
+
+def test_helper_image_refs_are_legacy_for_default_stack(installer):
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    assert installer._get_helper_image_refs() == {
+        "whatsapp_mcp": "tsushin/whatsapp-mcp:latest",
+        "toolbox": "tsushin-toolbox:base",
+    }
+
+
+def test_helper_image_refs_are_stack_scoped_for_custom_stack(installer):
+    installer.config['TSN_STACK_NAME'] = 'Audit_5.Local'
+    assert installer._get_helper_image_refs() == {
+        "whatsapp_mcp": "audit_5-local/whatsapp-mcp:latest",
+        "toolbox": "audit_5-local/toolbox:base",
+    }
+
+
+def test_generated_env_includes_stack_scoped_helper_images(installer, tmp_path):
+    installer.root_dir = tmp_path
+    installer.env_file = tmp_path / ".env"
+    installer.backend_data_dir = tmp_path / "backend" / "data"
+    installer.config.update({
+        'TSN_STACK_NAME': 'audit5local',
+        'TSN_APP_PORT': '8091',
+        'FRONTEND_PORT': '3091',
+        'SSL_MODE': 'disabled',
+        'ACCESS_TYPE': 'localhost',
+        'PUBLIC_HOST': 'localhost',
+    })
+
+    installer.generate_env_file()
+    env_text = installer.env_file.read_text()
+    assert "TSN_WHATSAPP_MCP_IMAGE=audit5local/whatsapp-mcp:latest" in env_text
+    assert "TSN_TOOLBOX_BASE_IMAGE=audit5local/toolbox:base" in env_text
 
 
 # ---------------------------------------------------------------------------

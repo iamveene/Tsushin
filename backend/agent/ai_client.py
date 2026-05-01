@@ -44,6 +44,8 @@ class AIClient:
         self.provider = provider.lower()
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)
+        self.model_name = self._coerce_generation_model(self.provider, self.model_name)
+        model_name = self.model_name
         self.db = db
         self.token_tracker = token_tracker
         self.tenant_id = tenant_id
@@ -81,6 +83,8 @@ class AIClient:
             instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
             if instance and instance.is_active:
                 self.provider = instance.vendor
+                self.model_name = self._coerce_generation_model(self.provider, self.model_name)
+                model_name = self.model_name
                 api_key = ProviderInstanceService.resolve_api_key(instance, db)
                 base_url = instance.base_url or get_vendor_default_base_url(instance.vendor)
 
@@ -371,6 +375,36 @@ class AIClient:
             self.logger.info(f"Initialized Vertex AI client: project={vertex_project_id}, region={vertex_region}, publisher={self.vertex_publisher}, model={model_name}")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
+
+    def _coerce_generation_model(self, provider: str, model_name: str) -> str:
+        """
+        Keep text-generation clients away from audio-only model ids.
+
+        Gemini TTS preview models are valid for the TTS provider, but the generic
+        AIClient only performs text generation. If an audio agent's main model is
+        accidentally set to a TTS preview model, normal WhatsApp text messages
+        fail before a response can be generated.
+        """
+        normalized_provider = (provider or "").lower()
+        normalized_model = (model_name or "").strip()
+        if normalized_provider != "gemini" or not normalized_model:
+            return model_name
+
+        fallback_by_model = {
+            "gemini-2.5-flash-tts-preview": "gemini-2.5-flash",
+            "gemini-2.5-pro-tts-preview": "gemini-2.5-pro",
+            "gemini-3.1-flash-tts-preview": "gemini-2.5-flash",
+        }
+        fallback_model = fallback_by_model.get(normalized_model.lower())
+        if fallback_model:
+            self.logger.warning(
+                "AIClient: replacing Gemini TTS-only model %s with text model %s",
+                normalized_model,
+                fallback_model,
+            )
+            return fallback_model
+
+        return model_name
 
     async def generate(
         self,

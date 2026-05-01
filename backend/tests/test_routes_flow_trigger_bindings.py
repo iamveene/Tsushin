@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import sys
 import types
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -42,13 +45,18 @@ from api.routes_flow_trigger_bindings import (  # noqa: E402
     FlowTriggerBindingCreate,
     create_binding,
 )
+from flows.flow_engine import FlowEngine  # noqa: E402
 from models import (  # noqa: E402
     Base,
     EmailChannelInstance,
     FlowDefinition,
     FlowNode,
+    FlowNodeRun,
     FlowRun,
     FlowTriggerBinding,
+    GitHubChannelInstance,
+    JiraChannelInstance,
+    WebhookIntegration,
 )
 from models_rbac import Tenant, User  # noqa: E402
 
@@ -63,9 +71,13 @@ def db_session():
             User.__table__,
             FlowDefinition.__table__,
             FlowNode.__table__,
+            FlowNodeRun.__table__,
             FlowRun.__table__,
             FlowTriggerBinding.__table__,
             EmailChannelInstance.__table__,
+            JiraChannelInstance.__table__,
+            GitHubChannelInstance.__table__,
+            WebhookIntegration.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -153,3 +165,200 @@ def test_schedule_binding_kind_is_not_accepted():
             trigger_kind="schedule",
             trigger_instance_id=20,
         )
+
+
+def _seed_trigger(db, trigger_kind: str, *, trigger_id: int = 301):
+    if trigger_kind == "email":
+        trigger = EmailChannelInstance(
+            id=trigger_id,
+            tenant_id="tenant-a",
+            integration_name="Inbox Watcher",
+            provider="gmail",
+            created_by=1,
+        )
+    elif trigger_kind == "jira":
+        trigger = JiraChannelInstance(
+            id=trigger_id,
+            tenant_id="tenant-a",
+            integration_name="Jira Watcher",
+            site_url="https://example.atlassian.net",
+            jql="project = HELP",
+            created_by=1,
+        )
+    elif trigger_kind == "github":
+        trigger = GitHubChannelInstance(
+            id=trigger_id,
+            tenant_id="tenant-a",
+            integration_name="GitHub Watcher",
+            github_integration_id=901,
+            repo_owner="acme",
+            repo_name="widget",
+            created_by=1,
+        )
+    elif trigger_kind == "webhook":
+        trigger = WebhookIntegration(
+            id=trigger_id,
+            tenant_id="tenant-a",
+            integration_name="Webhook Watcher",
+            slug=f"webhook-{trigger_id}",
+            api_secret_encrypted="encrypted",
+            api_secret_preview="whsec_xxx",
+            created_by=1,
+        )
+    else:
+        raise AssertionError(f"Unsupported trigger kind: {trigger_kind}")
+
+    db.add(trigger)
+    db.commit()
+    return trigger
+
+
+@pytest.mark.parametrize("trigger_kind", ["email", "jira", "github", "webhook"])
+def test_generated_trigger_flow_continues_conversation_failure_when_notification_configured(
+    db_session,
+    trigger_kind,
+):
+    """BUG-726: notification-enabled generated flows must keep Notification reachable."""
+    from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+    _seed_tenant(db_session, "tenant-a", 1)
+    db_session.commit()
+    trigger = _seed_trigger(db_session, trigger_kind)
+
+    flow, _binding, created = ensure_system_managed_flow_for_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger.id,
+        default_agent_id=201,
+        notification_recipient="+15551234567",
+        notification_enabled=True,
+    )
+
+    assert created is True
+    nodes = (
+        db_session.query(FlowNode)
+        .filter(FlowNode.flow_definition_id == flow.id)
+        .order_by(FlowNode.position)
+        .all()
+    )
+    assert [node.type for node in nodes] == ["source", "gate", "conversation", "notification"]
+
+    conversation = nodes[2]
+    notification = nodes[3]
+    assert conversation.on_failure == "continue"
+    notification_config = json.loads(notification.config_json)
+    assert notification_config["enabled"] is True
+    assert notification_config["recipient"] == "+15551234567"
+
+
+def test_enabling_auto_flow_notification_repairs_existing_conversation_failure_contract(db_session):
+    """BUG-726: toggling notification on later must repair old generated flows too."""
+    from services.flow_binding_service import (
+        ensure_system_managed_flow_for_trigger,
+        update_auto_flow_notification,
+    )
+
+    _seed_tenant(db_session, "tenant-a", 1)
+    db_session.commit()
+    trigger = _seed_trigger(db_session, "email")
+    flow, _binding, _created = ensure_system_managed_flow_for_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind="email",
+        trigger_instance_id=trigger.id,
+        default_agent_id=201,
+        notification_enabled=False,
+    )
+
+    conversation = (
+        db_session.query(FlowNode)
+        .filter(FlowNode.flow_definition_id == flow.id, FlowNode.type == "conversation")
+        .one()
+    )
+    assert conversation.on_failure is None
+
+    result = update_auto_flow_notification(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind="email",
+        trigger_instance_id=trigger.id,
+        enabled=True,
+        recipient_phone="+15551234567",
+    )
+
+    db_session.flush()
+    db_session.refresh(conversation)
+    assert result["enabled"] is True
+    assert conversation.on_failure == "continue"
+
+
+def test_generated_trigger_flow_reaches_notification_after_conversation_failure(db_session):
+    """BUG-726 runtime proof: a generated conversation failure does not stop notification."""
+    from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+    _seed_tenant(db_session, "tenant-a", 1)
+    db_session.commit()
+    trigger = _seed_trigger(db_session, "email")
+    flow, _binding, _created = ensure_system_managed_flow_for_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind="email",
+        trigger_instance_id=trigger.id,
+        default_agent_id=201,
+        notification_recipient="+15551234567",
+        notification_enabled=True,
+    )
+    db_session.commit()
+
+    token_tracker = MagicMock()
+    token_tracker.track_request = AsyncMock(return_value=None)
+    with patch.object(FlowEngine, "_cleanup_stale_runs", return_value=0):
+        engine = FlowEngine(db=db_session, token_tracker=token_tracker)
+
+    async def fail_conversation(step, input_data, flow_run, step_run):
+        return {
+            "status": "failed",
+            "recipient": "",
+            "error": "Could not resolve recipient '' to a phone number",
+        }
+
+    notification_calls = []
+
+    async def complete_notification(step, input_data, flow_run, step_run):
+        notification_calls.append(step.id)
+        return {"status": "completed", "recipient": "+15551234567"}
+
+    engine.handlers["conversation"].execute = fail_conversation  # type: ignore[assignment]
+    engine.handlers["notification"].execute = complete_notification  # type: ignore[assignment]
+
+    flow_run = asyncio.run(
+        engine.run_flow(
+            flow_definition_id=flow.id,
+            trigger_context={
+                "source": {
+                    "trigger_kind": "email",
+                    "instance_id": trigger.id,
+                    "payload": {"subject": "Build report"},
+                }
+            },
+            initiator="system",
+            trigger_type="triggered",
+            tenant_id="tenant-a",
+        )
+    )
+
+    step_runs = (
+        db_session.query(FlowNodeRun)
+        .join(FlowNode, FlowNodeRun.flow_node_id == FlowNode.id)
+        .filter(FlowNodeRun.flow_run_id == flow_run.id)
+        .order_by(FlowNode.position)
+        .all()
+    )
+
+    assert notification_calls
+    assert [run.step.type for run in step_runs] == ["source", "gate", "conversation", "notification"]
+    assert [run.status for run in step_runs] == ["completed", "completed", "failed", "completed"]
+    assert flow_run.status == "completed_with_errors"
+    assert flow_run.failed_steps == 1
+    assert flow_run.completed_steps == 3

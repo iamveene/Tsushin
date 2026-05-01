@@ -309,6 +309,12 @@ class TsushinInstaller:
         if not env_vars.get('TSN_SSL_MODE'):
             updates['TSN_SSL_MODE'] = self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled'))
 
+        helper_images = self._get_helper_image_refs()
+        if not env_vars.get('TSN_WHATSAPP_MCP_IMAGE'):
+            updates['TSN_WHATSAPP_MCP_IMAGE'] = helper_images['whatsapp_mcp']
+        if not env_vars.get('TSN_TOOLBOX_BASE_IMAGE'):
+            updates['TSN_TOOLBOX_BASE_IMAGE'] = helper_images['toolbox']
+
         # BUG-685 backfill: ensure SSL installs have COMPOSE_FILE pinned so
         # subsequent maintenance `docker-compose` calls auto-apply the SSL
         # overlay and keep port 443 published.
@@ -958,6 +964,32 @@ class TsushinInstaller:
     def _get_stack_name(self) -> str:
         return (self.config.get('TSN_STACK_NAME') or 'tsushin').strip() or 'tsushin'
 
+    def _get_docker_safe_stack_name(self) -> str:
+        stack_name = self._get_stack_name().lower()
+        # Docker treats the first image path component as a registry host when
+        # it contains "." or ":". Keep the stack namespace registry-neutral.
+        stack_name = re.sub(r"[^a-z0-9_-]+", "-", stack_name).strip("-_")
+        return stack_name or "tsushin"
+
+    def _get_helper_image_refs(self) -> Dict[str, str]:
+        """Return helper image refs scoped to custom stack names.
+
+        The default stack keeps the historical image refs for backwards
+        compatibility. Non-default installs use stack-scoped repositories so a
+        disposable local install cannot retag a host's global helper images.
+        """
+        if self._get_docker_safe_stack_name() == "tsushin":
+            return {
+                "whatsapp_mcp": "tsushin/whatsapp-mcp:latest",
+                "toolbox": "tsushin-toolbox:base",
+            }
+
+        image_stack = self._get_docker_safe_stack_name()
+        return {
+            "whatsapp_mcp": f"{image_stack}/whatsapp-mcp:latest",
+            "toolbox": f"{image_stack}/toolbox:base",
+        }
+
     def _get_caddy_stack_dir(self) -> Path:
         return self.root_dir / "caddy" / self._get_stack_name()
 
@@ -975,6 +1007,32 @@ class TsushinInstaller:
             legacy_path.write_text(content)
 
         return stack_path
+
+    def _write_selfsigned_beacon_bootstrap(self) -> Optional[Path]:
+        """Generate an operator helper for beacon TLS trust on self-signed installs."""
+        if self._normalize_ssl_mode(self.config.get('SSL_MODE', 'disabled')) != 'selfsigned':
+            return None
+
+        domain = self.config.get('SSL_DOMAIN', 'localhost')
+        content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+TSUSHIN_URL="${{TSUSHIN_URL:-https://{domain}}}"
+CA_BUNDLE="${{TSUSHIN_CA_BUNDLE:-$HOME/.tsushin/tsushin-selfsigned-ca.pem}}"
+
+mkdir -p "$(dirname "$CA_BUNDLE")"
+curl -fsSLk "$TSUSHIN_URL/tsushin-selfsigned-ca.pem" -o "$CA_BUNDLE"
+
+echo "Tsushin self-signed CA bundle saved to: $CA_BUNDLE"
+echo "Run the beacon with:"
+echo "  REQUESTS_CA_BUNDLE=\\"$CA_BUNDLE\\" python run.py --server \\"$TSUSHIN_URL/api/shell\\" --api-key \\"<beacon-api-key>\\" --ca-bundle \\"$CA_BUNDLE\\" --persistence install"
+"""
+        path = self._write_caddy_artifact("beacon-selfsigned-bootstrap.sh", content)
+        try:
+            path.chmod(0o755)
+        except Exception:
+            pass
+        return path
 
     def _sync_cert_files(self, filenames: List[str]):
         """Mirror cert files from caddy/{stack}/certs/ to legacy caddy/certs/.
@@ -1097,9 +1155,19 @@ class TsushinInstaller:
         # explicit `/metrics` handler that bypasses Next.js — bearer-token
         # auth is enforced inside the backend itself when
         # TSN_METRICS_SCRAPE_TOKEN is set on the backend container.
+        selfsigned_cert_route = ""
+        if ssl_mode == 'selfsigned':
+            selfsigned_cert_route = """    handle /tsushin-selfsigned-ca.pem {
+        rewrite * /selfsigned.crt
+        root * /etc/caddy/certs
+        header Content-Type "application/x-pem-file"
+        file_server
+    }
+"""
+
         snippet_block = f"""(tsushin_routes) {{
     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    handle /api/* {{
+{selfsigned_cert_route}    handle /api/* {{
         reverse_proxy {backend_host}
     }}
     handle /ws/* {{
@@ -1161,13 +1229,12 @@ class TsushinInstaller:
             # hostname-bound install still get the correct cert.
             if self._is_ip(domain):
                 global_block = ""
-                # BUG-688: when openssl produced selfsigned.crt with IP:<ip> SAN,
-                # use it directly so the cert that operators trust matches the
-                # cert presented by the proxy. Falls back to Caddy internal CA
-                # only when openssl was unavailable at install time.
-                cert_path = (Path(__file__).resolve().parent / "caddy"
-                             / self.config.get('TSN_STACK_NAME', 'tsushin')
-                             / "certs" / "selfsigned.crt")
+                # BUG-667/688: when openssl produced selfsigned.crt with IP:<ip>
+                # SAN, use it directly so SNI-less bare-IP TLS handshakes do
+                # not depend on Caddy's internal on-demand cert selection.
+                # Falls back to Caddy internal CA only when openssl was
+                # unavailable at install time.
+                cert_path = self._get_caddy_stack_dir() / "certs" / "selfsigned.crt"
                 if cert_path.exists():
                     site_block = (
                         ":443 {\n"
@@ -1184,12 +1251,21 @@ class TsushinInstaller:
                     )
             else:
                 global_block = f"{{\n    default_sni {domain}\n}}\n\n"
-                site_block = (
-                    f"{domain} {{\n"
-                    f"    tls internal\n"
-                    f"    import tsushin_routes\n"
-                    f"}}\n\n"
-                )
+                cert_path = self._get_caddy_stack_dir() / "certs" / "selfsigned.crt"
+                if cert_path.exists():
+                    site_block = (
+                        f"{domain} {{\n"
+                        f"    tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key\n"
+                        f"    import tsushin_routes\n"
+                        f"}}\n\n"
+                    )
+                else:
+                    site_block = (
+                        f"{domain} {{\n"
+                        f"    tls internal\n"
+                        f"    import tsushin_routes\n"
+                        f"}}\n\n"
+                    )
             caddyfile_content = (
                 f"{global_block}"
                 f"{snippet_block}\n\n"
@@ -1202,6 +1278,12 @@ class TsushinInstaller:
 
         generated_path = self._write_caddy_artifact("Caddyfile", caddyfile_content)
         print_success(f"Caddy configuration generated: {generated_path.relative_to(self.root_dir)}")
+        bootstrap_path = self._write_selfsigned_beacon_bootstrap()
+        if bootstrap_path:
+            print_success(
+                "Self-signed beacon trust helper generated: "
+                f"{bootstrap_path.relative_to(self.root_dir)}"
+            )
 
     def generate_self_signed_cert(self):
         """Generate self-signed SSL certificate for development"""
@@ -1451,6 +1533,7 @@ class TsushinInstaller:
                 cors_origins.append(origin)
 
         disable_auth_rate_limit = self.config.get('TSN_DISABLE_AUTH_RATE_LIMIT', self._resolve_disable_auth_rate_limit())
+        helper_images = self._get_helper_image_refs()
 
         # BUG-685: pin COMPOSE_FILE so manual `docker-compose` commands automatically
         # apply the SSL overlay (otherwise port 443 is never published, the proxy
@@ -1475,6 +1558,8 @@ TSN_LOG_LEVEL=INFO
 TSN_AUTH_RATE_LIMIT={auth_rate_limit}
 TSN_DISABLE_AUTH_RATE_LIMIT={disable_auth_rate_limit}
 TSN_POLL_INTERVAL_MS=3000
+TSN_WHATSAPP_MCP_IMAGE={helper_images['whatsapp_mcp']}
+TSN_TOOLBOX_BASE_IMAGE={helper_images['toolbox']}
 
 # Database
 POSTGRES_PASSWORD={postgres_password}
@@ -1741,14 +1826,14 @@ NEXT_PUBLIC_API_URL={backend_url}
         images_to_build = [
             {
                 "name": "WhatsApp MCP",
-                "image": "tsushin/whatsapp-mcp:latest",
+                "image": self._get_helper_image_refs()["whatsapp_mcp"],
                 "context": self.root_dir / "backend" / "whatsapp-mcp",
                 "dockerfile": None,  # Uses default Dockerfile
                 "build_args": {},
             },
             {
                 "name": "Toolbox (Sandboxed Tools)",
-                "image": "tsushin-toolbox:base",
+                "image": self._get_helper_image_refs()["toolbox"],
                 "context": self.root_dir,
                 "dockerfile": self.root_dir / "backend" / "containers" / "Dockerfile.toolbox",
                 "build_args": {"TARGETARCH": target_arch} if target_arch else {},
@@ -1817,7 +1902,7 @@ NEXT_PUBLIC_API_URL={backend_url}
                             "Rebuild manually with: "
                             f"docker build -f {img['dockerfile']} "
                             f"--build-arg TARGETARCH={target_arch or 'amd64'} "
-                            "-t tsushin-toolbox:base ."
+                            f"-t {img['image']} ."
                         )
 
             except Exception as e:
@@ -2004,6 +2089,15 @@ NEXT_PUBLIC_API_URL={backend_url}
             if ssl_mode == 'selfsigned':
                 print_warning("Self-signed certificate: browsers will show a security warning.")
                 print_info("Accept the warning to proceed, or add the certificate to your trusted store.")
+                print_info(
+                    "Shell beacon trust without OS bootstrap: download "
+                    f"{primary_url}/tsushin-selfsigned-ca.pem and run the beacon with "
+                    "REQUESTS_CA_BUNDLE pointing at that PEM file."
+                )
+                print_info(
+                    "Helper script on this host: "
+                    f"{(self._get_caddy_stack_dir() / 'beacon-selfsigned-bootstrap.sh').relative_to(self.root_dir)}"
+                )
                 print()
             elif ssl_mode == 'letsencrypt':
                 print_success("Let's Encrypt certificate will auto-renew (managed by Caddy).")

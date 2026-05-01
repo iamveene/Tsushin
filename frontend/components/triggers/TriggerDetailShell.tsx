@@ -284,6 +284,7 @@ export default function TriggerDetailShell({ kind }: Props) {
   // Email-specific state
   const [gmailIntegrations, setGmailIntegrations] = useState<EmailGmailIntegrationSummary[]>([])
   const [emailTriageLoading, setEmailTriageLoading] = useState(false)
+  const [emailGmailReauthLoading, setEmailGmailReauthLoading] = useState(false)
   const [emailPolling, setEmailPolling] = useState(false)
   const [emailPollResult, setEmailPollResult] = useState<EmailPollNowResponse | null>(null)
   const [emailQueryTesting, setEmailQueryTesting] = useState(false)
@@ -448,6 +449,52 @@ export default function TriggerDetailShell({ kind }: Props) {
       setError(getErrorMessage(err, 'Failed to enable email triage'))
     } finally {
       setEmailTriageLoading(false)
+    }
+  }
+
+  const handleChooseEmailTriageAgent = () => {
+    setActiveTab('overview')
+    window.setTimeout(() => {
+      const routingCard = document.getElementById('routing-card')
+      routingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const routingButton = routingCard?.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')
+      if (routingButton && routingButton.getAttribute('aria-expanded') !== 'true') {
+        routingButton.click()
+      }
+      routingButton?.focus()
+    }, 0)
+  }
+
+  const handleReconnectEmailGmailForDrafts = async () => {
+    if (!trigger || kind !== 'email') return
+    const email = trigger as EmailTrigger
+    const integrationId = gmailIntegration?.id ?? email.gmail_integration_id
+    if (!integrationId) {
+      setError('This Email trigger is not linked to a Gmail integration. Review the Gmail account in Hub before enabling triage.')
+      return
+    }
+    setEmailGmailReauthLoading(true)
+    setError(null)
+    try {
+      const currentPath = typeof window !== 'undefined'
+        ? `${window.location.pathname}${window.location.search}`
+        : `/hub/triggers/email/${email.id}`
+      const params = new URLSearchParams({
+        redirect_url: currentPath,
+        include_send_scope: 'true',
+      })
+      const response = await authenticatedFetch(`/api/hub/google/reauthorize/${integrationId}?${params}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        throw new Error(errorData.detail || `HTTP ${response.status}`)
+      }
+      const data = await response.json()
+      window.location.href = data.authorization_url
+    } catch (err: unknown) {
+      setEmailGmailReauthLoading(false)
+      setError(getErrorMessage(err, 'Failed to start Gmail reauthorization'))
     }
   }
 
@@ -658,7 +705,10 @@ export default function TriggerDetailShell({ kind }: Props) {
           onEmailPollNow={handleEmailPollNow}
           emailPolling={emailPolling}
           onEnableEmailTriage={handleEnableEmailTriage}
+          onChooseEmailTriageAgent={handleChooseEmailTriageAgent}
+          onReconnectEmailGmail={handleReconnectEmailGmailForDrafts}
           emailTriageLoading={emailTriageLoading}
+          emailGmailReauthLoading={emailGmailReauthLoading}
         />
 
         <Divider />

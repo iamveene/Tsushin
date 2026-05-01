@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 
 class TriggerRecapConfigRead(BaseModel):
-    id: int
+    id: Optional[int] = None
     tenant_id: str
     trigger_kind: str
     trigger_instance_id: int
@@ -73,8 +73,8 @@ class TriggerRecapConfigRead(BaseModel):
     format_template: str
     inject_position: str
     max_recap_chars: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -130,6 +130,29 @@ _TRIGGER_KIND_TO_CHANNEL = {
 
 def _to_read(row) -> TriggerRecapConfigRead:
     return TriggerRecapConfigRead.model_validate(row)
+
+
+def _ensure_known_trigger_kind(trigger_kind: str) -> None:
+    if trigger_kind not in _TRIGGER_KIND_TO_CHANNEL:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+
+
+def _default_read(
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+) -> TriggerRecapConfigRead:
+    defaults = TriggerRecapConfigWrite().model_dump()
+    return TriggerRecapConfigRead(
+        id=None,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+        created_at=None,
+        updated_at=None,
+        **defaults,
+    )
 
 
 def _resolve_default_agent_id(
@@ -238,6 +261,7 @@ def get_recap_config_for(
 ) -> TriggerRecapConfigRead:
     from models import TriggerRecapConfig
 
+    _ensure_known_trigger_kind(trigger_kind)
     row = (
         db.query(TriggerRecapConfig)
         .filter(
@@ -248,7 +272,11 @@ def get_recap_config_for(
         .first()
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="Recap config not found")
+        return _default_read(
+            tenant_id=tenant_id,
+            trigger_kind=trigger_kind,
+            trigger_instance_id=trigger_instance_id,
+        )
     return _to_read(row)
 
 
@@ -268,6 +296,7 @@ def put_recap_config_for(
     """
     from models import TriggerRecapConfig
 
+    _ensure_known_trigger_kind(trigger_kind)
     row = (
         db.query(TriggerRecapConfig)
         .filter(
@@ -307,6 +336,7 @@ def delete_recap_config_for(
     """DELETE /recap-config — 404 when no row exists."""
     from models import TriggerRecapConfig
 
+    _ensure_known_trigger_kind(trigger_kind)
     row = (
         db.query(TriggerRecapConfig)
         .filter(
@@ -344,6 +374,7 @@ def delete_recap_config_for_trigger_instance(
 
     from models import TriggerRecapConfig
 
+    _ensure_known_trigger_kind(trigger_kind)
     # Use a savepoint so a missing-table failure doesn't roll back the parent
     # transaction's prior work (the trigger DELETE itself + its other cascades).
     try:
@@ -377,15 +408,15 @@ def run_test_recap_for(
          recap service still has structured input.
       3. The most recent ``WakeEvent`` for this trigger.
 
-    A missing recap config returns 404 (matches GET semantics —
-    operators get an actionable error). Any internal failure inside
-    ``build_memory_recap`` returns ``rendered_text=None`` with
-    ``cases_used=0`` so the UI can render an empty preview without a
-    500.
+    A missing recap config returns 404 because the preview requires a
+    saved row. Any internal failure inside ``build_memory_recap`` returns
+    ``rendered_text=None`` with ``cases_used=0`` so the UI can render an
+    empty preview without a 500.
     """
     from models import TriggerRecapConfig
     from services.trigger_recap_service import build_memory_recap
 
+    _ensure_known_trigger_kind(trigger_kind)
     config_row = (
         db.query(TriggerRecapConfig)
         .filter(

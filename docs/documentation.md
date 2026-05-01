@@ -129,6 +129,8 @@ Tsushin spawns per-tenant containers outside the compose stack, all joining `tsu
 * **Tester surface** — QA bridge status exposed through `/api/mcp/instances/tester/*`; the backend prefers a legacy/compose tester container when present and otherwise falls back to the tenant's active runtime tester instance.
 * **Toolbox containers** — per-tenant sandboxes for "Sandboxed Tools" (nmap, dig, nuclei, etc.), managed by `services/toolbox_container_service.py` with base image built from `backend/containers/Dockerfile.toolbox`.
 
+Non-default local stacks use stack-scoped helper images so disposable fresh-install audits do not overwrite the host's shared helper tags. The installer writes `TSN_WHATSAPP_MCP_IMAGE` and `TSN_TOOLBOX_BASE_IMAGE` into `.env`, and the runtime managers use those tags when provisioning WhatsApp MCP and toolbox containers.
+
 Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.py:114`, `backend/services/mcp_container_manager.py:234`.
 
 ### 2.4 v0.7.0 Phase 0 foundation
@@ -243,7 +245,7 @@ Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release
 * **Runtime polling** — `backend/channels/email/trigger.py` polls active Gmail-backed Email triggers, fetches message deltas through Gmail list/search APIs, normalizes payloads, advances a stable cursor, rejects missing/foreign/inactive Gmail integrations, and dispatches wake events through `TriggerDispatchService`.
 * **Triage and Flow output actions** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for draft-based triage. Notification output is configured through the generated or wired Flow's Notification node, not through an Email-trigger-local card. Both actions consume the same `email.message.received` wake evidence.
 * **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
-* **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, Flow output links, managed triage setup, and clear draft-scope messaging when `gmail.compose` is missing.
+* **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, Flow output links, and managed triage setup. The unified trigger creation wizard is intentionally self-contained across Email, Webhook, Jira, and GitHub: selecting a trigger type reveals prerequisites, criteria options, required setup rows, optional dependencies, and after-save actions before the user saves. The triage card also explains that triage creates reviewable Gmail drafts instead of sending, shows a readiness checklist for default-agent routing, Gmail account verification, `gmail.compose` draft permission, and `hub.write` access, and links operators directly to the missing setup action.
 * **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
 
 ### 2.13.1 v0.7.0 RC sweep — Continuous-Agent CRUD, Analytics, Gmail compose
@@ -418,7 +420,7 @@ The installer supports four SSL modes, all served through Caddy. Let's Encrypt i
 | `letsencrypt` | Public-facing deployment with a real domain pointing at this server. Requires ports 80 and 443 reachable from the internet. | Caddy-managed in the `caddy-data` volume |
 | `manual` | You already have a cert issued by your own CA or a public CA. Supports an optional chain/intermediate bundle. | `caddy/<stack>/certs/{cert,key}.pem` |
 
-**Self-signed on IP-address hosts.** When the domain passed to the installer is an IPv4/IPv6 literal, the generated certificate's `subjectAltName` now uses the `IP:` entry type (`IP:10.211.55.5`). Emitting `DNS:10.211.55.5` is invalid per RFC 5280 and causes browsers to show `NET::ERR_CERT_COMMON_NAME_INVALID`. The Caddyfile's `default_sni` also falls back to `localhost` for IP installs because Caddy rejects IP literals as SNI values.
+**Self-signed on IP-address hosts.** When the domain passed to the installer is an IPv4/IPv6 literal, the generated certificate's `subjectAltName` now uses the `IP:` entry type (`IP:10.211.55.5`). Emitting `DNS:10.211.55.5` is invalid per RFC 5280 and causes browsers to show `NET::ERR_CERT_COMMON_NAME_INVALID`. The generated Caddyfile serves the installer-created `selfsigned.crt` / `selfsigned.key` directly when present, including on `:443` IP-literal sites, so bare-IP clients are not dependent on SNI-based internal certificate issuance.
 
 **Let's Encrypt pre-flight.** Before writing the Caddyfile, the installer (a) resolves the domain via DNS, (b) optionally fetches the server's public IP via `api.ipify.org` and compares it against the resolved IPs, and (c) performs a plain HTTP HEAD on port 80 (the ACME HTTP-01 challenge path). Mismatches and unreachable hosts surface as warnings — valid configurations behind Cloudflare proxy / CDN / NAT can still proceed.
 
@@ -459,7 +461,7 @@ The installer automatically:
 2. Creates the `tsushin-network` Docker bridge if absent.
 3. Generates `.env` with random `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `TSN_MASTER_KEY`.
 4. Sets `HOST_BACKEND_DATA_PATH` to the absolute host path of `backend/data` (required for Docker-in-Docker volume mounts).
-5. Builds backend + frontend images and starts the stack.
+5. Builds backend + frontend images and stack-scoped helper images, then starts the stack.
 6. (If SSL) Generates `caddy/<stack-name>/Caddyfile` with stack-scoped upstreams plus matching self-signed cert or Let's Encrypt configuration.
 
 Source: `install.py:49-53`, `docker-compose.yml:131-134` (HOST_BACKEND_DATA_PATH is required in `.env`).
@@ -1990,8 +1992,8 @@ WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new identifier format
 1. **Contact auto-linking** — when an inbound message arrives with a new LID, the adapter looks up the existing `Contact` row by phone number (if the phone number is still exposed) and attaches the LID as an alternate identifier on the contact's `ContactChannelMapping`. No manual merge required.
    Source: `backend/channels/whatsapp/adapter.py` + `backend/services/contact_service.py`.
 
-2. **UserAgentSession fallback via phone number** — `UserAgentSession` lookups (used for per-contact default agent resolution) now try LID-keyed rows first, then fall back to phone-number-keyed rows. Sessions created before the migration keep working until they're rewritten on next contact, at which point they get upgraded to LID keys.
-   Source: `backend/services/user_agent_session_service.py`.
+2. **UserAgentSession phone/LID aliasing** — `UserAgentSession` lookups (used for per-contact agent preference resolution) now resolve the tenant-scoped contact first, compare all known phone and WhatsApp LID aliases, and choose the newest saved preference. When a switch happens through `/invoke`, the selected agent is synced back to every known alias so text and audio messages route consistently even when WhatsApp alternates between phone IDs and LIDs.
+   Source: `backend/agent/router.py`.
 
 3. **ContactAgentMapping dual-key lookup** — `ContactAgentMapping` resolution accepts either a LID or a phone-number key and returns the first match. This keeps slash-command permissions, default-agent assignments, and DM trigger rules pointing at the right contact even as WhatsApp phases in LIDs for groups.
    Source: `backend/services/contact_agent_mapping_service.py`.
@@ -3089,7 +3091,7 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
   | `gemini-2.5-flash-tts-preview` | Fast | Shorter latency; identical SDK shape; same WAV output. |
   | `gemini-2.5-pro-tts-preview` | Quality | Highest quality tier; pricing typically 5–10× Flash (currently `$0.00` until Google publishes pricing — see TODO in `get_pricing_info()`). |
 
-  Tenants pick the model per agent via the Audio Agents Wizard or the regular Agent Wizard's audio step. The selection is persisted into `AgentSkill.config.model` (no migration — JSON field) and is delivered into the SDK via `client.models.generate_content(model=…)`. Unknown model ids fall back to `DEFAULT_MODEL` with a `warning` log line (rather than silently routing to a wrong model). Discover the catalog programmatically via `GET /api/tts-providers/gemini/models` (returns `[{model_id, label, is_default}]`).
+  Tenants pick the model per agent via the Audio Agents Wizard or the regular Agent Wizard's audio step. The selection is persisted into `AgentSkill.config.model` (no migration — JSON field) and is delivered into the SDK via `client.models.generate_content(model=…)`. Unknown model ids fall back to `DEFAULT_MODEL` with a `warning` log line (rather than silently routing to a wrong model). These `*-tts-preview` ids are audio-only; if one is accidentally saved as an agent's primary Gemini chat model, `AIClient` falls back to a stable Gemini text model for normal text replies while the TTS skill still uses its configured preview model. Discover the catalog programmatically via `GET /api/tts-providers/gemini/models` (returns `[{model_id, label, is_default}]`).
 
 - **Endpoint shape:** standard `generateContent` with `response_modalities=["AUDIO"]` and a `SpeechConfig(voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=…)))` block.
 - **30 prebuilt voices:** Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat. Case-sensitive proper nouns. (Documented for the 3.1 model; the 2.5 Flash/Pro models are assumed to share the same catalog — verify per Google docs before announcing.)
@@ -4354,6 +4356,8 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_CHROMA_DIR` | `./data/chroma` | ChromaDB persistence. | `settings.py:92` |
 | `TSN_BACKUPS_DIR` | `./data/backups` | Backup output. | `settings.py:93` |
 | `HOST_BACKEND_DATA_PATH` | (required in compose) | **Absolute host path to `backend/data`**, used by MCP containers for Docker-in-Docker bind mounts. | `docker-compose.yml:134`, `services/toolbox_container_service.py:114`, `services/mcp_container_manager.py:234` |
+| `TSN_WHATSAPP_MCP_IMAGE` | `tsushin/whatsapp-mcp:latest` | WhatsApp MCP helper image tag used by runtime-managed WhatsApp containers. Non-default installer stacks use a stack-scoped tag. | `docker-compose.yml`, `services/mcp_container_manager.py`, `backend/whatsapp-mcp/build.sh` |
+| `TSN_TOOLBOX_BASE_IMAGE` | `tsushin-toolbox:base` | Toolbox helper image tag used by runtime-managed sandbox containers. Non-default installer stacks use a stack-scoped tag. | `docker-compose.yml`, `services/toolbox_container_service.py` |
 
 ### A.3 Logging
 
@@ -4478,8 +4482,10 @@ Shell-Beacon agent (separate binary installed on endpoints, not the server):
 | `TSUSHIN_SERVER_URL` | Beacon → server URL. | `shell_beacon/config.py:173` |
 | `TSUSHIN_API_KEY` | Beacon auth key. | `shell_beacon/config.py:175` |
 | `TSUSHIN_POLL_INTERVAL` / `TSUSHIN_SHELL` / `TSUSHIN_TIMEOUT` / `TSUSHIN_WORKING_DIR` / `TSUSHIN_LOG_LEVEL` / `TSUSHIN_LOG_FILE` / `TSUSHIN_AUTO_UPDATE` | Beacon config. | `shell_beacon/config.py:179-197` |
+| `TSUSHIN_CA_BUNDLE` / `REQUESTS_CA_BUNDLE` | Optional CA bundle path for self-signed or private-CA HTTPS endpoints. | `shell_beacon/config.py:212-218`, `shell_beacon/beacon.py` |
+| `TSUSHIN_INSECURE_SKIP_VERIFY` | Explicit non-production fallback that disables TLS verification for beacon requests. | `shell_beacon/config.py:219-220`, `shell_beacon/beacon.py` |
 
-**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. If `TSUSHIN_SERVER_URL` points at an installer-generated self-signed HTTPS endpoint, the beacon host must trust that certificate (or trust the issuing CA) before registration/check-in will work. For same-host QA smoke tests only, point the beacon at local HTTP such as `http://127.0.0.1:8081/api/shell` instead of the public self-signed URL.
+**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. Installer-generated self-signed deployments expose the generated trust material at `/tsushin-selfsigned-ca.pem` and include a trust helper so beacon hosts can install or pass the CA bundle explicitly. Use `--ca-bundle`, `TSUSHIN_CA_BUNDLE`, or `REQUESTS_CA_BUNDLE` for trusted self-signed operation. `--insecure-skip-verify` / `TSUSHIN_INSECURE_SKIP_VERIFY=true` exists only as an operator-controlled non-production fallback.
 
 ---
 
