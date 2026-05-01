@@ -5,6 +5,7 @@ Linux persistence manager using systemd (primary) or cron (fallback).
 import os
 import subprocess
 import shutil
+import shlex
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -57,6 +58,12 @@ class LinuxPersistenceManager(BasePersistenceManager):
 
     def _generate_systemd_service(self) -> str:
         """Generate systemd service file content."""
+        extra_env_lines = "\n".join(
+            f'Environment="{key}={value}"'
+            for key, value in self.extra_env.items()
+        )
+        if extra_env_lines:
+            extra_env_lines += "\n"
         return f"""[Unit]
 Description=Tsushin Shell Beacon
 Documentation=https://github.com/your-org/tsushin
@@ -70,7 +77,7 @@ Restart=always
 RestartSec=10
 Environment="TSUSHIN_API_KEY={self.api_key}"
 Environment="TSUSHIN_SERVER_URL={self.server_url}"
-
+{extra_env_lines}
 # Security hardening (optional, can be adjusted)
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -200,7 +207,13 @@ WantedBy={"multi-user.target" if self.system_level else "default.target"}
 
     def _install_cron(self) -> PersistenceResult:
         """Install using cron @reboot fallback."""
-        cron_line = f"@reboot {self.python_path} {self.beacon_path} --config {self.config_path} {self.CRON_MARKER}"
+        env_prefix = " ".join(
+            f"{key}={shlex.quote(value)}"
+            for key, value in self.extra_env.items()
+        )
+        if env_prefix:
+            env_prefix += " "
+        cron_line = f"@reboot {env_prefix}{self.python_path} {self.beacon_path} --config {self.config_path} {self.CRON_MARKER}"
 
         try:
             # Get current crontab

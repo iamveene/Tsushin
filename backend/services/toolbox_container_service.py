@@ -39,7 +39,7 @@ _SAFE_TENANT_ID = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
 class ToolboxContainerService:
     """Manages per-tenant toolbox Docker containers for custom tool execution"""
 
-    BASE_IMAGE = "tsushin-toolbox:base"
+    BASE_IMAGE = os.getenv("TSN_TOOLBOX_BASE_IMAGE", "tsushin-toolbox:base")
     COMMAND_TIMEOUT = 300  # Default 5 minutes
     HEALTH_CHECK_TIMEOUT = 30
 

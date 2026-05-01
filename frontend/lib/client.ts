@@ -2664,7 +2664,7 @@ export interface TelegramHealthStatus {
 // (see backend/api/routes_trigger_recap.py and the per-kind trigger routers).
 // One config row per trigger instance regardless of kind.
 export interface TriggerRecapConfig {
-  id?: number
+  id?: number | null
   enabled: boolean
   query_template: string
   scope: 'agent' | 'trigger_kind' | 'trigger_instance'
@@ -2675,8 +2675,8 @@ export interface TriggerRecapConfig {
   format_template: string
   inject_position: 'prepend_user_msg' | 'system_addendum'
   max_recap_chars: number
-  created_at?: string
-  updated_at?: string
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface TriggerRecapTestResult {
@@ -6555,8 +6555,8 @@ export const api = {
 
   // v0.7.x Wave 2-C/D — per-trigger Memory Recap config CRUD + test endpoint.
   // Single endpoint family per kind: /api/triggers/{kind}/{id}/recap-config and
-  // /api/triggers/{kind}/{id}/test-recap. Backend returns 404 when no row
-  // exists for GET; we surface that as `null` so callers can render defaults.
+  // /api/triggers/{kind}/{id}/test-recap. Modern backends return a disabled
+  // default object when no row exists; keep 404-as-null for older deployments.
   async getTriggerRecapConfig(kind: string, id: number): Promise<TriggerRecapConfig | null> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`)
     if (res.status === 404) return null

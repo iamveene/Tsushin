@@ -5,7 +5,7 @@
  * Supports email/password and Google SSO authentication
  */
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -61,6 +61,7 @@ export default function LoginClient({
   const [googleLoading, setGoogleLoading] = useState(false)
   const isSessionRecovery = recoveryReason === 'session-recovery'
   const showGoogleSection = googleSSOEnabled || !googleStatusResolved
+  const recoveryCleanupRef = useRef<Promise<void> | null>(null)
 
   // Redirect to /setup if system needs initial setup
   useEffect(() => {
@@ -112,10 +113,15 @@ export default function LoginClient({
       return
     }
 
-    api.logout().catch(() => {
-      // The backend may be the exact reason we landed here. Keep the login
-      // page usable even when the cookie-clearing request fails.
-    })
+    recoveryCleanupRef.current = api.logout()
+      .then(() => undefined)
+      .catch(() => {
+        // The backend may be the exact reason we landed here. Keep the login
+        // page usable even when the cookie-clearing request fails.
+      })
+      .finally(() => {
+        recoveryCleanupRef.current = null
+      })
   }, [forceLogin, isSessionRecovery])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -134,6 +140,7 @@ export default function LoginClient({
     setLoading(true)
 
     try {
+      await recoveryCleanupRef.current
       await login(normalizedEmail, password)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')

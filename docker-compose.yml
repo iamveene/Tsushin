@@ -11,7 +11,7 @@
 #                 the current compose file does not define a `testing` profile.
 #
 # Custom Tools Toolbox (per-tenant containers):
-#   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base ./backend/containers
+#   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t "${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}" .
 #   Note: Tenant containers are managed dynamically by ToolboxContainerService
 #
 # ============================================================================
@@ -172,6 +172,8 @@ services:
       # line 156 shadowed this value with an empty string when the var was unset.
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
       - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
+      - TSN_WHATSAPP_MCP_IMAGE=${TSN_WHATSAPP_MCP_IMAGE:-tsushin/whatsapp-mcp:latest}
+      - TSN_TOOLBOX_BASE_IMAGE=${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}
       # v0.7.0 Triggers↔Flows Unification env-var gates. Default off so
       # the release ships byte-identical to 0.6.x. Operators flip per
       # tenant in staging then production. See backend/config/feature_flags.py.

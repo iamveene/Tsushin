@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -380,6 +380,153 @@ class AgentRouter:
         except Exception as e:
             self.db.rollback()
             self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
+
+    @staticmethod
+    def _normalize_user_agent_identifier(identifier: Optional[str]) -> Optional[str]:
+        """Normalize a sender/session identifier without changing runtime sender keys."""
+        if not identifier:
+            return None
+        normalized = str(identifier).strip()
+        if not normalized:
+            return None
+        normalized = normalized.split("@", 1)[0].lstrip("+").strip()
+        return normalized or None
+
+    def _append_user_agent_alias(self, aliases: List[str], identifier: Optional[str]):
+        normalized = self._normalize_user_agent_identifier(identifier)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+
+    def _is_whatsapp_direct_message(self, message: Dict) -> bool:
+        if message.get("is_group"):
+            return False
+        channel = message.get("channel")
+        if channel is None:
+            return bool(self.mcp_instance_id)
+        return channel in ("whatsapp", "whatsapp_group")
+
+    def _get_direct_message_session_aliases(
+        self,
+        message: Dict,
+        sender_key: Optional[str] = None,
+        contact: Optional[Contact] = None,
+    ) -> List[str]:
+        """
+        Build equivalent UserAgentSession identifiers for a WhatsApp DM.
+
+        WhatsApp can deliver the same person as a phone JID on one message and
+        as a Linked Device ID (LID) on the next. Session aliases are intentionally
+        scoped to direct WhatsApp messages and tenant-resolved contacts so group
+        routing and other channels keep their existing sender keys.
+        """
+        primary_key = sender_key or self._get_sender_key(message)
+        if not self._is_whatsapp_direct_message(message):
+            return [primary_key] if primary_key else []
+
+        aliases: List[str] = []
+        self._append_user_agent_alias(aliases, primary_key)
+
+        self._append_user_agent_alias(aliases, message.get("sender"))
+
+        if not contact:
+            return aliases
+
+        self._append_user_agent_alias(aliases, contact.phone_number)
+        self._append_user_agent_alias(aliases, contact.whatsapp_id)
+
+        try:
+            for mapping in getattr(contact, "channel_mappings", []) or []:
+                if mapping.channel_type in ("phone", "whatsapp"):
+                    self._append_user_agent_alias(aliases, mapping.channel_identifier)
+        except Exception as e:
+            self.logger.debug(f"[SESSION ALIASES] Could not inspect contact mappings: {e}")
+
+        return aliases
+
+    def _get_user_agent_sessions_for_aliases(self, aliases: List[str]):
+        from models import UserAgentSession
+
+        if not aliases:
+            return []
+
+        sessions = self.db.query(UserAgentSession).filter(
+            UserAgentSession.user_identifier.in_(aliases)
+        ).all()
+        return sorted(
+            sessions,
+            key=lambda session: (
+                session.updated_at or session.created_at or datetime.min,
+                session.id or 0,
+            ),
+            reverse=True,
+        )
+
+    def _agent_is_usable_for_saved_session(self, agent: Optional[Agent], is_agent_valid_for_channel) -> bool:
+        if not agent or not agent.is_active:
+            return False
+        if self.tenant_id and agent.tenant_id and agent.tenant_id != self.tenant_id:
+            return False
+        return is_agent_valid_for_channel(agent)
+
+    def _select_saved_agent_from_aliases(self, aliases: List[str], is_agent_valid_for_channel):
+        if not aliases:
+            return None
+
+        try:
+            for saved_session in self._get_user_agent_sessions_for_aliases(aliases):
+                agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
+                if self._agent_is_usable_for_saved_session(agent, is_agent_valid_for_channel):
+                    if len(aliases) > 1:
+                        self._sync_user_agent_session_aliases(aliases, agent.id)
+                    self.logger.info(
+                        f"Using saved agent preference: {agent.id} for "
+                        f"{aliases[0]} (aliases={aliases})"
+                    )
+                    return agent
+
+                self.logger.warning(
+                    f"Skipping invalid saved agent preference for {saved_session.user_identifier}: "
+                    f"agent_id={saved_session.agent_id}"
+                )
+        except Exception as e:
+            self.logger.error(f"Error checking agent preference aliases {aliases}: {e}")
+
+        return None
+
+    def _sync_user_agent_session_aliases(self, aliases: List[str], agent_id: int):
+        """Persist the same selected agent across all known phone/LID aliases."""
+        if not aliases or not agent_id:
+            return
+
+        from models import UserAgentSession
+
+        try:
+            now = datetime.utcnow()
+            existing_sessions = {
+                session.user_identifier: session
+                for session in self.db.query(UserAgentSession).filter(
+                    UserAgentSession.user_identifier.in_(aliases)
+                ).all()
+            }
+
+            for alias in aliases:
+                session = existing_sessions.get(alias)
+                if session:
+                    session.agent_id = agent_id
+                    session.updated_at = now
+                else:
+                    self.db.add(UserAgentSession(
+                        user_identifier=alias,
+                        agent_id=agent_id,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+
+            self.db.commit()
+            self.logger.info(f"[SESSION ALIASES] Synced agent {agent_id} for aliases={aliases}")
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error(f"[SESSION ALIASES] Failed to sync aliases {aliases}: {e}", exc_info=True)
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
@@ -804,6 +951,8 @@ class AgentRouter:
         message_text = message.get("body", "").lower()
         sender = message.get("sender", "")
         is_group = message.get("is_group", False)
+        sender_key = self._get_sender_key(message)
+        contact = None
 
         # Phase 10: Helper to check if agent is valid for this MCP instance
         def is_agent_valid_for_channel(agent: Agent) -> bool:
@@ -850,37 +999,17 @@ class AgentRouter:
 
         # Step -1: Check for saved agent preference (agent switcher persistence)
         # This takes absolute priority - once user switches agents, it persists
-        from models import UserAgentSession
-        sender_key = self._get_sender_key(message)
         try:
-            saved_session = self.db.query(UserAgentSession).filter(
-                UserAgentSession.user_identifier == sender_key
-            ).first()
-
-            # WhatsApp LID migration: if sender is a LID, also try the contact's phone
-            if not saved_session and not message.get("is_group"):
-                _contact = self._resolve_direct_message_contact(message, sender)
-                if _contact and _contact.phone_number:
-                    _phone = _contact.phone_number.lstrip("+").strip()
-                    if _phone and _phone != sender_key:
-                        saved_session = self.db.query(UserAgentSession).filter(
-                            UserAgentSession.user_identifier == _phone
-                        ).first()
-                        if saved_session:
-                            saved_session.user_identifier = sender_key
-                            self.db.commit()
-                            self.logger.info(f"[LID MIGRATION] Updated UserAgentSession from phone {_phone} to LID {sender_key}")
-
-            if saved_session:
-                agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
-                if agent and agent.is_active and is_agent_valid_for_channel(agent):
-                    self.logger.info(f"Using saved agent preference: {agent.id} for {sender_key}")
-                    return self._agent_to_config(agent), agent.id, self._get_agent_name(agent)
-                else:
-                    # Saved agent no longer active or not valid for channel, clear preference
-                    self.db.delete(saved_session)
-                    self.db.commit()
-                    self.logger.warning(f"Cleared invalid agent preference for {sender_key}")
+            if self._is_whatsapp_direct_message(message):
+                contact = self._resolve_direct_message_contact(message, sender)
+            session_aliases = self._get_direct_message_session_aliases(
+                message,
+                sender_key=sender_key,
+                contact=contact,
+            )
+            agent = self._select_saved_agent_from_aliases(session_aliases, is_agent_valid_for_channel)
+            if agent:
+                return self._agent_to_config(agent), agent.id, self._get_agent_name(agent)
         except Exception as e:
             self.logger.error(f"Error checking agent preference: {e}")
 
@@ -931,7 +1060,8 @@ class AgentRouter:
                 except Exception:
                     pass
 
-            contact = self._resolve_direct_message_contact(message, sender)
+            if contact is None:
+                contact = self._resolve_direct_message_contact(message, sender)
 
             # If contact found (by either method), check for agent mapping
             # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant agent assignment
@@ -3945,7 +4075,6 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
             # Get agent for this user (for agent-specific commands)
             # Use override from @mention if provided (Phase 21)
-            from models import UserAgentSession
             sender = message.get("sender", "")
 
             agent_id = override_agent_id  # Use override from @mention if provided
@@ -3953,9 +4082,15 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             # If no override, try to get from saved session
             if not agent_id:
                 try:
-                    saved_session = self.db.query(UserAgentSession).filter(
-                        UserAgentSession.user_identifier == sender_key
-                    ).first()
+                    contact = None
+                    if self._is_whatsapp_direct_message(message):
+                        contact = self._resolve_direct_message_contact(message, sender)
+                    session_aliases = self._get_direct_message_session_aliases(
+                        message,
+                        sender_key=sender_key,
+                        contact=contact,
+                    )
+                    saved_session = next(iter(self._get_user_agent_sessions_for_aliases(session_aliases)), None)
                     if saved_session:
                         agent_id = saved_session.agent_id
                 except Exception:
@@ -4057,20 +4192,16 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 # Save agent preference
                 new_agent_id = result["data"]["agent_id"]
                 try:
-                    existing = self.db.query(UserAgentSession).filter(
-                        UserAgentSession.user_identifier == sender_key
-                    ).first()
-                    if existing:
-                        existing.agent_id = new_agent_id
-                    else:
-                        from models import UserAgentSession
-                        session = UserAgentSession(
-                            user_identifier=sender_key,
-                            agent_id=new_agent_id
-                        )
-                        self.db.add(session)
-                    self.db.commit()
-                    self.logger.info(f"[SLASH] Agent preference saved: {new_agent_id} for {sender_key}")
+                    contact = None
+                    if self._is_whatsapp_direct_message(message):
+                        contact = self._resolve_direct_message_contact(message, sender)
+                    session_aliases = self._get_direct_message_session_aliases(
+                        message,
+                        sender_key=sender_key,
+                        contact=contact,
+                    )
+                    self._sync_user_agent_session_aliases(session_aliases, new_agent_id)
+                    self.logger.info(f"[SLASH] Agent preference saved: {new_agent_id} for {session_aliases}")
                 except Exception as e:
                     self.logger.error(f"[SLASH] Error saving agent preference: {e}")
 

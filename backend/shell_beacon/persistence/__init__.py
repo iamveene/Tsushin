@@ -134,6 +134,8 @@ def handle_persistence_command(
         # Get server config
         server_url = config.server.url if hasattr(config, 'server') and config.server.url else ""
         api_key = config.server.api_key if hasattr(config, 'server') and config.server.api_key else ""
+        if hasattr(config, 'tls') and getattr(config.tls, 'ca_bundle', None):
+            os.environ["REQUESTS_CA_BUNDLE"] = str(config.tls.ca_bundle)
 
         # For install, we need valid config
         if action == "install":

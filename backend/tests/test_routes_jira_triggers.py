@@ -75,6 +75,7 @@ from models import (  # noqa: E402
     JiraChannelInstance,
     JiraIntegration,
     SentinelProfile,
+    TriggerRecapConfig,
     WakeEvent,
     WhatsAppMCPInstance,
 )
@@ -114,6 +115,7 @@ def db_session(monkeypatch):
             ContinuousRun.__table__,
             ChannelEventDedupe.__table__,
             JiraChannelInstance.__table__,
+            TriggerRecapConfig.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -461,6 +463,60 @@ def test_update_jira_trigger_relinks_integration_and_pauses(db_session):
     assert updated.status == "paused"
     assert stored.jira_integration_id == second_integration.id
     assert stored.api_token_encrypted is None
+
+
+def test_jira_recap_config_get_returns_default_without_saved_row(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    trigger = JiraChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Jira Trigger",
+        site_url="https://example.atlassian.net",
+        project_key="HELP",
+        jql="project = HELP",
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    out = jira_routes.get_jira_trigger_recap_config(
+        trigger_id=trigger.id,
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    assert out.id is None
+    assert out.tenant_id == "tenant-a"
+    assert out.trigger_kind == "jira"
+    assert out.trigger_instance_id == trigger.id
+    assert out.enabled is False
+    assert out.scope == "trigger_instance"
+    assert db_session.query(TriggerRecapConfig).count() == 0
+
+
+def test_jira_recap_config_delete_missing_still_404(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    trigger = JiraChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Jira Trigger",
+        site_url="https://example.atlassian.net",
+        project_key="HELP",
+        jql="project = HELP",
+        created_by=1,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        jira_routes.delete_jira_trigger_recap_config(
+            trigger_id=trigger.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 404
 
 
 def test_update_jira_trigger_syncs_managed_flow_default_agent(db_session):

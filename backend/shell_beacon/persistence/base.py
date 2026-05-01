@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from enum import Enum
+import os
 
 
 class PersistenceStatus(Enum):
@@ -60,6 +61,10 @@ class BasePersistenceManager(ABC):
         self.server_url = server_url
         self.api_key = api_key
         self.system_level = system_level
+        self.extra_env = {}
+        ca_bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("TSUSHIN_CA_BUNDLE")
+        if ca_bundle:
+            self.extra_env["REQUESTS_CA_BUNDLE"] = ca_bundle
 
     @abstractmethod
     def install(self) -> PersistenceResult:

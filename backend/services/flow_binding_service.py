@@ -271,6 +271,7 @@ def ensure_system_managed_flow_for_trigger(
         name="Default agent",
         agent_id=default_agent_id,
         conversation_objective=objective,
+        on_failure="continue" if notification_enabled and notification_recipient else None,
         config_json=json.dumps({
             "objective": objective,
             "allow_multi_turn": False,
@@ -393,6 +394,20 @@ def update_auto_flow_notification(
         config["recipient"] = recipient_phone
     notification_node.config_json = json.dumps(config)
     notification_node.updated_at = datetime.utcnow()
+
+    if enabled and config.get("recipient"):
+        conversation_nodes = (
+            db.query(FlowNode)
+            .filter(
+                FlowNode.flow_definition_id == flow.id,
+                FlowNode.type == "conversation",
+            )
+            .all()
+        )
+        for node in conversation_nodes:
+            if node.on_failure != "continue":
+                node.on_failure = "continue"
+                node.updated_at = datetime.utcnow()
 
     return {
         "flow_definition_id": flow.id,

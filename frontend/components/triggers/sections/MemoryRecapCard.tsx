@@ -101,10 +101,10 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
 
   const handleEnable = useCallback(() => {
     if (!caseMemoryEnabled) return
-    setDraft({ ...DEFAULT_RECAP_CONFIG, enabled: true })
+    setDraft({ ...(config ?? DEFAULT_RECAP_CONFIG), enabled: true })
     setEditing(true)
     setError(null)
-  }, [caseMemoryEnabled])
+  }, [caseMemoryEnabled, config])
 
   const handleEdit = useCallback(() => {
     setDraft(config ?? DEFAULT_RECAP_CONFIG)
@@ -264,6 +264,7 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
 
   // Summary view — read-only badges + edit/disable/test controls.
   const enabled = config.enabled
+  const hasSavedConfig = config.id != null
   return (
     <div className={cardClass}>
       <div className="flex flex-col gap-4">
@@ -271,7 +272,9 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
           <div className="min-w-0">
             <h3 className="text-base font-semibold text-white">Memory Recap</h3>
             <p className="mt-1 text-sm text-tsushin-slate">
-              Recalls past similar cases when this trigger fires and injects them into the agent prompt.
+              {hasSavedConfig
+                ? 'Recalls past similar cases when this trigger fires and injects them into the agent prompt.'
+                : 'Memory Recap is disabled for this trigger and ready to configure from default settings.'}
             </p>
           </div>
           <span
@@ -328,7 +331,7 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {canWriteHub && (
+          {canWriteHub && hasSavedConfig && (
             <button
               type="button"
               onClick={handleEdit}
@@ -336,6 +339,16 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
               className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
             >
               Edit
+            </button>
+          )}
+          {canWriteHub && !hasSavedConfig && (
+            <button
+              type="button"
+              onClick={handleEnable}
+              disabled={saving}
+              className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 hover:text-white disabled:opacity-50"
+            >
+              Enable
             </button>
           )}
           {canWriteHub && enabled && (
@@ -348,14 +361,16 @@ export default function MemoryRecapCard({ kind, triggerId, canWriteHub, caseMemo
               {saving ? 'Working…' : 'Disable'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleTest}
-            disabled={testing}
-            className="rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-          >
-            {testing ? 'Testing…' : 'Test Recap'}
-          </button>
+          {hasSavedConfig && (
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testing}
+              className="rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+            >
+              {testing ? 'Testing…' : 'Test Recap'}
+            </button>
+          )}
         </div>
 
         {testError && (

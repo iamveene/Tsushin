@@ -56,7 +56,8 @@ class MacOSPersistenceManager(BasePersistenceManager):
             "StandardErrorPath": str(log_dir / "beacon-stderr.log"),
             "EnvironmentVariables": {
                 "TSUSHIN_API_KEY": self.api_key,
-                "TSUSHIN_SERVER_URL": self.server_url
+                "TSUSHIN_SERVER_URL": self.server_url,
+                **self.extra_env,
             },
             "ThrottleInterval": 10,  # Don't restart more than once every 10 seconds
         }

@@ -32,18 +32,23 @@ import {
 } from '@/lib/client'
 import MemoryRecapStep, { DEFAULT_RECAP_CONFIG } from '@/components/triggers/MemoryRecapStep'
 import {
+  buildEmailSearchQuery,
   buildCriteriaTemplate,
-  emailSourceFromSearchQuery,
+  type CriteriaSourceValues,
   parseCriteriaText,
 } from '@/components/triggers/CriteriaBuilder'
 import CriteriaBuilder from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 import useGmailOAuthPoller from '@/hooks/useGmailOAuthPoller'
 import {
+  AlertTriangleIcon,
+  CheckCircleIcon,
   CodeIcon,
   EnvelopeIcon,
   GitHubIcon,
+  InfoIcon,
   WebhookIcon,
+  XCircleIcon,
   type IconProps,
 } from '@/components/ui/icons'
 
@@ -192,6 +197,118 @@ const DEFAULT_PR_SAMPLE_PAYLOAD = JSON.stringify({
 
 const GITHUB_EVENT_OPTIONS = ['push', 'pull_request', 'issues', 'issue_comment', 'release', 'workflow_run']
 
+type ReadinessTone = 'ready' | 'required' | 'warning' | 'optional' | 'info'
+
+interface ReadinessItem {
+  title: string
+  detail: ReactNode
+  tone: ReadinessTone
+  action?: ReactNode
+}
+
+interface TriggerPathGuide {
+  headline: string
+  summary: string
+  prerequisites: string[]
+  criteria: string[]
+  afterSave: string[]
+}
+
+const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
+  email: {
+    headline: 'Gmail monitoring path',
+    summary: 'Use this when Gmail messages should wake an agent. Managed triage drafts also need draft permission on the selected Gmail account.',
+    prerequisites: [
+      'Google OAuth client credentials configured for Gmail.',
+      'A Gmail account connected with read access; draft/reply scope is needed only when the flow creates drafts.',
+      'Optional default agent for immediate routing.',
+    ],
+    criteria: [
+      'Gmail search query, sender, subject, and body keyword helpers.',
+      'Blank criteria watches the whole inbox using the saved poll cadence.',
+    ],
+    afterSave: [
+      'Tsushin polls Gmail, deduplicates matching messages, and runs the wired auto-flow.',
+      'For draft-based triage, reconnect the account with gmail.compose if the readiness check calls it out.',
+    ],
+  },
+  webhook: {
+    headline: 'External webhook path',
+    summary: 'Use this when another system can POST signed events to Tsushin.',
+    prerequisites: [
+      'A trigger name; Tsushin generates the inbound URL and HMAC secret after save.',
+      'Optional callback URL, IP allowlist, rate limit, and default agent.',
+    ],
+    criteria: [
+      'Optional JSONPath criteria envelope for payload fields.',
+      'Blank criteria accepts all valid signed payloads.',
+    ],
+    afterSave: [
+      'Copy the one-time HMAC secret and inbound URL before leaving the success screen.',
+      'Configure the sending system to sign requests and target the generated URL.',
+    ],
+  },
+  jira: {
+    headline: 'Jira polling path',
+    summary: 'Use this when Jira issues should wake an agent based on JQL.',
+    prerequisites: [
+      'A Hub Jira connection under Tool APIs.',
+      'A trigger name, JQL, poll cadence, and optional default agent.',
+    ],
+    criteria: [
+      'JQL is the required source filter; project and priority JSON helpers can narrow the matched issues.',
+      'The Test Query action previews real Jira matches before save.',
+    ],
+    afterSave: [
+      'Tsushin polls Jira on the selected cadence and routes matching issues to the wired auto-flow.',
+      'The generated flow can be edited for routing, notifications, and follow-up actions.',
+    ],
+  },
+  github: {
+    headline: 'GitHub webhook path',
+    summary: 'Use this when repository events should wake an agent.',
+    prerequisites: [
+      'A Hub GitHub connection under Developer Tools.',
+      'Repository owner/name, selected webhook events, optional webhook secret, and optional default agent.',
+    ],
+    criteria: [
+      'Pull request actions are required for the PR Submitted envelope.',
+      'Branch, path, author, title, body, non-draft, and sample payload tests refine the match.',
+    ],
+    afterSave: [
+      'Use the saved inbound URL and secret when configuring the GitHub repository webhook.',
+      'The trigger only wakes agents for selected events and matching PR criteria.',
+    ],
+  },
+}
+
+function defaultEmailCriteriaSource(): CriteriaSourceValues {
+  return {
+    emailSearchQuery: '',
+    emailSender: '',
+    emailSubject: '',
+    emailBodyKeyword: '',
+  }
+}
+
+function criteriaParseError(text: string): string | null {
+  if (!text.trim()) return null
+  try {
+    parseCriteriaText(text)
+    return null
+  } catch (error: unknown) {
+    return getErrorMessage(error, 'Invalid criteria JSON')
+  }
+}
+
+function stripGmailHelper(searchQuery: string | null | undefined, helper: 'from' | 'subject'): string {
+  const query = searchQuery || ''
+  const tokenPattern = helper === 'from'
+    ? /(^|\s)from:(\([^)]+\)|\S+)/g
+    : /(^|\s)subject:(\([^)]+\)|\S+)/g
+  return query.replace(tokenPattern, ' ').replace(/\s+/g, ' ').trim()
+}
+
 export default function TriggerCreationWizard({
   isOpen,
   onClose,
@@ -232,7 +349,8 @@ export default function TriggerCreationWizard({
   // Email-specific state
   const [emailIntegrationId, setEmailIntegrationId] = useState<number | null>(null)
   const [emailIntegrationName, setEmailIntegrationName] = useState('')
-  const [emailSearchQuery, setEmailSearchQuery] = useState('')
+  const [emailCriteriaSource, setEmailCriteriaSource] = useState<CriteriaSourceValues>(() => defaultEmailCriteriaSource())
+  const [emailCriteriaText, setEmailCriteriaText] = useState('')
   const [emailPollIntervalSeconds, setEmailPollIntervalSeconds] = useState('60')
   const [emailCredentialsOk, setEmailCredentialsOk] = useState(false)
 
@@ -296,7 +414,8 @@ export default function TriggerCreationWizard({
 
     setEmailIntegrationId(null)
     setEmailIntegrationName('')
-    setEmailSearchQuery('')
+    setEmailCriteriaSource(defaultEmailCriteriaSource())
+    setEmailCriteriaText('')
     setEmailPollIntervalSeconds('60')
     setEmailCredentialsOk(false)
 
@@ -510,9 +629,44 @@ export default function TriggerCreationWizard({
     [emailIntegrationId, gmailPoller.integrations],
   )
 
+  const resolvedEmailSearchQuery = useMemo(
+    () => buildEmailSearchQuery(emailCriteriaSource),
+    [emailCriteriaSource],
+  )
+
+  const handleEmailCriteriaSourceChange = useCallback((patch: Partial<CriteriaSourceValues>) => {
+    setEmailCriteriaSource((current) => {
+      const next: CriteriaSourceValues = { ...current, ...patch }
+      if (patch.emailSender !== undefined) {
+        next.emailSearchQuery = stripGmailHelper(next.emailSearchQuery, 'from')
+      }
+      if (patch.emailSubject !== undefined) {
+        next.emailSearchQuery = stripGmailHelper(next.emailSearchQuery, 'subject')
+      }
+      return next
+    })
+  }, [])
+
   const emailPollValue = Number(emailPollIntervalSeconds)
   const emailPollIntervalValid =
     Number.isInteger(emailPollValue) && emailPollValue >= 30 && emailPollValue <= 3600
+
+  const emailCriteriaJsonError = useMemo(
+    () => criteriaParseError(emailCriteriaText),
+    [emailCriteriaText],
+  )
+  const webhookCriteriaJsonError = useMemo(
+    () => criteriaParseError(webhookCriteriaText),
+    [webhookCriteriaText],
+  )
+  const jiraCriteriaJsonError = useMemo(
+    () => criteriaParseError(jiraCriteriaText),
+    [jiraCriteriaText],
+  )
+
+  const webhookRateValue = Number(webhookRateLimitRpm)
+  const webhookRateLimitValid = Number.isFinite(webhookRateValue) && webhookRateValue > 0
+  const webhookCallbackReady = !webhookCallbackEnabled || webhookCallbackUrl.trim().length > 0
 
   const jiraPollValue = Number(jiraPollInterval)
   const jiraPollIntervalValid =
@@ -529,7 +683,7 @@ export default function TriggerCreationWizard({
       )
     }
     if (kind === 'webhook') {
-      return webhookName.trim().length > 0
+      return webhookName.trim().length > 0 && webhookRateLimitValid && webhookCallbackReady
     }
     if (kind === 'jira') {
       return Boolean(
@@ -564,16 +718,385 @@ export default function TriggerCreationWizard({
     repoName,
     repoOwner,
     selectedGithubIntegrationId,
+    webhookCallbackReady,
     webhookName,
+    webhookRateLimitValid,
   ])
 
   const criteriaValid = useMemo(() => {
     if (!kind) return false
+    if (kind === 'email') {
+      return !emailCriteriaJsonError
+    }
+    if (kind === 'webhook') {
+      return !webhookCriteriaJsonError
+    }
+    if (kind === 'jira') {
+      return !jiraCriteriaJsonError
+    }
     if (kind === 'github') {
       return prSelectedActions.length > 0
     }
     return true
-  }, [kind, prSelectedActions.length])
+  }, [emailCriteriaJsonError, jiraCriteriaJsonError, kind, prSelectedActions.length, webhookCriteriaJsonError])
+
+  const selectedJiraIntegration = useMemo(
+    () => jiraIntegrations.find((entry) => entry.id === jiraIntegrationId) || null,
+    [jiraIntegrationId, jiraIntegrations],
+  )
+  const selectedGithubIntegration = useMemo(
+    () => githubIntegrations.find((entry) => entry.id === selectedGithubIntegrationId) || null,
+    [githubIntegrations, selectedGithubIntegrationId],
+  )
+  const defaultAgentLabel = useMemo(
+    () => agents.find((agent) => agent.id === defaultAgentId)?.contact_name || null,
+    [agents, defaultAgentId],
+  )
+
+  const sourceReadinessItems = useMemo<ReadinessItem[]>(() => {
+    if (!kind) return []
+    const agentItem: ReadinessItem = {
+      title: 'Default agent routing',
+      detail: defaultAgentLabel
+        ? `Matched events will start with ${defaultAgentLabel}.`
+        : 'Optional. Without this, the generated flow can still be customized after save.',
+      tone: defaultAgentLabel ? 'ready' : 'optional',
+    }
+
+    if (kind === 'email') {
+      return [
+        {
+          title: 'Google OAuth client',
+          detail: emailCredentialsOk
+            ? 'Gmail authorization can run from this wizard.'
+            : 'Required before a Gmail account can be connected or refreshed.',
+          tone: emailCredentialsOk ? 'ready' : 'required',
+        },
+        {
+          title: 'Gmail account',
+          detail: selectedGmailAccount
+            ? `${selectedGmailAccount.email_address} is selected (${gmailCapabilityLabel(selectedGmailAccount)}).`
+            : 'Required. Select an existing account or connect one below.',
+          tone: selectedGmailAccount ? 'ready' : 'required',
+        },
+        {
+          title: 'Trigger name',
+          detail: emailIntegrationName.trim() ? emailIntegrationName.trim() : 'Required label shown in Triggers and Hub.',
+          tone: emailIntegrationName.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Polling cadence',
+          detail: emailPollIntervalValid ? `${emailPollValue}s between Gmail checks.` : 'Required. Use 30 to 3600 seconds.',
+          tone: emailPollIntervalValid ? 'ready' : 'required',
+        },
+        {
+          title: 'Draft triage permission',
+          detail: selectedGmailAccount
+            ? selectedGmailAccount.can_draft
+              ? 'This account can create reviewable drafts for managed triage.'
+              : 'Monitoring works, but draft-based triage needs reauthorization with gmail.compose.'
+            : 'Shown after selecting an account. Draft creation is only needed for managed triage.',
+          tone: selectedGmailAccount?.can_draft ? 'ready' : selectedGmailAccount ? 'warning' : 'info',
+        },
+        agentItem,
+      ]
+    }
+
+    if (kind === 'webhook') {
+      return [
+        {
+          title: 'Integration name',
+          detail: webhookName.trim() ? webhookName.trim() : 'Required label for the inbound endpoint.',
+          tone: webhookName.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Inbound URL and HMAC secret',
+          detail: 'Generated after save. The secret is shown once so the sending system can sign requests.',
+          tone: 'info',
+        },
+        {
+          title: 'Outbound callback',
+          detail: webhookCallbackEnabled
+            ? webhookCallbackReady
+              ? `Enabled for ${webhookCallbackUrl.trim()}.`
+              : 'Callback is enabled, so a callback URL is required.'
+            : 'Optional. Leave off when Tsushin only needs to receive events.',
+          tone: webhookCallbackEnabled ? (webhookCallbackReady ? 'ready' : 'required') : 'optional',
+        },
+        {
+          title: 'Rate limit',
+          detail: webhookRateLimitValid ? `${webhookRateValue} request(s) per minute.` : 'Required. Use a positive number.',
+          tone: webhookRateLimitValid ? 'ready' : 'required',
+        },
+        {
+          title: 'IP allowlist',
+          detail: webhookIpAllowlistText.trim()
+            ? 'Only listed source IPs/CIDRs will be accepted.'
+            : 'Optional. Blank accepts any source IP that sends a valid signed request.',
+          tone: webhookIpAllowlistText.trim() ? 'ready' : 'optional',
+        },
+        agentItem,
+      ]
+    }
+
+    if (kind === 'jira') {
+      return [
+        {
+          title: 'Hub Jira connection',
+          detail: selectedJiraIntegration
+            ? selectedJiraIntegration.site_url || selectedJiraIntegration.integration_name || selectedJiraIntegration.name || `Connection #${selectedJiraIntegration.id}`
+            : jiraIntegrationsLoading
+              ? 'Loading available Jira connections.'
+              : 'Required. Create a Jira connection in Hub > Tool APIs if none appear.',
+          tone: selectedJiraIntegration ? 'ready' : 'required',
+          action: selectedJiraIntegration ? null : (
+            <a href="/hub?tab=tool-apis" target="_blank" rel="noopener noreferrer">
+              Open Tool APIs
+            </a>
+          ),
+        },
+        {
+          title: 'Trigger name',
+          detail: jiraIntegrationName.trim() ? jiraIntegrationName.trim() : 'Required label shown in Triggers and Hub.',
+          tone: jiraIntegrationName.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'JQL source filter',
+          detail: jiraJql.trim() ? 'JQL is ready to poll.' : 'Required. Define the issues this trigger should watch.',
+          tone: jiraJql.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Polling cadence',
+          detail: jiraPollIntervalValid ? `${jiraPollValue}s between Jira checks.` : 'Required. Use 60 to 3600 seconds.',
+          tone: jiraPollIntervalValid ? 'ready' : 'required',
+        },
+        {
+          title: 'Query preview',
+          detail: jiraTestResult
+            ? jiraTestResult.message
+            : 'Recommended. Test the JQL on the Criteria step before saving.',
+          tone: jiraTestResult?.tone === 'success' ? 'ready' : 'warning',
+        },
+        agentItem,
+      ]
+    }
+
+    return [
+      {
+        title: 'Hub GitHub connection',
+        detail: selectedGithubIntegration
+          ? selectedGithubIntegration.integration_name || selectedGithubIntegration.name || `GitHub connection #${selectedGithubIntegration.id}`
+          : githubIntegrationsLoading
+            ? 'Loading available GitHub connections.'
+            : 'Required. Create a GitHub connection in Hub > Developer Tools if none appear.',
+        tone: selectedGithubIntegration ? 'ready' : 'required',
+        action: selectedGithubIntegration ? null : (
+          <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
+            Open Developer Tools
+          </a>
+        ),
+      },
+      {
+        title: 'Trigger name',
+        detail: githubIntegrationName.trim() ? githubIntegrationName.trim() : 'Required label shown in Triggers and Hub.',
+        tone: githubIntegrationName.trim() ? 'ready' : 'required',
+      },
+      {
+        title: 'Repository',
+        detail: repoOwner.trim() && repoName.trim()
+          ? `${repoOwner.trim()}/${repoName.trim()}`
+          : 'Required. Enter the owner and repository name that will send webhooks.',
+        tone: repoOwner.trim() && repoName.trim() ? 'ready' : 'required',
+      },
+      {
+        title: 'Webhook events',
+        detail: githubEvents.length > 0
+          ? githubEvents.map((eventName) => eventName.replace('_', ' ')).join(', ')
+          : 'Required. Pick at least one GitHub event.',
+        tone: githubEvents.length > 0 ? 'ready' : 'required',
+      },
+      {
+        title: 'Webhook secret',
+        detail: githubWebhookSecret.trim()
+          ? 'The repository webhook must use this exact secret.'
+          : 'Optional. Leave blank to let Tsushin generate one after save.',
+        tone: githubWebhookSecret.trim() ? 'ready' : 'optional',
+      },
+      agentItem,
+    ]
+  }, [
+    defaultAgentLabel,
+    emailCredentialsOk,
+    emailIntegrationName,
+    emailPollIntervalValid,
+    emailPollValue,
+    githubEvents,
+    githubIntegrationName,
+    githubIntegrationsLoading,
+    githubWebhookSecret,
+    jiraIntegrationName,
+    jiraIntegrationsLoading,
+    jiraJql,
+    jiraPollIntervalValid,
+    jiraPollValue,
+    jiraTestResult,
+    kind,
+    repoName,
+    repoOwner,
+    selectedGithubIntegration,
+    selectedGmailAccount,
+    selectedJiraIntegration,
+    webhookCallbackEnabled,
+    webhookCallbackReady,
+    webhookCallbackUrl,
+    webhookIpAllowlistText,
+    webhookName,
+    webhookRateLimitValid,
+    webhookRateValue,
+  ])
+
+  const criteriaReadinessItems = useMemo<ReadinessItem[]>(() => {
+    if (!kind) return []
+    if (kind === 'email') {
+      const helperCount = [
+        emailCriteriaSource.emailSender,
+        emailCriteriaSource.emailSubject,
+        emailCriteriaSource.emailBodyKeyword,
+      ].filter((value) => (value || '').trim()).length
+      return [
+        {
+          title: 'Gmail search query',
+          detail: resolvedEmailSearchQuery || 'Blank watches the selected account inbox with no extra Gmail search filter.',
+          tone: resolvedEmailSearchQuery ? 'ready' : 'optional',
+        },
+        {
+          title: 'Sender, subject, and body helpers',
+          detail: helperCount > 0
+            ? `${helperCount} helper filter(s) will be included in the generated criteria.`
+            : 'Optional helpers below make common filters explicit without requiring Gmail query syntax.',
+          tone: helperCount > 0 ? 'ready' : 'optional',
+        },
+        {
+          title: 'Criteria JSON',
+          detail: emailCriteriaJsonError
+            ? emailCriteriaJsonError
+            : emailCriteriaText.trim()
+              ? 'Custom criteria JSON is valid.'
+              : 'Generated automatically from the email helpers when the trigger is saved.',
+          tone: emailCriteriaJsonError ? 'required' : emailCriteriaText.trim() ? 'ready' : 'info',
+        },
+      ]
+    }
+
+    if (kind === 'webhook') {
+      return [
+        {
+          title: 'Payload filtering',
+          detail: webhookCriteriaText.trim()
+            ? 'Only payloads matching the JSON criteria envelope will wake agents.'
+            : 'Blank criteria accepts every valid signed payload.',
+          tone: webhookCriteriaText.trim() ? 'ready' : 'optional',
+        },
+        {
+          title: 'Criteria JSON',
+          detail: webhookCriteriaJsonError
+            ? webhookCriteriaJsonError
+            : webhookCriteriaText.trim()
+              ? 'Custom criteria JSON is valid.'
+              : 'No JSON criteria required for accept-all webhooks.',
+          tone: webhookCriteriaJsonError ? 'required' : webhookCriteriaText.trim() ? 'ready' : 'info',
+        },
+      ]
+    }
+
+    if (kind === 'jira') {
+      return [
+        {
+          title: 'JQL match source',
+          detail: jiraJql.trim() || 'Required on the Source step.',
+          tone: jiraJql.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Project helper',
+          detail: jiraProjectKey.trim() ? `Project ${jiraProjectKey.trim()} is included in helper criteria.` : 'Optional. Use this when the JQL spans multiple projects.',
+          tone: jiraProjectKey.trim() ? 'ready' : 'optional',
+        },
+        {
+          title: 'Query preview',
+          detail: jiraTestResult
+            ? jiraTestResult.message
+            : 'Recommended. Test Query shows whether the JQL returns real issues.',
+          tone: jiraTestResult?.tone === 'success' ? 'ready' : 'warning',
+        },
+        {
+          title: 'Criteria JSON',
+          detail: jiraCriteriaJsonError
+            ? jiraCriteriaJsonError
+            : jiraCriteriaText.trim()
+              ? 'Custom criteria JSON is valid.'
+              : 'Optional. Leave blank to route every issue returned by JQL.',
+          tone: jiraCriteriaJsonError ? 'required' : jiraCriteriaText.trim() ? 'ready' : 'optional',
+        },
+      ]
+    }
+
+    const optionalGithubFilters = [
+      branchFilter,
+      pathFiltersText,
+      authorFilter,
+      prTitleContains,
+      prBodyContains,
+    ].filter((value) => value.trim()).length
+    return [
+      {
+        title: 'Pull request actions',
+        detail: prSelectedActions.length > 0
+          ? prSelectedActions.join(', ')
+          : 'Required. Pick at least one PR action that should wake an agent.',
+        tone: prSelectedActions.length > 0 ? 'ready' : 'required',
+      },
+      {
+        title: 'Draft handling',
+        detail: prDraftOnly ? 'Draft PRs are rejected.' : 'Draft PRs are allowed when the action matches.',
+        tone: prDraftOnly ? 'ready' : 'optional',
+      },
+      {
+        title: 'Branch, path, author, and text filters',
+        detail: optionalGithubFilters > 0
+          ? `${optionalGithubFilters} optional filter(s) configured.`
+          : 'Optional. Use these only when the repository event stream needs narrower routing.',
+        tone: optionalGithubFilters > 0 ? 'ready' : 'optional',
+      },
+      {
+        title: 'Sample payload test',
+        detail: prCriteriaResult
+          ? prCriteriaResult.message
+          : 'Recommended. Paste a real GitHub webhook payload to verify the criteria before save.',
+        tone: prCriteriaResult?.matched ? 'ready' : 'warning',
+      },
+    ]
+  }, [
+    authorFilter,
+    branchFilter,
+    emailCriteriaJsonError,
+    emailCriteriaSource,
+    emailCriteriaText,
+    jiraCriteriaJsonError,
+    jiraCriteriaText,
+    jiraJql,
+    jiraProjectKey,
+    jiraTestResult,
+    kind,
+    pathFiltersText,
+    prBodyContains,
+    prCriteriaResult,
+    prDraftOnly,
+    prSelectedActions,
+    prTitleContains,
+    resolvedEmailSearchQuery,
+    webhookCriteriaJsonError,
+    webhookCriteriaText,
+  ])
 
   const handleClose = useCallback(() => {
     if (saveState === 'saving') return
@@ -701,15 +1224,24 @@ export default function TriggerCreationWizard({
           if (!emailPollIntervalValid) {
             throw new Error('Poll interval must be between 30 and 3600 seconds.')
           }
-          const trigger_criteria = buildCriteriaTemplate(
-            'email',
-            emailSourceFromSearchQuery(emailSearchQuery),
-          )
+          let trigger_criteria: TriggerCriteria
+          if (emailCriteriaText.trim()) {
+            try {
+              trigger_criteria = parseCriteriaText(emailCriteriaText) as TriggerCriteria
+            } catch (error: unknown) {
+              throw new Error(`Invalid criteria JSON: ${getErrorMessage(error, 'parse error')}`)
+            }
+          } else {
+            trigger_criteria = buildCriteriaTemplate(
+              'email',
+              { ...emailCriteriaSource, emailSearchQuery: resolvedEmailSearchQuery },
+            )
+          }
           const result = await api.createEmailTrigger({
             integration_name: emailIntegrationName.trim(),
             gmail_integration_id: emailIntegrationId,
             default_agent_id: defaultAgentId,
-            search_query: emailSearchQuery.trim() || null,
+            search_query: resolvedEmailSearchQuery || null,
             trigger_criteria,
             poll_interval_seconds: emailPollValue,
             is_active: isActive,
@@ -728,6 +1260,12 @@ export default function TriggerCreationWizard({
           if (!webhookName.trim()) {
             throw new Error('Integration name is required.')
           }
+          if (!webhookCallbackReady) {
+            throw new Error('Callback URL is required when outbound callbacks are enabled.')
+          }
+          if (!webhookRateLimitValid) {
+            throw new Error('Rate limit must be a positive number.')
+          }
           let parsedCriteria: TriggerCriteria | null = null
           if (webhookCriteriaText.trim()) {
             try {
@@ -740,13 +1278,12 @@ export default function TriggerCreationWizard({
             .split(/[\n,]/)
             .map((line) => line.trim())
             .filter(Boolean)
-          const rateLimitValue = Number(webhookRateLimitRpm)
           const payload: WebhookIntegrationCreate = {
             integration_name: webhookName.trim(),
             callback_url: webhookCallbackUrl.trim() || null,
             callback_enabled: webhookCallbackEnabled,
             ip_allowlist: ipAllowlist.length > 0 ? ipAllowlist : null,
-            rate_limit_rpm: Number.isFinite(rateLimitValue) && rateLimitValue > 0 ? rateLimitValue : 60,
+            rate_limit_rpm: webhookRateValue,
             default_agent_id: defaultAgentId,
             trigger_criteria: parsedCriteria,
           }
@@ -853,11 +1390,12 @@ export default function TriggerCreationWizard({
     branchFilter,
     buildPRSubmittedCriteria,
     defaultAgentId,
+    emailCriteriaSource,
+    emailCriteriaText,
     emailIntegrationId,
     emailIntegrationName,
     emailPollIntervalValid,
     emailPollValue,
-    emailSearchQuery,
     githubEvents,
     githubIntegrationName,
     githubWebhookSecret,
@@ -876,13 +1414,16 @@ export default function TriggerCreationWizard({
     recapConfig,
     repoName,
     repoOwner,
+    resolvedEmailSearchQuery,
     selectedGithubIntegrationId,
+    webhookCallbackReady,
     webhookCallbackEnabled,
     webhookCallbackUrl,
     webhookCriteriaText,
     webhookIpAllowlistText,
     webhookName,
-    webhookRateLimitRpm,
+    webhookRateLimitValid,
+    webhookRateValue,
   ])
 
   // ---------------------------------------------------------------- footer
@@ -960,6 +1501,8 @@ export default function TriggerCreationWizard({
               )
             })}
           </div>
+
+          {kind && <SelectedPathGuide kind={kind} />}
         </div>
       </Wizard>
     )
@@ -1006,113 +1549,122 @@ export default function TriggerCreationWizard({
           </>,
         )}
       >
-        {kind === 'email' && (
-          <EmailSourceBody
-            credentialsOk={emailCredentialsOk}
-            onCredentialsReady={() => setEmailCredentialsOk(true)}
-            integrations={gmailPoller.integrations}
-            integrationsLoading={gmailPoller.integrationsLoading}
-            popupOpen={gmailPoller.popupOpen}
-            popupError={gmailPoller.popupError}
-            onConnectNew={gmailPoller.startAuthorization}
-            selectedIntegrationId={emailIntegrationId}
-            onSelectIntegration={(id) => {
-              setEmailIntegrationId(id)
-              const match = gmailPoller.integrations.find((entry) => entry.id === id)
-              if (match) {
-                setEmailIntegrationName((current) => current.trim() || `Inbox: ${match.email_address}`)
-              }
-            }}
-            integrationName={emailIntegrationName}
-            onIntegrationNameChange={setEmailIntegrationName}
-            pollIntervalSeconds={emailPollIntervalSeconds}
-            onPollIntervalChange={setEmailPollIntervalSeconds}
-            pollIntervalValid={emailPollIntervalValid}
-            agents={agents}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-            isActive={isActive}
-            onIsActiveChange={setIsActive}
+        <div className="space-y-5">
+          <ReadinessPanel
+            title={`${displayKind(kind)} setup requirements`}
+            description="Complete the required rows before moving to criteria. Optional rows show downstream behavior so there are no surprise prerequisites later."
+            items={sourceReadinessItems}
           />
-        )}
 
-        {kind === 'webhook' && (
-          <WebhookSourceBody
-            integrationName={webhookName}
-            onIntegrationNameChange={setWebhookName}
-            callbackUrl={webhookCallbackUrl}
-            onCallbackUrlChange={setWebhookCallbackUrl}
-            callbackEnabled={webhookCallbackEnabled}
-            onCallbackEnabledChange={setWebhookCallbackEnabled}
-            ipAllowlistText={webhookIpAllowlistText}
-            onIpAllowlistChange={setWebhookIpAllowlistText}
-            rateLimitRpm={webhookRateLimitRpm}
-            onRateLimitChange={setWebhookRateLimitRpm}
-            agents={agents}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-            isActive={isActive}
-            onIsActiveChange={setIsActive}
-          />
-        )}
+          {kind === 'email' && (
+            <EmailSourceBody
+              credentialsOk={emailCredentialsOk}
+              onCredentialsReady={() => setEmailCredentialsOk(true)}
+              integrations={gmailPoller.integrations}
+              integrationsLoading={gmailPoller.integrationsLoading}
+              popupOpen={gmailPoller.popupOpen}
+              popupError={gmailPoller.popupError}
+              onConnectNew={gmailPoller.startAuthorization}
+              selectedIntegrationId={emailIntegrationId}
+              onSelectIntegration={(id) => {
+                setEmailIntegrationId(id)
+                const match = gmailPoller.integrations.find((entry) => entry.id === id)
+                if (match) {
+                  setEmailIntegrationName((current) => current.trim() || `Inbox: ${match.email_address}`)
+                }
+              }}
+              integrationName={emailIntegrationName}
+              onIntegrationNameChange={setEmailIntegrationName}
+              pollIntervalSeconds={emailPollIntervalSeconds}
+              onPollIntervalChange={setEmailPollIntervalSeconds}
+              pollIntervalValid={emailPollIntervalValid}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+            />
+          )}
 
-        {kind === 'jira' && (
-          <JiraSourceBody
-            integrations={jiraIntegrations}
-            integrationsLoading={jiraIntegrationsLoading}
-            integrationId={jiraIntegrationId}
-            onIntegrationIdChange={setJiraIntegrationId}
-            integrationName={jiraIntegrationName}
-            onIntegrationNameChange={setJiraIntegrationName}
-            projectKey={jiraProjectKey}
-            onProjectKeyChange={setJiraProjectKey}
-            jql={jiraJql}
-            onJqlChange={setJiraJql}
-            pollInterval={jiraPollInterval}
-            onPollIntervalChange={setJiraPollInterval}
-            pollIntervalValid={jiraPollIntervalValid}
-            agents={agents}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-            isActive={isActive}
-            onIsActiveChange={setIsActive}
-          />
-        )}
+          {kind === 'webhook' && (
+            <WebhookSourceBody
+              integrationName={webhookName}
+              onIntegrationNameChange={setWebhookName}
+              callbackUrl={webhookCallbackUrl}
+              onCallbackUrlChange={setWebhookCallbackUrl}
+              callbackEnabled={webhookCallbackEnabled}
+              onCallbackEnabledChange={setWebhookCallbackEnabled}
+              ipAllowlistText={webhookIpAllowlistText}
+              onIpAllowlistChange={setWebhookIpAllowlistText}
+              rateLimitRpm={webhookRateLimitRpm}
+              onRateLimitChange={setWebhookRateLimitRpm}
+              rateLimitValid={webhookRateLimitValid}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+            />
+          )}
 
-        {kind === 'github' && (
-          <GitHubSourceBody
-            integrationName={githubIntegrationName}
-            onIntegrationNameChange={setGithubIntegrationName}
-            integrations={githubIntegrations}
-            integrationsLoading={githubIntegrationsLoading}
-            selectedIntegrationId={selectedGithubIntegrationId}
-            onIntegrationSelect={(next) => {
-              setSelectedGithubIntegrationId(next)
-              if (next) {
-                const match = githubIntegrations.find((item) => item.id === next)
-                if (match?.default_owner) setRepoOwner(match.default_owner)
-                if (match?.default_repo) setRepoName(match.default_repo)
-              }
-            }}
-            repoOwner={repoOwner}
-            onRepoOwnerChange={setRepoOwner}
-            repoName={repoName}
-            onRepoNameChange={setRepoName}
-            webhookSecret={githubWebhookSecret}
-            onWebhookSecretChange={setGithubWebhookSecret}
-            events={githubEvents}
-            onToggleEvent={(eventName) => setGithubEvents((current) => (
-              current.includes(eventName)
-                ? current.filter((item) => item !== eventName)
-                : [...current, eventName]
-            ))}
-            agents={agents}
-            defaultAgentId={defaultAgentId}
-            onDefaultAgentChange={setDefaultAgentId}
-            isActive={isActive}
-            onIsActiveChange={setIsActive}
-          />
-        )}
+          {kind === 'jira' && (
+            <JiraSourceBody
+              integrations={jiraIntegrations}
+              integrationsLoading={jiraIntegrationsLoading}
+              integrationId={jiraIntegrationId}
+              onIntegrationIdChange={setJiraIntegrationId}
+              integrationName={jiraIntegrationName}
+              onIntegrationNameChange={setJiraIntegrationName}
+              projectKey={jiraProjectKey}
+              onProjectKeyChange={setJiraProjectKey}
+              jql={jiraJql}
+              onJqlChange={setJiraJql}
+              pollInterval={jiraPollInterval}
+              onPollIntervalChange={setJiraPollInterval}
+              pollIntervalValid={jiraPollIntervalValid}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+            />
+          )}
+
+          {kind === 'github' && (
+            <GitHubSourceBody
+              integrationName={githubIntegrationName}
+              onIntegrationNameChange={setGithubIntegrationName}
+              integrations={githubIntegrations}
+              integrationsLoading={githubIntegrationsLoading}
+              selectedIntegrationId={selectedGithubIntegrationId}
+              onIntegrationSelect={(next) => {
+                setSelectedGithubIntegrationId(next)
+                if (next) {
+                  const match = githubIntegrations.find((item) => item.id === next)
+                  if (match?.default_owner) setRepoOwner(match.default_owner)
+                  if (match?.default_repo) setRepoName(match.default_repo)
+                }
+              }}
+              repoOwner={repoOwner}
+              onRepoOwnerChange={setRepoOwner}
+              repoName={repoName}
+              onRepoNameChange={setRepoName}
+              webhookSecret={githubWebhookSecret}
+              onWebhookSecretChange={setGithubWebhookSecret}
+              events={githubEvents}
+              onToggleEvent={(eventName) => setGithubEvents((current) => (
+                current.includes(eventName)
+                  ? current.filter((item) => item !== eventName)
+                  : [...current, eventName]
+              ))}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+            />
+          )}
+        </div>
       </Wizard>
     )
   }
@@ -1162,62 +1714,76 @@ export default function TriggerCreationWizard({
           </>,
         )}
       >
-        {kind === 'email' && (
-          <EmailCriteriaBody
-            searchQuery={emailSearchQuery}
-            onSearchQueryChange={setEmailSearchQuery}
+        <div className="space-y-5">
+          <ReadinessPanel
+            title={`${displayKind(kind)} matching coverage`}
+            description="This step shows exactly what will match, what is optional, and which validations are recommended before saving."
+            items={criteriaReadinessItems}
           />
-        )}
-        {kind === 'webhook' && (
-          <WebhookCriteriaBody
-            criteriaText={webhookCriteriaText}
-            onCriteriaTextChange={setWebhookCriteriaText}
-          />
-        )}
-        {kind === 'jira' && (
-          <JiraCriteriaBody
-            jql={jiraJql}
-            integrationSiteUrl={jiraIntegrations.find((i) => i.id === jiraIntegrationId)?.site_url || ''}
-            sampleIssues={jiraSampleIssues}
-            testing={jiraTesting}
-            testResult={jiraTestResult}
-            canTest={Boolean(jiraIntegrationId && jiraJql.trim())}
-            onTestQuery={handleJiraTestQuery}
-            criteriaText={jiraCriteriaText}
-            onCriteriaTextChange={setJiraCriteriaText}
-            projectKey={jiraProjectKey}
-            onProjectKeyChange={setJiraProjectKey}
-            onJqlChange={setJiraJql}
-          />
-        )}
 
-        {kind === 'github' && (
-          <GitHubCriteriaBody
-            prSelectedActions={prSelectedActions}
-            onTogglePRAction={(action) => setPrSelectedActions((current) => (
-              current.includes(action)
-                ? current.filter((item) => item !== action)
-                : [...current, action]
-            ))}
-            prDraftOnly={prDraftOnly}
-            onPrDraftOnlyChange={setPrDraftOnly}
-            prTitleContains={prTitleContains}
-            onPrTitleContainsChange={setPrTitleContains}
-            prBodyContains={prBodyContains}
-            onPrBodyContainsChange={setPrBodyContains}
-            prSamplePayloadText={prSamplePayloadText}
-            onPrSamplePayloadChange={setPrSamplePayloadText}
-            prCriteriaResult={prCriteriaResult}
-            prCriteriaTesting={prCriteriaTesting}
-            onTestPRSubmittedCriteria={handleTestPRSubmittedCriteria}
-            branchFilter={branchFilter}
-            onBranchFilterChange={setBranchFilter}
-            pathFiltersText={pathFiltersText}
-            onPathFiltersChange={setPathFiltersText}
-            authorFilter={authorFilter}
-            onAuthorFilterChange={setAuthorFilter}
-          />
-        )}
+          {kind === 'email' && (
+            <EmailCriteriaBody
+              source={emailCriteriaSource}
+              onSourceChange={handleEmailCriteriaSourceChange}
+              criteriaText={emailCriteriaText}
+              onCriteriaTextChange={setEmailCriteriaText}
+              resolvedSearchQuery={resolvedEmailSearchQuery}
+              criteriaJsonError={emailCriteriaJsonError}
+            />
+          )}
+          {kind === 'webhook' && (
+            <WebhookCriteriaBody
+              criteriaText={webhookCriteriaText}
+              onCriteriaTextChange={setWebhookCriteriaText}
+              criteriaJsonError={webhookCriteriaJsonError}
+            />
+          )}
+          {kind === 'jira' && (
+            <JiraCriteriaBody
+              jql={jiraJql}
+              integrationSiteUrl={jiraIntegrations.find((i) => i.id === jiraIntegrationId)?.site_url || ''}
+              sampleIssues={jiraSampleIssues}
+              testing={jiraTesting}
+              testResult={jiraTestResult}
+              canTest={Boolean(jiraIntegrationId && jiraJql.trim())}
+              onTestQuery={handleJiraTestQuery}
+              criteriaText={jiraCriteriaText}
+              onCriteriaTextChange={setJiraCriteriaText}
+              criteriaJsonError={jiraCriteriaJsonError}
+              projectKey={jiraProjectKey}
+              onProjectKeyChange={setJiraProjectKey}
+              onJqlChange={setJiraJql}
+            />
+          )}
+
+          {kind === 'github' && (
+            <GitHubCriteriaBody
+              prSelectedActions={prSelectedActions}
+              onTogglePRAction={(action) => setPrSelectedActions((current) => (
+                current.includes(action)
+                  ? current.filter((item) => item !== action)
+                  : [...current, action]
+              ))}
+              prDraftOnly={prDraftOnly}
+              onPrDraftOnlyChange={setPrDraftOnly}
+              prTitleContains={prTitleContains}
+              onPrTitleContainsChange={setPrTitleContains}
+              prBodyContains={prBodyContains}
+              onPrBodyContainsChange={setPrBodyContains}
+              prSamplePayloadText={prSamplePayloadText}
+              onPrSamplePayloadChange={setPrSamplePayloadText}
+              prCriteriaResult={prCriteriaResult}
+              prCriteriaTesting={prCriteriaTesting}
+              onTestPRSubmittedCriteria={handleTestPRSubmittedCriteria}
+              branchFilter={branchFilter}
+              onBranchFilterChange={setBranchFilter}
+              pathFiltersText={pathFiltersText}
+              onPathFiltersChange={setPathFiltersText}
+              authorFilter={authorFilter}
+              onAuthorFilterChange={setAuthorFilter}
+            />
+          )}
+        </div>
       </Wizard>
     )
   }
@@ -1393,7 +1959,9 @@ export default function TriggerCreationWizard({
             email={{
               integrationName: emailIntegrationName,
               account: selectedGmailAccount?.email_address || null,
-              query: emailSearchQuery,
+              query: resolvedEmailSearchQuery,
+              bodyKeyword: emailCriteriaSource.emailBodyKeyword || '',
+              customCriteria: emailCriteriaText.trim().length > 0,
               pollSeconds: emailPollValue,
             }}
             webhook={{
@@ -1470,6 +2038,151 @@ function triggerLabel(saved: SavedTriggerAny): string {
 
 function triggerActiveLabel(saved: SavedTriggerAny): string {
   return (saved as { is_active?: boolean }).is_active === false ? 'paused' : 'active'
+}
+
+function SelectedPathGuide({ kind }: { kind: TriggerId }) {
+  const guide = TRIGGER_PATH_GUIDES[kind]
+  return (
+    <div className="rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white">{guide.headline}</div>
+          <p className="mt-1 text-sm text-tsushin-slate">{guide.summary}</p>
+        </div>
+        <span className="rounded-full border border-tsushin-border/70 bg-black/20 px-2.5 py-1 text-[10px] uppercase tracking-wide text-tsushin-slate">
+          selected path
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <PathGuideColumn title="Prerequisites" items={guide.prerequisites} />
+        <PathGuideColumn title="Criteria options" items={guide.criteria} />
+        <PathGuideColumn title="After save" items={guide.afterSave} />
+      </div>
+    </div>
+  )
+}
+
+function PathGuideColumn({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-xl border border-tsushin-border/60 bg-black/10 p-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-tsushin-slate/80">{title}</div>
+      <div className="mt-3 space-y-2">
+        {items.map((item) => (
+          <div key={item} className="flex gap-2 text-xs leading-relaxed text-tsushin-slate">
+            <span aria-hidden className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-tsushin-slate/60" />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ReadinessPanel({
+  title,
+  description,
+  items,
+}: {
+  title: string
+  description: string
+  items: ReadinessItem[]
+}) {
+  const completeRequired = items.filter((item) => item.tone === 'required').length === 0
+  return (
+    <div className="rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-white">{title}</div>
+          <p className="mt-1 text-xs text-tsushin-slate">{description}</p>
+        </div>
+        <span
+          className={`rounded-full border px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide ${
+            completeRequired
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+          }`}
+        >
+          {completeRequired ? 'ready' : 'required setup'}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        {items.map((item) => (
+          <ReadinessRow key={item.title} item={item} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ReadinessRow({ item }: { item: ReadinessItem }) {
+  const { icon: Icon, iconClass, rowClass, label } = readinessToneConfig(item.tone)
+  return (
+    <div className={`rounded-xl border px-3 py-3 ${rowClass}`}>
+      <div className="flex gap-3">
+        <Icon size={16} className={`mt-0.5 shrink-0 ${iconClass}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-white">{item.title}</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-tsushin-slate">
+              {label}
+            </span>
+          </div>
+          <div className="mt-1 text-xs leading-relaxed text-tsushin-slate">{item.detail}</div>
+          {item.action && (
+            <div className="mt-2 text-xs text-tsushin-fog underline decoration-tsushin-border underline-offset-4 hover:text-white">
+              {item.action}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function readinessToneConfig(tone: ReadinessTone): {
+  icon: ComponentType<IconProps>
+  iconClass: string
+  rowClass: string
+  label: string
+} {
+  switch (tone) {
+    case 'ready':
+      return {
+        icon: CheckCircleIcon,
+        iconClass: 'text-emerald-300',
+        rowClass: 'border-emerald-500/20 bg-emerald-500/5',
+        label: 'ready',
+      }
+    case 'required':
+      return {
+        icon: XCircleIcon,
+        iconClass: 'text-amber-300',
+        rowClass: 'border-amber-500/25 bg-amber-500/10',
+        label: 'required',
+      }
+    case 'warning':
+      return {
+        icon: AlertTriangleIcon,
+        iconClass: 'text-yellow-300',
+        rowClass: 'border-yellow-500/20 bg-yellow-500/5',
+        label: 'review',
+      }
+    case 'optional':
+      return {
+        icon: InfoIcon,
+        iconClass: 'text-sky-300',
+        rowClass: 'border-sky-500/20 bg-sky-500/5',
+        label: 'optional',
+      }
+    case 'info':
+      return {
+        icon: InfoIcon,
+        iconClass: 'text-tsushin-slate',
+        rowClass: 'border-tsushin-border/60 bg-black/10',
+        label: 'info',
+      }
+  }
 }
 
 // ============================================================================
@@ -1681,36 +2394,50 @@ function EmailSourceBody({
 }
 
 interface EmailCriteriaBodyProps {
-  searchQuery: string
-  onSearchQueryChange: (value: string) => void
+  source: CriteriaSourceValues
+  onSourceChange: (patch: Partial<CriteriaSourceValues>) => void
+  criteriaText: string
+  onCriteriaTextChange: (value: string) => void
+  resolvedSearchQuery: string
+  criteriaJsonError: string | null
 }
 
-function EmailCriteriaBody({ searchQuery, onSearchQueryChange }: EmailCriteriaBodyProps) {
-  const idPrefix = useId()
-  const searchQueryId = `${idPrefix}-search`
-  const previewQuery = searchQuery.trim() || 'label:inbox is:unread'
+function EmailCriteriaBody({
+  source,
+  onSourceChange,
+  criteriaText,
+  onCriteriaTextChange,
+  resolvedSearchQuery,
+  criteriaJsonError,
+}: EmailCriteriaBodyProps) {
+  const previewQuery = resolvedSearchQuery.trim() || 'Whole inbox'
+  const bodyKeyword = (source.emailBodyKeyword || '').trim()
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <label htmlFor={searchQueryId} className="block text-sm font-medium text-white">Gmail Search Query</label>
-        <textarea
-          id={searchQueryId}
-          value={searchQuery}
-          onChange={(event) => onSearchQueryChange(event.target.value)}
-          rows={3}
-          placeholder="label:inbox is:unread newer_than:2d"
-          className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/30"
-        />
-        <p className="text-xs text-tsushin-slate">
-          Leave blank to watch all new inbox activity. Any valid Gmail search query works here.
-        </p>
-      </div>
+      <CriteriaBuilder
+        kind="email"
+        value={criteriaText}
+        onChange={onCriteriaTextChange}
+        source={source}
+        onSourceChange={onSourceChange}
+      />
+
+      {criteriaJsonError && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Fix criteria JSON before continuing: {criteriaJsonError}
+        </div>
+      )}
 
       <div className="rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4">
         <div className="text-xs uppercase tracking-[0.18em] text-tsushin-slate/80">Watches</div>
         <div className="mt-2 font-mono text-sm text-emerald-200">{previewQuery}</div>
+        {bodyKeyword && (
+          <div className="mt-2 text-xs text-tsushin-slate">
+            Body must contain <span className="font-mono text-emerald-200">{bodyKeyword}</span>.
+          </div>
+        )}
         <p className="mt-2 text-xs text-tsushin-slate">
-          The trigger criteria envelope is generated automatically from this query.
+          The saved Gmail search query controls polling; the criteria envelope is generated from the helpers unless you provide custom JSON.
         </p>
       </div>
     </div>
@@ -1732,6 +2459,7 @@ interface WebhookSourceBodyProps {
   onIpAllowlistChange: (value: string) => void
   rateLimitRpm: string
   onRateLimitChange: (value: string) => void
+  rateLimitValid: boolean
   agents: Agent[]
   defaultAgentId: number | null
   onDefaultAgentChange: (id: number | null) => void
@@ -1750,6 +2478,7 @@ function WebhookSourceBody({
   onIpAllowlistChange,
   rateLimitRpm,
   onRateLimitChange,
+  rateLimitValid,
   agents,
   defaultAgentId,
   onDefaultAgentChange,
@@ -1827,6 +2556,9 @@ function WebhookSourceBody({
             onChange={(event) => onRateLimitChange(event.target.value)}
             className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           />
+          <p className={`text-xs ${rateLimitValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
+            Use a positive number. This protects the trigger from accidental bursts.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -1866,9 +2598,14 @@ function WebhookSourceBody({
 interface WebhookCriteriaBodyProps {
   criteriaText: string
   onCriteriaTextChange: (value: string) => void
+  criteriaJsonError: string | null
 }
 
-function WebhookCriteriaBody({ criteriaText, onCriteriaTextChange }: WebhookCriteriaBodyProps) {
+function WebhookCriteriaBody({
+  criteriaText,
+  onCriteriaTextChange,
+  criteriaJsonError,
+}: WebhookCriteriaBodyProps) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-tsushin-slate">
@@ -1879,6 +2616,11 @@ function WebhookCriteriaBody({ criteriaText, onCriteriaTextChange }: WebhookCrit
         value={criteriaText}
         onChange={onCriteriaTextChange}
       />
+      {criteriaJsonError && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Fix criteria JSON before continuing: {criteriaJsonError}
+        </div>
+      )}
     </div>
   )
 }
@@ -2085,6 +2827,7 @@ interface JiraCriteriaBodyProps {
   onTestQuery: () => void
   criteriaText: string
   onCriteriaTextChange: (value: string) => void
+  criteriaJsonError: string | null
   projectKey: string
   onProjectKeyChange: (value: string) => void
   onJqlChange: (value: string) => void
@@ -2100,6 +2843,7 @@ function JiraCriteriaBody({
   onTestQuery,
   criteriaText,
   onCriteriaTextChange,
+  criteriaJsonError,
   projectKey,
   onProjectKeyChange,
   onJqlChange,
@@ -2153,6 +2897,12 @@ function JiraCriteriaBody({
           if (patch.jiraJql !== undefined) onJqlChange(patch.jiraJql || '')
         }}
       />
+
+      {criteriaJsonError && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Fix criteria JSON before continuing: {criteriaJsonError}
+        </div>
+      )}
     </div>
   )
 }
@@ -2627,6 +3377,8 @@ interface PreSaveSummaryProps {
     integrationName: string
     account: string | null
     query: string
+    bodyKeyword: string
+    customCriteria: boolean
     pollSeconds: number
   }
   webhook: {
@@ -2674,6 +3426,8 @@ function PreSaveSummary({
     cells.push(['Trigger name', email.integrationName || '—'])
     cells.push(['Gmail account', email.account || '—'])
     cells.push(['Search query', email.query.trim() || 'Whole inbox'])
+    cells.push(['Body keyword', email.bodyKeyword.trim() || '—'])
+    cells.push(['Criteria JSON', email.customCriteria ? 'Custom JSON' : 'Generated from helpers'])
     cells.push(['Poll interval', `${email.pollSeconds}s`])
   } else if (kind === 'webhook') {
     cells.push(['Integration name', webhook.integrationName || '—'])

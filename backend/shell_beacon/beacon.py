@@ -77,6 +77,13 @@ class Beacon:
 
         logger.info(f"Beacon initialized (version {__version__})")
 
+    def _tls_verify_setting(self):
+        if self.config.tls.insecure_skip_verify:
+            return False
+        if self.config.tls.ca_bundle:
+            return self.config.tls.ca_bundle
+        return True
+
     def _create_session(self) -> requests.Session:
         """Create HTTP session with retry configuration."""
         session = requests.Session()
@@ -141,7 +148,8 @@ class Beacon:
                 method=method,
                 url=url,
                 json=data,
-                timeout=self.config.connection.request_timeout
+                timeout=self.config.connection.request_timeout,
+                verify=self._tls_verify_setting(),
             )
 
             request_duration = (datetime.utcnow() - request_start).total_seconds()

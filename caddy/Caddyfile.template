@@ -30,6 +30,14 @@
 #     handle /ws/* {
 #         reverse_proxy {TSN_STACK_NAME}-backend:8081
 #     }
+#     # Self-signed installs also expose the generated leaf certificate here
+#     # so shell beacons can use REQUESTS_CA_BUNDLE without OS trust changes.
+#     handle /tsushin-selfsigned-ca.pem {
+#         rewrite * /selfsigned.crt
+#         root * /etc/caddy/certs
+#         header Content-Type "application/x-pem-file"
+#         file_server
+#     }
 #     handle {
 #         reverse_proxy {TSN_STACK_NAME}-frontend:3030
 #     }
@@ -69,7 +77,9 @@
 #   without `default_sni`, IP-only installs still failed curl/browser HTTPS
 #   because curl does NOT send SNI for IP-literal hosts (per RFC 3546 §3.1).
 #   Caddy then has no way to match a domain-bound site block and responds
-#   with `TLSv1 alert internal error`.
+#   with `TLSv1 alert internal error`. The installer now prefers its
+#   OpenSSL-generated selfsigned.crt/selfsigned.key for IP binds so the
+#   presented certificate has the IP SAN even when the client sends no SNI.
 #
 # For hostname binds (`SSL_DOMAIN` is a DNS name):
 # {
@@ -88,7 +98,7 @@
 #     SAN for the bound IP.
 #
 # :443 {
-#     tls internal
+#     tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key
 #     import tsushin_routes
 # }
 #

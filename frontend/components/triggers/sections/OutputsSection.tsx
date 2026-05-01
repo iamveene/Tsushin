@@ -46,7 +46,10 @@ interface Props {
   onEmailPollNow?: () => void
   emailPolling?: boolean
   onEnableEmailTriage?: () => void
+  onChooseEmailTriageAgent?: () => void
+  onReconnectEmailGmail?: () => void
   emailTriageLoading?: boolean
+  emailGmailReauthLoading?: boolean
 }
 
 export default function OutputsSection({
@@ -61,7 +64,10 @@ export default function OutputsSection({
   onEmailPollNow,
   emailPolling = false,
   onEnableEmailTriage,
+  onChooseEmailTriageAgent,
+  onReconnectEmailGmail,
   emailTriageLoading = false,
+  emailGmailReauthLoading = false,
 }: Props) {
   // Track bindings so WiredFlowsCard can refresh after local changes.
   const [, setBindings] = useState<FlowTriggerBinding[]>([])
@@ -101,7 +107,10 @@ export default function OutputsSection({
           trigger={email}
           gmailIntegration={emailGmailIntegration}
           onEnable={onEnableEmailTriage ?? (() => undefined)}
+          onChooseDefaultAgent={onChooseEmailTriageAgent}
+          onReconnectGmail={onReconnectEmailGmail}
           enabling={emailTriageLoading}
+          reconnectingGmail={emailGmailReauthLoading}
           canWriteHub={canWriteHub}
         />
         <WiredFlowsCard

@@ -68,6 +68,13 @@ class UpdateConfig:
 
 
 @dataclass
+class TLSConfig:
+    """TLS verification configuration."""
+    ca_bundle: str = ""
+    insecure_skip_verify: bool = False
+
+
+@dataclass
 class BeaconConfig:
     """Complete beacon configuration."""
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -75,6 +82,7 @@ class BeaconConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     update: UpdateConfig = field(default_factory=UpdateConfig)
+    tls: TLSConfig = field(default_factory=TLSConfig)
 
     # Runtime state
     config_file_path: Optional[str] = None
@@ -165,6 +173,13 @@ class BeaconConfig:
             if 'check_interval_hours' in update_data:
                 config.update.check_interval_hours = int(update_data['check_interval_hours'])
 
+        if 'tls' in data:
+            tls_data = data['tls']
+            if 'ca_bundle' in tls_data:
+                config.tls.ca_bundle = str(tls_data['ca_bundle'] or "")
+            if 'insecure_skip_verify' in tls_data:
+                config.tls.insecure_skip_verify = bool(tls_data['insecure_skip_verify'])
+
         return config
 
     def apply_env_vars(self) -> None:
@@ -197,6 +212,14 @@ class BeaconConfig:
         if env_auto_update := os.environ.get("TSUSHIN_AUTO_UPDATE"):
             self.update.enabled = env_auto_update.lower() in ("true", "1", "yes")
 
+        if env_ca_bundle := (
+            os.environ.get("TSUSHIN_CA_BUNDLE")
+            or os.environ.get("REQUESTS_CA_BUNDLE")
+        ):
+            self.tls.ca_bundle = env_ca_bundle
+        if env_insecure := os.environ.get("TSUSHIN_INSECURE_SKIP_VERIFY"):
+            self.tls.insecure_skip_verify = env_insecure.lower() in ("true", "1", "yes")
+
     def apply_cli_args(self, args: argparse.Namespace) -> None:
         """Apply CLI argument overrides."""
         if hasattr(args, 'server') and args.server:
@@ -221,6 +244,10 @@ class BeaconConfig:
             self.logging.file = args.log_file
         if hasattr(args, 'no_auto_update') and args.no_auto_update:
             self.update.enabled = False
+        if hasattr(args, 'ca_bundle') and args.ca_bundle:
+            self.tls.ca_bundle = args.ca_bundle
+        if hasattr(args, 'insecure_skip_verify') and args.insecure_skip_verify:
+            self.tls.insecure_skip_verify = True
 
     def validate(self) -> list[str]:
         """Validate configuration and return list of errors."""
@@ -238,6 +265,9 @@ class BeaconConfig:
         if self.execution.timeout < 1:
             errors.append("Execution timeout must be at least 1 second.")
 
+        if self.tls.ca_bundle and not Path(self.tls.ca_bundle).expanduser().exists():
+            errors.append(f"TLS CA bundle does not exist: {self.tls.ca_bundle}")
+
         return errors
 
     def finalize(self) -> None:
@@ -252,6 +282,9 @@ class BeaconConfig:
         # Expand ~ in working directory
         if self.execution.working_dir:
             self.execution.working_dir = str(Path(self.execution.working_dir).expanduser())
+
+        if self.tls.ca_bundle:
+            self.tls.ca_bundle = str(Path(self.tls.ca_bundle).expanduser())
 
         # Ensure log directory exists
         log_dir = Path(self.logging.file).parent
@@ -285,6 +318,10 @@ class BeaconConfig:
                 "enabled": self.update.enabled,
                 "check_on_startup": self.update.check_on_startup,
                 "check_interval_hours": self.update.check_interval_hours
+            },
+            "tls": {
+                "ca_bundle": self.tls.ca_bundle or "(system trust)",
+                "insecure_skip_verify": self.tls.insecure_skip_verify
             }
         }
 
@@ -346,6 +383,16 @@ Configuration priority (highest to lowest):
         type=int,
         metavar="SECONDS",
         help="WebSocket heartbeat interval in seconds (default: 15)"
+    )
+    conn_group.add_argument(
+        "--ca-bundle",
+        metavar="PATH",
+        help="PEM CA bundle for self-signed Tsushin HTTPS endpoints"
+    )
+    conn_group.add_argument(
+        "--insecure-skip-verify",
+        action="store_true",
+        help="Disable TLS verification (self-signed lab installs only)"
     )
 
     # Execution options
