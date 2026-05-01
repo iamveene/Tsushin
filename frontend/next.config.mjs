@@ -19,9 +19,12 @@ const nextConfig = {
   // internal Docker network so browser requests stay same-origin with the
   // frontend (cookie-scoped). BACKEND_INTERNAL_URL is read at request time
   // from the Node.js process (NOT a build arg). Default targets the compose
-  // service `backend` on its in-network port 8081.
+  // stack-scoped compose backend on its in-network port 8081.
   async rewrites() {
-    const backend = process.env.BACKEND_INTERNAL_URL || 'http://backend:8081'
+    const stackName = process.env.TSN_STACK_NAME?.trim()
+    const backend =
+      process.env.BACKEND_INTERNAL_URL ||
+      (stackName ? `http://${stackName}-backend:8081` : 'http://backend:8081')
     return [
       { source: '/api/:path*', destination: `${backend}/api/:path*` },
       { source: '/ws/:path*', destination: `${backend}/ws/:path*` },
