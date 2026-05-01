@@ -28,6 +28,7 @@ def test_next_rewrite_fallback_uses_stack_name_when_present():
 
     assert "process.env.TSN_STACK_NAME" in next_config
     assert "`http://${stackName}-backend:8081`" in next_config
+    assert "fallback: [" in next_config
     assert "process.env.TSN_STACK_NAME" in auth_proxy
     assert "`http://${stackName}-backend:8081`" in auth_proxy
     assert "process.env.TSN_SSL_MODE" in auth_proxy
