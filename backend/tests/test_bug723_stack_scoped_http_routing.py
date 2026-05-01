@@ -10,6 +10,7 @@ def _read(path: str) -> str:
 
 def test_frontend_internal_backend_urls_default_to_stack_scoped_names():
     compose = _read("docker-compose.yml")
+    dockerfile = _read("frontend/Dockerfile")
 
     assert (
         "BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}"
@@ -20,6 +21,11 @@ def test_frontend_internal_backend_urls_default_to_stack_scoped_names():
         in compose
     )
     assert "BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend:8081}" not in compose
+    assert "TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}" in compose
+    assert "ARG BACKEND_INTERNAL_URL=" in dockerfile
+    assert "ENV BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL}" in dockerfile
+    assert "ARG TSN_STACK_NAME=tsushin" in dockerfile
+    assert "ENV TSN_STACK_NAME=${TSN_STACK_NAME}" in dockerfile
 
 
 def test_next_rewrite_fallback_uses_stack_name_when_present():
