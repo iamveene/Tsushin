@@ -1,10 +1,17 @@
 from pathlib import Path
 
+import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "docker-compose.yml").exists() and (parent / "frontend").is_dir():
+            return parent
+    pytest.skip("repository-root files are unavailable in this backend-only test image")
 
 
 def _read(path: str) -> str:
+    ROOT = _repo_root()
     return (ROOT / path).read_text()
 
 
