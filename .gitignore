@@ -311,6 +311,7 @@ backend/tests/*
 !backend/tests/test_case_memory_embedding_contract.py
 !backend/tests/test_case_memory_failure_safety.py
 !backend/tests/test_routes_case_memory.py
+!backend/tests/test_bug723_stack_scoped_http_routing.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
