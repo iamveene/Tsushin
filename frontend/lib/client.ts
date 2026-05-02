@@ -3832,6 +3832,19 @@ export interface ASRInstanceCreate {
   default_model?: string
 }
 
+/** Cascade summary returned by DELETE /api/asr-instances/{id} — describes
+ * what happened to agent_skill rows pinned to the deleted instance. */
+export interface ASRCascadeSummary {
+  reassigned: number
+  disabled: number
+  successor_instance_id: number | null
+}
+
+export interface ASRDeleteResponse {
+  detail: string
+  cascade: ASRCascadeSummary
+}
+
 // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
 
 export interface TTSInstance {
@@ -9477,11 +9490,14 @@ export const api = {
     return res.json()
   },
 
-  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<void> {
+  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<ASRDeleteResponse> {
+    // Returns the cascade summary so the Hub ASR card can surface a banner
+    // describing how many agent_skill rows were reassigned vs disabled.
     const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}?remove_volume=${removeVolume}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete ASR instance')
+    return res.json()
   },
 
   async asrContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {

@@ -4763,20 +4763,22 @@ export default function HubPage() {
                             return (
                               <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
                                 <div className="flex items-start justify-between gap-2 flex-wrap">
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
-                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400">{inst.vendor}</span>
-                                      {inst.is_auto_provisioned && (
-                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                  <div className="flex items-start gap-2 min-w-0">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400">{inst.vendor}</span>
+                                        {inst.is_auto_provisioned && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                        )}
+                                      </div>
+                                      {inst.default_model && (
+                                        <p className="text-[11px] text-tsushin-muted mt-1">Model: <span className="font-mono">{inst.default_model}</span></p>
+                                      )}
+                                      {inst.base_url && (
+                                        <p className="text-[11px] font-mono text-tsushin-muted mt-1 truncate">{inst.base_url}</p>
                                       )}
                                     </div>
-                                    {inst.default_model && (
-                                      <p className="text-[11px] text-tsushin-muted mt-1">Model: <span className="font-mono">{inst.default_model}</span></p>
-                                    )}
-                                    {inst.base_url && (
-                                      <p className="text-[11px] font-mono text-tsushin-muted truncate">{inst.base_url}</p>
-                                    )}
                                   </div>
                                   <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
                                     isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
