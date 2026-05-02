@@ -35,7 +35,10 @@ export default function A2APermissionsManager() {
     target_agent_id: 0,
     max_depth: 3,
     rate_limit_rpm: 30,
-    allow_target_skills: false,
+    // Default ON in the UI: a tenant admin clicking "Add Permission" almost always
+    // wants the target to actually do its job (read mailbox, run a tool) when asked.
+    // The DB-level default stays false (defense in depth — see models.py:4158).
+    allow_target_skills: true,
   })
   const [savingPermission, setSavingPermission] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -88,7 +91,7 @@ export default function A2APermissionsManager() {
       await api.createAgentCommPermission(newPermission)
       toast.success('Permission created successfully')
       setShowAddModal(false)
-      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 30, allow_target_skills: false })
+      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 30, allow_target_skills: true })
       loadPermissions()
     } catch (err: any) {
       toast.error('Create Failed', err.message || 'Failed to create permission')
@@ -331,13 +334,21 @@ export default function A2APermissionsManager() {
                     className="mt-1 h-4 w-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-2 focus:ring-amber-500"
                   />
                   <span>
-                    <span className="block text-sm font-medium text-gray-300">Allow target to use its own skills</span>
+                    <span className="block text-sm font-medium text-gray-300">
+                      Allow target to use its own skills <span className="text-tsushin-muted font-normal">(recommended)</span>
+                    </span>
                     <span className="block text-xs text-tsushin-muted mt-0.5">
                       The target agent can use its gmail, sandboxed_tools, shell, etc. when invoked through A2A.
-                      Leave off for pure LLM-knowledge replies. Depth, rate limit, and Sentinel still apply.
+                      Uncheck for pure LLM-knowledge replies. Depth, rate limit, and Sentinel still apply.
                     </span>
                   </span>
                 </label>
+                {newPermission.allow_target_skills && (
+                  <div className="mt-2 ml-7 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                    <strong className="font-medium">Heads up:</strong> the source agent will be able to invoke the target's tools indirectly.
+                    Only enable for source agents you trust to act on your behalf (capability amplification).
+                  </div>
+                )}
               </div>
             </div>
 
