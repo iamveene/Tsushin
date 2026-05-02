@@ -394,6 +394,360 @@ class ProviderInstanceService:
         db.commit()
         return True
 
+    # =========================================================================
+    # Catalog / Usage / Cascade-aware delete (v0.7.0 LLM Provider consistency)
+    # =========================================================================
+
+    @staticmethod
+    def get_catalog(tenant_id: str, db: Session) -> List[dict]:
+        """Single source of truth for "what providers can an agent use" UI.
+
+        Returns one dict per supported vendor with the vendor's display info
+        and the tenant's active instances. The Studio agent edit modal, the
+        agent creation wizard, the playground config panel and the Hub all
+        consume this so they never drift apart.
+
+        Each entry has: ``vendor``, ``display_name``, ``default_base_url``,
+        ``supports_discovery``, ``creatable`` (always True for now),
+        ``instances`` (list of active ProviderInstance dicts).
+        """
+        # Local import to avoid circulars with the API route module.
+        from api.routes_provider_instances import (
+            VENDOR_DISPLAY_NAMES,
+            VENDORS_WITH_LIVE_DISCOVERY,
+            VALID_VENDORS,
+        )
+
+        active_instances = (
+            db.query(ProviderInstance)
+            .filter(
+                ProviderInstance.tenant_id == tenant_id,
+                ProviderInstance.is_active == True,  # noqa: E712
+            )
+            .order_by(
+                ProviderInstance.vendor,
+                ProviderInstance.is_default.desc(),
+                ProviderInstance.instance_name,
+            )
+            .all()
+        )
+        by_vendor: dict[str, list[ProviderInstance]] = {}
+        for inst in active_instances:
+            by_vendor.setdefault(inst.vendor, []).append(inst)
+
+        ordered_vendors = [
+            "openai", "anthropic", "gemini", "groq", "grok",
+            "openrouter", "deepseek", "vertex_ai", "ollama", "custom",
+        ]
+        # Tail any extra vendors so nothing is silently hidden if VALID_VENDORS
+        # ever expands without this list being updated.
+        for v in sorted(VALID_VENDORS):
+            if v not in ordered_vendors:
+                ordered_vendors.append(v)
+
+        out: list[dict] = []
+        for vendor in ordered_vendors:
+            if vendor not in VALID_VENDORS:
+                continue
+            try:
+                default_url = get_vendor_default_base_url(vendor)
+            except Exception:
+                default_url = None
+            instances = [
+                {
+                    "id": inst.id,
+                    "instance_name": inst.instance_name,
+                    "base_url": inst.base_url,
+                    "is_default": bool(inst.is_default),
+                    "available_models": list(inst.available_models or []),
+                    "health_status": inst.health_status or "unknown",
+                    "health_status_reason": inst.health_status_reason,
+                    "is_auto_provisioned": bool(getattr(inst, "is_auto_provisioned", False)),
+                    "container_status": getattr(inst, "container_status", None),
+                }
+                for inst in by_vendor.get(vendor, [])
+            ]
+            out.append({
+                "vendor": vendor,
+                "display_name": VENDOR_DISPLAY_NAMES.get(vendor, vendor),
+                "default_base_url": default_url,
+                "supports_discovery": vendor in VENDORS_WITH_LIVE_DISCOVERY,
+                "creatable": True,
+                "instances": instances,
+            })
+        return out
+
+    @staticmethod
+    def get_instance_usage(instance_id: int, tenant_id: str, db: Session) -> dict:
+        """Return the agents currently bound to this provider instance.
+
+        Used by the pre-delete confirmation modal in Hub so the operator can
+        choose where to reassign dependents before the instance disappears.
+        Tenant-scoped — never leaks cross-tenant data.
+        """
+        from models import Agent, Contact
+
+        instance = ProviderInstanceService.get_instance(instance_id, tenant_id, db)
+        if not instance:
+            return {"instance_id": instance_id, "agents": [], "dependent_count": 0}
+
+        rows = (
+            db.query(Agent, Contact.friendly_name)
+            .join(Contact, Contact.id == Agent.contact_id)
+            .filter(
+                Agent.tenant_id == tenant_id,
+                Agent.provider_instance_id == instance_id,
+            )
+            .order_by(Contact.friendly_name)
+            .all()
+        )
+        agents = [
+            {
+                "id": agent.id,
+                "name": friendly_name or f"Agent {agent.id}",
+                "model_provider": agent.model_provider,
+                "model_name": agent.model_name,
+                "is_active": bool(agent.is_active),
+            }
+            for agent, friendly_name in rows
+        ]
+        return {
+            "instance_id": instance_id,
+            "vendor": instance.vendor,
+            "instance_name": instance.instance_name,
+            "agents": agents,
+            "dependent_count": len(agents),
+        }
+
+    @staticmethod
+    def delete_instance_with_reassign(
+        instance_id: int,
+        tenant_id: str,
+        db: Session,
+        *,
+        reassign_to_instance_id: Optional[int] = None,
+        unassign: bool = False,
+    ) -> dict:
+        """Delete an instance after reassigning all dependent agents.
+
+        Behavior:
+        - If there are no dependents, soft-deletes (same as ``delete_instance``).
+        - If ``reassign_to_instance_id`` is given, validates that target exists,
+          is active, belongs to the same tenant. Vendor mismatch is allowed —
+          the caller (UI) is in charge of confirming the model-name change.
+        - If ``unassign=True``, sets ``provider_instance_id=None`` on dependents
+          so they fall back to the tenant default for their current vendor.
+        - If neither flag is provided AND there are dependents, raises
+          ``ValueError("dependents_require_decision")``. The caller MUST surface
+          this to the operator (no silent orphaning).
+
+        Returns ``{instance_name, deleted, reassigned_count, reassigned_to}``.
+        """
+        from models import Agent
+
+        instance = ProviderInstanceService.get_instance(instance_id, tenant_id, db)
+        if not instance:
+            raise ValueError("instance_not_found")
+
+        dependents_q = db.query(Agent).filter(
+            Agent.tenant_id == tenant_id,
+            Agent.provider_instance_id == instance_id,
+        )
+        dependents = dependents_q.all()
+
+        reassigned_to_instance: Optional[ProviderInstance] = None
+        if dependents:
+            if reassign_to_instance_id is not None:
+                if reassign_to_instance_id == instance_id:
+                    raise ValueError("reassign_target_is_self")
+                target = ProviderInstanceService.get_instance(
+                    reassign_to_instance_id, tenant_id, db
+                )
+                if not target or not target.is_active:
+                    raise ValueError("reassign_target_invalid")
+                reassigned_to_instance = target
+            elif not unassign:
+                raise ValueError("dependents_require_decision")
+
+        # Apply reassignment.
+        reassigned_count = 0
+        if dependents:
+            if reassigned_to_instance is not None:
+                update_payload: dict = {
+                    "provider_instance_id": reassigned_to_instance.id,
+                    "model_provider": reassigned_to_instance.vendor,
+                }
+                # If the target vendor exposes preferred models, snap each
+                # agent to the target's first model so the agent doesn't
+                # try to use a model the target instance doesn't support.
+                target_models = list(reassigned_to_instance.available_models or [])
+                if target_models:
+                    update_payload["model_name"] = target_models[0]
+                reassigned_count = dependents_q.update(update_payload, synchronize_session=False)
+            else:
+                # Unassign — agent keeps current model_provider / model_name
+                # and falls back to the tenant default instance for that vendor
+                # (or to the legacy global path if none exists).
+                reassigned_count = dependents_q.update(
+                    {"provider_instance_id": None}, synchronize_session=False
+                )
+
+        instance.is_active = False
+        from datetime import datetime as _dt
+        instance.updated_at = _dt.utcnow()
+        db.commit()
+
+        return {
+            "instance_name": instance.instance_name,
+            "deleted": True,
+            "reassigned_count": int(reassigned_count or 0),
+            "reassigned_to": (
+                {
+                    "id": reassigned_to_instance.id,
+                    "instance_name": reassigned_to_instance.instance_name,
+                    "vendor": reassigned_to_instance.vendor,
+                }
+                if reassigned_to_instance is not None
+                else None
+            ),
+            "unassigned": dependents and reassigned_to_instance is None,
+        }
+
+    @staticmethod
+    def bootstrap_orphan_vendor_agents(db: Session) -> dict:
+        """Boot-time hook: ensure every (tenant, vendor) pair that has agents
+        but zero active provider instances gets one materialised.
+
+        This kills the "ghost vendor" inconsistency where the agent worked at
+        runtime via the legacy hardcoded fallback (Ollama base_url env var,
+        host.docker.internal, etc.) but the Hub UI showed nothing. After this
+        runs, the Hub catalogue and the agent runtime see the same instances.
+
+        Today the supported auto-bootstrap is **Ollama only** — for the other
+        vendors we don't have an API key and would have to invent one. Those
+        agents stay orphan and the runtime returns a clear error pointing the
+        operator at Hub instead of silently using the wrong key.
+
+        Returns ``{tenants_processed, instances_created, agents_relinked}``.
+        """
+        from models import Agent
+
+        rows = (
+            db.query(Agent.tenant_id, Agent.model_provider)
+            .filter(
+                Agent.is_active == True,  # noqa: E712
+                Agent.provider_instance_id.is_(None),
+            )
+            .distinct()
+            .all()
+        )
+
+        tenants_processed: set[str] = set()
+        instances_created = 0
+        agents_relinked = 0
+
+        for tenant_id, vendor in rows:
+            if not tenant_id or not vendor:
+                continue
+            existing_active = (
+                db.query(ProviderInstance)
+                .filter(
+                    ProviderInstance.tenant_id == tenant_id,
+                    ProviderInstance.vendor == vendor,
+                    ProviderInstance.is_active == True,  # noqa: E712
+                )
+                .first()
+            )
+            if existing_active:
+                # Agent has no FK but an active instance exists — relink to
+                # the default (or first active) so the Studio UI shows the
+                # binding and the runtime doesn't fall through to the legacy
+                # fallback.
+                target = (
+                    db.query(ProviderInstance)
+                    .filter(
+                        ProviderInstance.tenant_id == tenant_id,
+                        ProviderInstance.vendor == vendor,
+                        ProviderInstance.is_active == True,  # noqa: E712
+                    )
+                    .order_by(ProviderInstance.is_default.desc(), ProviderInstance.id)
+                    .first()
+                )
+                if target:
+                    relinked = (
+                        db.query(Agent)
+                        .filter(
+                            Agent.tenant_id == tenant_id,
+                            Agent.model_provider == vendor,
+                            Agent.provider_instance_id.is_(None),
+                            Agent.is_active == True,  # noqa: E712
+                        )
+                        .update(
+                            {"provider_instance_id": target.id},
+                            synchronize_session=False,
+                        )
+                    )
+                    if relinked:
+                        agents_relinked += int(relinked)
+                        tenants_processed.add(tenant_id)
+                continue
+
+            # No active instance and we know how to materialise one.
+            if vendor == "ollama":
+                try:
+                    new_inst = ProviderInstanceService.ensure_ollama_instance(
+                        tenant_id, db
+                    )
+                    instances_created += 1
+                    relinked = (
+                        db.query(Agent)
+                        .filter(
+                            Agent.tenant_id == tenant_id,
+                            Agent.model_provider == "ollama",
+                            Agent.provider_instance_id.is_(None),
+                            Agent.is_active == True,  # noqa: E712
+                        )
+                        .update(
+                            {"provider_instance_id": new_inst.id},
+                            synchronize_session=False,
+                        )
+                    )
+                    agents_relinked += int(relinked or 0)
+                    tenants_processed.add(tenant_id)
+                    logger.info(
+                        "bootstrap_orphan_vendor_agents: tenant=%s vendor=ollama "
+                        "auto-created instance %s, relinked %s agent(s)",
+                        tenant_id, new_inst.id, relinked,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "bootstrap_orphan_vendor_agents: failed to create Ollama "
+                        "instance for tenant=%s: %s",
+                        tenant_id, exc,
+                    )
+            else:
+                # Other vendors require user-supplied credentials. Log a
+                # one-line WARNING per (tenant, vendor) so the operator
+                # notices and creates the instance via Hub.
+                logger.warning(
+                    "bootstrap_orphan_vendor_agents: tenant=%s has active agent(s) "
+                    "for vendor=%s with no provider_instance_id and no active "
+                    "instance — agent will fail at runtime until configured in Hub.",
+                    tenant_id, vendor,
+                )
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        return {
+            "tenants_processed": len(tenants_processed),
+            "instances_created": instances_created,
+            "agents_relinked": agents_relinked,
+        }
+
     @staticmethod
     def resolve_api_key(instance: ProviderInstance, db: Session) -> Optional[str]:
         """Decrypt instance key. Falls back to get_api_key() if no instance key."""

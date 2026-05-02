@@ -224,6 +224,22 @@ export interface Message {
   channel?: 'whatsapp' | 'playground' | 'telegram' | 'slack' | 'discord'  // Phase 10.1.1 + v0.6.0: Channel tracking
 }
 
+export interface QueueItem {
+  id: number
+  status: string
+  channel: string
+  agent_id: number | null
+  sender_key: string | null
+  priority: number
+  retry_count: number
+  position?: number
+  error_message?: string | null
+  result?: unknown
+  queued_at: string | null
+  processing_started_at: string | null
+  completed_at?: string | null
+}
+
 // Sandboxed Tools (formerly CustomTools - renamed in Skills-as-Tools Phase 6)
 export interface SandboxedTool {
   id: number
@@ -3677,6 +3693,52 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+// v0.7.0 — LLM Provider catalog (single source of truth across wizard, Studio, Hub)
+export interface LlmCatalogInstance {
+  id: number
+  instance_name: string
+  base_url: string | null
+  is_default: boolean
+  available_models: string[]
+  health_status: string
+  health_status_reason: string | null
+  is_auto_provisioned: boolean
+  container_status: string | null
+}
+
+export interface LlmCatalogVendor {
+  vendor: string
+  display_name: string
+  default_base_url: string | null
+  supports_discovery: boolean
+  creatable: boolean
+  instances: LlmCatalogInstance[]
+}
+
+export interface ProviderInstanceUsageAgent {
+  id: number
+  name: string
+  model_provider: string
+  model_name: string
+  is_active: boolean
+}
+
+export interface ProviderInstanceUsage {
+  instance_id: number
+  vendor: string
+  instance_name: string
+  agents: ProviderInstanceUsageAgent[]
+  dependent_count: number
+}
+
+export interface CascadeDeleteResult {
+  instance_name: string
+  deleted: boolean
+  reassigned_count: number
+  reassigned_to?: { id: number; instance_name: string; vendor: string } | null
+  unassigned: boolean
+}
+
 /**
  * Vendor catalog entry returned by GET /api/providers/vendors.
  *
@@ -3737,7 +3799,7 @@ export interface VectorStoreInstanceCreate {
 export interface ASRInstance {
   id: number
   tenant_id: string
-  vendor: string  // speaches
+  vendor: string  // 'speaches' | 'openai_whisper'
   instance_name: string
   description?: string | null
   base_url?: string | null
@@ -9061,11 +9123,50 @@ export const api = {
     return res.json()
   },
 
-  async deleteProviderInstance(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete provider instance')
+  async deleteProviderInstance(
+    id: number,
+    options?: { reassignToInstanceId?: number; unassign?: boolean },
+  ): Promise<CascadeDeleteResult> {
+    const body =
+      options?.reassignToInstanceId !== undefined || options?.unassign !== undefined
+        ? {
+            reassign_to_instance_id: options?.reassignToInstanceId,
+            unassign: options?.unassign ?? false,
+          }
+        : undefined
+    const init: RequestInit = { method: 'DELETE' }
+    if (body) {
+      init.headers = { 'Content-Type': 'application/json' }
+      init.body = JSON.stringify(body)
+    }
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}`, init)
+    if (!res.ok) {
+      // 409 → dependents_require_decision: surface the embedded usage payload
+      // so the caller can show the pre-delete reassign modal.
+      if (res.status === 409) {
+        let detail: any = null
+        try { detail = (await res.json()).detail } catch { /* swallow */ }
+        const err: any = new Error(detail?.message || 'Provider instance has dependents')
+        err.status = 409
+        err.code = detail?.error || 'dependents_require_decision'
+        err.usage = detail?.usage as ProviderInstanceUsage | undefined
+        throw err
+      }
+      await handleApiError(res, 'Failed to delete provider instance')
+    }
+    return res.json()
+  },
+
+  async getProviderInstanceUsage(id: number): Promise<ProviderInstanceUsage> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/usage`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch provider instance usage')
+    return res.json()
+  },
+
+  async getLlmProvidersCatalog(): Promise<LlmCatalogVendor[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/llm-providers/catalog`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch LLM providers catalog')
+    return res.json()
   },
 
   async testProviderConnection(id: number, model?: string): Promise<{ success: boolean; message: string; latency_ms?: number }> {
@@ -9403,20 +9504,10 @@ export const api = {
     return res.json()
   },
 
-  async getDefaultASRInstance(): Promise<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null }> {
-    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`)
-    if (!res.ok) await handleApiError(res, 'Failed to get default ASR instance')
-    return res.json()
-  },
-
-  async setDefaultASRInstance(instanceId: number | null): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ default_asr_instance_id: instanceId }),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to update default ASR instance')
-  },
+  // getDefaultASRInstance / setDefaultASRInstance were removed when the
+  // tenant-level ASR default concept was retired. Audio agents now pin a
+  // specific ASR instance via the audio_transcript skill (asr_mode='instance'
+  // + asr_instance_id) — no tenant-wide default exists.
 
   // ==================== SearXNG Instances (v0.6.0-patch.7 per-tenant) ====================
 

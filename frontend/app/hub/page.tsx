@@ -60,6 +60,7 @@ import TriggerBreadthCards from '@/components/triggers/TriggerBreadthCards'
 import WhatsAppCreateModeSelector from '@/components/hub/WhatsAppCreateModeSelector'
 import ChannelRoutingRulesPanel from '@/components/hub/ChannelRoutingRulesPanel'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
+import ProviderInstanceDeleteModal from '@/components/providers/ProviderInstanceDeleteModal'
 import ManagedContainerPanel from '@/components/hub/ManagedContainerPanel'
 import VectorStoreCard from '@/components/vector-stores/VectorStoreCard'
 import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfigModal'
@@ -1070,6 +1071,7 @@ export default function HubPage() {
   // fallback listens for `tsushin:open-provider-advanced-modal` and opens
   // the existing ProviderInstanceModal below.
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null)
+  const [deletingInstance, setDeletingInstance] = useState<ProviderInstance | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<string>('')
   const [instanceMenuOpen, setInstanceMenuOpen] = useState<number | null>(null)
 
@@ -2018,8 +2020,19 @@ export default function HubPage() {
             toast.success('Stopping Ollama container...')
             setTimeout(() => { refreshOllamaContainerStatus() }, 1200)
           } else {
-            await api.deleteProviderInstance(ollamaInstance.id)
-            toast.success('Ollama disabled')
+            // v0.7.0: cascade-aware. If there are dependent agents the backend
+            // returns 409 and we route the user to the reassign modal so they
+            // can pick a destination instead of silently orphaning agents.
+            try {
+              await api.deleteProviderInstance(ollamaInstance.id)
+              toast.success('Ollama disabled')
+            } catch (err: any) {
+              if (err?.status === 409) {
+                setDeletingInstance(ollamaInstance)
+              } else {
+                throw err
+              }
+            }
           }
         }
       } else {
@@ -3991,16 +4004,13 @@ export default function HubPage() {
                                             )}
                                             <div className="border-t border-tsushin-border my-1" />
                                             <button
-                                              onClick={async () => {
+                                              onClick={() => {
+                                                // v0.7.0: cascade-aware delete via reassign modal.
+                                                // The native confirm() was replaced because it
+                                                // silently orphaned dependent agents (the AIClient
+                                                // legacy fallback masked the problem).
                                                 setInstanceMenuOpen(null)
-                                                if (!confirm(`Delete instance "${inst.instance_name}"?`)) return
-                                                try {
-                                                  await api.deleteProviderInstance(inst.id)
-                                                  toast.success(`Deleted ${inst.instance_name}`)
-                                                  fetchProviderInstances()
-                                                } catch (err: any) {
-                                                  toast.error(err.message || 'Failed to delete')
-                                                }
+                                                setDeletingInstance(inst)
                                               }}
                                               className="w-full text-left px-3 py-2 text-sm text-tsushin-vermilion hover:bg-tsushin-vermilion/10 transition-colors"
                                             >
@@ -4331,7 +4341,7 @@ export default function HubPage() {
                                 logsOpen={ollamaLogsOpen}
                                 onTest={handleOllamaTest}
                                 testLabel={ollamaTestLoading ? 'Testing…' : 'Test'}
-                                onDelete={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
+                                onDelete={() => setDeletingInstance(ollamaInstance)}
                               />
                             )}
 
@@ -4358,7 +4368,7 @@ export default function HubPage() {
                                   Refresh Models
                                 </button>
                                 <button
-                                  onClick={() => setOllamaConfirmDelete({ id: ollamaInstance.id, removeVolume: true })}
+                                  onClick={() => setDeletingInstance(ollamaInstance)}
                                   className="ml-auto text-[11px] bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 text-tsushin-vermilion hover:bg-tsushin-vermilion/20 rounded px-2 py-1"
                                 >
                                   Delete
@@ -6788,6 +6798,29 @@ export default function HubPage() {
         onSave={fetchProviderInstances}
         instance={editingInstance}
         defaultVendor={selectedVendor}
+      />
+
+      {/* v0.7.0: cascade-aware delete modal — refuses delete unless caller
+          either reassigns dependent agents to another instance or explicitly
+          unassigns them. Replaces the previous silent orphan flow. */}
+      <ProviderInstanceDeleteModal
+        isOpen={!!deletingInstance}
+        instance={deletingInstance}
+        onClose={() => setDeletingInstance(null)}
+        onDeleted={(result) => {
+          if (result.reassigned_count > 0 && result.reassigned_to) {
+            toast.success(
+              `Deleted ${result.instance_name} — reassigned ${result.reassigned_count} agent(s) to ${result.reassigned_to.instance_name}`,
+            )
+          } else if (result.unassigned) {
+            toast.success(
+              `Deleted ${result.instance_name} — unassigned ${result.reassigned_count} agent(s)`,
+            )
+          } else {
+            toast.success(`Deleted ${result.instance_name}`)
+          }
+          fetchProviderInstances()
+        }}
       />
 
       {/* Phase 10.1.1: Telegram Bot Creation Modal */}
