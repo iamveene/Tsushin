@@ -21,7 +21,7 @@ interface VendorOption {
   label: string
   description: string
   Icon: React.FC<IconProps>
-  /** Optional tag surfaced above the card (e.g. "Uses Nano Banana"). */
+  /** Optional tag surfaced above the card (e.g. "Preview"). */
   tag?: string
 }
 
@@ -53,11 +53,18 @@ const TTS_LOCAL: VendorOption[] = [
 
 const IMAGE_CLOUD: VendorOption[] = [
   {
+    id: 'openai',
+    label: 'OpenAI',
+    description: 'Image generation and editing with GPT Image 2.',
+    Icon: OpenAIIcon,
+    tag: 'GPT Image 2',
+  },
+  {
     id: 'gemini',
     label: 'Google Gemini',
-    description: 'Image generation via gemini-2.5-flash-image ("Nano Banana") and gemini-3-pro-image-preview ("Nano Banana Pro").',
+    description: 'Image generation via Gemini image models and direct Gemini API Imagen 4 models.',
     Icon: GeminiIcon,
-    tag: 'Uses Nano Banana / Nano Banana Pro',
+    tag: 'Gemini API Imagen 4',
   },
 ]
 
@@ -103,7 +110,7 @@ export default function StepVendorSelect() {
         <h3 className="text-base font-semibold text-white mb-1">Choose a provider</h3>
         <p className="text-xs text-tsushin-slate">
           {modality === 'image'
-            ? 'Image generation runs on Gemini. You can add more providers later when available.'
+            ? 'Image generation can run on OpenAI GPT Image 2 or Google Gemini, including Gemini API Imagen 4.'
             : options.length === 1
               ? 'Only one provider fits your choices — click to continue.'
               : 'Pick which vendor this instance will use.'}

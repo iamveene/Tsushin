@@ -3,7 +3,7 @@
 import { useEffect } from 'react'
 import { useProviderWizard } from '@/contexts/ProviderWizardContext'
 
-function summarizeKey(apiKey: string, vendor: string | null, extra: Record<string, any> | undefined): string {
+function summarizeKey(apiKey: string, vendor: string | null, extra: Record<string, unknown> | undefined): string {
   if (vendor === 'vertex_ai') {
     const pk: string = (extra?.private_key || '') as string
     if (!pk) return '(not provided)'
@@ -83,7 +83,7 @@ export default function StepReview() {
     })
   } else {
     rows.push({
-      label: 'Models',
+      label: draft.modality === 'image' ? 'Image models' : 'Models',
       value: draft.available_models.length > 0
         ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
         : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,

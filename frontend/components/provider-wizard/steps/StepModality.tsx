@@ -28,7 +28,7 @@ const OPTIONS: Option[] = [
   {
     id: 'image',
     label: 'Image Generation',
-    description: 'Generate images from prompts. Uses Gemini "Nano Banana" / "Nano Banana Pro".',
+    description: 'Generate images from prompts with Gemini API Imagen 4 and OpenAI GPT Image 2.',
     Icon: BeakerIcon,
   },
 ]
@@ -48,7 +48,7 @@ export default function StepModality() {
 
   const handlePick = (m: Modality) => {
     // Auto-pick hosting for modalities where only one option exists today.
-    // Image: cloud-only (Gemini). LLM/TTS: user chooses on next step.
+    // Image: cloud-only. LLM/TTS: user chooses on next step.
     const hostingPatch = m === 'image' ? { hosting: 'cloud' as const } : {}
     patchDraft({ modality: m, ...hostingPatch })
   }

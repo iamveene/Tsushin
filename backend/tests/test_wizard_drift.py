@@ -339,6 +339,63 @@ def test_predefined_models_single_source():
     )
 
 
+def test_image_models_are_isolated_from_llm_suggestions():
+    """
+    Image-only Gemini/Imagen/OpenAI IDs belong in image setup buckets and the
+    ImageSkill schema, not normal LLM suggestion lists that feed agent model
+    pickers.
+    """
+    image_skill_path = _resolve_backend_site("agent/skills/image_skill.py")
+    routes_path = _resolve_backend_site("api/routes_provider_instances.py")
+    image_text = _read(image_skill_path)
+    routes_text = _read(routes_path)
+
+    supported_block = re.search(
+        r"SUPPORTED_MODELS\s*=\s*\{(.*?)\n\s{4}\}",
+        image_text,
+        re.DOTALL,
+    )
+    assert supported_block, "ImageSkill.SUPPORTED_MODELS block not found"
+    image_models = set(re.findall(r'^\s*"([^"]+)":', supported_block.group(1), re.MULTILINE))
+
+    def _models_from_list_constant(name: str) -> set[str]:
+        bucket = re.search(
+            rf"{name}\s*=\s*\[(.*?)\n\]",
+            routes_text,
+            re.DOTALL,
+        )
+        assert bucket, f"{name} block not found"
+        return set(re.findall(r'"([^"]+)"', bucket.group(1)))
+
+    gemini_image_models = _models_from_list_constant("GEMINI_IMAGE_MODELS")
+    openai_image_models = _models_from_list_constant("OPENAI_IMAGE_MODELS")
+    predefined_image_models = gemini_image_models | openai_image_models
+
+    generic_gemini = re.search(
+        r'"gemini":\s*\[(.*?)\n\s{4}\]',
+        routes_text,
+        re.DOTALL,
+    )
+    assert generic_gemini, "PREDEFINED_MODELS['gemini'] block not found"
+    generic_gemini_models = set(re.findall(r'"([^"]+)"', generic_gemini.group(1)))
+
+    generic_openai = re.search(
+        r'"openai":\s*\[(.*?)\n\s{4}\]',
+        routes_text,
+        re.DOTALL,
+    )
+    assert generic_openai, "PREDEFINED_MODELS['openai'] block not found"
+    generic_openai_models = set(re.findall(r'"([^"]+)"', generic_openai.group(1)))
+
+    assert predefined_image_models == image_models
+    assert gemini_image_models.isdisjoint(generic_gemini_models)
+    assert openai_image_models.isdisjoint(generic_openai_models)
+    assert '"gemini_image": GEMINI_IMAGE_MODELS' in routes_text
+    assert '"openai_image": OPENAI_IMAGE_MODELS' in routes_text
+    assert "if _is_gemini_image_model(model_id):" in routes_text
+    assert 'vendor == "openai" and _is_openai_image_model(model_id)' in routes_text
+
+
 # ---------------------------------------------------------------------------
 # Guard 4 — memory_isolation_mode literal consolidation
 # ---------------------------------------------------------------------------
