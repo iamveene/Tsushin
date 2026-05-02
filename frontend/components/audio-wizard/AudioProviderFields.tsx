@@ -544,9 +544,31 @@ export function AudioTranscriptFields({
             <div className="text-xs text-gray-400 mt-1">
               {instances.length > 0
                 ? 'Pin this agent to one tenant-owned ASR container (Speaches or openai_whisper).'
-                : 'No local ASR instances available yet. Create one from Hub → Add Provider → Speech-to-Text → Local.'}
+                : 'No local ASR instances available yet.'}
             </div>
           </button>
+          {instances.length === 0 && (
+            // Separate sibling: the disabled button above blocks click events
+            // on its children (HTML disabled-button semantics), so this CTA
+            // lives outside the button. Dispatching a custom DOM event keeps
+            // the wizard orchestration in hub/page.tsx — no context coupling.
+            <div className="mt-2 px-4 py-3 rounded-xl border border-teal-500/20 bg-teal-500/5 text-xs text-gray-300">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tsushin:open-provider-wizard', {
+                      detail: { modality: 'asr', hosting: 'local' }
+                    }))
+                  }
+                }}
+                className="text-teal-400 hover:text-teal-300 underline font-medium"
+              >
+                + Create an ASR instance now
+              </button>
+              <span className="text-gray-400">{' '}or go to Hub → Add Provider → Speech-to-Text → Local.</span>
+            </div>
+          )}
         </div>
       </div>
 
