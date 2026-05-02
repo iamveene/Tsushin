@@ -51,6 +51,31 @@ const TTS_LOCAL: VendorOption[] = [
   { id: 'kokoro', label: 'Kokoro', description: 'Self-hosted multilingual TTS container. Per-tenant instance.', Icon: MicrophoneIcon },
 ]
 
+const ASR_CLOUD: VendorOption[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI Whisper API',
+    description: 'Cloud transcription via OpenAI’s hosted whisper-1 model. Reuses the OpenAI API key from the LLM > OpenAI provider — no separate credential to enter.',
+    Icon: MicrophoneIcon,
+  },
+]
+
+const ASR_LOCAL: VendorOption[] = [
+  {
+    id: 'openai_whisper',
+    label: 'OpenAI Whisper (self-hosted)',
+    description: 'Runs the official openai/whisper Python package inside an auto-provisioned container (onerahmet/openai-whisper-asr-webservice). Pick a model size at create time (tiny → large-v3 / turbo).',
+    Icon: MicrophoneIcon,
+    tag: 'New',
+  },
+  {
+    id: 'speaches',
+    label: 'Speaches (faster-whisper)',
+    description: 'OpenAI-compatible /v1/audio/transcriptions endpoint backed by faster-whisper (CTranslate2). Lower memory, multilingual default.',
+    Icon: MicrophoneIcon,
+  },
+]
+
 const IMAGE_CLOUD: VendorOption[] = [
   {
     id: 'openai',
@@ -82,6 +107,8 @@ export default function StepVendorSelect() {
     if (modality === 'llm' && hosting === 'local') return LLM_LOCAL
     if (modality === 'tts' && hosting === 'cloud') return TTS_CLOUD
     if (modality === 'tts' && hosting === 'local') return TTS_LOCAL
+    if (modality === 'asr' && hosting === 'cloud') return ASR_CLOUD
+    if (modality === 'asr' && hosting === 'local') return ASR_LOCAL
     if (modality === 'image') return IMAGE_CLOUD
     return []
   }, [modality, hosting])

@@ -28,7 +28,16 @@ export default function StepReview() {
   const rows: Array<{ label: string; value: React.ReactNode; editStep: Parameters<typeof goToStep>[0] | null }> = [
     {
       label: 'Modality',
-      value: draft.modality === 'llm' ? 'Language Model' : draft.modality === 'tts' ? 'Text-to-Speech' : draft.modality === 'image' ? 'Image Generation' : '—',
+      value:
+        draft.modality === 'llm'
+          ? 'Language Model'
+          : draft.modality === 'tts'
+            ? 'Text-to-Speech'
+            : draft.modality === 'asr'
+              ? 'Speech-to-Text'
+              : draft.modality === 'image'
+                ? 'Image Generation'
+                : '—',
       editStep: 'modality',
     },
     {
@@ -37,14 +46,24 @@ export default function StepReview() {
       editStep: 'hosting',
     },
     { label: 'Vendor', value: draft.vendor || '—', editStep: 'vendor' },
-    {
+  ]
+  // ASR cloud has no instance row — the call path uses the existing OpenAI key.
+  const isAsrCloud = draft.modality === 'asr' && draft.hosting === 'cloud'
+  if (!isAsrCloud) {
+    rows.push({
       label: 'Instance name',
       value: draft.instance_name || '(unnamed)',
       editStep: draft.hosting === 'local' ? 'container' : 'credentials',
-    },
-  ]
+    })
+  }
 
-  if (draft.hosting === 'cloud') {
+  if (isAsrCloud) {
+    rows.push({
+      label: 'Credential source',
+      value: <span className="text-xs text-tsushin-slate">Reuses your saved OpenAI API key</span>,
+      editStep: null,
+    })
+  } else if (draft.hosting === 'cloud') {
     if (draft.base_url) {
       rows.push({ label: 'Base URL', value: <span className="font-mono">{draft.base_url}</span>, editStep: 'credentials' })
     }
@@ -63,6 +82,13 @@ export default function StepReview() {
     if (draft.vendor === 'ollama') {
       rows.push({ label: 'GPU', value: draft.gpu_enabled ? 'Enabled' : 'Disabled', editStep: 'container' })
     }
+    if (draft.modality === 'asr' && draft.vendor === 'openai_whisper') {
+      rows.push({
+        label: 'ASR engine',
+        value: <span className="text-xs">openai/whisper (model: <span className="font-mono">base</span>, locked at boot)</span>,
+        editStep: 'container',
+      })
+    }
   }
 
   // Single Models row — for Ollama local the model list is captured on the
@@ -73,9 +99,13 @@ export default function StepReview() {
   // discovered via /api/tts-providers/{provider}/voices and /models and
   // selected per-agent in the Audio Agents Wizard) — surface that explicitly
   // so the user doesn't see a red "Missing" prompt for a field that does
-  // not apply to TTS instances.
+  // not apply to TTS instances. ASR instances have a single model pinned at
+  // container boot, so the per-instance models row is irrelevant there too.
   const modelsEditStep = draft.vendor === 'ollama' && draft.hosting === 'local' ? 'pullModels' : 'testAndModels'
-  if (draft.modality === 'tts') {
+  if (draft.modality === 'asr') {
+    // No models row for ASR (already shown via "ASR engine" row above when local;
+    // cloud has nothing to show).
+  } else if (draft.modality === 'tts') {
     rows.push({
       label: 'Voices & models',
       value: <span className="text-xs text-tsushin-slate">Picked per-agent in the Audio Agents Wizard</span>,
@@ -98,7 +128,9 @@ export default function StepReview() {
   const cloudTtsViaApiKey = draft.modality === 'tts' && (
     draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini'
   )
-  if (!cloudTtsViaApiKey) {
+  // ASR doesn't surface a default-instance toggle in the wizard; the tenant
+  // default ASR instance is managed under Settings > ASR.
+  if (!cloudTtsViaApiKey && draft.modality !== 'asr') {
     rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
   }
 

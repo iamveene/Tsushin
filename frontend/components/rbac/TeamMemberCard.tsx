@@ -83,6 +83,7 @@ export default function TeamMemberCard({
             <div className="flex items-center space-x-3">
               <Link
                 href={`/settings/team/${member.id}`}
+                prefetch={false}
                 className="text-lg font-semibold text-gray-900 dark:text-gray-100 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
               >
                 {member.name}

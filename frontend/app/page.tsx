@@ -11,7 +11,6 @@
  */
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardTab from '@/components/watcher/DashboardTab'
 import GraphViewTab from '@/components/watcher/GraphViewTab'
@@ -21,6 +20,8 @@ import BillingTab from '@/components/watcher/BillingTab'
 import SecurityTab from '@/components/watcher/SecurityTab'
 import ChannelHealthTab from '@/components/watcher/ChannelHealthTab'
 import CommunicationTab from '@/components/watcher/CommunicationTab'
+import WakeEventsPage from '@/app/wake-events/page'
+import ContinuousAgentsPage from '@/app/continuous-agents/page'
 
 // Inline SVG icon to match codebase patterns
 const LockClosedIcon = ({ className }: { className?: string }) => (
@@ -29,7 +30,7 @@ const LockClosedIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing'
+type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing' | 'wake-events' | 'continuous-agents'
 
 export default function WatcherPage() {
   const [activeTab, setActiveTab] = useState<WatcherTab>('dashboard')
@@ -47,7 +48,13 @@ export default function WatcherPage() {
     { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
     { id: 'communication' as WatcherTab, label: 'A2A Comms', description: 'Inter-Agent Messaging' },
     { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
+    { id: 'wake-events' as WatcherTab, label: 'Wake Events', description: 'Trigger event browser' },
+    { id: 'continuous-agents' as WatcherTab, label: 'Continuous Agents', description: 'Always-on inventory' },
   ]
+
+  const handleTabChange = (tab: WatcherTab) => {
+    setActiveTab(tab)
+  }
 
   // Filter tabs based on permissions
   const visibleTabs = tabs.filter(tab => {
@@ -65,17 +72,15 @@ export default function WatcherPage() {
         <p className="text-tsushin-slate">Observability & Monitoring Hub</p>
       </div>
 
-      {/* Tab Navigation — v0.7.0-fix Phase 9.6: in-page tabs and full-page
-          sub-routes (Wake Events, Continuous Agents) live in ONE glass-card
-          strip so the nav reads as a single surface instead of two bolted-
-          on strips. Sub-route entries use Link (no active-state coloring
-          since they navigate away). */}
+      {/* Tab Navigation — Wake Events and Continuous Agents stay mounted inside
+          Watcher so operators do not lose the monitoring context when they
+          switch between Watcher surfaces. */}
       <div className="mb-6">
         <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`
                 relative px-5 py-3 text-sm font-medium rounded-lg transition-all duration-200
                 ${activeTab === tab.id
@@ -96,24 +101,6 @@ export default function WatcherPage() {
               </span>
             </button>
           ))}
-          <Link
-            href="/wake-events"
-            className="relative px-5 py-3 text-sm font-medium rounded-lg text-tsushin-slate hover:text-white transition-all duration-200"
-          >
-            <span className="flex flex-col items-start">
-              <span>Wake Events</span>
-              <span className="text-2xs text-tsushin-muted">Trigger event browser</span>
-            </span>
-          </Link>
-          <Link
-            href="/continuous-agents"
-            className="relative px-5 py-3 text-sm font-medium rounded-lg text-tsushin-slate hover:text-white transition-all duration-200"
-          >
-            <span className="flex flex-col items-start">
-              <span>Continuous Agents</span>
-              <span className="text-2xs text-tsushin-muted">Always-on inventory</span>
-            </span>
-          </Link>
         </div>
       </div>
 
@@ -140,6 +127,8 @@ export default function WatcherPage() {
         {activeTab === 'channel-health' && <ChannelHealthTab />}
         {activeTab === 'communication' && <CommunicationTab />}
         {activeTab === 'billing' && <BillingTab />}
+        {activeTab === 'wake-events' && <WakeEventsPage />}
+        {activeTab === 'continuous-agents' && <ContinuousAgentsPage />}
       </div>
     </div>
   )

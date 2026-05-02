@@ -71,7 +71,7 @@ const CODE_REPOSITORY_CAPABILITY_LABELS: Record<string, { label: string; descrip
 // Audio sub-skill tabs
 type AudioTab = 'tts' | 'transcript'
 type TranscriptResponseMode = 'conversational' | 'transcript_only'
-type TranscriptASRMode = 'openai' | 'tenant_default' | 'instance'
+type TranscriptASRMode = 'openai' | 'instance'
 type SkillConfig = Record<string, unknown>
 
 interface ConfigSchemaProperty extends SkillConfig {
@@ -134,13 +134,239 @@ interface TranscriptSkillConfig extends Record<string, unknown> {
   asr_instance_id: number | null
 }
 
+interface SkillCardFact {
+  label: string
+  value: string
+}
+
+const HIDDEN_CARD_CONFIG_KEYS = new Set([
+  'ai_model',
+  'analysis_prompt',
+  'edit_handoff_keywords',
+  'edit_keywords',
+  'enabled_channels',
+  'execution_mode',
+  'generate_keywords',
+  'keywords',
+  'processing_message',
+  'use_ai_fallback',
+])
+
+const MODEL_LABELS: Record<string, string> = {
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-2.5-flash-image': 'Gemini 2.5 Flash Image',
+  'gemini-3.1-flash-image-preview': 'Gemini 3.1 Flash Image Preview',
+  'gemini-3-pro-image-preview': 'Gemini 3 Pro Image Preview',
+  'imagen-4.0-fast-generate-001': 'Imagen 4 Fast',
+  'imagen-4.0-generate-001': 'Imagen 4 Standard',
+  'imagen-4.0-ultra-generate-001': 'Imagen 4 Ultra',
+  'gpt-image-2': 'OpenAI GPT Image 2',
+}
+
+const FLIGHT_PROVIDER_LABELS: Record<string, string> = {
+  amadeus: 'Amadeus',
+  google_flights: 'Google Flights (SerpAPI)',
+  skyscanner: 'Skyscanner',
+}
+
+const BROWSER_PROVIDER_LABELS: Record<string, string> = {
+  cdp: 'Chrome CDP',
+  playwright: 'Playwright',
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value : fallback
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : []
+}
+
+function boolLabel(value: boolean): string {
+  return value ? 'Enabled' : 'Disabled'
+}
+
+function percentLabel(value: unknown, fallback: number): string {
+  return `${Math.round(asNumber(value, fallback) * 100)}%`
+}
+
+function formatModelName(value: unknown): string {
+  const model = asString(value)
+  if (!model) return 'Default'
+  return MODEL_LABELS[model] || model
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map(part => (/^\d/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(' ')
+}
+
+function formatConfigValue(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? `${value.length} configured` : null
+  }
+  if (typeof value === 'boolean') {
+    return boolLabel(value)
+  }
+  if (typeof value === 'number') {
+    return String(value)
+  }
+  if (typeof value === 'string') {
+    return value.trim() || null
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.keys(value).length > 0 ? 'Configured' : null
+  }
+  return null
+}
+
+function formatConfigLabel(key: string, schema?: ConfigSchemaProperty): string {
+  if (schema?.title) return String(schema.title)
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function getFallbackSkillCardFacts(
+  config: SkillConfig,
+  schemaProperties: Record<string, ConfigSchemaProperty>,
+): SkillCardFact[] {
+  const keywords = asStringArray(config.keywords)
+  const facts: SkillCardFact[] = []
+
+  Object.entries(config).forEach(([key, value]) => {
+    if (HIDDEN_CARD_CONFIG_KEYS.has(key)) return
+
+    const formatted = formatConfigValue(value)
+    if (!formatted) return
+
+    facts.push({
+      label: formatConfigLabel(key, schemaProperties[key]),
+      value: formatted,
+    })
+  })
+
+  if (keywords.length > 0) {
+    facts.push({ label: 'Keywords', value: `${keywords.length} configured` })
+  }
+
+  return facts
+}
+
+function getSkillCardFacts(
+  skillType: string,
+  config: SkillConfig,
+  schemaProperties: Record<string, ConfigSchemaProperty>,
+): SkillCardFact[] {
+  switch (skillType) {
+    case 'agent_communication':
+      return [
+        { label: 'Runtime model', value: 'Target agent setting' },
+        { label: 'Timeout', value: `${asNumber(config.default_timeout, 60)}s` },
+        { label: 'Depth limit', value: 'A2A permission rule' },
+      ]
+    case 'agent_switcher': {
+      const keywordCount = asStringArray(config.keywords).length
+      return [
+        { label: 'Triggering', value: 'Agent tool call' },
+        { label: 'Keywords', value: keywordCount > 0 ? `${keywordCount} configured` : 'Not required' },
+      ]
+    }
+    case 'browser_automation':
+      return [
+        { label: 'Browser engine', value: BROWSER_PROVIDER_LABELS[asString(config.provider_type, 'playwright')] || asString(config.provider_type, 'playwright') },
+        { label: 'Action timeout', value: `${asNumber(config.timeout_seconds, 30)}s` },
+        { label: 'Triggering', value: 'Agent tool call' },
+      ]
+    case 'flight_search': {
+      const settings = asRecord(config.settings)
+      const preferDirect = asBoolean(settings.prefer_direct_flights, false)
+      return [
+        { label: 'Provider', value: FLIGHT_PROVIDER_LABELS[asString(config.provider, 'google_flights')] || asString(config.provider, 'google_flights') },
+        { label: 'Currency', value: asString(settings.default_currency, 'BRL') },
+        { label: 'Results', value: `${asNumber(settings.max_results, 5)} max` },
+        { label: 'Direct flights', value: preferDirect ? 'Preferred' : 'Flexible' },
+      ]
+    }
+    case 'image': {
+      const model = asString(config.model, 'imagen-4.0-generate-001')
+      const channels = asStringArray(config.enabled_channels)
+      return [
+        { label: 'Model', value: formatModelName(model) },
+        { label: 'Mode', value: model.startsWith('imagen-') ? 'Generation only' : 'Generate and edit' },
+        { label: 'Channels', value: channels.length > 0 ? `${channels.length} active` : 'All configured channels' },
+        { label: 'Edit context', value: `${asNumber(config.lookback_messages, 5)} messages` },
+      ]
+    }
+    case 'image_analysis': {
+      const channels = asStringArray(config.enabled_channels)
+      return [
+        { label: 'Vision model', value: formatModelName(config.model) },
+        { label: 'Triggering', value: 'Inbound images' },
+        { label: 'Channels', value: channels.length > 0 ? `${channels.length} active` : 'All configured channels' },
+        { label: 'Edit requests', value: 'Hand off to Image Generation' },
+      ]
+    }
+    case 'knowledge_sharing':
+      return [
+        { label: 'Fact extraction', value: boolLabel(asBoolean(config.auto_extract, true)) },
+        { label: 'Auto share', value: boolLabel(asBoolean(config.auto_share, true)) },
+        { label: 'Access', value: asString(config.access_level, 'public') },
+        { label: 'Confidence', value: percentLabel(config.min_confidence, 0.7) },
+        { label: 'Group context', value: asBoolean(config.share_group_context, true) ? `${asNumber(config.group_context_window, 20)} messages` : 'Disabled' },
+      ]
+    case 'adaptive_personality':
+      return [
+        { label: 'Learning threshold', value: `${asNumber(config.detection_threshold, 3)} repeats` },
+        { label: 'Adaptation strength', value: percentLabel(config.adaptation_strength, 0.7) },
+        { label: 'Formality matching', value: boolLabel(asBoolean(config.mirror_formality, true)) },
+        { label: 'Inside jokes', value: boolLabel(asBoolean(config.learn_inside_jokes, true)) },
+      ]
+    case 'okg_term_memory':
+      return [
+        { label: 'Auto capture', value: boolLabel(asBoolean(config.auto_capture_enabled, false)) },
+        { label: 'Auto recall', value: boolLabel(asBoolean(config.auto_recall_enabled, true)) },
+        { label: 'Recall limit', value: `${asNumber(config.auto_recall_limit, 5)} memories` },
+        { label: 'Capture confidence', value: percentLabel(config.capture_min_confidence, 0.75) },
+      ]
+    case 'automation':
+      return [
+        { label: 'Flow execution', value: boolLabel(asBoolean(config.is_enabled, true)) },
+        { label: 'Confirmation', value: asBoolean(config.require_confirmation, true) ? 'Required' : 'Not required' },
+        { label: 'Parallel limit', value: `${asNumber(config.max_parallel_flows, 5)} flows` },
+      ]
+    case 'sandboxed_tools':
+      return [
+        { label: 'Tool access', value: 'Configured per tool' },
+        { label: 'Runtime', value: 'Isolated toolbox containers' },
+      ]
+    default:
+      return getFallbackSkillCardFacts(config, schemaProperties)
+  }
+}
+
 function normalizeTranscriptConfig(
   config: Record<string, unknown> | null | undefined,
 ): TranscriptSkillConfig {
   const raw = config || {}
+  // ``tenant_default`` was retired (no tenant-level ASR default — instances
+  // are assigned per-agent). Stale rows still carrying it collapse to
+  // 'openai' so they fall back to the cloud Whisper API instead of silently
+  // resolving to a phantom tenant default.
   const rawAsrMode = raw.asr_mode
   const asrMode: TranscriptASRMode =
-    rawAsrMode === 'openai' || rawAsrMode === 'tenant_default' || rawAsrMode === 'instance'
+    rawAsrMode === 'openai' || rawAsrMode === 'instance'
       ? rawAsrMode
       : raw.asr_instance_id
         ? 'instance'
@@ -1283,9 +1509,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               <div className="text-xs text-tsushin-muted">
                 {transcriptConfigData.asr_mode === 'instance'
                   ? 'Pinned local ASR'
-                  : transcriptConfigData.asr_mode === 'tenant_default'
-                    ? 'Tenant default ASR'
-                    : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
+                  : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
               </div>
             )}
           </div>
@@ -1317,9 +1541,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <div className="font-medium text-sm text-white">
                       {transcriptConfigData.asr_mode === 'instance'
                         ? 'Pinned local'
-                        : transcriptConfigData.asr_mode === 'tenant_default'
-                          ? 'Tenant default'
-                          : 'OpenAI Whisper'}
+                        : 'OpenAI Whisper'}
                     </div>
                   </div>
                   <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
@@ -1500,6 +1722,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
     const config = getSkillConfig(skill.skill_type)
     const display = getSkillDisplay(skill.skill_type, skill.skill_name, skill.skill_description)
     const Icon = display.icon
+    const schemaProperties = (skill.config_schema?.properties || {}) as Record<string, ConfigSchemaProperty>
+    const cardFacts = getSkillCardFacts(skill.skill_type, config, schemaProperties).slice(0, 6)
 
     return (
       <div
@@ -1527,22 +1751,15 @@ export default function AgentSkillsManager({ agentId }: Props) {
           </div>
         </div>
 
-        {Object.keys(config).length > 0 && (
+        {cardFacts.length > 0 && (
           <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
-            <div className="grid grid-cols-3 gap-4">
-              {Object.entries(config)
-                .filter(([key]) => {
-                  if (key === 'ai_model' && config.intent_detection_model) return false
-                  return true
-                })
-                .slice(0, 6)
-                .map(([key, value]) => (
-                  <div key={key} className="bg-tsushin-surface rounded p-2 border border-tsushin-border">
-                    <div className="text-xs text-tsushin-slate">{key.replace(/_/g, ' ')}</div>
-                    <div className="text-sm font-medium truncate">{Array.isArray(value) ? `${value.length} items` : String(value)}</div>
-                  </div>
-                ))
-              }
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {cardFacts.map((fact) => (
+                <div key={`${fact.label}:${fact.value}`} className="bg-tsushin-surface rounded p-2 border border-tsushin-border">
+                  <div className="text-xs text-tsushin-slate">{fact.label}</div>
+                  <div className="text-sm font-medium truncate" title={fact.value}>{fact.value}</div>
+                </div>
+              ))}
             </div>
             <div className="mt-3">
               <button
@@ -1555,7 +1772,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           </div>
         )}
 
-        {Object.keys(config).length === 0 && (
+        {cardFacts.length === 0 && (
           <div className="mt-3">
             <button
               onClick={() => removeSkill(skill.skill_type, display.displayName)}

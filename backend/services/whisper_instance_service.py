@@ -8,23 +8,30 @@ OpenAI-compatible Whisper/Speaches endpoints.
 import logging
 import secrets
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from hub.security import TokenEncryption
 from models import ASRInstance
-from models_rbac import Tenant
 from services.encryption_key_service import get_api_key_encryption_key
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_VENDORS = {"speaches"}
-AUTO_PROVISIONABLE_VENDORS = {"speaches"}
+SUPPORTED_VENDORS = {"speaches", "openai_whisper"}
+AUTO_PROVISIONABLE_VENDORS = {"speaches", "openai_whisper"}
 DEFAULT_AUTH_USERNAME = "tsushin"
 DEFAULT_MODEL_ID = "Systran/faster-distil-whisper-small.en"
+# openai/whisper engine takes plain model size names (tiny/base/small/medium/large-v3/turbo).
+# The webservice loads the model once at boot and keeps it warm; "base" is
+# the safe default for ~1 GB RAM, ~1.5x realtime CPU on a 4-core x86.
+DEFAULT_OPENAI_WHISPER_MODEL = "base"
+
+
+def default_model_for_vendor(vendor: str) -> str:
+    if vendor == "openai_whisper":
+        return DEFAULT_OPENAI_WHISPER_MODEL
+    return DEFAULT_MODEL_ID
 
 
 class WhisperInstanceService:
@@ -73,6 +80,9 @@ class WhisperInstanceService:
             )
 
         api_token = secrets.token_urlsafe(32)
+        resolved_default_model = (
+            default_model.strip() if default_model and default_model.strip() else default_model_for_vendor(vendor)
+        )
         instance = ASRInstance(
             tenant_id=tenant_id,
             vendor=vendor,
@@ -81,7 +91,7 @@ class WhisperInstanceService:
             base_url=base_url,
             auth_username=DEFAULT_AUTH_USERNAME,
             api_token_encrypted=WhisperInstanceService._encrypt_token(api_token, tenant_id, db),
-            default_model=(default_model or DEFAULT_MODEL_ID).strip(),
+            default_model=resolved_default_model,
             mem_limit=mem_limit,
             cpu_quota=cpu_quota,
             is_auto_provisioned=bool(auto_provision),
@@ -175,117 +185,107 @@ class WhisperInstanceService:
         return instance
 
     @staticmethod
-    def delete_instance(instance_id: int, tenant_id: str, db: Session) -> bool:
+    def delete_instance(instance_id: int, tenant_id: str, db: Session) -> Optional[dict]:
+        """Soft-delete the instance and reconcile pinned agent skills.
+
+        Returns ``None`` if the instance was not found, otherwise the cascade
+        summary dict (``reassigned``, ``disabled``, ``successor_instance_id``)
+        so the API can surface what happened to dependent agents.
+        """
         instance = WhisperInstanceService.get_instance(instance_id, tenant_id, db)
         if not instance:
-            return False
+            return None
         instance.is_active = False
         instance.updated_at = datetime.utcnow()
-        WhisperInstanceService._clear_tenant_default_if_matches(instance_id, tenant_id, db)
+        cascade = WhisperInstanceService.cascade_agent_skill_pins(instance_id, tenant_id, db)
         db.commit()
-        return True
+        return cascade
 
     @staticmethod
-    def set_tenant_default(
-        instance_id_or_none: Optional[int],
+    def cascade_agent_skill_pins(
+        deleted_instance_id: int,
         tenant_id: str,
         db: Session,
-    ) -> Optional[int]:
-        """Atomically set the tenant's default ASR instance.
+    ) -> dict:
+        """When an ASR instance is deleted, every agent_skill row that pinned
+        it must be reconciled. Strategy:
 
-        ``None`` means "use OpenAI Whisper by default". A concrete instance id
-        must belong to the calling tenant and remain active.
+        1. If the tenant still has another active ASR instance, repoint every
+           pinned skill at that instance (lowest-id wins for determinism).
+        2. If no other instance exists, disable each pinned audio_transcript
+           skill (``is_enabled=false``). The user wants explicit silence rather
+           than a silent fallback to cloud OpenAI Whisper, since the original
+           pin was a deliberate privacy/cost choice.
+
+        Returns a summary dict so the API layer can surface what happened.
         """
-        for attempt in range(2):
-            try:
-                tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-                if not tenant:
-                    raise ValueError(f"Tenant {tenant_id} not found")
+        from models import Agent, AgentSkill
 
-                db.execute(
-                    text("SELECT id FROM tenant WHERE id = :id FOR UPDATE"),
-                    {"id": tenant_id},
-                )
+        affected = (
+            db.query(AgentSkill)
+            .join(Agent, Agent.id == AgentSkill.agent_id)
+            .filter(
+                Agent.tenant_id == tenant_id,
+                AgentSkill.skill_type == "audio_transcript",
+                AgentSkill.is_enabled == True,
+            )
+            .all()
+        )
+        # Filter to skills actually pinned to the deleted instance.
+        pinned = [
+            s for s in affected
+            if isinstance(s.config, dict)
+            and (s.config or {}).get("asr_mode") == "instance"
+            and (s.config or {}).get("asr_instance_id") == deleted_instance_id
+        ]
+        if not pinned:
+            return {"reassigned": 0, "disabled": 0, "successor_instance_id": None}
 
-                if instance_id_or_none is not None:
-                    instance = (
-                        db.query(ASRInstance)
-                        .filter(
-                            ASRInstance.id == instance_id_or_none,
-                            ASRInstance.tenant_id == tenant_id,
-                            ASRInstance.is_active == True,
-                        )
-                        .first()
-                    )
-                    if not instance:
-                        raise ValueError(
-                            f"ASR instance {instance_id_or_none} not found for tenant"
-                        )
-
-                tenant.default_asr_instance_id = instance_id_or_none
-                tenant.updated_at = datetime.utcnow()
-                db.commit()
-                return instance_id_or_none
-
-            except IntegrityError as e:
-                db.rollback()
-                if attempt == 0:
-                    logger.warning(
-                        "set_tenant_default IntegrityError for tenant=%s, retrying: %s",
-                        tenant_id,
-                        e,
-                    )
-                    continue
-                logger.error(
-                    "set_tenant_default failed after retry for tenant=%s: %s",
-                    tenant_id,
-                    e,
-                )
-                raise
-
-        return instance_id_or_none
-
-    @staticmethod
-    def get_tenant_default(
-        tenant_id: str, db: Session
-    ) -> Tuple[Optional[int], Optional[ASRInstance]]:
-        """Return the tenant default ASR instance, if one is configured."""
-        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-        if not tenant or not tenant.default_asr_instance_id:
-            return None, None
-
-        instance = (
+        successor = (
             db.query(ASRInstance)
             .filter(
-                ASRInstance.id == tenant.default_asr_instance_id,
                 ASRInstance.tenant_id == tenant_id,
+                ASRInstance.id != deleted_instance_id,
                 ASRInstance.is_active == True,
             )
+            .order_by(ASRInstance.id.asc())
             .first()
         )
-        if not instance:
-            stale_id = tenant.default_asr_instance_id
-            tenant.default_asr_instance_id = None
-            tenant.updated_at = datetime.utcnow()
-            db.commit()
-            logger.info(
-                "Cleared stale default ASR instance tenant=%s instance=%s",
-                tenant_id,
-                stale_id,
-            )
-            return None, None
-        return tenant.default_asr_instance_id, instance
 
-    @staticmethod
-    def _clear_tenant_default_if_matches(
-        instance_id: int,
-        tenant_id: str,
-        db: Session,
-    ) -> None:
-        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-        if tenant and tenant.default_asr_instance_id == instance_id:
-            tenant.default_asr_instance_id = None
-            tenant.updated_at = datetime.utcnow()
+        reassigned = 0
+        disabled = 0
+        for skill in pinned:
+            cfg = dict(skill.config or {})
+            if successor is not None:
+                cfg["asr_instance_id"] = successor.id
+                skill.config = cfg
+                reassigned += 1
+            else:
+                # No successor — disable the skill so the agent stops trying
+                # to transcribe via a now-deleted endpoint. The user can
+                # re-enable + repin once they create a new ASR instance.
+                cfg["asr_instance_id"] = None
+                cfg["asr_mode"] = "openai"
+                skill.config = cfg
+                skill.is_enabled = False
+                disabled += 1
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(skill, "config")
+            skill.updated_at = datetime.utcnow()
+
+        logger.info(
+            "ASR instance %s deletion cascade: reassigned=%d disabled=%d "
+            "successor_instance_id=%s",
+            deleted_instance_id,
+            reassigned,
+            disabled,
+            successor.id if successor else None,
+        )
+        return {
+            "reassigned": reassigned,
+            "disabled": disabled,
+            "successor_instance_id": successor.id if successor else None,
+        }
 
     @staticmethod
     def resolve_api_token(instance: ASRInstance, db: Session) -> Optional[str]:
