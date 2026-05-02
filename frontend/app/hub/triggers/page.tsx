@@ -343,13 +343,13 @@ export default function HubTriggersIndexPage() {
                   className="border-b border-tsushin-border/60 transition-colors hover:bg-black/20"
                 >
                   <td className="px-4 py-3">
-                    <Link href={row.href} className="inline-flex items-center gap-2 text-tsushin-fog hover:text-white">
+                    <Link href={row.href} prefetch={false} className="inline-flex items-center gap-2 text-tsushin-fog hover:text-white">
                       <KindIcon kind={row.kind} />
                       {KIND_LABEL[row.kind]}
                     </Link>
                   </td>
                   <td className="px-4 py-3">
-                    <Link href={row.href} className="font-medium text-cyan-200 hover:text-white">
+                    <Link href={row.href} prefetch={false} className="font-medium text-cyan-200 hover:text-white">
                       {row.name}
                     </Link>
                     <div className="text-xs text-tsushin-slate">#{row.id}</div>

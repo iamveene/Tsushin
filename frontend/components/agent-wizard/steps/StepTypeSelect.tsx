@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { useAgentWizard } from '@/contexts/AgentWizardContext'
 import type { AgentType } from '@/lib/agent-wizard/reducer'
 
@@ -8,7 +8,7 @@ interface TypeCard {
   id: AgentType
   title: string
   body: string
-  icon: JSX.Element
+  icon: ReactNode
 }
 
 const cards: TypeCard[] = [

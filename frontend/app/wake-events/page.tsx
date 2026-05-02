@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { api, type PageResponse, type WakeEvent, type WakeEventPayload } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import {
@@ -63,7 +63,9 @@ function JsonBlock({ value }: { value: unknown }) {
 }
 
 export default function WakeEventsPage() {
+  const pathname = usePathname()
   const searchParams = useSearchParams()
+  const isEmbeddedInWatcher = pathname === '/'
   const highlightId = Number(searchParams.get('highlight'))
   const requestedChannel = searchParams.get('channel_type') || 'all'
   const requestedInstance = searchParams.get('channel_instance_id') || ''
@@ -183,14 +185,16 @@ export default function WakeEventsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+      <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-8'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
         <div>
-          <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/" className="hover:text-white">Watcher</Link>
-            <span>/</span>
-            <span>Wake Events</span>
-          </div>
+          {!isEmbeddedInWatcher && (
+            <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
+              <Link href="/" className="hover:text-white">Watcher</Link>
+              <span>/</span>
+              <span>Wake Events</span>
+            </div>
+          )}
           <h1 className="text-3xl font-display font-bold text-white">Wake Events</h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
             Trigger-origin event browser for continuous agents, with tenant-scoped payload inspection for selected events.

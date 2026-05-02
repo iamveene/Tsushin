@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "es2017",
+    "strict": false,
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "next-env.d.ts",
+    "app/agents/page.tsx",
+    "app/continuous-agents/page.tsx",
+    "app/hub/triggers/page.tsx",
+    "components/rbac/TeamMemberCard.tsx",
+    "tests/visual/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next"
+  ]
+}

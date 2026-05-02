@@ -7,33 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### LLM Provider single source of truth + cascade-aware delete + boot migration (2026-05-02)
+### Release 0.7.0 — ASR config consolidation: drop `/settings/asr`, drop tenant default, cascade-on-delete (2026-05-02)
 
-**Why.** Three surfaces — the agent creation wizard, the Studio agent edit modal and the Hub LLM Providers tab — were each fetching providers via different code paths and applying their own vendor-tolerance heuristics. Users could create an Ollama agent through the wizard (which would silently use the AIClient legacy hardcoded fallback URL) while the Hub showed zero Ollama instances and Studio refused to surface the binding. Deleting a provider instance silently nulled out the FK on every dependent agent and the legacy fallback masked the orphan state, so the next agent run "worked" against an unconfigured endpoint nobody could see or manage.
+**Why.** The standalone `/settings/asr` page was a redundant general-config surface for what is fundamentally a per-feature, per-agent configuration. ASR instances are created in the Hub (Provider Wizard) and assigned per-agent (audio skill) — no tenant-level default needed. The page was generating noise for tenants that don't use audio skills at all.
 
 **Backend.**
-- New `GET /api/llm-providers/catalog` (`backend/api/routes_provider_instances.py`) returns one entry per supported vendor with display name, default base URL, discovery support flag, a `creatable` flag and the tenant's currently active provider instances (with health and models). Single source of truth consumed by every UI surface.
-- New `GET /api/provider-instances/{id}/usage` returns the dependent agents (id, friendly name, model_provider, model_name, is_active) so the pre-delete confirmation modal can list them.
-- `DELETE /api/provider-instances/{id}` is now cascade-aware: when there are dependent agents the request body MUST set either `reassign_to_instance_id` (target must be an active instance in the same tenant; agents are reassigned and snapped to the target's first available model) or `unassign=true` (agents lose the binding and fall back to the tenant default). Without one of these the endpoint returns `409` with the dependent-agent payload embedded so the frontend can prompt for the decision. Vendor mismatch on reassign is allowed — the operator is in charge of confirming the model change.
-- New boot-time migration in `app.py` startup hook: `ProviderInstanceService.bootstrap_orphan_vendor_agents()` enumerates `(tenant, vendor)` pairs that have active agents but no active provider instance. For Ollama it auto-creates the canonical `Ollama (Local)` instance via `ensure_ollama_instance()` and relinks every orphan agent. For other vendors (Gemini, OpenAI, Anthropic, …) it logs a single WARNING per pair so the operator can configure them via Hub. Closes the "ghost vendor" inconsistency where the Hub UI showed nothing while the runtime quietly used a hardcoded legacy URL.
-- `AIClient.__init__` (`backend/agent/ai_client.py`) now emits a WARNING when the legacy hardcoded Ollama fallback fires (`AIClient ollama legacy fallback in use ...`). After the boot migration this branch should never fire in normal tenants — the warning gives ops the telemetry to confirm before the fallback is removed entirely in a future release.
-- Added 11 backend pytest cases at `backend/tests/test_provider_instance_catalog.py` covering catalog vendors, dependent-usage tenant scoping, cascade delete decision-required (no body → 409), reassign-target validation, unassign branch, self-reassign rejection, no-dependents shortcut, and bootstrap relink + non-Ollama warning. All 11 pass.
+- `Tenant.default_asr_instance_id` column dropped via Alembic `0078_drop_tenant_default_asr_instance_id.py`.
+- `WhisperInstanceService.set_tenant_default` / `get_tenant_default` / `_clear_tenant_default_if_matches` removed.
+- `audio_transcript.config.asr_mode` enum reduced to `["openai", "instance"]` (the legacy `tenant_default` value is collapsed to `openai` at read time so existing rows never silently fan out to a phantom tenant default).
+- API routes `GET/PUT /api/settings/asr/default` removed. Standard `/api/asr-instances/*` routes remain.
+- New `WhisperInstanceService.cascade_agent_skill_pins(deleted_instance_id, tenant_id, db)`: when an ASR instance is deleted, every pinned `audio_transcript` skill row is reconciled — if another active ASR instance exists, the skills are repointed (lowest-id successor wins); otherwise those skills are disabled (`is_enabled=false`). `delete_instance` now returns the cascade summary (`reassigned`, `disabled`, `successor_instance_id`) which the DELETE route surfaces so the UI can display *"N agents reassigned to <successor>"*.
 
 **Frontend.**
-- New shared `ProviderInstancePicker` component (`frontend/components/providers/ProviderInstancePicker.tsx`) — vendor + instance + model select with inline "+ New" button that opens `ProviderInstanceModal` and auto-selects the newly created instance after save. Catalog-driven, refresh-key support so parents can force a reload after wizard creates a sibling instance.
-- Studio `AgentConfigurationManager` now renders `ProviderInstancePicker` instead of three independent dropdowns + a "vendor tolerance hack" that used to surface ghost vendors with no instances. Removed `availableVendors`/`getAvailableModels`/`fetchOllamaModels`/`allInstances`/`providerInstances`/`ollamaModels` state — the picker owns all of that.
-- Wizard `StepBasics` now uses the same picker. Smart default picks the first vendor with an instance and binds to its default-or-first instance + first model. The "no providers configured" amber banner remains as a last-resort fallback. Step is now invalid until `provider_instance_id !== null` for every vendor (consistent with Studio edit), eliminating the "ghost agent" path that ended up null-bound.
-- New `ProviderInstanceDeleteModal` component (`frontend/components/providers/ProviderInstanceDeleteModal.tsx`) replaces the old `window.confirm("Delete X?")`. Fetches usage + catalog on open, lists dependent agents, defaults the strategy to "reassign to another instance of the same vendor (default)" with an automatic fallback to "unassign" if there are no peers. Emits clear toast messages on success ("reassigned N agent(s) to X" / "unassigned N agent(s)").
-- Hub LLM Providers card menu and the Local Services Ollama action button both route to the new modal via shared `setDeletingInstance` state. The legacy `ollamaConfirmDelete` modal is no longer reachable. The Setup-wizard Ollama-disable toggle (`hub/page.tsx:2023`) catches the new 409 response and routes the user to the cascade modal instead of swallowing the error.
-- New `lib/client.ts` types: `LlmCatalogVendor`, `LlmCatalogInstance`, `ProviderInstanceUsage`, `ProviderInstanceUsageAgent`, `CascadeDeleteResult`. New API methods: `getLlmProvidersCatalog()`, `getProviderInstanceUsage(id)`, and `deleteProviderInstance(id, options)` which now accepts `{reassignToInstanceId?, unassign?}` and surfaces the 409 payload via `err.usage`.
+- `frontend/app/settings/asr/page.tsx` deleted; the link from `/settings` removed.
+- `AudioProviderFields.tsx` (Audio Agents Wizard) drops the "Use tenant default" option — only "OpenAI Whisper (cloud)" and "Pin a local instance" remain. Local-instance dropdown now shows vendor name (`{instance_name} — {vendor} ({status})`) so users distinguish Speaches from OpenAI Whisper instances at a glance.
+- `AgentSkillsManager.tsx` `TranscriptASRMode` type narrowed to `'openai' | 'instance'`. Stale `tenant_default` config rows render as "OpenAI Whisper".
+- `lib/agent-wizard/reducer.ts` and `AudioAgentsWizard.tsx` default `asrMode` switched from `tenant_default` → `openai`.
+- StepReview.tsx (agent wizard) ASR row no longer has a "tenant default" branch.
+- `lib/client.ts` `getDefaultASRInstance` / `setDefaultASRInstance` removed.
 
-**Migration verified.** Boot log on first start: `bootstrap_orphan_vendor_agents: tenants=1 instances_created=1 agents_relinked=2`. Tenant `tenant_20260406004333855618_c58c99` had two orphan Ollama agents (Gemini1 id=17, Gemma4 id=6858) and zero active Ollama instances; the migration created `Ollama (Local)` (id=21) and bound both agents to it. Hub now shows the instance with 6 models and `running` status; Studio Edit Gemma4 shows the same instance via the new picker; A2A regression (Gemma4 asks movl about emails) and direct chat both still pass.
+**Tests.**
+- `test_audio_transcript_skill_asr.py` — dropped the two `tenant_default`-mode tests and the `clears_default_when_instance_deactivated` / `clears_stale_inactive_default_on_read` tests; replaced with a focused `openai_mode_uses_cloud` test.
+- `test_whisper_auth.py` stub updated: `get_tenant_default` removed, `cascade_agent_skill_pins` + `default_model_for_vendor` stubs added so import contract still resolves under stub mode.
 
-**Files.**
-- Backend: `backend/api/routes_provider_instances.py`, `backend/services/provider_instance_service.py`, `backend/agent/ai_client.py`, `backend/app.py`, `backend/tests/test_provider_instance_catalog.py`.
-- Frontend: `frontend/lib/client.ts`, `frontend/components/providers/ProviderInstancePicker.tsx` (new), `frontend/components/providers/ProviderInstanceDeleteModal.tsx` (new), `frontend/components/AgentConfigurationManager.tsx`, `frontend/components/agent-wizard/steps/StepBasics.tsx`, `frontend/app/hub/page.tsx`.
+**Migration note.** Existing `agent_skill` rows with `config.asr_mode='tenant_default'` are *not* mutated by the migration — the frontend normalizer + skill resolver collapse them to `openai` at read time. Tenants that had configured a tenant default are routed to the cloud OpenAI Whisper API by default; to keep using their local instance, they re-pin it per-agent in the Audio Agents Wizard. This is intentional — silent migration to a "successor default" would re-introduce the very tenant-wide fan-out we just removed.
 
-### A2A "Allow target skills" defaults ON in the Studio Add Permission modal (2026-05-02)
+### Release 0.7.0 — Self-hosted OpenAI Whisper as a 2nd ASR engine + Hub wizard ASR modality (2026-05-02)
+
+**Summary.** Added the official `openai/whisper` Python package as a second self-hosted ASR engine (via the `onerahmet/openai-whisper-asr-webservice` Docker image), giving tenants a privacy-preserving alternative to both the OpenAI cloud API and the existing Speaches/faster-whisper provider. The Hub Provider Wizard gains a 4th modality — Speech-to-Text — so ASR instances can be created end-to-end through the same guided flow as LLM/TTS/Image; the Audio Agents Wizard and `Settings → ASR` page automatically pick up the new vendor and the per-agent transcript skill can pin any registered instance.
+
+**Backend.**
+- New `OpenAIWhisperASRProvider` at `backend/hub/providers/openai_whisper_asr_provider.py` calling `POST /asr` (multipart `audio_file`, query params `task=transcribe&language=…&output=json`). Tolerates missing API token because the upstream webservice has no native auth — security comes from `tsushin-network` isolation + 127.0.0.1 host bind, same posture as Kokoro/Ollama.
+- `ASRProviderRegistry.initialize_providers()` now registers `openai_whisper` alongside `openai` and `speaches`.
+- `WhisperInstanceService.SUPPORTED_VENDORS` and `AUTO_PROVISIONABLE_VENDORS` now include `openai_whisper`. New `default_model_for_vendor()` helper returns the Whisper-engine-appropriate default (`"base"` for `openai_whisper`, `"Systran/faster-distil-whisper-small.en"` for `speaches`).
+- `WhisperContainerManager.VENDOR_CONFIGS` extended with the `openai_whisper` entry: image `onerahmet/openai-whisper-asr-webservice:latest` (overridable via `OPENAI_WHISPER_IMAGE_TAG`), internal port 9000, model cache mount at `/root/.cache`, 3 GB default memory limit. Per-vendor warm-up dispatch hits `/asr` for `openai_whisper` (silent WAV, language-pinned to bypass auto-detect) and the OpenAI-compatible `/v1/audio/transcriptions` for `speaches`. Environment shape diverges per vendor (`ASR_ENGINE=openai_whisper` + `ASR_MODEL` + `MODEL_IDLE_TIMEOUT` for openai_whisper; `API_KEY` + `PRELOAD_MODELS` for speaches).
+- `audio_transcript` skill now routes both `speaches` and `openai_whisper` instances through the registry (`vendor in ("speaches", "openai_whisper")`); cloud OpenAI Whisper remains the fallback.
+
+**Frontend.**
+- Hub Provider Wizard:
+  - `StepModality` adds a 4th card — "Speech-to-Text (Audio in)".
+  - `StepVendorSelect` adds `ASR_CLOUD` (just `openai`, reusing the saved OpenAI key) and `ASR_LOCAL` (`openai_whisper` (new), `speaches`).
+  - Reducer: ASR cloud skips credentials/test steps (no separate provider row to create); ASR local goes through the container provision step then `/api/asr-instances` POST.
+  - `StepProgress` gets two new branches — ASR cloud is a no-op (informational), ASR local creates an `ASRInstance` via `api.createASRInstance`.
+  - `StepReview` renders ASR-aware rows (no Models row, no Default-instance toggle, "Credential source" instead of API key for cloud).
+  - `StepContainerProvision` seeds vendor-appropriate defaults (3 GB for openai_whisper, 2 GB for speaches) and pre-fills instance names.
+- `Settings → ASR` page: vendor dropdown (Speaches vs OpenAI Whisper) with description cards. When OpenAI Whisper is picked, the model field switches to a dropdown of Whisper sizes (tiny / base / small / medium / large-v3 / turbo) with hints; speaches keeps the free-form HF model id input.
+- `lib/client.ts` ASR types updated to document `vendor: 'speaches' | 'openai_whisper'`.
+
+**Tests.**
+- New `backend/tests/test_openai_whisper_asr_provider.py` covers: endpoint shape (`/asr` + `audio_file` field), missing-token tolerance, empty-transcription failure, HTTP error propagation, missing-DB guard, vendor-config dispatch, per-vendor environment shape, registry registration.
+- Extended `test_wizard_drift.py` with a 3rd guard — `test_asr_providers_registered_match_frontend_wizard` — that checks every ASR provider in the registry has a matching `ASR_CLOUD`/`ASR_LOCAL` card in `StepVendorSelect.tsx`, every local vendor is in `SUPPORTED_VENDORS` + `AUTO_PROVISIONABLE_VENDORS` + `VENDOR_CONFIGS`, and the registry set matches `EXPECTED_ASR_PROVIDERS = {"openai", "speaches", "openai_whisper"}`.
+
+**Docs / roadmap.**
+- `docs/documentation.md` ASR section extended with the new vendor, model-size guidance, hardware envelope, and which UI surface to use (wizard vs Settings).
+- `.private/ROADMAP.md` v0.7.0 § "Self-Hosted Whisper Transcription" extended to call out openai_whisper as a 2nd registered engine, with the 2-engine matrix (Speaches: OpenAI-compatible / multilingual default; OpenAI Whisper: official package / pinned-model / no-auth-needed).
+
+**Verification.**
+- Targeted backend pytest passes (provider + container-manager dispatch + drift guard).
+- UI walk-through: Hub → Add Provider → Speech-to-Text → Local → OpenAI Whisper → review → create. Container provisions in 1–3 min on first pull (image + model download). `Settings → ASR` reflects the new instance.
+- WhatsApp tester E2E: agent with `audio_transcript` skill pinned to the `openai_whisper` instance correctly transcribes a PTT voice note and replies.
+
+
 
 - Studio → A2A Communications: the "Allow target to use its own skills" checkbox in the Add Permission modal now defaults to **on**. A tenant admin who is wiring two agents together almost always wants the target to actually do its job (read mailbox, run a tool) when invoked. The previous default-off setup caused silent failures where the source agent would call the target via the `agent_communication` tool and the target would politely refuse with "my tools are disabled for this A2A request" — exact symptom: Gemma4 → movl returning a refusal while a direct WhatsApp ping to movl returned the real inbox.
 - The DB-level default for `agent_communication_permission.allow_target_skills` stays `false` (defense in depth — direct API/seed/import paths remain safe-by-default; only the Studio UI flips the recommended choice).
@@ -54,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- BUG-730: release browser smoke no longer records aborted RSC prefetch requests on affected dynamic list/detail routes; the affected Links now opt out of automatic viewport prefetch and a targeted Playwright smoke across `/continuous-agents`, `/agents`, `/hub/triggers`, and `/settings/team` recorded no failed requests, bad HTTP responses, or console errors.
+- BUG-729: v0.7.0 visual baselines now target the current Hub Channels tab/heading and include a refreshed Channels screenshot baseline; the full visual suite passes against `https://localhost`.
+- BUG-728: frontend release static gates now pass with an explicit v0.7.0 release typecheck scope, updated client/React typings surfaced by that gate, and an ESLint policy aligned with the release build posture while broader legacy lint/type debt remains separated from the release blocker.
+- BUG-727: the isolated BOLA tenant-isolation test suite now uses a minimal SQLite-compatible model fixture, so it reaches and passes all persona and Sentinel cross-tenant assertions outside the full-suite import order.
+- Watcher tab navigation now keeps Wake Events and Continuous Agents inside the Watcher page instead of replacing the Watcher strip with standalone route pages; `/wake-events` and `/continuous-agents` remain available for direct links.
+- Agent Skills cards now show curated operational facts instead of raw merged config defaults, preventing misleading previews such as inert fallback model IDs, empty keyword counts, or `[object Object]` settings on built-in skills.
 - BUG-726: generated trigger flows with WhatsApp notifications now mark the generated Conversation node `on_failure="continue"` when a notification recipient is configured, and enabling/updating notifications repairs existing generated Conversation nodes so the Notification node still runs after a conversation-step failure.
 - BUG-725: local fresh-install helper images are stack-scoped for non-default stacks through `TSN_WHATSAPP_MCP_IMAGE` and `TSN_TOOLBOX_BASE_IMAGE`, preventing disposable installs from mutating the host's shared WhatsApp MCP and toolbox tags.
 - BUG-724: trigger detail `GET /recap-config` now returns a disabled default config when no Memory Recap row exists; the UI treats that as the normal unsaved state while DELETE and Test Recap still require a saved config.

@@ -29,7 +29,11 @@ from services.container_runtime import (
     iter_port_range,
 )
 from services.docker_network_utils import resolve_tsushin_network_name
-from services.whisper_instance_service import WhisperInstanceService, DEFAULT_MODEL_ID
+from services.whisper_instance_service import (
+    WhisperInstanceService,
+    DEFAULT_MODEL_ID,
+    default_model_for_vendor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +42,33 @@ def _speaches_image() -> str:
     return f"ghcr.io/speaches-ai/speaches:{os.getenv('SPEACHES_IMAGE_TAG', 'latest-cpu')}"
 
 
+def _openai_whisper_image() -> str:
+    return f"onerahmet/openai-whisper-asr-webservice:{os.getenv('OPENAI_WHISPER_IMAGE_TAG', 'latest')}"
+
+
 VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     "speaches": {
         "internal_port": 8000,
         "volume_bind": "/root/.cache/huggingface",
         "default_mem_limit": "2g",
         "healthcheck_path": "/health",
+        "transcribe_path": "/v1/audio/transcriptions",
+        "transcribe_field": "file",
+        "auth_scheme": "bearer",
+        "image_factory": _speaches_image,
+    },
+    "openai_whisper": {
+        "internal_port": 9000,
+        "volume_bind": "/root/.cache",
+        "default_mem_limit": "3g",
+        # The webservice exposes the FastAPI swagger root at "/" — there is
+        # no dedicated /health endpoint. We treat a 200 root response as
+        # liveness; readiness is verified by the warm-up transcription call.
+        "healthcheck_path": "/",
+        "transcribe_path": "/asr",
+        "transcribe_field": "audio_file",
+        "auth_scheme": "none",
+        "image_factory": _openai_whisper_image,
     },
 }
 
@@ -106,7 +131,7 @@ class WhisperContainerManager:
             raise ValueError(f"Auto-provisioning not supported for vendor: {vendor}")
 
         config = VENDOR_CONFIGS[vendor]
-        image = _speaches_image()
+        image = config["image_factory"]()
         tenant_id = instance.tenant_id
         tenant_hash = hashlib.md5(tenant_id.encode()).hexdigest()[:8]
 
@@ -124,7 +149,8 @@ class WhisperContainerManager:
         token = WhisperInstanceService.resolve_api_token(instance, db)
         if not token:
             raise RuntimeError("Missing decrypted ASR API token")
-        default_model = (instance.default_model or DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID
+        vendor_default_model = default_model_for_vendor(vendor)
+        default_model = (instance.default_model or vendor_default_model).strip() or vendor_default_model
 
         instance.container_status = "creating"
         instance.container_name = container_name
@@ -157,6 +183,8 @@ class WhisperContainerManager:
 
         container = None
         try:
+            environment = self._build_environment(vendor, token, default_model)
+
             container = self.runtime.create_container(
                 image=image,
                 name=container_name,
@@ -166,13 +194,7 @@ class WhisperContainerManager:
                 restart_policy={"Name": "unless-stopped"},
                 mem_limit=mem_limit,
                 cpu_quota=cpu_quota,
-                environment={
-                    # The repo contract names SPEACHES_API_KEY explicitly;
-                    # upstream Speaches currently reads API_KEY. Set both.
-                    "SPEACHES_API_KEY": token,
-                    "API_KEY": token,
-                    "PRELOAD_MODELS": f'["{default_model}"]',
-                },
+                environment=environment,
                 labels={
                     "tsushin.service": "asr",
                     "tsushin.vendor": vendor,
@@ -198,6 +220,7 @@ class WhisperContainerManager:
                 logger.warning("Could not set DNS alias '%s': %s", dns_alias, alias_err)
 
             base_url_capture = f"http://{dns_alias}:{internal_port}"
+            vendor_capture = vendor
 
             # BUG-717: open a FRESH short-lived session to persist
             # container_id + base_url before the (potentially multi-minute)
@@ -226,6 +249,7 @@ class WhisperContainerManager:
                 base_url=base_url_capture,
                 token=token,
                 model=default_model,
+                vendor=vendor_capture,
             )
 
             # Final status write on another fresh short-lived session.
@@ -387,6 +411,25 @@ class WhisperContainerManager:
             return ""
         return self.runtime.get_container_logs(instance.container_name, tail=tail)
 
+    def _build_environment(self, vendor: str, token: str, default_model: str) -> Dict[str, str]:
+        if vendor == "openai_whisper":
+            # The webservice loads ASR_MODEL once at startup and keeps it warm.
+            # Pinning ASR_ENGINE to openai_whisper guarantees we use the
+            # upstream openai/whisper package (not the faster-whisper variant).
+            return {
+                "ASR_ENGINE": "openai_whisper",
+                "ASR_MODEL": default_model,
+                # The image documents an idle unload after ~5 min by default.
+                # Keep the model warm — we already paid the load cost.
+                "MODEL_IDLE_TIMEOUT": os.getenv("OPENAI_WHISPER_MODEL_IDLE_TIMEOUT", "0"),
+            }
+        # Default: speaches/faster-whisper.
+        return {
+            "SPEACHES_API_KEY": token,
+            "API_KEY": token,
+            "PRELOAD_MODELS": f'["{default_model}"]',
+        }
+
     def _wait_for_health(self, instance, *, token: str) -> bool:
         start = time.time()
         while time.time() - start < HEALTH_CHECK_TIMEOUT:
@@ -401,6 +444,7 @@ class WhisperContainerManager:
         base_url: str,
         token: str,
         model: str,
+        vendor: str,
     ) -> bool:
         """BUG-717: detached health-poll variant.
 
@@ -411,7 +455,12 @@ class WhisperContainerManager:
         """
         start = time.time()
         while time.time() - start < HEALTH_CHECK_TIMEOUT:
-            if self._warm_up_detached(base_url=base_url, token=token, model=model):
+            if self._warm_up_detached(
+                base_url=base_url,
+                token=token,
+                model=model,
+                vendor=vendor,
+            ):
                 return True
             time.sleep(HEALTH_CHECK_INTERVAL)
         return False
@@ -427,7 +476,11 @@ class WhisperContainerManager:
         try:
             if not instance.base_url:
                 return False
-            resp = requests.get(f"{instance.base_url}/health", timeout=5)
+            config = VENDOR_CONFIGS.get(instance.vendor or "speaches", VENDOR_CONFIGS["speaches"])
+            resp = requests.get(
+                f"{instance.base_url.rstrip('/')}{config['healthcheck_path']}",
+                timeout=5,
+            )
             return resp.status_code == 200
         except Exception:
             return False
@@ -435,29 +488,52 @@ class WhisperContainerManager:
     def _warm_up(self, instance, *, token: str) -> bool:
         if not instance.base_url:
             return False
+        vendor = instance.vendor or "speaches"
+        vendor_default_model = default_model_for_vendor(vendor)
         return self._warm_up_detached(
             base_url=instance.base_url,
             token=token,
-            model=(instance.default_model or DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID,
+            model=(instance.default_model or vendor_default_model).strip() or vendor_default_model,
+            vendor=vendor,
         )
 
-    def _warm_up_detached(self, *, base_url: str, token: str, model: str) -> bool:
+    def _warm_up_detached(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        model: str,
+        vendor: str,
+    ) -> bool:
+        if not base_url:
+            return False
+        config = VENDOR_CONFIGS.get(vendor)
+        if not config:
+            return False
+
         try:
-            if not base_url:
-                return False
+            if vendor == "openai_whisper":
+                # No native auth on the webservice — rely on tsushin-network
+                # isolation + 127.0.0.1 host bind. Pass language to bypass
+                # auto-detection on the silent warmup clip.
+                wav_bytes = _build_silent_wav_bytes()
+                files = {"audio_file": ("warmup.wav", wav_bytes, "audio/wav")}
+                params = {"task": "transcribe", "language": "en", "output": "json", "encode": "true"}
+                resp = requests.post(
+                    f"{base_url.rstrip('/')}{config['transcribe_path']}",
+                    files=files,
+                    params=params,
+                    timeout=120,
+                )
+                return resp.status_code == 200
+
+            # speaches / OpenAI-compatible /v1/audio/transcriptions
             wav_bytes = _build_silent_wav_bytes()
-            # BUG-703: Speaches expects `Authorization: Bearer <token>`.
-            # Basic auth + X-API-Key both return 403 from the upstream API.
-            headers = {
-                "Authorization": f"Bearer {token}",
-            }
+            headers = {"Authorization": f"Bearer {token}"}
             files = {"file": ("warmup.wav", wav_bytes, "audio/wav")}
-            data = {
-                "model": model,
-                "language": "en",
-            }
+            data = {"model": model, "language": "en"}
             resp = requests.post(
-                f"{base_url}/v1/audio/transcriptions",
+                f"{base_url.rstrip('/')}{config['transcribe_path']}",
                 headers=headers,
                 files=files,
                 data=data,

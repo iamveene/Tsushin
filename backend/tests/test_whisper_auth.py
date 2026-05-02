@@ -92,18 +92,24 @@ if "services.whisper_instance_service" not in sys.modules:
             return None
 
         @staticmethod
-        def get_tenant_default(*args, **kwargs):  # pragma: no cover - stub
-            return None, None
-
-        @staticmethod
         def update_instance(*args, **kwargs):  # pragma: no cover - stub
             return None
+
+        @staticmethod
+        def cascade_agent_skill_pins(*args, **kwargs):  # pragma: no cover - stub
+            return {"reassigned": 0, "disabled": 0, "successor_instance_id": None}
 
 
     _whisper_instance_service_stub.WhisperInstanceService = _StubWhisperInstanceService
     _whisper_instance_service_stub.DEFAULT_MODEL_ID = (
         "Systran/faster-distil-whisper-small.en"
     )
+    _whisper_instance_service_stub.DEFAULT_OPENAI_WHISPER_MODEL = "base"
+    _whisper_instance_service_stub.default_model_for_vendor = lambda v: (
+        "base" if v == "openai_whisper" else "Systran/faster-distil-whisper-small.en"
+    )
+    _whisper_instance_service_stub.SUPPORTED_VENDORS = {"speaches", "openai_whisper"}
+    _whisper_instance_service_stub.AUTO_PROVISIONABLE_VENDORS = {"speaches", "openai_whisper"}
     sys.modules["services.whisper_instance_service"] = (
         _whisper_instance_service_stub
     )
@@ -286,6 +292,7 @@ def test_warmup_call_sends_bearer_not_basic():
             base_url="http://whisper-test:8000",
             token="warmup-bearer-xyz",
             model="Systran/faster-distil-whisper-small.en",
+            vendor="speaches",
         )
 
     assert ok is True

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { api, ApiError, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { ActivityIcon, BotIcon, ClockIcon, EyeIcon, LightningIcon, RefreshIcon } from '@/components/ui/icons'
@@ -50,7 +50,9 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 }
 
 export default function ContinuousAgentsPage() {
+  const pathname = usePathname()
   const searchParams = useSearchParams()
+  const isEmbeddedInWatcher = pathname === '/'
   const [agentsPage, setAgentsPage] = useState<PageResponse<ContinuousAgent> | null>(null)
   const [runsPage, setRunsPage] = useState<PageResponse<ContinuousRun> | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
@@ -163,14 +165,16 @@ export default function ContinuousAgentsPage() {
   const systemOwnedCount = agents.filter(agent => agent.is_system_owned).length
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+      <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-8'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
         <div>
-          <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/" className="hover:text-white">Watcher</Link>
-            <span>/</span>
-            <span>Watcher Monitors</span>
-          </div>
+          {!isEmbeddedInWatcher && (
+            <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
+              <Link href="/" className="hover:text-white">Watcher</Link>
+              <span>/</span>
+              <span>Watcher Monitors</span>
+            </div>
+          )}
           <h1 className="text-3xl font-display font-bold text-white">Watcher Monitors</h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
             Always-on monitors for Studio agents, their run history, and trigger readiness from Watcher.
@@ -272,6 +276,7 @@ export default function ContinuousAgentsPage() {
                   <div className="min-w-0">
                     <Link
                       href={`/continuous-agents/${agent.id}`}
+                      prefetch={false}
                       className="block truncate text-lg font-semibold text-white hover:text-cyan-300"
                     >
                       {agent.name || agent.agent_name || `Watcher Monitor #${agent.id}`}
@@ -319,6 +324,7 @@ export default function ContinuousAgentsPage() {
                       Delete = button) — visual hierarchy now consistent. */}
                   <Link
                     href={`/continuous-agents/${agent.id}`}
+                    prefetch={false}
                     className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
                   >
                     <EyeIcon size={13} />

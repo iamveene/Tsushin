@@ -21,8 +21,14 @@ const OPTIONS: Option[] = [
   },
   {
     id: 'tts',
-    label: 'Text-to-Speech',
-    description: 'Voice synthesis for audio agents. Self-hosted Kokoro or hosted ElevenLabs.',
+    label: 'Text-to-Speech (Audio out)',
+    description: 'Voice synthesis for audio agents. Self-hosted Kokoro or hosted OpenAI / ElevenLabs / Gemini.',
+    Icon: MicrophoneIcon,
+  },
+  {
+    id: 'asr',
+    label: 'Speech-to-Text (Audio in)',
+    description: 'Voice-note transcription. Cloud OpenAI Whisper, or self-hosted Speaches / openai/whisper.',
     Icon: MicrophoneIcon,
   },
   {
@@ -60,7 +66,7 @@ export default function StepModality() {
         <p className="text-xs text-tsushin-slate">Pick the type of provider. Each path walks you through the right configuration.</p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {OPTIONS.map(opt => {
           const Icon = opt.Icon
           const active = modality === opt.id

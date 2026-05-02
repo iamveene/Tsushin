@@ -37,7 +37,7 @@ interface WizardState {
   format: string
   /** Provider-specific model id (Gemini today). */
   model?: string
-  asrMode: 'openai' | 'tenant_default' | 'instance'
+  asrMode: 'openai' | 'instance'
   asrInstanceId: number | null
   transcriptModel: string
   // Kokoro-only
@@ -62,7 +62,7 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
     speed: 1.0,
     format: 'opus',
     model: provider === 'gemini' ? GEMINI_TTS_DEFAULT_MODEL : undefined,
-    asrMode: 'tenant_default',
+    asrMode: 'openai',
     asrInstanceId: null,
     transcriptModel: 'whisper-1',
     memLimit: '1.5g',
@@ -637,11 +637,9 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
               <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
                 <div className="text-xs text-gray-500">ASR backend</div>
                 <div className="text-white capitalize">
-                  {state.asrMode === 'tenant_default'
-                    ? 'Tenant default'
-                    : state.asrMode === 'instance'
-                      ? `Local instance #${state.asrInstanceId ?? '—'}`
-                      : 'OpenAI Whisper'}
+                  {state.asrMode === 'instance'
+                    ? `Local instance #${state.asrInstanceId ?? '—'}`
+                    : 'OpenAI Whisper'}
                 </div>
               </div>
             )}

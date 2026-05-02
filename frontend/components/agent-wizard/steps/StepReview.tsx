@@ -106,11 +106,9 @@ export default function StepReview() {
                   )}
                   {(state.draft.audio.capability === 'transcript' || state.draft.audio.capability === 'hybrid') && (
                     <div className="text-xs text-gray-400">
-                      ASR: {state.draft.audio.asrMode === 'tenant_default'
-                        ? 'tenant default'
-                        : state.draft.audio.asrMode === 'instance'
-                          ? `local instance #${state.draft.audio.asrInstanceId ?? '—'}`
-                          : 'OpenAI Whisper'}
+                      ASR: {state.draft.audio.asrMode === 'instance'
+                        ? `local instance #${state.draft.audio.asrInstanceId ?? '—'}`
+                        : 'OpenAI Whisper'}
                     </div>
                   )}
                 </>

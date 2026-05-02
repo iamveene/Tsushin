@@ -57,11 +57,7 @@ class AgentCommunicationSkill(BaseSkill):
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {
-            "keywords": [],
-            "use_ai_fallback": False,
-            "ai_model": "gemini-2.5-flash-lite",
             "default_timeout": 60,
-            "default_max_depth": 3,
         }
 
     @classmethod
@@ -75,13 +71,6 @@ class AgentCommunicationSkill(BaseSkill):
                     "default": 60,
                     "minimum": 5,
                     "maximum": 120,
-                },
-                "default_max_depth": {
-                    "type": "integer",
-                    "description": "Maximum delegation chain depth",
-                    "default": 3,
-                    "minimum": 1,
-                    "maximum": 5,
                 },
             },
             "required": [],

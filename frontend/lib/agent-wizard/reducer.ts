@@ -11,7 +11,7 @@ import type { AudioProvider } from '@/components/audio-wizard/defaults'
 
 export type AgentType = 'text' | 'audio' | 'hybrid'
 export type AudioCapability = 'voice' | 'transcript' | 'hybrid'
-export type ASRUsageMode = 'openai' | 'tenant_default' | 'instance'
+export type ASRUsageMode = 'openai' | 'instance'
 export type MemoryMode = 'builtin' | 'vector' | 'semantic'
 
 export type StepKey =
@@ -113,7 +113,7 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   memLimit: '1.5g',
   autoProvision: true,
   setAsDefaultTTS: false,
-  asrMode: 'tenant_default',
+  asrMode: 'openai',
   asrInstanceId: null,
   transcriptModel: 'whisper-1',
 }

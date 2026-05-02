@@ -679,6 +679,7 @@ export default function AgentsPage() {
                     <div className="flex gap-2 ml-4 flex-shrink-0">
                       <Link
                         href={`/agents/${agent.id}`}
+                        prefetch={false}
                         className="btn-primary py-1.5 px-3 text-sm flex items-center gap-1.5"
                       >
                         <SettingsIcon size={14} /> Manage

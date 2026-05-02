@@ -50,6 +50,15 @@ WIZARD_HIDDEN_SKILLS: Set[str] = {
 # in frontend/components/audio-wizard/defaults.ts (the fallback list).
 EXPECTED_TTS_PROVIDERS: Set[str] = {"openai", "kokoro", "elevenlabs", "gemini"}
 
+# ASR provider IDs registered at startup in ASRProviderRegistry.initialize_providers().
+# If you add a provider there, add its ID here AND wire it through the wizard +
+# settings/asr UI so tenants can pick it.
+EXPECTED_ASR_PROVIDERS: Set[str] = {"openai", "speaches", "openai_whisper"}
+# Subset of ASR providers that auto-provision a tenant-scoped container — these
+# are the ones that need a vendor entry in StepVendorSelect's ASR_LOCAL list AND
+# a SUPPORTED_VENDORS entry in WhisperInstanceService.
+EXPECTED_LOCAL_ASR_VENDORS: Set[str] = {"speaches", "openai_whisper"}
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -320,7 +329,77 @@ def test_tts_providers_registered_match_frontend_fallback():
 
 
 # ---------------------------------------------------------------------------
-# Guard 3 — PREDEFINED_MODELS single source of truth
+# Guard 3 — ASR provider catalog drift
+# ---------------------------------------------------------------------------
+
+def test_asr_providers_registered_match_frontend_wizard():
+    """
+    Every ASR provider registered in ASRProviderRegistry must be reflected in:
+      - SUPPORTED_VENDORS / AUTO_PROVISIONABLE_VENDORS for local ones
+      - VENDOR_CONFIGS in WhisperContainerManager for local ones
+      - StepVendorSelect's ASR_CLOUD / ASR_LOCAL arrays
+    so the Hub > Add Provider > ASR flow stays in sync with backend dispatch.
+    """
+    from hub.providers.asr_registry import ASRProviderRegistry
+    from services.whisper_instance_service import (
+        SUPPORTED_VENDORS as WHISPER_SUPPORTED,
+        AUTO_PROVISIONABLE_VENDORS as WHISPER_AUTO,
+    )
+    from services.whisper_container_manager import VENDOR_CONFIGS as WHISPER_VENDOR_CONFIGS
+
+    ASRProviderRegistry.initialize_providers()
+    registered = set(ASRProviderRegistry._providers.keys())
+    assert registered, "ASRProviderRegistry came up empty — registration broken?"
+    assert registered == EXPECTED_ASR_PROVIDERS, (
+        f"ASR provider registry drift: registered={sorted(registered)}, "
+        f"test expects {sorted(EXPECTED_ASR_PROVIDERS)}. Update "
+        f"EXPECTED_ASR_PROVIDERS in this test (and the wizard) when "
+        f"adding/removing an ASR provider."
+    )
+
+    # Local ASR vendors must be registered as auto-provisionable + container-mgr
+    assert WHISPER_SUPPORTED == EXPECTED_LOCAL_ASR_VENDORS, (
+        f"WhisperInstanceService.SUPPORTED_VENDORS drift: {sorted(WHISPER_SUPPORTED)} "
+        f"vs expected {sorted(EXPECTED_LOCAL_ASR_VENDORS)}."
+    )
+    assert WHISPER_AUTO == EXPECTED_LOCAL_ASR_VENDORS, (
+        f"WhisperInstanceService.AUTO_PROVISIONABLE_VENDORS drift: "
+        f"{sorted(WHISPER_AUTO)} vs expected {sorted(EXPECTED_LOCAL_ASR_VENDORS)}."
+    )
+    missing_in_container_mgr = EXPECTED_LOCAL_ASR_VENDORS - set(WHISPER_VENDOR_CONFIGS.keys())
+    assert not missing_in_container_mgr, (
+        f"Local ASR vendors missing from WhisperContainerManager.VENDOR_CONFIGS: "
+        f"{sorted(missing_in_container_mgr)}."
+    )
+
+    # Frontend wizard
+    pw_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepVendorSelect.tsx"
+    assert pw_path.exists(), f"StepVendorSelect.tsx not found at {pw_path}"
+    pw_text = _read(pw_path)
+
+    asr_cloud_block = re.search(r"ASR_CLOUD[^=]*=\s*\[(.*?)\n\]", pw_text, re.DOTALL)
+    assert asr_cloud_block, "ASR_CLOUD not found in StepVendorSelect.tsx"
+    asr_cloud_ids = set(re.findall(r"id:\s*'([^']+)'", asr_cloud_block.group(1)))
+
+    asr_local_block = re.search(r"ASR_LOCAL[^=]*=\s*\[(.*?)\n\]", pw_text, re.DOTALL)
+    assert asr_local_block, "ASR_LOCAL not found in StepVendorSelect.tsx"
+    asr_local_ids = set(re.findall(r"id:\s*'([^']+)'", asr_local_block.group(1)))
+
+    # ASR cloud always = openai (the cloud Whisper API).
+    assert "openai" in asr_cloud_ids, (
+        "Hub > Add Provider > ASR > Cloud should expose 'openai' (Whisper API). "
+        "Add it back to ASR_CLOUD in StepVendorSelect.tsx."
+    )
+    missing_local = EXPECTED_LOCAL_ASR_VENDORS - asr_local_ids
+    assert not missing_local, (
+        f"Local ASR vendors registered in backend but missing from ASR_LOCAL: "
+        f"{sorted(missing_local)}. "
+        f"Add the vendor card in frontend/components/provider-wizard/steps/StepVendorSelect.tsx."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 4 — PREDEFINED_MODELS single source of truth
 # ---------------------------------------------------------------------------
 
 def test_predefined_models_single_source():

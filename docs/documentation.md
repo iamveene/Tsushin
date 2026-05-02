@@ -3153,15 +3153,24 @@ On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instance
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
 
-### 25.8 `/settings/asr`
+### 25.8 ASR — Hub > Add Provider > Speech-to-Text wizard (no global settings page)
 
-`frontend/app/settings/asr/page.tsx` is the tenant-facing ASR control plane for Track D:
+ASR (Speech-to-Text) configuration lives entirely in the Hub Provider Wizard and per-agent audio skill — there is **no global "Settings → ASR" page** and **no tenant-level default ASR**. Each agent either uses cloud OpenAI Whisper or pins a specific tenant-owned local instance.
 
-1. **Default transcription path** — `GET/PUT /api/settings/asr/default`. `null` means OpenAI Whisper; a concrete `default_asr_instance_id` means "use this tenant's local Speaches/Whisper instance by default".
-2. **Local instance provisioning** — `POST /api/asr-instances` creates a managed or external ASR instance. The page exposes instance name, default model, memory limit, and auto-provision toggle.
-3. **Container lifecycle** — per-instance `start` / `stop` / `restart` / `delete` actions call `/api/asr-instances/{id}/container/*` and `/api/asr-instances/{id}`. Managed Speaches containers mount their Hugging Face cache at `/root/.cache/huggingface`; deactivating, deleting, or discovering a stale inactive default clears `Tenant.default_asr_instance_id` back to OpenAI fallback.
+**Two registered local engines** (both share `WhisperInstance` + `WhisperContainerManager` + the per-vendor dispatch table in `VENDOR_CONFIGS`):
 
-Agent-level audio surfaces (Audio Agents Wizard, Agent Wizard, Agent Skills Manager) can then choose `openai`, `tenant_default`, or `instance` for `audio_transcript.config.asr_mode`.
+| Engine | Image | Endpoint | Auth | Default model | Notes |
+|---|---|---|---|---|---|
+| `speaches` | `ghcr.io/speaches-ai/speaches` | `POST /v1/audio/transcriptions` | Bearer (encrypted Fernet token per instance) | `Systran/faster-distil-whisper-small.en` | OpenAI-compatible. Multilingual default. ~2 GB RAM. |
+| `openai_whisper` | `onerahmet/openai-whisper-asr-webservice` | `POST /asr` (multipart `audio_file`) | None — relies on `tsushin-network` isolation + 127.0.0.1 host bind | `base` (configurable: tiny / base / small / medium / large-v3 / turbo) | Wraps the official `openai/whisper` Python package. `ASR_ENGINE=openai_whisper`. Model is pinned at boot via `ASR_MODEL` env. ~3 GB RAM for `base`. |
+
+**Hub Provider Wizard ASR modality.** `frontend/components/provider-wizard/steps/StepModality.tsx` exposes "Speech-to-Text (Audio in)" as a 4th modality. Picking ASR → Cloud surfaces only `openai` (Whisper API; reuses the saved OpenAI key) and skips credentials/test steps because there is no separate provider row to create. Picking ASR → Local surfaces both `openai_whisper` (new) and `speaches`, then routes through the standard container provision step before calling `POST /api/asr-instances` with `auto_provision=true`.
+
+**Per-agent assignment.** The `audio_transcript` skill exposes only two modes: `openai` (cloud Whisper API) and `instance` (pin a specific tenant-owned ASR instance via `asr_instance_id`). The Audio Agents Wizard and Agent Skills Manager surface this choice; both list every active tenant ASR instance so the user can pick which one this agent uses.
+
+**Deletion cascade.** When an ASR instance is deleted, every `audio_transcript` skill row pinned to it is reconciled in the same transaction: if the tenant still has another active ASR instance (lowest id wins), the pinned skills are repointed; otherwise those skills are disabled (`is_enabled=false`) so the agent stops trying to transcribe via a now-deleted endpoint. The cascade summary (`reassigned`, `disabled`, `successor_instance_id`) is returned in the DELETE response so the UI can surface a banner like *"3 agents reassigned to OpenAI Whisper QA"*.
+
+**Removed surfaces (v0.7.0 RC cleanup).** `/settings/asr`, `Tenant.default_asr_instance_id`, the legacy `tenant_default` value of `asr_mode`, and the GET/PUT `/api/settings/asr/default` routes were retired in this release. Existing skill rows still carrying `asr_mode='tenant_default'` collapse to `'openai'` at read time — no silent fan-out to a phantom tenant default.
 
 #### 20.6.2 Ollama Setup Wizard
 

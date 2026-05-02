@@ -61,10 +61,6 @@ class ASRInstanceUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-class DefaultASRUpdate(BaseModel):
-    default_asr_instance_id: Optional[int] = None
-
-
 def _to_response(instance: ASRInstance) -> Dict[str, Any]:
     return {
         "id": instance.id,
@@ -234,11 +230,20 @@ async def delete_asr_instance(
     ctx: TenantContext = Depends(require_permission("org.settings.write")),
     db: Session = Depends(get_db),
 ):
+    """Delete an ASR instance, deprovision its container, and reconcile every
+    agent_skill row pinned to it. If another active ASR instance exists for
+    the tenant, pinned skills are repointed to it; otherwise those skills
+    are disabled (``is_enabled=False``) so agents stop trying to transcribe
+    via a now-deleted endpoint. Response includes the cascade summary so the
+    UI can surface a banner like "3 agents reassigned to OpenAI Whisper QA".
+    """
     from services.whisper_container_manager import WhisperContainerManager
     from services.whisper_instance_service import WhisperInstanceService
 
     instance = WhisperInstanceService.get_instance(instance_id, ctx.tenant_id, db)
-    if instance and instance.is_auto_provisioned:
+    if not instance:
+        raise HTTPException(status_code=404, detail="ASR instance not found")
+    if instance.is_auto_provisioned:
         try:
             WhisperContainerManager().deprovision(
                 instance_id,
@@ -249,10 +254,10 @@ async def delete_asr_instance(
         except Exception as e:
             logger.warning("ASR container deprovision failed: %s", e)
 
-    success = WhisperInstanceService.delete_instance(instance_id, ctx.tenant_id, db)
-    if not success:
+    cascade = WhisperInstanceService.delete_instance(instance_id, ctx.tenant_id, db)
+    if cascade is None:
         raise HTTPException(status_code=404, detail="ASR instance not found")
-    return {"detail": "ASR instance deleted"}
+    return {"detail": "ASR instance deleted", "cascade": cascade}
 
 
 @router.post("/asr-instances/{instance_id}/container/{action}", tags=["ASR Instances"])
@@ -310,41 +315,8 @@ async def asr_container_logs(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/settings/asr/default", tags=["ASR Instances"])
-async def get_default_asr(
-    ctx: TenantContext = Depends(require_permission("org.settings.read")),
-    db: Session = Depends(get_db),
-):
-    from services.whisper_instance_service import WhisperInstanceService
-
-    default_id, instance = WhisperInstanceService.get_tenant_default(ctx.tenant_id, db)
-    return {
-        "default_asr_instance_id": default_id,
-        "provider": instance.vendor if instance else "openai",
-        "instance": _to_response(instance) if instance else None,
-    }
-
-
-@router.put("/settings/asr/default", tags=["ASR Instances"])
-async def set_default_asr(
-    data: DefaultASRUpdate,
-    ctx: TenantContext = Depends(require_permission("org.settings.write")),
-    db: Session = Depends(get_db),
-):
-    from services.whisper_instance_service import WhisperInstanceService
-
-    try:
-        new_id = WhisperInstanceService.set_tenant_default(
-            data.default_asr_instance_id,
-            ctx.tenant_id,
-            db,
-        )
-        return {"default_asr_instance_id": new_id}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to set default ASR instance: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to set default ASR instance",
-        )
+# Note: legacy GET/PUT /api/settings/asr/default routes were removed when the
+# tenant-level default ASR concept was retired. ASR instances are assigned per
+# agent via the ``audio_transcript`` skill config (asr_mode='instance' +
+# asr_instance_id). The Hub Provider Wizard creates instances; the Hub Local
+# Services panel and the Audio Agents Wizard manage assignment.

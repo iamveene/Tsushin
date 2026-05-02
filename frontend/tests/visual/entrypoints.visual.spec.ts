@@ -23,26 +23,26 @@ test.describe('v0.7.0 Phase 0 visual baselines', () => {
     await expect(page).toHaveScreenshot('auth-login.png', { fullPage: true })
   })
 
-  test('hub communication baseline', async ({ page }) => {
-    await page.goto('/hub?tab=communication')
+  test('hub channels baseline', async ({ page }) => {
+    await page.goto('/hub?tab=channels')
     await stabilize(page)
-    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
-    await expect(page).toHaveScreenshot('hub-communication.png', { fullPage: true })
+    await expect(page.getByRole('heading', { name: 'Channels' })).toBeVisible({ timeout: 15000 })
+    await expect(page).toHaveScreenshot('hub-channels.png', { fullPage: true })
   })
 
   test('hub channel wizard baseline', async ({ page }) => {
-    await page.goto('/hub?tab=communication')
+    await page.goto('/hub?tab=channels')
     await stabilize(page)
-    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Channels' })).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: /add channel/i }).first().click()
     await expect(page.getByRole('heading', { name: 'Add Channel' })).toBeVisible()
     await expect(page).toHaveScreenshot('hub-channel-wizard.png', { fullPage: true })
   })
 
   test('slack setup wizard baseline', async ({ page }) => {
-    await page.goto('/hub?tab=communication')
+    await page.goto('/hub?tab=channels')
     await stabilize(page)
-    await expect(page.getByRole('heading', { name: 'Communication' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Channels' })).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: /add channel/i }).first().click()
     await expect(page.getByRole('heading', { name: 'Add Channel' })).toBeVisible()
     const addChannelModal = page.locator('.fixed').filter({ has: page.getByRole('heading', { name: 'Add Channel' }) })

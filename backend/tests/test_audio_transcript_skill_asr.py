@@ -84,8 +84,8 @@ def _ensure_real_whisper_instance_service():
     Other tests (e.g. test_whisper_auth.py) install a lightweight stub at
     sys.modules["services.whisper_instance_service"] during pytest collection.
     These tests exercise the real `WhisperInstanceService.update_instance` and
-    `get_tenant_default` business logic, so we must drop any stub before each
-    test that depends on it.
+    `cascade_agent_skill_pins` business logic, so we must drop any stub before
+    each test that depends on it.
     """
     existing = sys.modules.get("services.whisper_instance_service")
     if existing is not None and not hasattr(existing, "__file__"):
@@ -193,6 +193,7 @@ def test_audio_transcript_prefers_asr_instance_when_configured():
                     _make_message(audio_path),
                     {
                         "tenant_id": "tenant-alpha",
+                        "asr_mode": "instance",
                         "asr_instance_id": 7,
                         "model": "whisper-1",
                         "response_mode": "conversational",
@@ -242,6 +243,7 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
                     _make_message(audio_path),
                     {
                         "tenant_id": "tenant-alpha",
+                        "asr_mode": "instance",
                         "asr_instance_id": 7,
                         "model": "whisper-1",
                         "response_mode": "transcript_only",
@@ -256,49 +258,14 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
         os.remove(audio_path)
 
 
-def test_audio_transcript_uses_tenant_default_instance_when_requested():
-    _ensure_real_whisper_instance_service()
-    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
-    os.close(fd)
-    try:
-        skill = AudioTranscriptSkill()
-        skill.set_db_session(object())
-        local_response = ASRResponse(success=True, provider="speaches", text="tenant default transcript")
-        asr_instance = SimpleNamespace(
-            id=9,
-            is_active=True,
-            vendor="speaches",
-            default_model="Systran/faster-whisper-small",
-        )
-
-        with patch(
-            "services.whisper_instance_service.WhisperInstanceService.get_tenant_default",
-            return_value=(9, asr_instance),
-        ), patch(
-            "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
-            return_value=_FakeProvider(local_response),
-        ):
-            result = asyncio.run(
-                skill.process(
-                    _make_message(audio_path),
-                    {
-                        "tenant_id": "tenant-alpha",
-                        "asr_mode": "tenant_default",
-                        "model": "whisper-1",
-                        "response_mode": "conversational",
-                    },
-                )
-            )
-
-        assert result.success is True
-        assert "tenant default transcript" in result.output
-        assert result.metadata["provider"] == "speaches"
-        assert result.metadata["model"] == "Systran/faster-whisper-small"
-    finally:
-        os.remove(audio_path)
+# NOTE: tests covering the retired tenant_default ASR mode were removed when
+# the tenant-level ASR default concept was rolled back. The replacement
+# behavior — collapsing stale ``asr_mode='tenant_default'`` rows to OpenAI —
+# is exercised by the AgentSkillsManager normalizer + the skill code path
+# below (``test_audio_transcript_openai_mode_uses_cloud``).
 
 
-def test_audio_transcript_openai_mode_skips_tenant_default_lookup():
+def test_audio_transcript_openai_mode_uses_cloud():
     _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
@@ -308,8 +275,6 @@ def test_audio_transcript_openai_mode_skips_tenant_default_lookup():
         openai_response = ASRResponse(success=True, provider="openai", text="direct openai transcript")
 
         with patch(
-            "services.whisper_instance_service.WhisperInstanceService.get_tenant_default",
-        ) as default_lookup, patch(
             "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider",
             return_value=_FakeProvider(openai_response),
         ), patch(
@@ -328,56 +293,8 @@ def test_audio_transcript_openai_mode_skips_tenant_default_lookup():
                 )
             )
 
-        default_lookup.assert_not_called()
         assert result.success is True
         assert "direct openai transcript" in result.output
         assert result.metadata["provider"] == "openai"
     finally:
         os.remove(audio_path)
-
-
-def test_whisper_instance_service_clears_default_when_instance_deactivated():
-    _ensure_real_whisper_instance_service()
-    from services.whisper_instance_service import WhisperInstanceService
-
-    tenant = SimpleNamespace(id="tenant-alpha", default_asr_instance_id=9, updated_at=None)
-    instance = SimpleNamespace(
-        id=9,
-        tenant_id="tenant-alpha",
-        is_active=True,
-        updated_at=None,
-    )
-    db = _FakeWhisperDB(tenant=tenant, instance=instance)
-
-    result = WhisperInstanceService.update_instance(
-        9,
-        "tenant-alpha",
-        db,
-        is_active=False,
-    )
-
-    assert result is instance
-    assert instance.is_active is False
-    assert tenant.default_asr_instance_id is None
-    assert tenant.updated_at is not None
-    assert db.commits == 1
-    assert db.refreshed == [instance]
-
-
-def test_whisper_instance_service_clears_stale_inactive_default_on_read():
-    _ensure_real_whisper_instance_service()
-    from services.whisper_instance_service import WhisperInstanceService
-
-    tenant = SimpleNamespace(id="tenant-alpha", default_asr_instance_id=9, updated_at=None)
-    db = _FakeWhisperDB(tenant=tenant, instance=None)
-
-    default_id, instance = WhisperInstanceService.get_tenant_default(
-        "tenant-alpha",
-        db,
-    )
-
-    assert default_id is None
-    assert instance is None
-    assert tenant.default_asr_instance_id is None
-    assert tenant.updated_at is not None
-    assert db.commits == 1
