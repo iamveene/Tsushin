@@ -174,12 +174,11 @@ class WhisperInstanceService:
             if value is not None and hasattr(instance, key):
                 setattr(instance, key, value)
         instance.updated_at = datetime.utcnow()
+        # When an instance is deactivated via update (not via delete), the same
+        # cascade applies: pinned agent skills must be repointed at a successor
+        # or disabled, otherwise they silently break.
         if instance.is_active is False:
-            WhisperInstanceService._clear_tenant_default_if_matches(
-                instance_id,
-                tenant_id,
-                db,
-            )
+            WhisperInstanceService.cascade_agent_skill_pins(instance_id, tenant_id, db)
         db.commit()
         db.refresh(instance)
         return instance
