@@ -234,6 +234,20 @@ class AIClient:
             # Load from Config table if available, otherwise from env var
             # BUG-663: resolve host.docker.internal with a Linux-safe fallback
             # to the Docker default-bridge gateway (172.17.0.1).
+            #
+            # v0.7.0 telemetry: this branch only runs when an Ollama agent has
+            # no provider_instance_id AND no active default Ollama instance was
+            # found by the safety net at line ~65. The boot-time
+            # bootstrap_orphan_vendor_agents() should have materialised one for
+            # every tenant with Ollama agents, so reaching this branch in
+            # production almost always indicates a tenant configured after boot
+            # without going through Hub. Logging at WARNING so it shows up in
+            # ops dashboards and we can decide when to remove the fallback.
+            self.logger.warning(
+                "AIClient ollama legacy fallback in use (tenant=%s, no active "
+                "provider_instance found). Configure via Hub → LLM Providers.",
+                tenant_id,
+            )
             from services.provider_instance_service import _resolve_ollama_host
             ollama_default_url = f"http://{_resolve_ollama_host()}:11434"
             ollama_base_url = os.getenv("OLLAMA_BASE_URL", ollama_default_url)

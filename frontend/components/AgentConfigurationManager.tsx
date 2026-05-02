@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { api, Agent, TonePreset, Persona, ProviderInstance, VectorStoreInstance, VENDOR_LABELS } from '@/lib/client'
+import { useEffect, useState } from 'react'
+import { api, Agent, TonePreset, Persona, VectorStoreInstance } from '@/lib/client'
+import ProviderInstancePicker from '@/components/providers/ProviderInstancePicker'
 import {
   InfoIcon, TargetIcon, TheaterIcon, BotIcon, KeyIcon, LightbulbIcon,
-  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon, DatabaseIcon
+  SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, DatabaseIcon
 } from '@/components/ui/icons'
 
 interface Props {
@@ -27,8 +28,6 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [modelProvider, setModelProvider] = useState('gemini')
   const [modelName, setModelName] = useState('gemini-2.5-pro')
   const [providerInstanceId, setProviderInstanceId] = useState<number | null>(null)
-  const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
-  const [allInstances, setAllInstances] = useState<ProviderInstance[]>([])
   const [isActive, setIsActive] = useState(true)
   const [isDefault, setIsDefault] = useState(false)
 
@@ -46,20 +45,17 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   // Input helpers for triggers
   const [groupFilterInput, setGroupFilterInput] = useState('')
   const [numberFilterInput, setNumberFilterInput] = useState('')
-  const [ollamaModels, setOllamaModels] = useState<string[]>([])
 
   useEffect(() => {
     loadData()
-    fetchOllamaModels()
   }, [agentId])
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const [agentData, personasData, allInstancesData, vectorStoresData, defaultVsData] = await Promise.all([
+      const [agentData, personasData, vectorStoresData, defaultVsData] = await Promise.all([
         api.getAgent(agentId),
         api.getPersonas(true), // Only active personas
-        api.getProviderInstances(),  // All configured provider instances (no vendor filter)
         api.getVectorStoreInstances().catch(() => []),
         api.getDefaultVectorStore().catch(() => ({ default_vector_store_instance_id: null, instance: null })),
       ])
@@ -84,10 +80,6 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       setProviderInstanceId(agentData.provider_instance_id || null)
       setIsActive(agentData.is_active)
       setIsDefault(agentData.is_default)
-
-      // Store all instances and filter for the agent's current vendor
-      setAllInstances(allInstancesData)
-      setProviderInstances(allInstancesData.filter(i => i.vendor === agentData.model_provider))
 
       // Vector store configuration
       setVectorStoreInstances(vectorStoresData)
@@ -197,46 +189,6 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     setTriggerNumberFilters(triggerNumberFilters.filter(f => f !== filter))
   }
 
-  const fetchOllamaModels = async () => {
-    try {
-      const data = await api.getOllamaHealth()
-      if (data.available && data.models) {
-        setOllamaModels(data.models.map((m) => m.name))
-      }
-    } catch {
-      // Ollama not available
-    }
-  }
-
-  // Vendors that have at least one configured instance, plus always include the current agent's vendor
-  const availableVendors = useMemo(() => {
-    const configured = [...new Set(allInstances.map(i => i.vendor))]
-    // Always include the agent's current vendor (even if it has no instances, to avoid breaking existing agents)
-    if (modelProvider && !configured.includes(modelProvider)) {
-      configured.push(modelProvider)
-    }
-    return configured.map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
-  }, [allInstances, modelProvider])
-
-  const getAvailableModels = () => {
-    // If an instance is selected and it has models, use those
-    if (providerInstanceId) {
-      const instance = providerInstances.find(i => i.id === providerInstanceId)
-      if (instance && instance.available_models.length > 0) {
-        return instance.available_models
-      }
-    }
-    // For Ollama, use dynamically fetched models
-    if (modelProvider === 'ollama') {
-      return ollamaModels
-    }
-    // Use all models from all configured instances for this vendor (deduplicated)
-    const vendorModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
-    if (vendorModels.length > 0) return vendorModels
-    // Last resort: keep current model so the dropdown is never empty
-    return modelName ? [modelName] : []
-  }
-
   if (loading) {
     return <div className="p-8 text-center">Loading configuration...</div>
   }
@@ -341,99 +293,24 @@ export default function AgentConfigurationManager({ agentId }: Props) {
         </div>
       </div>
 
-      {/* AI Model Selection */}
+      {/* AI Model Selection — driven by /api/llm-providers/catalog (v0.7.0).
+          Same component is reused by the agent creation wizard so the two
+          surfaces never drift; supports inline provider creation via
+          ProviderInstanceModal so the user never has to leave Studio. */}
       <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><BotIcon size={20} /> AI Model</h3>
-
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Provider</label>
-              <select
-                value={modelProvider}
-                onChange={(e) => {
-                  const newVendor = e.target.value
-                  setModelProvider(newVendor)
-                  setProviderInstanceId(null)
-                  // Filter from already-loaded allInstances — no extra API call needed
-                  const vendorInsts = allInstances.filter(i => i.vendor === newVendor)
-                  setProviderInstances(vendorInsts)
-                  if (newVendor === 'ollama') {
-                    setModelName(ollamaModels[0] || '')
-                  } else {
-                    const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
-                    if (defaultInst && defaultInst.available_models.length > 0) {
-                      setModelName(defaultInst.available_models[0])
-                      setProviderInstanceId(defaultInst.id)
-                    }
-                  }
-                }}
-                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-              >
-                {availableVendors.map((vendor) => (
-                  <option key={vendor.value} value={vendor.value}>
-                    {vendor.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Model</label>
-              <select
-                value={modelName}
-                onChange={(e) => setModelName(e.target.value)}
-                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-              >
-                {getAvailableModels().map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Provider Instance (Optional) */}
-          <div>
-            <label className="block text-sm font-medium mb-2 flex items-center gap-2">
-              <LinkIcon size={14} />
-              Provider Instance
-              <span className="text-xs text-tsushin-slate font-normal">(Optional)</span>
-            </label>
-            {providerInstances.length > 0 ? (
-              <select
-                value={providerInstanceId || ''}
-                onChange={(e) => {
-                  const id = e.target.value ? parseInt(e.target.value) : null
-                  setProviderInstanceId(id)
-                  // If instance has models, auto-select the first one
-                  if (id) {
-                    const inst = providerInstances.find(i => i.id === id)
-                    if (inst && inst.available_models.length > 0) {
-                      setModelName(inst.available_models[0])
-                    }
-                  }
-                }}
-                className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-              >
-                <option value="">No instance (use default)</option>
-                {providerInstances.map((inst) => (
-                  <option key={inst.id} value={inst.id}>
-                    {inst.instance_name}
-                    {inst.is_default ? ' (default)' : ''}
-                    {inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-xs text-tsushin-slate">
-                No instances configured for {VENDOR_LABELS[modelProvider] || modelProvider}.
-                <a href="/hub" className="text-teal-400 hover:underline ml-1">Configure in Hub &gt; AI Providers</a>
-              </div>
-            )}
-          </div>
-        </div>
+        <ProviderInstancePicker
+          value={{
+            vendor: modelProvider,
+            instance_id: providerInstanceId,
+            model_name: modelName,
+          }}
+          onChange={(next) => {
+            setModelProvider(next.vendor)
+            setProviderInstanceId(next.instance_id)
+            setModelName(next.model_name)
+          }}
+        />
       </div>
 
       {/* Vector Store */}

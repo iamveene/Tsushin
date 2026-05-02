@@ -281,6 +281,32 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Ollama startup reconcile failed: {e}")
 
+    # v0.7.0: Bootstrap orphan vendor agents.
+    # Materialise an active provider_instance for every (tenant, vendor) pair
+    # that has agents but zero active instances, and relink agents whose
+    # provider_instance_id was nulled by a stale soft-delete. After this runs,
+    # the Hub catalogue and the runtime AIClient see the same data — closing
+    # the "ghost vendor" inconsistency where an agent worked at runtime via
+    # the legacy hardcoded Ollama URL but the UI showed nothing.
+    try:
+        from services.provider_instance_service import ProviderInstanceService
+        from sqlalchemy.orm import sessionmaker
+        BootSession = sessionmaker(bind=engine)
+        boot_db = BootSession()
+        try:
+            stats = ProviderInstanceService.bootstrap_orphan_vendor_agents(boot_db)
+            if stats["instances_created"] or stats["agents_relinked"]:
+                logger.info(
+                    "bootstrap_orphan_vendor_agents: tenants=%s instances_created=%s agents_relinked=%s",
+                    stats["tenants_processed"],
+                    stats["instances_created"],
+                    stats["agents_relinked"],
+                )
+        finally:
+            boot_db.close()
+    except Exception as e:
+        logger.warning(f"bootstrap_orphan_vendor_agents failed: {e}")
+
     async def _prewarm_embedding_models() -> None:
         """Warm the default embedder off the request path."""
         try:

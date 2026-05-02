@@ -181,6 +181,69 @@ class VendorInfoResponse(BaseModel):
     tenant_has_configured: bool = False
 
 
+# v0.7.0 — LLM Provider catalog & cascade-delete schemas
+
+class CatalogInstance(BaseModel):
+    id: int
+    instance_name: str
+    base_url: Optional[str] = None
+    is_default: bool = False
+    available_models: List[str] = []
+    health_status: str = "unknown"
+    health_status_reason: Optional[str] = None
+    is_auto_provisioned: bool = False
+    container_status: Optional[str] = None
+
+
+class CatalogVendor(BaseModel):
+    """One vendor row in GET /api/llm-providers/catalog.
+
+    Single source of truth consumed by the agent wizard, the Studio agent
+    edit modal, the playground config panel, and the Hub LLM Providers tab.
+    """
+    vendor: str
+    display_name: str
+    default_base_url: Optional[str] = None
+    supports_discovery: bool = False
+    creatable: bool = True
+    instances: List[CatalogInstance] = []
+
+
+class InstanceUsageAgent(BaseModel):
+    id: int
+    name: str
+    model_provider: str
+    model_name: str
+    is_active: bool
+
+
+class InstanceUsageResponse(BaseModel):
+    instance_id: int
+    vendor: str
+    instance_name: str
+    agents: List[InstanceUsageAgent] = []
+    dependent_count: int = 0
+
+
+class CascadeDeleteRequest(BaseModel):
+    """Body for DELETE /api/provider-instances/{id} when there are dependents.
+
+    Exactly one of ``reassign_to_instance_id`` or ``unassign`` must be provided
+    when ``dependent_count > 0``. The empty body is accepted only when there
+    are zero dependents.
+    """
+    reassign_to_instance_id: Optional[int] = None
+    unassign: Optional[bool] = False
+
+
+class CascadeDeleteResponse(BaseModel):
+    instance_name: str
+    deleted: bool
+    reassigned_count: int = 0
+    reassigned_to: Optional[Dict[str, Any]] = None
+    unassigned: bool = False
+
+
 # ==================== Helpers ====================
 
 VALID_VENDORS = {"openai", "anthropic", "gemini", "groq", "grok", "deepseek", "openrouter", "ollama", "vertex_ai", "custom"}
@@ -599,6 +662,32 @@ def list_provider_vendors(
             tenant_has_configured=vendor_id in configured_vendors,
         ))
     return out
+
+
+@router.get("/llm-providers/catalog", response_model=List[CatalogVendor])
+def get_llm_providers_catalog(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    v0.7.0: Single source of truth for "what providers can an agent use".
+
+    Returns one entry per supported vendor with:
+      - display name + default base URL + discovery support flag
+      - the tenant's currently active provider instances (with health and models)
+      - a ``creatable`` flag (true today for all vendors) so the UI can offer
+        an inline-create CTA when a vendor has zero instances.
+
+    Consumed by: agent creation wizard (StepBasics), Studio agent edit modal
+    (AgentConfigurationManager), Playground config panel, and the Hub LLM
+    Providers tab. They previously each fetched ``/api/provider-instances``
+    separately and applied per-surface vendor heuristics, which produced the
+    "ghost vendor" inconsistency this endpoint eliminates.
+    """
+    from services.provider_instance_service import ProviderInstanceService
+    catalog = ProviderInstanceService.get_catalog(ctx.tenant_id, db)
+    return catalog
 
 
 @router.post("/provider-instances/discover-models-raw")
@@ -1022,15 +1111,47 @@ def update_provider_instance(
     return _to_response(instance, db)
 
 
-@router.delete("/provider-instances/{instance_id}")
+@router.get("/provider-instances/{instance_id}/usage", response_model=InstanceUsageResponse)
+def get_provider_instance_usage(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """v0.7.0: dependent-agent dry-run for the cascade-aware delete UI.
+
+    Returns the list of agents currently bound to this instance so the
+    operator can pick a reassignment target (or accept unassigning) before
+    confirming the delete. Tenant-scoped.
+    """
+    instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+    if not ctx.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+
+    from services.provider_instance_service import ProviderInstanceService
+    usage = ProviderInstanceService.get_instance_usage(instance_id, instance.tenant_id, db)
+    return InstanceUsageResponse(**usage)
+
+
+@router.delete("/provider-instances/{instance_id}", response_model=CascadeDeleteResponse)
 def delete_provider_instance(
     instance_id: int,
     request: Request,
+    body: Optional[CascadeDeleteRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """Soft-delete a provider instance (set is_active=False)."""
+    """Soft-delete a provider instance.
+
+    v0.7.0 cascade-aware behavior:
+      - If the instance has no dependent agents, deletes immediately (no body).
+      - If it has dependents, the body MUST set either ``reassign_to_instance_id``
+        or ``unassign=true``. Without one of these the request fails with 409
+        and the UI is expected to show the pre-delete reassign modal.
+    """
     instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="Provider instance not found")
@@ -1056,12 +1177,55 @@ def delete_provider_instance(
                 detail=f"Failed to deprovision Ollama container before delete: {e}",
             )
 
-    instance.is_active = False
-    instance.updated_at = datetime.utcnow()
-    db.commit()
-    logger.info(f"Soft-deleted provider instance {instance_id} for tenant {instance.tenant_id}")
+    body = body or CascadeDeleteRequest()
+    from services.provider_instance_service import ProviderInstanceService
+    try:
+        result = ProviderInstanceService.delete_instance_with_reassign(
+            instance_id,
+            instance.tenant_id,
+            db,
+            reassign_to_instance_id=body.reassign_to_instance_id,
+            unassign=bool(body.unassign),
+        )
+    except ValueError as ve:
+        code = str(ve)
+        if code == "dependents_require_decision":
+            usage = ProviderInstanceService.get_instance_usage(
+                instance_id, instance.tenant_id, db
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "dependents_require_decision",
+                    "message": (
+                        f"This instance is used by {usage['dependent_count']} agent(s). "
+                        "Pass reassign_to_instance_id or unassign=true to confirm."
+                    ),
+                    "usage": usage,
+                },
+            )
+        if code == "reassign_target_invalid":
+            raise HTTPException(
+                status_code=400,
+                detail="reassign_to_instance_id must be an active provider instance in the same tenant.",
+            )
+        if code == "reassign_target_is_self":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot reassign dependents to the instance being deleted.",
+            )
+        if code == "instance_not_found":
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        raise
 
-    # BUG-709: emit tenant audit event (no api_key in payload)
+    logger.info(
+        "Soft-deleted provider instance %s for tenant %s — reassigned=%s to=%s unassigned=%s",
+        instance_id, instance.tenant_id,
+        result.get("reassigned_count"),
+        (result.get("reassigned_to") or {}).get("id"),
+        result.get("unassigned"),
+    )
+
     log_tenant_event(
         db,
         instance.tenant_id,
@@ -1069,11 +1233,16 @@ def delete_provider_instance(
         _PROVIDER_AUDIT_DELETE,
         "provider_instance",
         str(instance.id),
-        _provider_audit_payload(instance),
+        {
+            **_provider_audit_payload(instance),
+            "reassigned_count": result.get("reassigned_count", 0),
+            "reassigned_to_instance_id": (result.get("reassigned_to") or {}).get("id"),
+            "unassigned": bool(result.get("unassigned")),
+        },
         request,
     )
 
-    return {"message": f"Provider instance '{instance.instance_name}' deleted successfully"}
+    return CascadeDeleteResponse(**result)
 
 
 @router.post("/provider-instances/test-connection", response_model=TestConnectionResponse)
