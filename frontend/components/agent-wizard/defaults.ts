@@ -147,7 +147,7 @@ export const BUILT_IN_SKILLS: BuiltInSkillDef[] = [
   {
     type: 'image',
     label: 'Image Generation',
-    description: 'Generate and edit images with Gemini Nano Banana / Pro.',
+    description: 'Generate and edit images with Gemini image models, Imagen 4, and OpenAI GPT Image 2.',
     appliesTo: ['text', 'audio', 'hybrid'],
   },
   {

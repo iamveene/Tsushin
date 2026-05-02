@@ -78,7 +78,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   image: {
     displayName: 'Image Generation',
-    description: 'Generate and edit images using AI models.',
+    description: 'Generate and edit images using Gemini, Imagen, and OpenAI GPT Image models.',
     category: 'audio_media',
     configType: 'standard',
     icon: RocketIcon,

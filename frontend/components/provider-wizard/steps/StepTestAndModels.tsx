@@ -28,6 +28,7 @@ export default function StepTestAndModels() {
   // either, so this step has nothing meaningful to ask. Auto-complete and
   // hide the LLM-shaped UI when modality === 'tts'.
   const isTTS = modality === 'tts'
+  const isImage = modality === 'image'
 
   // The backend `ProviderInstanceCreate` schema requires
   // `available_models.length >= 1` — POSTing with an empty list returns 400.
@@ -40,12 +41,17 @@ export default function StepTestAndModels() {
     markStepComplete('testAndModels', isTTS || draft.available_models.length > 0)
   }, [markStepComplete, isTTS, draft.available_models.length])
 
-  // Load curated model suggestions once.
+  // Load curated model suggestions once. Image setup intentionally uses
+  // provider-specific image-only buckets so image model IDs appear there
+  // without polluting normal LLM model suggestions.
   useEffect(() => {
+    const predefinedKey = isImage && vendor
+      ? `${vendor}_image`
+      : (vendor || '')
     api.getPredefinedModels()
-      .then(m => setPredefined(m?.[vendor || ''] || []))
+      .then(m => setPredefined(m?.[predefinedKey] || []))
       .catch(() => {})
-  }, [vendor])
+  }, [vendor, isImage])
 
   const runTest = async () => {
     if (!vendor) return
@@ -57,7 +63,7 @@ export default function StepTestAndModels() {
         api_key: vendor === 'vertex_ai'
           ? (draft.extra_config?.private_key || undefined)
           : (draft.api_key || undefined),
-        model: draft.available_models[0],
+        model: isImage ? undefined : draft.available_models[0],
         extra_config: vendor === 'vertex_ai'
           ? {
               project_id: draft.extra_config?.project_id,
@@ -68,8 +74,13 @@ export default function StepTestAndModels() {
       }
       const result = await api.testProviderConnectionRaw(body)
       patchDraft({ test_result: result })
-    } catch (err: any) {
-      patchDraft({ test_result: { success: false, message: err?.message || 'Test failed' } })
+    } catch (err: unknown) {
+      patchDraft({
+        test_result: {
+          success: false,
+          message: err instanceof Error ? err.message : 'Test failed',
+        },
+      })
     } finally {
       setTesting(false)
     }
@@ -106,14 +117,19 @@ export default function StepTestAndModels() {
       : !!draft.api_key
   )
 
-  const canDiscover = vendor && ['gemini', 'openai', 'groq', 'grok', 'deepseek', 'openrouter'].includes(vendor) && !!draft.api_key
+  const canDiscover = !isImage && vendor && ['gemini', 'openai', 'groq', 'grok', 'deepseek', 'openrouter'].includes(vendor) && !!draft.api_key
+  const imageModelExample = vendor === 'openai' ? 'gpt-image-2' : 'imagen-4.0-generate-001'
 
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-white mb-1">Test & choose models</h3>
+        <h3 className="text-base font-semibold text-white mb-1">
+          {isImage ? 'Test & choose image models' : 'Test & choose models'}
+        </h3>
         <p className="text-xs text-tsushin-slate">
-          Optional but recommended — run a connection test and pick which models this instance will expose to your agents.
+          {isImage
+            ? 'Run a connection test and pick which image models this setup should expose.'
+            : 'Optional but recommended — run a connection test and pick which models this instance will expose to your agents.'}
         </p>
       </div>
 
@@ -157,7 +173,7 @@ export default function StepTestAndModels() {
         </div>
       )}
 
-      {/* Models (LLM only) */}
+      {/* Models (LLM/Image only) */}
       {!isTTS && (
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -180,7 +196,9 @@ export default function StepTestAndModels() {
             onChange={e => setModelInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addModel() } }}
             list="wiz-models-suggestions"
-            placeholder={predefined.length > 0 ? 'Pick a suggestion or type a custom ID...' : 'Model name (e.g. gpt-4o)'}
+            placeholder={predefined.length > 0
+              ? (isImage ? 'Pick an image model suggestion or type a custom ID...' : 'Pick a suggestion or type a custom ID...')
+              : (isImage ? `Image model name (e.g. ${imageModelExample})` : 'Model name (e.g. gpt-4o)')}
             className="flex-1 px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface placeholder:text-tsushin-slate/50 text-sm"
           />
           <datalist id="wiz-models-suggestions">
@@ -209,7 +227,7 @@ export default function StepTestAndModels() {
           </div>
         ) : (
           <p className="text-[11px] text-tsushin-vermilion">
-            At least one model is required before you can create the instance.
+            At least one {isImage ? 'image model' : 'model'} is required before you can create the instance.
             {canDiscover ? ' Use Auto-detect above, or type a model name and click Add.' : ' Pick a suggestion or type a custom model ID, then click Add.'}
           </p>
         )}

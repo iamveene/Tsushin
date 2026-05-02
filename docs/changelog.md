@@ -4470,6 +4470,19 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - **(BUG-201) Installer leaves frontend unhealthy — docker-compose v1 health dependency race**: Installer now waits for backend to become healthy before starting the frontend container, working around docker-compose v1.29.2 `service_healthy` condition race on Ubuntu 24.04.
 - **(BUG-202) Browser API calls use relative paths incompatible with HTTP-only installs**: Fixed `client.ts` API URL resolution so installations without Caddy proxy (SSL disabled) work correctly. Relative `/api/*` paths now resolve against the correct origin.
 
+### Gemini API Imagen 4 image generation (2026-05-02)
+
+- Added direct Gemini API support for Imagen 4 image generation models: `imagen-4.0-generate-001`, `imagen-4.0-ultra-generate-001`, and `imagen-4.0-fast-generate-001`. Imagen 4 requests use the Gemini API `models.generate_images` path, while existing Gemini image models keep the `generate_content` image-output path.
+- Set `imagen-4.0-generate-001` as the Image Skill default and made Imagen 4 edit attempts fail clearly because Gemini API Imagen 4 is text-to-image only.
+- Added an image-only `gemini_image` model suggestion bucket for the Provider Wizard so Imagen 4 appears in Image Generation setup without polluting normal Gemini LLM model suggestions or live Gemini LLM discovery results.
+- Added pricing rows for Imagen 4 Fast, Standard, and Ultra at `$0.02`, `$0.04`, and `$0.06` per generated image using Tsushin's existing image-operation pricing convention.
+
+### OpenAI GPT Image 2 image generation (2026-05-02)
+
+- Added Image Skill support for OpenAI `gpt-image-2` using the OpenAI Images API for both generation (`client.images.generate`) and edits (`client.images.edit`).
+- Added an image-only `openai_image` model suggestion bucket for the Provider Wizard so `gpt-image-2` appears in Image Generation setup without polluting normal OpenAI LLM model suggestions or live OpenAI LLM discovery results.
+- Added pricing for `gpt-image-2` using Tsushin's existing prompt/completion pricing shape: `$5/1M` prompt tokens and `$30/1M` completion tokens. OpenAI's separate `$8/1M` image-input token price is documented as a known approximation gap in the current two-field schema.
+
 ---
 
 ## [0.5.0-beta] - 2026-02-01

@@ -131,11 +131,19 @@ MODEL_PRICING = {
     "gemini-2.0-flash": {"prompt": 0.10, "completion": 0.40},
     "gemini-2.0-flash-exp": {"prompt": 0.0, "completion": 0.0},  # Free tier (legacy)
 
-    # Google Gemini Image Generation (Nano Banana)
-    # Pricing: ~$0.02-0.04 per image (represented as per-operation cost)
+    # Google Gemini / Imagen Image Generation
+    # Pricing: per image (represented as per-operation cost)
     "gemini-2.5-flash-image": {"prompt": 20.0, "completion": 0.0},  # Nano Banana - $0.02/image
     "gemini-3.1-flash-image-preview": {"prompt": 20.0, "completion": 0.0},  # TODO confirm — assume parity with 2.5 flash-image for now
     "gemini-3-pro-image-preview": {"prompt": 40.0, "completion": 0.0},  # Nano Banana Pro - $0.04/image
+    "imagen-4.0-fast-generate-001": {"prompt": 20.0, "completion": 0.0},  # Imagen 4 Fast - $0.02/image
+    "imagen-4.0-generate-001": {"prompt": 40.0, "completion": 0.0},  # Imagen 4 Standard - $0.04/image
+    "imagen-4.0-ultra-generate-001": {"prompt": 60.0, "completion": 0.0},  # Imagen 4 Ultra - $0.06/image
+
+    # OpenAI GPT Image models
+    # Pricing: text input $5/1M tokens, image output $30/1M tokens.
+    # Image input tokens ($8/1M) are not modeled separately by this two-field schema.
+    "gpt-image-2": {"prompt": 5.0, "completion": 30.0},
 
     # Google Gemini 1.5 series (legacy)
     "gemini-1.5-pro": {"prompt": 1.25, "completion": 5.0},

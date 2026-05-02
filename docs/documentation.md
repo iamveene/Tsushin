@@ -274,7 +274,7 @@ Phase 8 finishes the v0.7.0 trigger/control-plane UX pass and keeps user guidanc
 
 After v0.7.0 shipped, an audit on the running instance surfaced structural UX issues — monitoring pages leaking into Hub, hidden Continuous Agents, per-trigger credentials still in the schema, and trigger-owned scheduling that duplicated `FlowDefinition.execution_method='scheduled'`. The user's complaint document is `.private/070fix.md`; the executor's working plan is `.private/070fix_plan.md`. Fourteen commits on `release/0.7.0` deliver the fix.
 
-* **Hub/Watcher restructure** ([`8dc1880`](https://github.com/iamveene/Tsushin/commit/8dc1880)) — Wake Events moved under Watcher at `/wake-events`; the old Hub route remains only as a compatibility redirect. Watcher landing links Wake Events + Continuous Agents. Hub is split into **Channels** (WhatsApp/Telegram/Slack/Discord/Playground) and **Triggers** (Email/Webhook/Jira/GitHub); legacy communication-tab URLs coerce to Channels.
+* **Hub/Watcher restructure** ([`8dc1880`](https://github.com/iamveene/Tsushin/commit/8dc1880)) — Wake Events moved under Watcher at `/wake-events`; the old Hub route remains only as a compatibility redirect. Watcher landing now keeps Wake Events + Continuous Agents in the same in-page tab strip, while the standalone URLs remain available for deep links. Hub is split into **Channels** (WhatsApp/Telegram/Slack/Discord/Playground) and **Triggers** (Email/Webhook/Jira/GitHub); legacy communication-tab URLs coerce to Channels.
 * **Trigger-owned scheduling removed entirely** ([`b587755`](https://github.com/iamveene/Tsushin/commit/b587755)) — alembic 0071 drops the old scheduling table. Routes, runtime channel module, frontend pages, visual picker, tests — all deleted. Cron utilities preserved as `backend/services/cron_preview_service.py` for Flow scheduled-kind reuse. `TriggerKind` reduced to `email | webhook | jira | github`.
 * **GitHub trigger linkage forced** ([`49ee2f3`](https://github.com/iamveene/Tsushin/commit/49ee2f3)) — alembic 0072 adds `github_channel_instance.github_integration_id` (NOT NULL, ON DELETE RESTRICT) and drops `auth_method`/`installation_id`/`pat_token_encrypted`/`pat_token_preview`. The `/test-connection` endpoints (unsaved + saved) are deleted; connectivity is verified at integration creation. The wizard requires a Hub GitHub integration before the user can proceed.
 * **Jira tightened + legacy notification card retired** ([`0b8f92c`](https://github.com/iamveene/Tsushin/commit/0b8f92c)) — `JiraTriggerCreate.jira_integration_id` is required; `auth_email`/`api_token`/`site_url` no longer accepted on the API (Site URL is read from the linked integration). Legacy notification fields are stripped from `JiraTriggerRead` and `EmailTriggerRead`; output config now lives on the auto-flow's Notification node.
@@ -1117,7 +1117,7 @@ Source: `backend/agent/skills/base.py:204-227`. Individual skills override to ad
 
 Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag, a per-agent `execution_mode` override, and a JSON `config` blob validated against the skill's `get_config_schema()`.
 
-The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`.
+The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`. The visible skill cards use curated, user-facing summaries instead of dumping raw JSON defaults, so implementation-only fields such as fallback classifier models, empty keyword arrays, and nested settings do not appear as misleading operational configuration.
 
 `image_analysis` is media-triggered rather than tool-triggered. It activates on inbound image attachments, uses Gemini multimodal models to analyze the image, and returns a direct response with `skip_ai=true`. If the image caption looks like an edit request ("remove background", "change this", etc.), the skill intentionally defers so the existing `image` editing skill can handle the request instead.
 
@@ -2786,15 +2786,23 @@ Google's Gemini 3.x preview line is first-class across every picker and pricing 
 | `gemini-3.1-flash-tts-preview` | TTS (preview, default) | 8,192 / 16,384 | Default Gemini TTS — Balanced tier. See §20.6. |
 | `gemini-2.5-flash-tts-preview` | TTS (preview) | 8,192 / 16,384 | Fast tier. See §20.6. |
 | `gemini-2.5-pro-tts-preview` | TTS (preview) | 8,192 / 16,384 | Quality tier. See §20.6. |
-| `gemini-2.5-flash-image` | Image generation (default) | — | "Nano Banana (Fast)". Default in `ImageSkill.SUPPORTED_MODELS`. |
-| `gemini-3.1-flash-image-preview` | Image generation | — | Available in `ImageSkill.SUPPORTED_MODELS` (`backend/agent/skills/image_skill.py`). |
-| `gemini-3-pro-image-preview` | Image generation (premium) | — | "Nano Banana Pro" — quality tier. |
+| `gemini-2.5-flash-image` | Image generation/editing | — | "Nano Banana (Fast)"; uses Gemini `generate_content` image output. |
+| `gemini-3.1-flash-image-preview` | Image generation/editing | — | Available in `ImageSkill.SUPPORTED_MODELS` (`backend/agent/skills/image_skill.py`); uses Gemini `generate_content` image output. |
+| `gemini-3-pro-image-preview` | Image generation/editing (premium) | — | "Nano Banana Pro" — quality tier; uses Gemini `generate_content` image output. |
+| `imagen-4.0-fast-generate-001` | Image generation only | — | Gemini API Imagen 4 Fast; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `imagen-4.0-generate-001` | Image generation only (default) | — | Gemini API Imagen 4 Standard; default in `ImageSkill.SUPPORTED_MODELS`; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `imagen-4.0-ultra-generate-001` | Image generation only | — | Gemini API Imagen 4 Ultra; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `gpt-image-2` | Image generation/editing | — | OpenAI GPT Image 2; uses the OpenAI Images API (`client.images.generate(...)` / `client.images.edit(...)`). |
 
 **Backend auto-lift of output tokens.** `backend/agent/ai_client.py` `_call_gemini` raises the default `generation_config.max_output_tokens` to **65,536** when the model name starts with `gemini-3-` or `gemini-3.1-` (the 2.x default of 8,192 truncates long 3.x outputs). The lift applies only when the caller hasn't explicitly set a lower value.
 
-**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes.
+**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing?hl=en) lists Imagen 4 image prices as Fast `$0.02`, Standard `$0.04`, and Ultra `$0.06` per generated image, which Tsushin records using the existing per-image operation convention. [OpenAI API pricing](https://openai.com/api/pricing/) lists GPT-image-2 at text input `$5/1M` tokens, image input `$8/1M` tokens, and image output `$30/1M` tokens; Tsushin records the two-field approximation as prompt `$5/1M` and completion `$30/1M`.
 
-**Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint.
+**Gemini API Imagen 4 behavior.** Imagen 4 support is direct Gemini API support only, documented in the [Gemini API Imagen guide](https://ai.google.dev/gemini-api/docs/imagen). The backend dispatches Imagen model IDs to `google.genai.Client(api_key=...).models.generate_images(...)`; it does not use Vertex AI credentials or project/region configuration. Imagen 4 is generation-only in the Gemini API path, so Image Skill edit requests with an Imagen model return a clear unsupported-edit error instead of falling back to another model.
+
+**OpenAI GPT Image behavior.** OpenAI image support uses the [OpenAI Images API](https://platform.openai.com/docs/api-reference/images/generate) directly with the tenant's OpenAI API key, not an OpenAI-compatible chat completion path. `gpt-image-2` generation calls `client.images.generate(...)`; edit mode calls `client.images.edit(...)` with the inbound image file.
+
+**Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint. Provider Wizard Image Generation setup uses image-only predefined buckets (`gemini_image`, `openai_image`) so Gemini image models, Imagen 4, and OpenAI GPT Image 2 appear there without adding image-only IDs to normal LLM suggestions. Live Gemini/OpenAI LLM discovery filters those image-only IDs out of the generic model lists.
 
 ### 19.8 ProviderWizard — guided multi-step setup (v0.7.x)
 
@@ -2820,7 +2828,7 @@ The guided wizard replaces the flat `ProviderSetupWizard` category picker (delet
 | Credentials | `hosting='cloud'` | `StepCredentials` — api_key, base_url, Vertex AI fields |
 | Container | `hosting='local'` | `StepContainerProvision` — instance_name, mem_limit, GPU |
 | Pull models | `vendor='ollama' && hosting='local'` | `StepOllamaPullModels` — curated starter models, skippable |
-| Test & models | Always | `StepTestAndModels` — Test Connection, Auto-detect models, default toggle |
+| Test & models | Always | `StepTestAndModels` — Test Connection, model suggestions, Auto-detect for LLM providers, default toggle |
 | Review | Always | `StepReview` — summary with jump-to-edit rows |
 | Progress | Always (terminal) | `StepProgress` — fires the actual create call |
 
@@ -2832,11 +2840,11 @@ The guided wizard replaces the flat `ProviderSetupWizard` category picker (delet
 | LLM | Local | ollama |
 | TTS | Cloud | elevenlabs |
 | TTS | Local | kokoro |
-| Image | Cloud | gemini (pre-tagged "Uses Nano Banana / Nano Banana Pro") |
+| Image | Cloud | openai (pre-tagged "GPT Image 2"), gemini (pre-tagged "Gemini API Imagen 4") |
 
 **Backend endpoints used (no new endpoints introduced):**
 
-- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (Gemini).
+- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (OpenAI/Gemini).
 - `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container).
 - `POST /api/api-keys` — TTS ElevenLabs (legacy api_keys surface).
 - `POST /api/settings/ollama/provision` — Ollama container lifecycle after `ProviderInstance` create.

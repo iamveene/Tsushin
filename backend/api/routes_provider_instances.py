@@ -367,6 +367,33 @@ async def _background_test_instance(instance_id: int, user_id: int) -> None:
             pass
 
 
+# Gemini image-generation models are deliberately separated from the normal
+# Gemini LLM suggestions. ProviderInstance.available_models feeds general
+# agent model pickers, so image-only IDs must not leak into the generic
+# `gemini` bucket or live Gemini discovery results.
+GEMINI_IMAGE_MODELS = [
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+    "imagen-4.0-fast-generate-001",
+    "imagen-4.0-generate-001",
+    "imagen-4.0-ultra-generate-001",
+]
+
+
+def _is_gemini_image_model(model_id: str) -> bool:
+    return model_id in GEMINI_IMAGE_MODELS
+
+
+OPENAI_IMAGE_MODELS = [
+    "gpt-image-2",
+]
+
+
+def _is_openai_image_model(model_id: str) -> bool:
+    return model_id in OPENAI_IMAGE_MODELS
+
+
 # Curated suggestions shown in the UI as model-name autocomplete.
 # Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
 # Auto-detect, gemini via live discovery below) will replace this list after
@@ -379,6 +406,7 @@ PREDEFINED_MODELS = {
         "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
         "o1", "o1-mini", "o3-mini", "o4-mini",
     ],
+    "openai_image": OPENAI_IMAGE_MODELS,
     "anthropic": [
         # Current generation. Older claude-3.5-sonnet / claude-3-opus removed
         # from selectable list (BUG-697); pricing rows in token_tracker.py are
@@ -399,6 +427,7 @@ PREDEFINED_MODELS = {
         # Gemini 2.0 / 1.5 (legacy):
         "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
     ],
+    "gemini_image": GEMINI_IMAGE_MODELS,
     "groq": [
         "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
         "mixtral-8x7b-32768", "gemma2-9b-it",
@@ -660,6 +689,8 @@ async def discover_models_raw(
                         if not name or "generateContent" not in methods:
                             continue
                         model_id = name[len("models/"):] if name.startswith("models/") else name
+                        if _is_gemini_image_model(model_id):
+                            continue
                         models.append(model_id)
                     page_token = body.get("nextPageToken")
                     if not page_token:
@@ -673,7 +704,13 @@ async def discover_models_raw(
                     return {"models": []}
                 body = resp.json()
                 models = sorted(
-                    {m.get("id") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
+                    {
+                        model_id
+                        for m in body.get("data", [])
+                        if isinstance(m, dict)
+                        for model_id in [m.get("id")]
+                        if model_id and not (vendor == "openai" and _is_openai_image_model(model_id))
+                    }
                 )
     except (httpx.ConnectError, httpx.TimeoutException):
         return {"models": []}
