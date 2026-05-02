@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### A2A "Allow target skills" defaults ON in the Studio Add Permission modal (2026-05-02)
+
+- Studio → A2A Communications: the "Allow target to use its own skills" checkbox in the Add Permission modal now defaults to **on**. A tenant admin who is wiring two agents together almost always wants the target to actually do its job (read mailbox, run a tool) when invoked. The previous default-off setup caused silent failures where the source agent would call the target via the `agent_communication` tool and the target would politely refuse with "my tools are disabled for this A2A request" — exact symptom: Gemma4 → movl returning a refusal while a direct WhatsApp ping to movl returned the real inbox.
+- The DB-level default for `agent_communication_permission.allow_target_skills` stays `false` (defense in depth — direct API/seed/import paths remain safe-by-default; only the Studio UI flips the recommended choice).
+- Added an inline amber warning under the checkbox when ON, explaining that the source agent will be able to invoke the target's tools indirectly (capability amplification) and to only enable for trusted source agents.
+- Files: `frontend/components/studio/A2APermissionsManager.tsx` (initial state + post-save reset + warning copy).
+
 ### Audit 5 local fresh-install and live-connected QA (2026-05-01)
 
 - Local fresh-install validation for target 11.2 ran from GitHub branch `release/0.7.0` at `3949de0f3a87aca4af742b84be4470ba6934d99d` using disposable local HTTP and self-signed TLS stacks. Programmatic coverage completed 46 API calls with 0 API failures; browser coverage walked 12 setup/login/Watcher/Playground/Triggers/Flows/Continuous Agents pages with 0 console errors, 0 bad HTTP responses, and 0 unexpected request failures. Fixture cleanup left 0 run-owned API/DB records and Docker cleanup left 0 run-owned containers, volumes, networks, images, or clone directories. The pre-run `pg_dump -Fc` restored the DB fingerprint exactly before backend restart; original health/readiness/proxy checks passed after restart, then live backend workers advanced seven runtime tables again. BUG-725 captured the prior helper image tag drift that is fixed below. Evidence: `output/playwright/full-regression-20260501161001/audit-5-local-instance/final/summary.json`.
