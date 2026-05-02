@@ -220,7 +220,7 @@ export default function ProviderInstancePicker({
             <select
               value={value.vendor || ''}
               onChange={(e) => handleVendorChange(e.target.value)}
-              className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white"
+              className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
               data-testid="provider-vendor-select"
             >
               <option value="">Select provider…</option>
@@ -244,7 +244,7 @@ export default function ProviderInstancePicker({
                   <select
                     value={value.instance_id ?? ''}
                     onChange={(e) => handleInstanceChange(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white"
+                    className="flex-1 px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                     data-testid="provider-instance-select"
                   >
                     {currentVendor.instances.map((inst) => (
@@ -265,7 +265,7 @@ export default function ProviderInstancePicker({
                     <button
                       type="button"
                       onClick={openCreateModal}
-                      className="shrink-0 px-3 py-2 text-xs bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 rounded-md border border-teal-500/40"
+                      className="shrink-0 px-3 py-2 text-xs bg-teal-500/20 text-teal-400 hover:bg-teal-500/30 rounded-md border border-teal-500/40 focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                       title={`Create another ${currentVendor.display_name} instance`}
                       data-testid="provider-instance-add"
                     >
@@ -284,7 +284,7 @@ export default function ProviderInstancePicker({
                     <button
                       type="button"
                       onClick={openCreateModal}
-                      className="w-full px-3 py-2 text-sm bg-teal-500/20 text-teal-200 hover:bg-teal-500/30 rounded-md border border-teal-500/40"
+                      className="w-full px-3 py-2 text-sm bg-teal-500/20 text-teal-300 hover:bg-teal-500/30 rounded-md border border-teal-500/40 focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                       data-testid="provider-instance-create"
                     >
                       + Create {currentVendor?.display_name || value.vendor} instance
@@ -305,7 +305,7 @@ export default function ProviderInstancePicker({
                 <select
                   value={value.model_name || ''}
                   onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white"
+                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                   data-testid="provider-model-select"
                 >
                   {modelOptions.map((m) => (
@@ -320,7 +320,7 @@ export default function ProviderInstancePicker({
                   value={value.model_name || ''}
                   onChange={(e) => handleModelChange(e.target.value)}
                   placeholder="Enter model name"
-                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white"
+                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                   data-testid="provider-model-input"
                 />
               )}

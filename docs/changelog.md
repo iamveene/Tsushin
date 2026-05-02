@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### LLM Provider closing pass — remove legacy Ollama fallback, kill dead Hub UI, single-source playground models (2026-05-02)
+
+**Why.** Right after landing the LLM-provider single-source-of-truth refactor (commit 420d487), an audit surfaced four loose ends we wanted closed in this release rather than scheduled: the AIClient host-Ollama fallback was still in code (only WARNING-logged), Hub had a dead Ollama-confirm-delete state + handler + modal that no trigger could reach, the Playground ConfigPanel kept a separate `fetchOllamaModels` round trip that bypassed the catalog, and the new shared components needed cosmetic alignment with the Studio house style.
+
+**Backend.**
+- `backend/agent/ai_client.py:232`: removed the legacy host-Ollama fallback (env `OLLAMA_BASE_URL` → `host.docker.internal:11434` → Linux gateway `_resolve_ollama_host()`). Mid-session orphan Ollama agents (created in a tenant after the boot migration ran, with no active default) now raise a clear `ValueError("Ollama agent has no provider_instance_id... Configure via Hub → LLM Providers → Add Ollama instance, or restart the backend to trigger the boot-time orphan migration.")` instead of silently spinning up an unconfigured client. `routes_sentinel.py:_get_ollama_models()` and the `/api/ollama/health` endpoint were verified to read `Config.ollama_base_url` directly (not through AIClient), so they remain functional and tenant-agnostic.
+- `backend/tests/test_provider_instance_catalog.py` extended to 13 cases. New: `test_aiclient_ollama_orphan_raises_clear_error` (orphan AIClient init raises with "Hub" + "LLM Providers" wording), `test_bootstrap_is_idempotent` (second `bootstrap_orphan_vendor_agents()` call creates 0 instances, relinks 0 agents, leaves a single Ollama row per tenant). All 13 pass.
+
+**Frontend.**
+- `frontend/app/hub/page.tsx`: removed dead `ollamaConfirmDelete` state (line 1121), `handleOllamaInstanceDelete` handler (lines 2215–2241), and the legacy "Delete Ollama instance?" modal block (lines 7046–7086). Every delete trigger (`ManagedContainerPanel.onDelete`, host-mode action strip, Setup-wizard disable toggle) now routes through `setDeletingInstance` → `<ProviderInstanceDeleteModal />`.
+- `frontend/components/playground/ConfigPanel.tsx`: removed the `ollamaModels` state, the `fetchOllamaModels()` helper, and the `isOllama` branch in the model-list builder. Ollama models now flow through `providerInstances.flatMap(i => i.available_models)` like every other vendor — eliminates the duplicate `/api/ollama/health` round trip and finishes the single-source-of-truth promise.
+- Cosmetic alignment of the v0.7.0 shared components: bumped `ProviderInstanceDeleteModal` to `size="lg"`, switched the dependent caption from `text-tsushin-muted` (border gray) to `text-tsushin-slate` (text gray), aligned destructive button hover from `hover:opacity-90` to `hover:bg-red-400` (matches Hub), bumped `ProviderInstancePicker` `+ New` button text from `text-teal-300` → `text-teal-400` (Studio house teal) and the create-CTA from `text-teal-200` → `text-teal-300`, and added `focus:outline-none focus:ring-2 focus:ring-teal-500/40` to all picker selects + buttons + the model-name fallback input.
+
+**Docs.** `docs/documentation.md` §19.11/§19.12/§19.13 added: catalog endpoint contract, cascade-aware delete flow + 409 semantics, boot-time orphan migration + AIClient legacy fallback removal note. Cross-references the test file and the picker/modal components.
+
+**Verified end-to-end (Playwright sweep).** Hub LLM Providers shows Ollama (Local) with 6 models, no console errors. Studio Edit Gemma4: picker bound to `vendor=ollama, instance_id=21, model=gemma4:latest`. Wizard step 2: smart default to OpenAI; switching to Anthropic (zero instances) surfaces inline `+ Create Anthropic instance` CTA. Hub cascade-delete on Ollama (Local): modal lists Gemini1 and Gemma4 as dependents with default strategy = Unassign (no other Ollama peer). Playground direct chat with Gemma4: `provider=ollama, model=gemma4:latest, agent_id=6858` log line, NO `legacy fallback` warning. Playground A2A `pergunte ao movl meus emails`: returned the live email list (Conta Azul, Accounts Payable, LEXDATA, KPMG, Hostinger), still NO legacy-fallback warning. Boot-migration log on the rebuilt backend confirms idempotency (0 new instances, 0 relinks on second boot — the existing Gemma4/Gemini1 bindings stuck).
+
+**Files.**
+- Backend: `backend/agent/ai_client.py`, `backend/tests/test_provider_instance_catalog.py`.
+- Frontend: `frontend/app/hub/page.tsx`, `frontend/components/playground/ConfigPanel.tsx`, `frontend/components/providers/ProviderInstancePicker.tsx`, `frontend/components/providers/ProviderInstanceDeleteModal.tsx`.
+- Docs: `docs/documentation.md`.
+
 ### Release 0.7.0 — ASR config consolidation: drop `/settings/asr`, drop tenant default, cascade-on-delete (2026-05-02)
 
 **Why.** The standalone `/settings/asr` page was a redundant general-config surface for what is fundamentally a per-feature, per-agent configuration. ASR instances are created in the Hub (Provider Wizard) and assigned per-agent (audio skill) — no tenant-level default needed. The page was generating noise for tenants that don't use audio skills at all.

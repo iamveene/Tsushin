@@ -2898,6 +2898,34 @@ The **Hub → AI Providers** tab no longer renders the legacy Service API Keys b
 
 The inline "Fallback — instance key takes priority" amber label has been removed — with the new filtering, the fallback card and the instance card can never appear on the same page simultaneously.
 
+### 19.11 LLM Providers Catalog endpoint (v0.7.0)
+
+`GET /api/llm-providers/catalog` is the single source of truth consumed by the agent creation wizard, the Studio agent edit modal, the Playground config panel and the Hub LLM Providers tab. Returns one entry per supported vendor with `vendor`, `display_name`, `default_base_url`, `supports_discovery`, `creatable`, and an embedded `instances` array (each with `id`, `instance_name`, `is_default`, `health_status`, `health_status_reason`, `base_url`, `available_models`, `is_auto_provisioned`, `container_status`). Active-only — soft-deleted instances never appear. Replaced three independent fetch paths that previously diverged into "ghost vendor" inconsistencies. (`backend/api/routes_provider_instances.py:get_llm_providers_catalog`, `backend/services/provider_instance_service.py:get_catalog`).
+
+The shared `<ProviderInstancePicker />` component (`frontend/components/providers/ProviderInstancePicker.tsx`) consumes this endpoint — wizard `StepBasics` and Studio `AgentConfigurationManager` both render it so they cannot drift. Selecting a vendor with zero active instances surfaces an inline `+ Create … instance` CTA that opens `<ProviderInstanceModal />` and auto-selects the newly created instance after save.
+
+### 19.12 Cascade-aware delete contract (v0.7.0)
+
+`DELETE /api/provider-instances/{id}` requires explicit cascade resolution when there are dependent agents. The body schema is `{reassign_to_instance_id?: int, unassign?: bool}`:
+
+- **No dependents:** body optional; succeeds immediately.
+- **Has dependents + `reassign_to_instance_id`:** target must be active and same-tenant; agents are reassigned and snapped to the target's first available model.
+- **Has dependents + `unassign=true`:** agents lose the binding (`provider_instance_id=null`); their `model_provider` and `model_name` are preserved.
+- **Has dependents + neither flag:** returns **HTTP 409** with `detail.usage` payload (dependent agent list) embedded so the UI can prompt for the decision.
+
+`GET /api/provider-instances/{id}/usage` is the dry-run endpoint that backs the pre-delete confirmation modal (`frontend/components/providers/ProviderInstanceDeleteModal.tsx`). Returns `{instance_id, vendor, instance_name, agents:[{id, name, model_provider, model_name, is_active}], dependent_count}`. Tenant-scoped — never leaks cross-tenant agent data even when the row is referenced. (`backend/services/provider_instance_service.py:get_instance_usage`, `delete_instance_with_reassign`).
+
+### 19.13 Boot-time orphan migration + legacy fallback removal (v0.7.0)
+
+`ProviderInstanceService.bootstrap_orphan_vendor_agents()` runs once during backend startup (`backend/app.py` lifespan hook). Enumerates `(tenant_id, vendor)` pairs where active agents have `provider_instance_id IS NULL` and no active instance exists for that vendor:
+
+- **Ollama:** auto-creates the canonical `Ollama (Local)` instance via `ensure_ollama_instance()` and relinks every orphan agent to it. Idempotent — a second call creates 0 instances, relinks 0 agents.
+- **Other vendors (Gemini, OpenAI, Anthropic, …):** logs one WARNING per pair (`bootstrap_orphan_vendor_agents: tenant=… has active agent(s) for vendor=… with no provider_instance_id …`). The operator must configure the instance via Hub — we don't have credentials to invent one.
+
+The AIClient legacy host-Ollama fallback (env var `OLLAMA_BASE_URL` → `host.docker.internal:11434` → Linux gateway) was **removed** in this pass (`backend/agent/ai_client.py:232`). Mid-session orphan Ollama agents created in tenants without a default instance now raise a clear ValueError pointing operator at Hub instead of silently spinning up an unconfigured client. The `_get_ollama_models()` helper in `routes_sentinel.py` and the `/api/ollama/health` endpoint still read from `Config.ollama_base_url` directly — they are tenant-agnostic platform helpers and are unaffected.
+
+Coverage: `backend/tests/test_provider_instance_catalog.py` (13 cases — catalog, usage tenant-scoping, cascade delete decision-required → 409, reassign-target validation, unassign branch, self-reassign rejection, no-dependents shortcut, bootstrap relink, non-Ollama warning, AIClient orphan ValueError, bootstrap idempotency).
+
 ---
 
 ## 20. Hub Integrations
@@ -3153,9 +3181,18 @@ On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instance
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
 
-### 25.8 ASR — Hub > Add Provider > Speech-to-Text wizard (no global settings page)
+### 25.8 ASR — Hub > Add Provider > Speech-to-Text wizard + Hub Local Services card
 
-ASR (Speech-to-Text) configuration lives entirely in the Hub Provider Wizard and per-agent audio skill — there is **no global "Settings → ASR" page** and **no tenant-level default ASR**. Each agent either uses cloud OpenAI Whisper or pins a specific tenant-owned local instance.
+ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** via the Provider Wizard, **management** via the Local Services card, and **per-agent assignment** via the Audio Agents Wizard / Studio Skills tab. There is **no global "Settings → ASR" page** and **no tenant-level default ASR**. Each agent either uses cloud OpenAI Whisper or pins a specific tenant-owned local instance.
+
+**Management (Hub > AI Providers tab > Local Services > ASR / Speech-to-Text card).** Once any ASR instance exists, the card lists every instance for the tenant with:
+- Vendor badge (`openai_whisper` or `speaches`) + `Auto` badge for auto-provisioned containers.
+- Live container status: `Provisioning` / `Running` / `Stopped` / `Error`.
+- Lifecycle controls (Start / Stop / Restart / Delete) via the shared `ManagedContainerPanel` component, identical to the Kokoro and Ollama cards.
+- Inline log viewer (last 100 log lines, refreshable).
+- `+ Setup with Wizard` button that opens the Hub Provider Wizard preset to ASR/local.
+- Delete confirmation modal that previews the cascade (*"Audio agents pinned to this instance will be reassigned to X"* or *"DISABLED"* if no successor) and an optional `Also remove container volume` checkbox for permanent model-cache deletion.
+- Post-deletion cyan banner showing the actual reassigned/disabled counts from the backend's cascade summary, e.g. *"ASR instance deleted — 3 audio agents reassigned to OpenAI Whisper QA-2"*.
 
 **Two registered local engines** (both share `WhisperInstance` + `WhisperContainerManager` + the per-vendor dispatch table in `VENDOR_CONFIGS`):
 

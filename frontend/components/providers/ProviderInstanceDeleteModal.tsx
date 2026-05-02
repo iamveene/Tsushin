@@ -115,7 +115,7 @@ export default function ProviderInstanceDeleteModal({
   if (!isOpen || !instance) return null
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Delete ${instance.instance_name}?`}>
+    <Modal isOpen={isOpen} onClose={onClose} title={`Delete ${instance.instance_name}?`} size="lg">
       <div className="space-y-4">
         {loadingUsage ? (
           <div className="text-sm text-tsushin-slate">Checking dependents…</div>
@@ -141,7 +141,7 @@ export default function ProviderInstanceDeleteModal({
                     <li key={a.id} className="flex items-center justify-between">
                       <span>
                         <span className="text-white font-medium">{a.name}</span>
-                        <span className="ml-2 text-tsushin-muted">
+                        <span className="ml-2 text-tsushin-slate">
                           ({a.model_provider} / {a.model_name})
                         </span>
                       </span>
@@ -223,7 +223,7 @@ export default function ProviderInstanceDeleteModal({
             type="button"
             onClick={handleConfirm}
             disabled={submitting || loadingUsage}
-            className="px-4 py-2 bg-tsushin-vermilion text-white rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            className="px-4 py-2 bg-tsushin-vermilion text-white rounded-md text-sm font-medium hover:bg-red-400 disabled:opacity-50"
             data-testid="provider-delete-confirm"
           >
             {submitting ? 'Deleting…' : 'Delete instance'}

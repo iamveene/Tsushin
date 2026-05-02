@@ -230,58 +230,19 @@ class AIClient:
             # Using legacy SDK - will use asyncio.to_thread() for async
             self.client = genai.GenerativeModel(model_name)
         elif self.provider == "ollama":
-            # Phase 5.2: Ollama HTTP client (API key optional for remote/secured instances)
-            # Load from Config table if available, otherwise from env var
-            # BUG-663: resolve host.docker.internal with a Linux-safe fallback
-            # to the Docker default-bridge gateway (172.17.0.1).
-            #
-            # v0.7.0 telemetry: this branch only runs when an Ollama agent has
-            # no provider_instance_id AND no active default Ollama instance was
-            # found by the safety net at line ~65. The boot-time
-            # bootstrap_orphan_vendor_agents() should have materialised one for
-            # every tenant with Ollama agents, so reaching this branch in
-            # production almost always indicates a tenant configured after boot
-            # without going through Hub. Logging at WARNING so it shows up in
-            # ops dashboards and we can decide when to remove the fallback.
-            self.logger.warning(
-                "AIClient ollama legacy fallback in use (tenant=%s, no active "
-                "provider_instance found). Configure via Hub → LLM Providers.",
-                tenant_id,
+            # v0.7.0: legacy host-mode fallback removed. The boot-time
+            # ProviderInstanceService.bootstrap_orphan_vendor_agents() materialises
+            # an Ollama instance for every tenant with Ollama agents and the wizard
+            # now requires provider_instance_id, so reaching this branch means the
+            # agent was created mid-session in a tenant that has no active default
+            # Ollama instance. Refuse loudly and point operator at Hub instead of
+            # silently spinning up an unconfigured client.
+            raise ValueError(
+                f"Ollama agent has no provider_instance_id and no active default "
+                f"Ollama instance for tenant={tenant_id}. Configure via Hub → "
+                f"LLM Providers → Add Ollama instance, or restart the backend "
+                f"to trigger the boot-time orphan migration."
             )
-            from services.provider_instance_service import _resolve_ollama_host
-            ollama_default_url = f"http://{_resolve_ollama_host()}:11434"
-            ollama_base_url = os.getenv("OLLAMA_BASE_URL", ollama_default_url)
-            ollama_api_key = None
-
-            if db:
-                from models import Config
-                config = db.query(Config).first()
-                if config and config.ollama_base_url:
-                    ollama_base_url = config.ollama_base_url
-                if config and config.ollama_api_key:
-                    ollama_api_key = config.ollama_api_key
-
-            self.ollama_base_url = ollama_base_url
-            self.ollama_api_key = ollama_api_key
-
-            if self.ollama_base_url:
-                from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
-                try:
-                    self.ollama_base_url = validate_ollama_url(self.ollama_base_url)
-                except SSRFValidationError as e:
-                    self.logger.error(f"SSRF blocked: Ollama base URL '{self.ollama_base_url}' rejected: {e}. Falling back to default.")
-                    self.ollama_base_url = ollama_default_url
-
-            # Extended timeout for CPU inference (first load can be slow)
-            headers = {}
-            if ollama_api_key:
-                headers["Authorization"] = f"Bearer {ollama_api_key}"
-
-            self.client = httpx.AsyncClient(
-                timeout=600.0,  # 600s (10 min) timeout for reasoning models on CPU (deepseek-r1 can be very slow)
-                headers=headers if headers else None
-            )
-            self.logger.info(f"Initialized Ollama client: {self.ollama_base_url}")
         elif self.provider == "openrouter":
             # OpenRouter: Unified API gateway for 100+ models
             # Uses OpenAI-compatible API with custom base URL

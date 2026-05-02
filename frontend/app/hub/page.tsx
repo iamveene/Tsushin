@@ -43,7 +43,7 @@ const TriggerCreationWizard = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration, ASRInstance } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -979,6 +979,7 @@ export default function HubPage() {
   useProviderWizardComplete(() => {
     fetchProviderInstances()
     refreshKokoroInstances().catch(() => {})
+    refreshASRInstances().catch(() => {})  // v0.7.0 G1: pick up newly created ASR instances
     fetchAPIKeys()
   })
 
@@ -1086,6 +1087,14 @@ export default function HubPage() {
   const [kokoroLogsContent, setKokoroLogsContent] = useState<string>('')
   const [kokoroLogsLoading, setKokoroLogsLoading] = useState(false)
   const [kokoroConfirmDelete, setKokoroConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
+  // v0.7.0 Track D: Per-tenant ASR instances (Hub Local Services card — G1)
+  const [asrInstances, setAsrInstances] = useState<ASRInstance[]>([])
+  const [asrInstanceActionLoading, setAsrInstanceActionLoading] = useState<number | null>(null)
+  const [asrLogsOpenFor, setAsrLogsOpenFor] = useState<number | null>(null)
+  const [asrLogsContent, setAsrLogsContent] = useState<string>('')
+  const [asrLogsLoading, setAsrLogsLoading] = useState(false)
+  const [asrConfirmDelete, setAsrConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
+  const [asrCascadeBanner, setAsrCascadeBanner] = useState<string | null>(null)
   // v0.6.0-patch.7: Per-tenant SearXNG auto-provisioning (Hub Tool APIs panel)
   const [searxngInstances, setSearxngInstances] = useState<SearxngInstance[]>([])
   const [searxngLoading, setSearxngLoading] = useState(false)
@@ -1118,7 +1127,6 @@ export default function HubPage() {
   const [ollamaLogsOpen, setOllamaLogsOpen] = useState(false)
   const [ollamaLogsContent, setOllamaLogsContent] = useState<string>('')
   const [ollamaLogsLoading, setOllamaLogsLoading] = useState(false)
-  const [ollamaConfirmDelete, setOllamaConfirmDelete] = useState<{ id: number; removeVolume: boolean } | null>(null)
 
   // MCP Servers state (Phase 26)
   const [mcpServers, setMcpServers] = useState<any[]>([])
@@ -1508,6 +1516,7 @@ export default function HubPage() {
       ]
       const tenantLoaders = hasTenantScope ? [
         refreshKokoroInstances(),  // v0.7.0: per-tenant Kokoro (Hub-consolidated)
+        refreshASRInstances(),  // v0.7.0 G1: per-tenant ASR (Hub-consolidated)
         refreshSearxngInstances(),  // v0.6.0-patch.7: per-tenant SearXNG (Hub-consolidated)
         loadHubIntegrations(),
         loadMcpInstances(),
@@ -1874,6 +1883,131 @@ export default function HubPage() {
     }
   }
 
+  // ==================== Per-Tenant ASR Instance Management (v0.7.0 G1) ====================
+
+  const refreshASRInstances = async () => {
+    try {
+      const list = await api.getASRInstances().catch(() => [] as ASRInstance[])
+      setAsrInstances(list || [])
+    } catch {
+      // Non-fatal — ASR card just stays hidden
+    }
+  }
+
+  const handleASRInstanceAction = async (id: number, action: 'start' | 'stop' | 'restart') => {
+    setAsrInstanceActionLoading(id)
+    try {
+      await api.asrContainerAction(id, action)
+      const label = action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'
+      toast.success(`${label} ASR container...`)
+      setTimeout(() => refreshASRInstances(), 1200)
+    } catch (e: any) {
+      toast.error(e?.message || `Failed to ${action} ASR container`)
+    } finally {
+      setAsrInstanceActionLoading(null)
+    }
+  }
+
+  const handleASRViewLogs = async (id: number) => {
+    if (asrLogsOpenFor === id) {
+      setAsrLogsOpenFor(null)
+      setAsrLogsContent('')
+      return
+    }
+    setAsrLogsOpenFor(id)
+    setAsrLogsLoading(true)
+    try {
+      const { logs } = await api.getASRContainerLogs(id, 100)
+      setAsrLogsContent(logs || '(no logs)')
+    } catch (e: any) {
+      setAsrLogsContent(`Error loading logs: ${e?.message || 'unknown'}`)
+    } finally {
+      setAsrLogsLoading(false)
+    }
+  }
+
+  const handleASRInstanceDelete = async () => {
+    if (!asrConfirmDelete) return
+    const { id, removeVolume } = asrConfirmDelete
+    // Snapshot the current instance list BEFORE refresh so the cascade banner
+    // can resolve the successor's name (it'll be repointed by the backend
+    // before our refresh fires).
+    const successorBefore = asrInstances.find(i =>
+      i.id !== id && i.is_active,
+    )
+    try {
+      const result = await api.deleteASRInstance(id, removeVolume)
+      setAsrConfirmDelete(null)
+      await refreshASRInstances()
+
+      const { cascade } = result
+      if (cascade.reassigned > 0 && cascade.successor_instance_id !== null) {
+        const successorName = successorBefore?.id === cascade.successor_instance_id
+          ? successorBefore.instance_name
+          : `instance #${cascade.successor_instance_id}`
+        setAsrCascadeBanner(
+          `ASR instance deleted — ${cascade.reassigned} audio agent${cascade.reassigned !== 1 ? 's' : ''} reassigned to ${successorName}`,
+        )
+      } else if (cascade.disabled > 0) {
+        setAsrCascadeBanner(
+          `ASR instance deleted — ${cascade.disabled} audio agent${cascade.disabled !== 1 ? 's' : ''} disabled (no other ASR instance available)`,
+        )
+      } else {
+        toast.success('ASR instance deleted')
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to delete ASR instance')
+      setAsrConfirmDelete(null)
+    }
+  }
+
+  // Auto-dismiss cascade banner after 8s.
+  useEffect(() => {
+    if (!asrCascadeBanner) return
+    const t = setTimeout(() => setAsrCascadeBanner(null), 8000)
+    return () => clearTimeout(t)
+  }, [asrCascadeBanner])
+
+  // Listen for "Create ASR instance" CTA dispatched from the Audio Agents
+  // Wizard (G6). We open the Hub Provider Wizard preset to ASR/local so the
+  // user lands directly on the vendor pick step.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {}
+      openProviderWizard({
+        modality: (detail.modality || 'asr') as any,
+        hosting: (detail.hosting || 'local') as any,
+      })
+    }
+    window.addEventListener('tsushin:open-provider-wizard', handler as EventListener)
+    return () => window.removeEventListener('tsushin:open-provider-wizard', handler as EventListener)
+  }, [openProviderWizard])
+
+  // Poll container status for ASR instances stuck in creating/provisioning.
+  // Same pattern as the Kokoro provisioning poll.
+  useEffect(() => {
+    const pending = asrInstances.filter(i => {
+      const s = (i.container_status || '').toLowerCase()
+      return s === 'creating' || s === 'provisioning'
+    })
+    if (pending.length === 0) return
+    const interval = setInterval(async () => {
+      try {
+        const updates = await Promise.all(
+          pending.map(i => api.getASRContainerStatus(i.id).catch(() => null))
+        )
+        const anyTerminal = updates.some(u => {
+          const s = (u?.status || '').toLowerCase()
+          return s === 'running' || s === 'error' || s === 'stopped'
+        })
+        if (anyTerminal) refreshASRInstances()
+      } catch {
+        // transient — keep polling
+      }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [asrInstances])
+
   // ==================== SearXNG Instance Management (v0.6.0-patch.7) ====================
 
   const refreshSearxngInstances = async () => {
@@ -2210,34 +2344,6 @@ export default function HubPage() {
       await fetchProviderInstances()
     } catch (err: any) {
       toast.error(err.message || 'Failed to deprovision Ollama container')
-    }
-  }
-
-  // Unified Ollama instance delete — mirrors handleKokoroInstanceDelete so
-  // the ManagedContainerPanel `onDelete` action behaves identically across
-  // Ollama and Kokoro (soft-delete the provider instance; backend tears down
-  // the container for auto-provisioned rows, see routes_provider_instances).
-  const handleOllamaInstanceDelete = async () => {
-    if (!ollamaConfirmDelete) return
-    const { id, removeVolume } = ollamaConfirmDelete
-    try {
-      const inst = providerInstances.find(i => i.id === id)
-      if (inst?.is_auto_provisioned) {
-        try {
-          await api.deprovisionOllamaContainer(id, removeVolume)
-        } catch {
-          // Deprovision is best-effort; the delete below is the source of truth.
-        }
-      }
-      await api.deleteProviderInstance(id)
-      toast.success('Ollama instance deleted')
-      setOllamaConfirmDelete(null)
-      setOllamaContainerStatus(null)
-      setOllamaPulledModels([])
-      await fetchProviderInstances()
-    } catch (e: any) {
-      toast.error(e?.message || 'Failed to delete instance')
-      setOllamaConfirmDelete(null)
     }
   }
 
@@ -3687,7 +3793,7 @@ export default function HubPage() {
   // the gate for background health polling, but the Hub card itself is driven
   // by the instance list so unused providers never take visual space.
   const ollamaInstance = providerInstances.find(i => i.vendor === 'ollama' && i.is_active) ?? null
-  const showLocalServices = !!ollamaInstance || kokoroInstances.length > 0
+  const showLocalServices = !!ollamaInstance || kokoroInstances.length > 0 || asrInstances.length > 0
 
   if (oauthPopupHandoff) {
     return null
@@ -4598,6 +4704,135 @@ export default function HubPage() {
                             </button>
                           </div>
                         )}
+                      </div>
+                    </div>
+                    )}
+
+                    {/* ASR / Speech-to-Text Card (v0.7.0 G1 — per-tenant instances + cascade-aware delete) */}
+                    {asrInstances.length > 0 && (
+                    <div className="card p-5 hover-glow group border-cyan-700/30">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                            <MicrophoneIcon size={20} className="text-cyan-400" />
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-white">ASR / Speech-to-Text</h3>
+                            <p className="text-[11px] text-tsushin-slate">Self-hosted Whisper or Speaches for local audio transcription</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-2 h-2 rounded-full ${
+                            asrInstances.some(i => (i.container_status || '').toLowerCase() === 'running')
+                              ? 'bg-tsushin-success animate-pulse'
+                              : asrInstances.length > 0 ? 'bg-yellow-400' : 'bg-tsushin-slate'
+                          }`} />
+                          <span className="text-[11px] text-tsushin-slate">
+                            {asrInstances.length} instance{asrInstances.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {asrCascadeBanner && (
+                        <div className="mb-3 px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-200 flex items-center justify-between gap-2">
+                          <span>{asrCascadeBanner}</span>
+                          <button onClick={() => setAsrCascadeBanner(null)} className="text-cyan-400 hover:text-white shrink-0" aria-label="Dismiss">×</button>
+                        </div>
+                      )}
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium text-tsushin-accent uppercase tracking-wider">Per-Tenant Instances</p>
+                          {canEditSettings && (
+                            <button
+                              onClick={() => openProviderWizard({ modality: 'asr' as any, hosting: 'local' as any })}
+                              className="text-[11px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 rounded-lg px-2.5 py-1 transition-colors"
+                            >
+                              + Setup with Wizard
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          {asrInstances.map(inst => {
+                            const raw = (inst.container_status || 'none').toLowerCase()
+                            const status = raw === 'exited' ? 'stopped' : raw
+                            const isProvisioning = status === 'creating' || status === 'provisioning'
+                            const isRunning = status === 'running'
+                            const isBusy = asrInstanceActionLoading === inst.id
+                            return (
+                              <div key={inst.id} className="p-3 bg-tsushin-ink/40 border border-white/5 rounded-lg">
+                                <div className="flex items-start justify-between gap-2 flex-wrap">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-sm text-white font-medium truncate">{inst.instance_name}</span>
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400">{inst.vendor}</span>
+                                      {inst.is_auto_provisioned && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Auto</span>
+                                      )}
+                                    </div>
+                                    {inst.default_model && (
+                                      <p className="text-[11px] text-tsushin-muted mt-1">Model: <span className="font-mono">{inst.default_model}</span></p>
+                                    )}
+                                    {inst.base_url && (
+                                      <p className="text-[11px] font-mono text-tsushin-muted truncate">{inst.base_url}</p>
+                                    )}
+                                  </div>
+                                  <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${
+                                    isRunning ? 'bg-tsushin-success/20 text-tsushin-success' :
+                                    isProvisioning ? 'bg-yellow-500/20 text-yellow-400' :
+                                    status === 'error' ? 'bg-tsushin-vermilion/20 text-tsushin-vermilion' :
+                                    'bg-gray-500/20 text-gray-400'
+                                  }`}>
+                                    {isProvisioning ? 'Provisioning...' : status || 'n/a'}
+                                  </span>
+                                </div>
+
+                                {canEditSettings && inst.is_auto_provisioned && (
+                                  <ManagedContainerPanel
+                                    status={status}
+                                    isBusy={isBusy}
+                                    onToggle={() => isRunning
+                                      ? handleASRInstanceAction(inst.id, 'stop')
+                                      : handleASRInstanceAction(inst.id, 'start')}
+                                    onRestart={() => handleASRInstanceAction(inst.id, 'restart')}
+                                    onLogs={() => handleASRViewLogs(inst.id)}
+                                    logsOpen={asrLogsOpenFor === inst.id}
+                                    onDelete={() => setAsrConfirmDelete({ id: inst.id, removeVolume: false })}
+                                  />
+                                )}
+
+                                {asrLogsOpenFor === inst.id && (
+                                  <div className="mt-2 p-2 bg-black/50 border border-white/5 rounded">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[10px] text-tsushin-muted uppercase tracking-wider">Last 100 log lines</span>
+                                      <button
+                                        onClick={async () => {
+                                          setAsrLogsLoading(true)
+                                          try {
+                                            const { logs } = await api.getASRContainerLogs(inst.id, 100)
+                                            setAsrLogsContent(logs || '(no logs)')
+                                          } catch (e: any) {
+                                            setAsrLogsContent(`Error: ${e?.message || 'unknown'}`)
+                                          } finally {
+                                            setAsrLogsLoading(false)
+                                          }
+                                        }}
+                                        disabled={asrLogsLoading}
+                                        className="text-[10px] text-tsushin-accent hover:text-white disabled:opacity-50"
+                                      >
+                                        {asrLogsLoading ? 'Loading...' : 'Refresh'}
+                                      </button>
+                                    </div>
+                                    <pre className="text-[10px] font-mono text-tsushin-slate whitespace-pre-wrap max-h-48 overflow-auto">
+                                      {asrLogsContent || (asrLogsLoading ? 'Loading logs...' : '(no logs loaded)')}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
                     </div>
                     )}
@@ -7072,47 +7307,58 @@ export default function HubPage() {
         </div>
       )}
 
-      {/* Ollama delete confirmation — mirrors the Kokoro modal so the Delete
-          action offered by <ManagedContainerPanel /> (and the host-mode
-          action strip) feels identical across both services. */}
-      {ollamaConfirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-          <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
-            <div className="p-6">
-              <h3 className="text-lg font-semibold text-white mb-2">Delete Ollama instance?</h3>
-              <p className="text-sm text-tsushin-slate mb-4">
-                This will soft-delete the instance and (if auto-provisioned) stop the container.
-              </p>
-              <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={ollamaConfirmDelete.removeVolume}
-                  onChange={e => setOllamaConfirmDelete({ ...ollamaConfirmDelete, removeVolume: e.target.checked })}
-                  className="mt-0.5 accent-tsushin-vermilion"
-                />
-                <div>
-                  <div className="text-sm text-white">Also remove container volume</div>
-                  <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent data loss — pulled models will be deleted and must be re-downloaded.</div>
+      {/* v0.7.0 G1: ASR Instance delete confirmation w/ cascade preview */}
+      {asrConfirmDelete && (() => {
+        const inst = asrInstances.find(i => i.id === asrConfirmDelete.id)
+        const otherInstances = asrInstances.filter(i => i.id !== asrConfirmDelete.id && i.is_active)
+        // Cascade preview: tells the user what will happen to dependent agents
+        // BEFORE they confirm. The actual counts are surfaced post-delete via
+        // the asrCascadeBanner using the backend response.
+        const cascadeWarning = otherInstances.length > 0
+          ? `Audio agents pinned to this instance will be reassigned to ${otherInstances[0].instance_name}.`
+          : 'No other ASR instance is available — audio agents pinned to this instance will be DISABLED.'
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+            <div className="bg-[#12121a] border border-white/10 rounded-xl w-full max-w-md">
+              <div className="p-6">
+                <h3 className="text-lg font-semibold text-white mb-2">Delete ASR instance?</h3>
+                <p className="text-sm text-tsushin-slate mb-3">
+                  This will soft-delete <span className="font-mono text-white">{inst?.instance_name}</span> and (if auto-provisioned) stop the container.
+                </p>
+                <p className="text-sm text-amber-200 mb-4 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  {cascadeWarning}
+                </p>
+                <label className="flex items-start gap-2 p-3 rounded-lg bg-tsushin-vermilion/5 border border-tsushin-vermilion/20 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={asrConfirmDelete.removeVolume}
+                    onChange={e => setAsrConfirmDelete({ ...asrConfirmDelete, removeVolume: e.target.checked })}
+                    className="mt-0.5 accent-tsushin-vermilion"
+                  />
+                  <div>
+                    <div className="text-sm text-white">Also remove container volume</div>
+                    <div className="text-xs text-tsushin-vermilion mt-0.5">Permanent — downloaded model weights will be deleted.</div>
+                  </div>
+                </label>
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => setAsrConfirmDelete(null)}
+                    className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleASRInstanceDelete}
+                    className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
+                  >
+                    Delete
+                  </button>
                 </div>
-              </label>
-              <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  onClick={() => setOllamaConfirmDelete(null)}
-                  className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-tsushin-slate text-sm hover:bg-white/10"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleOllamaInstanceDelete}
-                  className="px-4 py-2 rounded-lg bg-tsushin-vermilion text-white text-sm font-medium hover:bg-red-400"
-                >
-                  Delete
-                </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       <AddIntegrationWizard
         isOpen={showSearchWizard}

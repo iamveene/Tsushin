@@ -269,3 +269,60 @@ def test_bootstrap_warns_for_orphan_non_ollama_without_creating(db):
     assert orphan.provider_instance_id is None
     # Ollama branch did not fire for this tenant either.
     assert stats["instances_created"] == 0
+
+
+def test_aiclient_ollama_orphan_raises_clear_error(db):
+    """Mid-session orphan Ollama agent (no instance, no tenant default) must
+    raise a Configure-via-Hub ValueError, not silently spin up a host client.
+
+    This protects the v0.7.0 invariant: every Ollama runtime call is bound to
+    an explicit provider_instance, either via the wizard / Studio edit or via
+    the boot-time bootstrap. Mid-session orphans (an agent created after the
+    backend booted in a tenant with no default Ollama) used to silently fall
+    back to the host-mode env var; that fallback is gone now.
+    """
+    from agent.ai_client import AIClient
+
+    tid = "tenant_orphan_ollama_runtime"
+    c = _make_contact(db, tid, "Mid-Session Bot")
+    _make_agent(db, tid, c.id, "ollama", "llama3.2:3b", instance_id=None)
+
+    with pytest.raises(ValueError) as excinfo:
+        AIClient(
+            provider="ollama",
+            model_name="llama3.2:3b",
+            db=db,
+            tenant_id=tid,
+            provider_instance_id=None,
+        )
+
+    msg = str(excinfo.value)
+    assert "Hub" in msg and "LLM Providers" in msg
+    assert tid in msg
+
+
+def test_bootstrap_is_idempotent(db):
+    """Second call must not double-create the auto-Ollama instance or
+    re-relink an already-linked agent. A boot loop (e.g. backend crash +
+    restart) should not pile up duplicate rows.
+    """
+    tid = "tenant_idempotent_bootstrap"
+    c = _make_contact(db, tid, "Idem Bot")
+    _make_agent(db, tid, c.id, "ollama", "llama3.2:3b", instance_id=None)
+
+    s1 = ProviderInstanceService.bootstrap_orphan_vendor_agents(db)
+    s2 = ProviderInstanceService.bootstrap_orphan_vendor_agents(db)
+
+    assert s1["instances_created"] >= 1
+    assert s2["instances_created"] == 0
+    assert s2["agents_relinked"] == 0
+
+    ollama_count = (
+        db.query(ProviderInstance)
+        .filter(
+            ProviderInstance.tenant_id == tid,
+            ProviderInstance.vendor == "ollama",
+        )
+        .count()
+    )
+    assert ollama_count == 1
