@@ -186,7 +186,6 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
   const [showCustomModelInput, setShowCustomModelInput] = useState(false)
   const [customModelInput, setCustomModelInput] = useState('')
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const [ollamaModels, setOllamaModels] = useState<{ value: string; label: string }[]>([])
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
 
   // Load settings from parent props or fetch from API
@@ -206,21 +205,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
     if (agentId) {
       loadAgentConfig()
     }
-    fetchOllamaModels()
   }, [agentId])
-
-  const fetchOllamaModels = async () => {
-    try {
-      const data = await api.getOllamaHealth()
-      if (data.available && data.models) {
-        setOllamaModels(
-          data.models.map((m) => ({ value: m.name, label: m.name }))
-        )
-      }
-    } catch {
-      // Ollama not available
-    }
-  }
 
   const loadAgentConfig = async () => {
     if (!agentId) return
@@ -391,7 +376,6 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
 
                       {/* Provider models with pricing — sourced from configured instances */}
                       {(() => {
-                        const isOllama = agent.model_provider?.toLowerCase() === 'ollama'
                         // TTS-only models must not appear in the chat-model picker — they
                         // emit audio only and would fail at call time on a text agent.
                         const TTS_ONLY_SUFFIXES = ['-tts-preview', '-tts']
@@ -406,9 +390,10 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         const instanceModels = [
                           ...new Set(providerInstances.flatMap(i => i.available_models))
                         ].filter(m => !isTTSOnlyModel(m))
-                        const dynamicModels: { value: string; label: string }[] = isOllama
-                          ? ollamaModels
-                          : instanceModels.length > 0
+                        // v0.7.0: Ollama models now flow through providerInstances like every
+                        // other vendor — single source of truth via the provider_instance catalog.
+                        const dynamicModels: { value: string; label: string }[] =
+                          instanceModels.length > 0
                             ? instanceModels.map(m => ({ value: m, label: labelFor(m) }))
                             : staticOptions.filter(o => !isTTSOnlyModel(o.value))
                         return dynamicModels
