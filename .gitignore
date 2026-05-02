@@ -275,6 +275,8 @@ backend/tests/*
 !backend/tests/test_whisper_container_manager.py
 !backend/tests/test_whisper_auth.py
 !backend/tests/test_audio_transcript_skill_asr.py
+!backend/tests/test_asr_cascade_on_delete.py
+!backend/tests/test_openai_whisper_asr_provider.py
 !backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py
 !backend/tests/test_wizard_drift.py
