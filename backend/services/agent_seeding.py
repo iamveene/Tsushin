@@ -35,6 +35,26 @@ def _get_agent_switcher_config(model_name: str) -> dict:
     }
 
 
+def _get_audio_transcript_config() -> dict:
+    """
+    v0.7.0: explicit `audio_transcript` defaults.
+
+    Mirrors `AudioTranscriptSkill.get_default_config()`. Seeding the row with
+    the schema defaults (`asr_mode="openai"`, no instance pinned) keeps fresh
+    installs declarative — the skill still works with an empty config because
+    the runtime falls through to OpenAI cloud when `asr_mode != "instance"`,
+    but explicit values mean the Studio UI doesn't need to rely on its
+    legacy-row normalizer to fill in the blank.
+    """
+    return {
+        "asr_mode": "openai",
+        "asr_instance_id": None,
+        "language": "auto",
+        "model": "whisper-1",
+        "response_mode": "conversational",
+    }
+
+
 def _get_flows_skill_config(model_name: str) -> dict:
     """Standard flows skill config with all capabilities."""
     return {
@@ -114,7 +134,14 @@ Communication style:
 - Professional but approachable
 - Ask clarifying questions when needed
 - Provide actionable information""",
-            "skills": ["web_search", "knowledge_sharing", "image", "automation", "audio_transcript", "audio_tts"],
+            "skills": [
+                "web_search",
+                "knowledge_sharing",
+                "image",
+                "automation",
+                {"type": "audio_transcript", "config": _get_audio_transcript_config()},
+                "audio_tts",
+            ],
             "channels": ["playground", "whatsapp", "telegram"],
             "trigger_dm_enabled": True,
             "trigger_group_filters": [],
@@ -173,7 +200,12 @@ Best practices:
 - Provide step-by-step solutions
 - Follow up to ensure resolution
 - Thank customers for their patience""",
-            "skills": ["web_search", "knowledge_sharing", "audio_transcript", "audio_tts"],
+            "skills": [
+                "web_search",
+                "knowledge_sharing",
+                {"type": "audio_transcript", "config": _get_audio_transcript_config()},
+                "audio_tts",
+            ],
             "channels": ["playground", "whatsapp", "telegram"],
             "trigger_dm_enabled": True,
             "trigger_group_filters": [],

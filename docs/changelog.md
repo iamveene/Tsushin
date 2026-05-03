@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Seeding audit: explicit `audio_transcript` defaults for fresh installs (2026-05-03)
+
+**Audit summary.** Walked every v0.7.0 feature against the install / per-tenant seed path (`install.py` → `auth_routes.py::setup_wizard()` → `agent_seeding.py::seed_default_agents()` → `app.py` startup hooks) to confirm fresh installs land in a working state. Findings:
+
+- **OpenAI cloud Whisper (ASR)** — works out-of-box. The setup wizard creates a `ProviderInstance(vendor="openai")` whenever the operator supplies an OpenAI key; the `audio_transcript` skill resolves to that instance (or the legacy `api_key("openai")` fallback) when `asr_mode != "instance"`. No separate ASR row needed for cloud.
+- **Self-hosted Whisper / Speaches (ASR)** — lazy by design. Operators create instances via the Hub Provider Wizard. Empty fresh installs surface the inline "+ Create an ASR instance now" CTA on the Audio Agents Wizard (G6 from the prior release).
+- **LLM provider single-source-of-truth** — seeded. Setup wizard creates a `ProviderInstance` per configured cloud key + auto-discovered local Ollama; `app.py` startup runs `bootstrap_orphan_vendor_agents` to repair any agent whose `provider_instance_id` was nulled by a soft-delete.
+- **KB custom embeddings (`agent_knowledge_config`)** — JIT/lazy. `KnowledgeService.get_knowledge_config` creates the row on first read with the migration's server defaults (provider=`local`, model=`all-MiniLM-L6-v2`, dims=384, cosine, fixed_text chunking).
+- **Embedding provider catalog** — code-only (`agent/memory/embedding_catalog.py`). `EmbeddingProviderService.list_options` filters existing `ProviderInstance` rows by `EMBEDDING_CAPABLE_VENDORS`, so any cloud LLM provider seeded above immediately appears as an embedding option without a second seed pass.
+- **Default vector store** — seeded. `VectorStoreInstanceService.create_default_setup_instance` provisions the tenant's default ChromaDB and links it to the seeded agents.
+- **Tenant case-memory gates / OKG** — seeded by migration `0077` (`server_default=TRUE`). No extra row needed.
+- **Continuous Agents, FlowTriggerBinding, Wake events** — lazy by design (user-driven through the existing routes).
+
+**Gap closed.** `services/agent_seeding.py` was seeding the v0.7.0 `audio_transcript` skill with `config={}`. Functionally fine — the runtime treats unset `asr_mode` as the cloud OpenAI path — but it left fresh-install rows reliant on the frontend's legacy normalizer to display the `asr_mode="openai"` value the schema documents as the default. Per CLAUDE.md's seed-maintenance rule (default values + enum changes), the seeded skill now carries the explicit v0.7.0 schema defaults inline.
+
+**Files.**
+- `backend/services/agent_seeding.py` — added `_get_audio_transcript_config()` helper mirroring `AudioTranscriptSkill.get_default_config()`; switched the `audio_transcript` entries on the seeded `Tsushin` and `CustomerService` agents from string-form to dict-form so the AgentSkill row is written with `{asr_mode:"openai", asr_instance_id:null, language:"auto", model:"whisper-1", response_mode:"conversational"}`.
+
+**Verified.** Helper output validated inside the running backend container; `agent_seeding.py` parses cleanly and the existing `AgentSkill(config=skill_config)` write path is unchanged. The change is additive and backwards-compatible — existing agents are unaffected (this only changes what brand-new tenants land with).
+
 ### Release 0.7.0 — Fix ORM cascade vs. NOT NULL FK delete failure (2026-05-03)
 
 **Why.** Deleting an agent that had any A2A communication permission (e.g. Kokoro in the QA tenant) returned `409 Conflict` with a misleading "cascade cleanup missed a table" message. Backend log:
