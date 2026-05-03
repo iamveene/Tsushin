@@ -2,7 +2,7 @@ import os
 
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from datetime import datetime
 
@@ -2762,8 +2762,18 @@ class SentinelProfileAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    profile = relationship("SentinelProfile", backref="assignments")
-    agent = relationship("Agent", backref="sentinel_profile_assignments")
+    # passive_deletes=True on both backrefs: profile_id is CASCADE+NOT NULL
+    # (deleting a SentinelProfile would fail without this) and agent_id is
+    # CASCADE+nullable=True (without this the row is left as a zombie with NULL
+    # agent_id instead of being deleted as the CASCADE intends).
+    profile = relationship(
+        "SentinelProfile",
+        backref=backref("assignments", passive_deletes=True),
+    )
+    agent = relationship(
+        "Agent",
+        backref=backref("sentinel_profile_assignments", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "skill_type", name="uq_sentinel_profile_assignment_scope"),
@@ -3943,7 +3953,12 @@ class ConversationTag(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="tags")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL, so let Postgres delete
+    # the tag rather than letting SQLAlchemy NULL the FK first (which would fail).
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("tags", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_tag_tenant_user", "tenant_id", "user_id"),
@@ -3969,7 +3984,12 @@ class ConversationInsight(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="insights")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL — same rationale as
+    # ConversationTag above.
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("insights", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_insight_tenant_user", "tenant_id", "user_id"),
@@ -3995,8 +4015,18 @@ class ConversationLink(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    source_thread = relationship("ConversationThread", foreign_keys=[source_thread_id], backref="outgoing_links")
-    target_thread = relationship("ConversationThread", foreign_keys=[target_thread_id], backref="incoming_links")
+    # passive_deletes=True: both *_thread_id columns are CASCADE+NOT NULL, so
+    # let Postgres delete the link row when either thread is removed.
+    source_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[source_thread_id],
+        backref=backref("outgoing_links", passive_deletes=True),
+    )
+    target_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[target_thread_id],
+        backref=backref("incoming_links", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_link_tenant_user", "tenant_id", "user_id"),
@@ -4160,8 +4190,20 @@ class AgentCommunicationPermission(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    source_agent = relationship("Agent", foreign_keys=[source_agent_id], backref="outgoing_comm_permissions")
-    target_agent = relationship("Agent", foreign_keys=[target_agent_id], backref="incoming_comm_permissions")
+    # passive_deletes=True: the FK is ondelete="CASCADE" + NOT NULL, so we let
+    # Postgres delete the row when the parent agent is removed instead of letting
+    # SQLAlchemy try to UPDATE ... SET <agent_id>=NULL first (which violates the
+    # NOT NULL constraint and surfaces as a 409 in the agent delete endpoint).
+    source_agent = relationship(
+        "Agent",
+        foreign_keys=[source_agent_id],
+        backref=backref("outgoing_comm_permissions", passive_deletes=True),
+    )
+    target_agent = relationship(
+        "Agent",
+        foreign_keys=[target_agent_id],
+        backref=backref("incoming_comm_permissions", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
