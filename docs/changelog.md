@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Fix ORM cascade vs. NOT NULL FK delete failure (2026-05-03)
+
+**Why.** Deleting an agent that had any A2A communication permission (e.g. Kokoro in the QA tenant) returned `409 Conflict` with a misleading "cascade cleanup missed a table" message. Backend log:
+
+```
+psycopg2.errors.NotNullViolation: null value in column "target_agent_id"
+of relation "agent_communication_permission" violates not-null constraint
+[SQL: UPDATE agent_communication_permission SET target_agent_id=NULL ...]
+```
+
+**Root cause.** The FKs `agent_communication_permission.source_agent_id` and `target_agent_id` are declared `ondelete="CASCADE"` + `nullable=False`, with a SQLAlchemy backref to `Agent` (`outgoing_comm_permissions` / `incoming_comm_permissions`). On `db.delete(agent)`, SQLAlchemy's default behavior loads the child rows and emits `UPDATE … SET <fk>=NULL` *before* Postgres can run the DB-level CASCADE — and that UPDATE violates the NOT NULL constraint, rolling the whole transaction back.
+
+**Fix.** Added `passive_deletes=True` to the affected backrefs so SQLAlchemy stays out of the way and lets Postgres `ON DELETE CASCADE` do its job. Same fix applied to five additional latent occurrences of the same pattern surfaced by the audit:
+
+- `AgentCommunicationPermission.source_agent` / `.target_agent` → `Agent` (the original Kokoro bug).
+- `SentinelProfileAssignment.profile` → `SentinelProfile` (deleting a sentinel profile would fail with `profile_id` NOT NULL violation).
+- `SentinelProfileAssignment.agent` → `Agent` (latent: agent_id is nullable so no crash, but ORM was leaving zombie assignment rows with NULL agent_id instead of cascading the delete as intended).
+- `ConversationTag.thread`, `ConversationInsight.thread`, `ConversationLink.source_thread` / `.target_thread` → `ConversationThread` (deleting a thread that had any tag, insight, or link would fail).
+
+**Files.**
+- `backend/models.py` — added `backref` import and `passive_deletes=True` on the six affected relationships listed above.
+
+**Verified.** Kokoro (agent_id=2) deleted via UI: `DELETE /api/agents/2 → 204 No Content`, agent count went from 14 → 13, no backend error in logs. The agent_communication_permission row that previously blocked the delete is now removed by Postgres CASCADE as the schema always intended.
+
+### Release 0.7.0 — KB custom embeddings + vector-store coexistence (2026-05-02)
+
+**Summary.** Agent Knowledge Base indexing now uses the shared embedding provider abstraction instead of a hardcoded local MiniLM + Chroma path. KBs can choose configured OpenAI, Gemini, Ollama, or built-in local embeddings; snapshot provider/model/dimensions/chunking/vector profile per document; and keep old documents searchable after settings change.
+
+**Backend.**
+- Added a shared embedding catalog and adapters for `local` (`all-MiniLM-L6-v2`, 384d), OpenAI (`text-embedding-3-small` / `text-embedding-3-large`, 256/512/1024/default max), Gemini (`gemini-embedding-2` / `gemini-embedding-001`, 768/1536/3072), and Ollama (`/api/embed`, test-pinned dimensions).
+- Added `GET /api/embedding-providers/options` and `POST /api/embedding-providers/test` to list embedding-capable configured provider instances and validate single + batch embeddings before saving KB settings.
+- Added `agent_knowledge_config` and KB snapshot fields on `agent_knowledge` for tenant/provider/model/dimensions/vector store/collection/namespace/chunk strategy/parser/index version.
+- KB vectors now carry `purpose="knowledge_base"`, tenant, agent, document, chunk, model, and dimensions metadata. Built-in Chroma and external Qdrant/MongoDB/Pinecone profiles derive KB-specific collections/indexes/namespaces like `kb_{tenant_hash}_{agent_id}_{dims}` so long-term memory and KB can share the same vector service without collection or dimension conflicts.
+- KB search groups documents by vector profile, embeds the query once per profile, merges ranked results, and preserves legacy `knowledge_agent_{agent_id}` Chroma collections for already-indexed documents.
+- Added deterministic chunk strategies: `fixed_text`, `json_structure`, and `csv_rows` across TXT/CSV/JSON/PDF/DOCX lightweight parsers. Docling and `llm_suggested` chunking remain deferred.
+- Fixed the broken KB reprocess path that referenced `service.vector_store`, and reprocess now snapshots the current KB config before re-indexing.
+
+**Frontend.**
+- Agent Knowledge tab now includes index settings: embedding provider/model/dimensions selector, vector-store selector, chunking controls, parser selector, embedding test, saved contract display, and per-document reprocess action.
+- Fixed KB search response typing/rendering and corrected the vector-store embedding test client route to `/api/vector-stores/{id}/test-embedding`.
+- Upload size validation now matches the backend 50 MB document limit.
+
+**Tests.**
+- Added backend success coverage for embedding contract validation, JSON/CSV chunking, KB profile isolation across built-in/external vector profiles, and case-memory regression compatibility.
+- Targeted validation: `23 passed` across `backend/tests/test_kb_custom_embeddings.py`, `backend/tests/test_agent_knowledge_metadata.py`, `backend/tests/test_case_memory_embedding_contract.py`, and `backend/tests/test_routes_test_embedding.py`.
+
 ### Release 0.7.0 — ASR Gap Closure: Hub management card + cascade banner + HTTP tests (2026-05-02)
 
 **Closes the 8 gaps from the post-merge audit (G1–G8).**
