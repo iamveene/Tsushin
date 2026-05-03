@@ -131,6 +131,10 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
       } else if (Array.isArray(data.detail)) {
         // Pydantic validation errors come as array of objects with msg field
         detail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+      } else if (typeof data.detail === 'object') {
+        // Some routes return { error, message, ...context } — prefer the human-readable message
+        const messageField = (data.detail as any).message
+        detail = typeof messageField === 'string' ? messageField : JSON.stringify(data.detail)
       } else {
         detail = String(data.detail)
       }
@@ -2127,6 +2131,7 @@ export interface FlowTriggerBindingUpdate {
 export interface AgentKnowledge {
   id: number
   agent_id: number
+  tenant_id?: string | null
   document_name: string
   document_type: string
   file_path: string
@@ -2137,6 +2142,19 @@ export interface AgentKnowledge {
   upload_date: string
   processed_date?: string
   tags?: string[]
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  vector_store_instance_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy?: string | null
+  chunk_size?: number | null
+  chunk_overlap?: number | null
+  parser?: string | null
+  index_version?: number | null
 }
 
 export interface AgentKnowledgeUpdate {
@@ -2152,6 +2170,119 @@ export interface KnowledgeChunk {
   char_count: number
   metadata_json: Record<string, any>
 }
+
+export interface KnowledgeSearchResult {
+  chunk_id: number
+  knowledge_id: number
+  document_name: string
+  content: string
+  similarity: number
+  chunk_index: number
+}
+
+export interface EmbeddingModelOption {
+  provider: string
+  model: string
+  label: string
+  supported_dimensions: number[]
+  default_dimensions?: number | null
+  max_dimensions?: number | null
+  requires_provider_instance: boolean
+  supports_dimensions_parameter: boolean
+}
+
+export interface EmbeddingProviderOption {
+  provider: string
+  provider_instance_id: number | null
+  instance_name: string
+  vendor: string
+  configured: boolean
+  health_status: string
+  base_url?: string | null
+  models: EmbeddingModelOption[]
+  default_model?: string | null
+  default_dimensions?: number | null
+  test_status?: string | null
+}
+
+export interface EmbeddingOptionsResponse {
+  providers: EmbeddingProviderOption[]
+  default: {
+    provider: string
+    provider_instance_id: number | null
+    model: string
+    dimensions: number
+  }
+}
+
+export interface EmbeddingProviderTestRequest {
+  provider: string
+  provider_instance_id?: number | null
+  model: string
+  dimensions?: number | null
+  text?: string
+}
+
+export interface EmbeddingProviderTestResult {
+  success: boolean
+  provider: string
+  provider_instance_id?: number | null
+  model: string
+  requested_dimensions?: number | null
+  actual_dimensions: number
+  batch_count: number
+  sample_norm: number
+  latency_ms: number
+  error?: string | null
+}
+
+export interface AgentKnowledgeConfig {
+  id: number
+  tenant_id: string
+  agent_id: number
+  embedding_provider_instance_id: number | null
+  embedding_provider: string
+  embedding_model: string
+  embedding_dims: number
+  embedding_metric: string
+  vector_store_instance_id: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy: string
+  chunk_size: number
+  chunk_overlap: number
+  parser: string
+  search_top_k: number
+  similarity_threshold: number
+}
+
+export type AgentKnowledgeConfigUpdate = Partial<Omit<AgentKnowledgeConfig, 'id' | 'tenant_id' | 'agent_id'>>
+
+export interface ProjectKnowledgeConfig {
+  id: number
+  tenant_id: string
+  project_id: number
+  embedding_provider_instance_id: number | null
+  embedding_provider: string
+  embedding_model: string
+  embedding_dims: number
+  embedding_metric: string
+  vector_store_instance_id: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy: string
+  chunk_size: number
+  chunk_overlap: number
+  parser: string
+  search_top_k: number
+  similarity_threshold: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type ProjectKnowledgeConfigUpdate = Partial<Omit<ProjectKnowledgeConfig, 'id' | 'tenant_id' | 'project_id' | 'created_at' | 'updated_at'>>
 
 // Task 3: Shared Knowledge
 export interface SharedKnowledge {
@@ -3149,6 +3280,7 @@ export interface Project {
   icon: string
   color: string
   agent_id?: number
+  agent_ids?: number[]
   system_prompt_override?: string
   enabled_tools: string[]
   enabled_custom_tools: number[]
@@ -3158,7 +3290,16 @@ export interface Project {
   // Phase 16: KB Configuration
   kb_chunk_size?: number
   kb_chunk_overlap?: number
+  kb_embedding_provider_instance_id?: number | null
+  kb_embedding_provider?: string | null
   kb_embedding_model?: string
+  kb_embedding_dims?: number | null
+  kb_embedding_metric?: string | null
+  kb_vector_store_instance_id?: number | null
+  kb_vector_store_index_id?: number | null
+  kb_vector_collection_name?: string | null
+  kb_vector_namespace?: string | null
+  kb_config?: ProjectKnowledgeConfig | null
   // Phase 16: Memory Configuration
   enable_semantic_memory?: boolean
   semantic_memory_results?: number
@@ -3246,6 +3387,23 @@ export interface ProjectCreate {
   color?: string
   agent_id?: number
   system_prompt_override?: string
+  kb_chunk_size?: number
+  kb_chunk_overlap?: number
+  kb_embedding_provider_instance_id?: number | null
+  kb_embedding_provider?: string | null
+  kb_embedding_model?: string
+  kb_embedding_dims?: number | null
+  kb_embedding_metric?: string | null
+  kb_vector_store_instance_id?: number | null
+  kb_vector_store_index_id?: number | null
+  kb_vector_collection_name?: string | null
+  kb_vector_namespace?: string | null
+  enable_semantic_memory?: boolean
+  semantic_memory_results?: number
+  semantic_similarity_threshold?: number
+  enable_factual_memory?: boolean
+  factual_extraction_threshold?: number
+  agent_ids?: number[]
 }
 
 export interface ProjectConversation {
@@ -3268,6 +3426,20 @@ export interface ProjectDocument {
   status: string
   error?: string
   upload_date?: string
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  vector_store_instance_id?: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy?: string | null
+  chunk_size?: number | null
+  chunk_overlap?: number | null
+  parser?: string | null
+  index_version?: number | null
 }
 
 // Phase 15: Skill Projects - Session Management
@@ -3756,6 +3928,56 @@ export interface VendorInfo {
 
 // ==================== Vector Store Instances (v0.6.0) ====================
 
+export interface VectorStoreIndex {
+  id: number
+  tenant_id?: string
+  vector_store_instance_id?: number | null
+  purpose?: string | null
+  owner_type?: string | null
+  owner_id?: number | null
+  collection_name?: string | null
+  namespace?: string | null
+  index_name?: string | null
+  physical_collection_name?: string | null
+  physical_namespace?: string | null
+  physical_index_name?: string | null
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  embedding_task?: string | null
+  embedding_task_document?: string | null
+  embedding_task_query?: string | null
+  contract_hash?: string | null
+  vector_count?: number | null
+  document_count?: number | null
+  chunk_count?: number | null
+  health_status?: string | null
+  is_default?: boolean
+  is_active?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface VectorStoreIndexResolveRequest {
+  purpose: string
+  owner_type?: string
+  owner_id?: number
+  contract?: Record<string, any>
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  embedding_task_document?: string | null
+  embedding_task_query?: string | null
+  physical_collection_name?: string | null
+  physical_index_name?: string | null
+  physical_namespace?: string | null
+  create?: boolean
+}
+
 export interface VectorStoreInstance {
   id: number
   tenant_id: string
@@ -3776,6 +3998,10 @@ export interface VectorStoreInstance {
   container_status?: string | null  // none | creating | running | stopped | error
   container_name?: string | null
   container_port?: number | null
+  indexes?: VectorStoreIndex[]
+  default_index?: VectorStoreIndex | null
+  default_vector_store_index_id?: number | null
+  long_term_memory_index_id?: number | null
   created_at?: string | null
   updated_at?: string | null
 }
@@ -5141,6 +5367,44 @@ export const api = {
     return res.json()
   },
 
+  async getAgentKnowledgeConfig(agentId: number): Promise<AgentKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge configuration')
+    return res.json()
+  },
+
+  async updateAgentKnowledgeConfig(agentId: number, config: AgentKnowledgeConfigUpdate): Promise<AgentKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save knowledge configuration')
+    return res.json()
+  },
+
+  async getAgentKnowledgeEmbeddingOptions(agentId: number): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/embedding-options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch embedding options')
+    return res.json()
+  },
+
+  async getEmbeddingProviderOptions(): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/embedding-providers/options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch embedding provider options')
+    return res.json()
+  },
+
+  async testEmbeddingProvider(request: EmbeddingProviderTestRequest): Promise<EmbeddingProviderTestResult> {
+    const res = await authenticatedFetch(`${API_URL}/api/embedding-providers/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test embedding provider')
+    return res.json()
+  },
+
   async getKnowledgeDocument(agentId: number, docId: number): Promise<AgentKnowledge> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge document')
@@ -5182,13 +5446,21 @@ export const api = {
     return res.json()
   },
 
-  async searchAgentKnowledge(agentId: number, query: string, maxResults = 5): Promise<KnowledgeChunk[]> {
+  async searchAgentKnowledge(agentId: number, query: string, maxResults = 5): Promise<KnowledgeSearchResult[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, max_results: maxResults }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to search agent knowledge')
+    return res.json()
+  },
+
+  async reprocessKnowledgeDocument(agentId: number, docId: number): Promise<{ message: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}/reprocess`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reprocess knowledge document')
     return res.json()
   },
 
@@ -6683,14 +6955,12 @@ export const api = {
     try {
       const res = await authenticatedFetch(`${API_URL}/api/feature-flags`)
       if (res.status === 404) {
-        // eslint-disable-next-line no-console
         console.debug('[feature-flags] endpoint missing — defaulting case_memory_enabled=true')
         return { case_memory_enabled: true }
       }
       if (!res.ok) await handleApiError(res, 'Failed to fetch feature flags')
       return res.json()
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.debug('[feature-flags] fetch failed — defaulting case_memory_enabled=true', err)
       return { case_memory_enabled: true }
     }
@@ -6698,7 +6968,7 @@ export const api = {
 
   async testEmbedding(instanceId: number, text: string): Promise<VectorStoreEmbeddingTestResult> {
     const res = await authenticatedFetch(
-      `${API_URL}/api/vector-store-instances/${instanceId}/test-embedding`,
+      `${API_URL}/api/vector-stores/${instanceId}/test-embedding`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7194,11 +7464,37 @@ export const api = {
   },
 
   // Project Knowledge
-  async uploadProjectDocument(projectId: number, file: File): Promise<ProjectDocument> {
+  async getProjectKnowledgeConfig(projectId: number): Promise<ProjectKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project knowledge configuration')
+    return res.json()
+  },
+
+  async updateProjectKnowledgeConfig(projectId: number, config: ProjectKnowledgeConfigUpdate): Promise<ProjectKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save project knowledge configuration')
+    return res.json()
+  },
+
+  async getProjectKnowledgeEmbeddingOptions(projectId: number): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/embedding-options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project embedding options')
+    return res.json()
+  },
+
+  async uploadProjectDocument(projectId: number, file: File, chunkSize?: number, chunkOverlap?: number): Promise<ProjectDocument> {
     const formData = new FormData()
     formData.append('file', file)
+    const params = new URLSearchParams()
+    if (typeof chunkSize === 'number') params.set('chunk_size', String(chunkSize))
+    if (typeof chunkOverlap === 'number') params.set('chunk_overlap', String(chunkOverlap))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
 
-    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/upload`, {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/upload${suffix}`, {
       method: 'POST',
       body: formData,
     })
@@ -9321,6 +9617,22 @@ export const api = {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to test vector store connection')
+    return res.json()
+  },
+
+  async getVectorStoreIndexes(id: number): Promise<VectorStoreIndex[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/indexes`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch vector store indexes')
+    return res.json()
+  },
+
+  async resolveVectorStoreIndex(id: number, data: VectorStoreIndexResolveRequest): Promise<VectorStoreIndex> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/indexes/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to resolve vector store index')
     return res.json()
   },
 

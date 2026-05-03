@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Bug-fix wave from full-validation campaign (2026-05-03)
+
+**Summary.** Closes 4 bugs surfaced by the v0.7.0 full-validation QA campaign and adds DB-level safety nets for trigger deletion. Also patches the onboarding tour with v0.7.0-specific feature bullets that were missing.
+
+**Backend.**
+- Added `0081_trigger_delete_cascade_safety.py` — per-trigger BEFORE DELETE trigger functions on `webhook_integration`, `email_channel_instance`, `jira_channel_instance`, `github_channel_instance`. Direct DB DELETE on a trigger row now removes the system-managed auto-flow + binding even when the service-layer route is bypassed (BUG-QA070-WC-001). Polymorphic `flow_trigger_binding.trigger_instance_id` cannot use a native FK CASCADE, so the trigger function `fn_cascade_trigger_delete` mirrors the `flow_binding_service.delete_bindings_for_trigger` semantics: only system-managed bindings get removed; if any user-authored binding still references the auto-flow, the flow is preserved.
+- Added `0082_flow_definition_cascade_fks.py` — flips `flow_node`, `flow_run`, `flow_node_run` FKs to `ON DELETE CASCADE` on the parent flow_definition / flow_node / flow_run. Required so the trigger-cascade chain in 0081 succeeds, and removes a long-standing manual-cleanup-required edge case for any path that deletes a flow.
+- Added `tests/test_trigger_delete_cascade.py` — 2 integration tests exercising direct DB DELETE cascade and the user-authored-binding-preservation invariant.
+
+**Frontend.**
+- Fixed BUG-QA070-A4-002 in `lib/client.ts::handleApiError` — when a backend route returns `detail` as an object (e.g., `{error, message, ...context}`), the handler now extracts `detail.message` instead of stringifying to `[object Object]`. Affects every wizard / modal that calls `handleApiError`. The user-visible benefit shows up most clearly in the "From Template" flow modal, which now displays the real "missing credentials" / "template returned empty flow" messages instead of an opaque `[object Object]` toast (this was the underlying cause of BUG-QA070-A4-001's "missing required parameter" confusion).
+- Fixed BUG-QA070-A1-001 in `contexts/OnboardingContext.tsx` — added `MINIMIZED_KEY_PREFIX` localStorage namespace, `getMinimizedKey()` helper, and rehydrate logic in the mount effect. `minimize()` now persists; `maximize()`/`completeTour()`/`dismissTour()`/`skipTour()` all clear the key. `startTour()` also persists the `started` key (was a regression entry point that bypassed reload survival). The minimized "Continue tour" pill now survives a full page reload.
+- Patched 4 steps of the onboarding tour in `components/OnboardingWizard.tsx` to surface v0.7.0 features: Step 5 (A2A & Long-Term Memory) now lists pluggable embedding providers (OpenAI / Gemini / Ollama), per-surface embedding contracts, and multi-index vector stores; Step 10 (Flows) lists the 12 step types across the agentic / programmatic / hybrid families, the 5 built-in templates, the source-step position-1 lock, and system-managed auto-flows; Step 12 (Voice) lists self-hosted Whisper as the second ASR engine plus cascade-aware delete; Step 15 (Triggers & Continuous Agents) lists the 4 trigger kinds with credentials, dry-run actions (`test-query` / `test-criteria` / `poll-now`), Memory Recap injection, and system-managed auto-flow scaffolding. The Step 15 action button URL was also corrected from `/hub?tab=channels` to `/hub/triggers`.
+
+**Triage notes.**
+- BUG-QA070-A4-001 ("template instantiation 422") was downgraded to a tester error, not a real defect: the qa-tester's curl probes used wrong body shapes (`{name: ...}`, `{flow_name: ...}`, `{parameters: {...}}`) and never tried the correct shape `{params: {...}}` that the UI actually sends. Verified via direct curl with cookies that `POST /api/flows/templates/daily_email_digest/instantiate` accepts `{params: {name, agent_id, channel, recipient, time_of_day, timezone, max_emails}}`. The user-visible symptom in the UI was the `[object Object]` toast from BUG-QA070-A4-002 hiding the real backend error (missing Gmail credentials), which is now fixed.
+
+**Tests + validation.**
+- `tests/test_trigger_delete_cascade.py` — 2 passed.
+- `tests/test_routes_flow_trigger_bindings.py` — 8 passed (regression check after migrations).
+- Browser validation: 4 PASS / 1 FAIL (round 1) → re-fix shipped → 1 PASS (round 2). Evidence at `docs/qa/v0.7.0/full-validation/wave_FIX_validation_evidence.md`.
+- Direct DB cascade verified end-to-end: created webhook trigger via API → confirmed auto-flow + binding + 4 nodes via DB inspection → ran `DELETE FROM webhook_integration WHERE id=...` → confirmed all child rows gone.
+
+### Release 0.7.0 — Multi-index vector stores for Agent KB, Project KB, and long-term memory (2026-05-03)
+
+**Summary.** Vector stores now separate connection/container lifecycle from physical indexes. A single Qdrant/Chroma/Mongo/Pinecone connection can host many immutable `VectorStoreIndex` rows, one per purpose + owner + embedding contract. Changing provider/model/dimension creates or resolves another collection/index/namespace inside the same vector-store instance instead of provisioning another Docker container.
+
+**Backend.**
+- Added `VectorStoreIndex` plus Alembic `0080_multi_index_vector_store.py`; Agent KB, Project KB, and Case Memory now snapshot `vector_store_index_id` alongside provider/model/dimensions.
+- Added `VectorStoreIndexResolver` and `/api/vector-stores/{id}/indexes` + `/api/vector-stores/{id}/indexes/resolve`.
+- Updated vector-store adapter caching to include physical collection/index/namespace, so the same `VectorStoreInstance` can safely serve multiple dimensions/contracts.
+- Implemented Project KB custom embedding config and endpoints: `GET/PUT /api/projects/{id}/knowledge/config` and `GET /api/projects/{id}/knowledge/embedding-options`.
+- Project KB uploads now persist external vectors immediately, and Project KB document/project deletion removes vectors before deleting chunk rows so Qdrant collections do not keep orphaned points.
+- Updated Case Memory so `VectorStoreInstance.extra_config.embedding_*` is only the default for future memory indexes. Existing cases keep their snapshotted contract/index and remain searchable after defaults change.
+
+**Frontend.**
+- Added reusable embedding-contract controls and wired them into Project create/detail, Vector Store config, and vector-store index display.
+- Settings → Vector Stores now presents the selected connection as a multi-index container and shows existing indexes/contracts.
+
+**Tests.**
+- Added resolver coverage for multi-index same-instance behavior, idempotency, and cross-tenant rejection.
+- Added Project KB config coverage for custom embedding snapshots, tenant-safe provider/vector-store validation, and external-vector cleanup ordering.
+- Targeted container validation: `15 passed` across `test_vector_store_index_resolver.py`, `test_project_kb_custom_embeddings.py`, `test_kb_custom_embeddings.py`, and `test_case_memory_embedding_contract.py`.
+- UI-first regression passed with `backend/dev_tests/multi_index_external_vector_ui_regression.js`: Agent KB and Project KB used one external Qdrant `VectorStoreInstance`, uploaded/searched `gemini-embedding-2` docs at `1536d` and `768d`, preserved mixed-contract search, displayed vector-store indexes in the UI, and returned all four Qdrant collections to `0` points after cleanup. Evidence: `output/playwright/multi-index-external-vector-ui-regression-2026-05-03T18-05-55-769Z/`.
+
 ### Release 0.7.0 — Seeding audit: explicit `audio_transcript` defaults for fresh installs (2026-05-03)
 
 **Audit summary.** Walked every v0.7.0 feature against the install / per-tenant seed path (`install.py` → `auth_routes.py::setup_wizard()` → `agent_seeding.py::seed_default_agents()` → `app.py` startup hooks) to confirm fresh installs land in a working state. Findings:
@@ -4639,6 +4684,11 @@ Coordinated fix sweep for 11 CRITICAL/HIGH findings from the v0.6.0 audit, group
 - Added Image Skill support for OpenAI `gpt-image-2` using the OpenAI Images API for both generation (`client.images.generate`) and edits (`client.images.edit`).
 - Added an image-only `openai_image` model suggestion bucket for the Provider Wizard so `gpt-image-2` appears in Image Generation setup without polluting normal OpenAI LLM model suggestions or live OpenAI LLM discovery results.
 - Added pricing for `gpt-image-2` using Tsushin's existing prompt/completion pricing shape: `$5/1M` prompt tokens and `$30/1M` completion tokens. OpenAI's separate `$8/1M` image-input token price is documented as a known approximation gap in the current two-field schema.
+
+### Multi-index external vector regression (2026-05-03)
+
+- Added deterministic `POST /api/projects/{project_id}/knowledge/search` so Project KB search can be validated independently of LLM conversation output.
+- Added `backend/dev_tests/multi_index_external_vector_ui_regression.js`, a UI-first browser regression that configures Agent KB and Project KB against one external Qdrant vector store, uploads `gemini-embedding-2` documents at `1536d` and `768d`, validates mixed-contract search, and verifies the resulting `VectorStoreIndex` rows and Qdrant vector sizes.
 
 ---
 
