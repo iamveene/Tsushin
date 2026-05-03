@@ -194,6 +194,7 @@ backend/dev_tests/
 !backend/dev_tests/
 backend/dev_tests/*
 !backend/dev_tests/export_gmail_oauth_fixture.py
+!backend/dev_tests/multi_index_external_vector_ui_regression.js
 
 # Individual test files outside tests/ directory
 # (prevents accidental commits of dev test scripts)
@@ -264,10 +265,12 @@ backend/tests/*
 !backend/tests/test_cluster3_backend_regressions.py
 !backend/tests/test_routes_flow_trigger_bindings.py
 !backend/tests/test_routes_github_integrations.py
+!backend/tests/test_trigger_delete_cascade.py
 !backend/tests/test_v070_backend_completion.py
 !backend/tests/test_provider_instance_catalog.py
 !backend/tests/test_playground_memory_regressions.py
 !backend/tests/test_mcp_container_manager.py
+!backend/tests/test_kb_custom_embeddings.py
 !backend/tests/test_routes_mcp_instances_tester.py
 !backend/tests/test_whatsapp_session_alias_routing.py
 !backend/tests/test_ai_client_model_safety.py
