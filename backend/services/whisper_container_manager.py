@@ -49,7 +49,14 @@ def _openai_whisper_image() -> str:
 VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     "speaches": {
         "internal_port": 8000,
-        "volume_bind": "/root/.cache/huggingface",
+        # The upstream Speaches image (`ghcr.io/speaches-ai/speaches:latest-cpu`)
+        # runs as the non-root `ubuntu` user (uid 1000), so its HuggingFace
+        # cache lives at /home/ubuntu/.cache/huggingface. Binding to
+        # /root/.cache/huggingface (the previous default) left the named
+        # volume empty and forced model re-downloads on every restart, which
+        # in turn caused 404s on /v1/audio/transcriptions until a model was
+        # cached.
+        "volume_bind": "/home/ubuntu/.cache/huggingface",
         "default_mem_limit": "2g",
         "healthcheck_path": "/health",
         "transcribe_path": "/v1/audio/transcriptions",

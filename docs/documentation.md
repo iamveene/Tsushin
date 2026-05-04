@@ -1402,16 +1402,50 @@ Uploads are handled by `POST /api/agents/{agent_id}/knowledge-base/upload` (Sour
 - Processing is asynchronous (FastAPI BackgroundTasks).
 - Required permission: `knowledge.write` (`:164`).
 
-Chunking/embedding configuration is set on the Project (see 17.2) — per-agent uploads use system defaults from `backend/agent/knowledge/document_processor.py`.
+Per-agent KB indexing defaults are stored in `agent_knowledge_config`. Every uploaded or reprocessed document snapshots its active embedding provider, model, dimensions, vector store, collection/index/namespace, chunking strategy, parser, and index version on the `agent_knowledge` row. This is intentional: changing the agent KB settings affects future uploads and reprocesses, while older documents remain searchable under their original vector profile.
+
+Embedding providers:
+
+| Provider | Models | Dimensions |
+|---|---|---|
+| Built-in local | `all-MiniLM-L6-v2` | fixed `384` |
+| OpenAI provider instance | `text-embedding-3-small`, `text-embedding-3-large` | `256`, `512`, `1024`, model default max (`1536` small, `3072` large) |
+| Gemini provider instance | `gemini-embedding-2`, `gemini-embedding-001` | `768`, `1536`, `3072` (default `1536`) |
+| Ollama provider instance | Any configured/pulled embedding model via `/api/embed` | detected by `POST /api/embedding-providers/test`; custom dimensions must match the returned vector length before saving |
+
+Vector-store coexistence with long-term memory:
+
+- `VectorStoreInstance` is the container/cluster/connection. `VectorStoreIndex` is the immutable physical collection/index/namespace for a purpose + owner + embedding contract.
+- Built-in Chroma, Qdrant, MongoDB, and Pinecone can share a single configured vector-store connection across many KB and long-term-memory indexes. Changing provider/model/dimensions resolves a new index inside the same connection instead of provisioning another Docker container.
+- Index names include a contract hash derived from provider, model, dimensions, and metric, so Gemini 1536d and OpenAI 1536d never collide even when they share the same vector-store instance.
+- Every KB vector stores metadata with `purpose="knowledge_base"`, tenant id, agent id, document id, chunk id, embedding model, and embedding dimensions. Long-term memory vectors keep their own sender/collection conventions, so both features can share the same vector service without read/write collisions.
+
+Chunking and parsing:
+
+| Strategy | Behavior |
+|---|---|
+| `fixed_text` | Default sentence/word-aware chunks with configurable size and overlap. |
+| `json_structure` | Chunks JSON by object/path and falls back to fixed text for oversized values. |
+| `csv_rows` | Preserves headers and groups bounded row batches. |
+
+Parsers remain lightweight for v0.7.0: TXT, CSV, JSON, PDF, and DOCX via existing libraries. Docling and `llm_suggested` chunking are deliberately deferred until cost controls and deterministic fallbacks are designed.
 
 Additional endpoints (`routes_knowledge_base.py`):
 - `GET /agents/{id}/knowledge-base` — list documents
 - `GET /agents/{id}/knowledge-base/stats` — stats
+- `GET /agents/{id}/knowledge-base/config` — read per-agent KB indexing defaults
+- `PUT /agents/{id}/knowledge-base/config` — update embedding/vector/chunking defaults for future uploads/reprocesses
+- `GET /agents/{id}/knowledge-base/embedding-options` — list tenant-scoped embedding provider options for this agent
 - `GET /agents/{id}/knowledge-base/{knowledge_id}` — detail
 - `PATCH /agents/{id}/knowledge-base/{knowledge_id}` — rename document and update lightweight tags (stored without a DB migration)
 - `GET /agents/{id}/knowledge-base/{knowledge_id}/chunks` — chunks
 - `POST /agents/{id}/knowledge-base/search` — semantic search over KB
 - `POST /agents/{id}/knowledge-base/{knowledge_id}/reprocess` — reprocess
+
+Shared embedding-provider endpoints:
+
+- `GET /api/embedding-providers/options` — all embedding-capable configured provider instances plus built-in local, supported models/dimensions, defaults, and health/test status.
+- `POST /api/embedding-providers/test` — validates provider instance, model, dimensions, and batch behavior before saving KB config.
 
 Knowledge-document tags are normalized to lowercase, deduplicated, and stored as sidecar metadata beside the uploaded file so existing databases do not need a schema change just to support document organization.
 
@@ -1474,7 +1508,7 @@ Experimental primitive shipped in v0.7.0 that lets trigger-driven agents (incide
 - Tenant/agent isolation: `tenant_id` (RESTRICT), `agent_id` (CASCADE), partial-unique on `continuous_run_id` and `flow_run_id` (Postgres only; SQLite test fixtures fall back to non-unique helpers and rely on the indexer's idempotency guard).
 - Correlation: `wake_event_id` (SET NULL), `continuous_run_id` (SET NULL), `flow_run_id` (SET NULL).
 - Content: `origin_kind` (`continuous_run | flow_run`), `trigger_kind` (`email | webhook | jira | github`), `subject_digest`, `problem_summary`, `action_summary`, `outcome_summary`, `outcome_label` (`resolved | failed | skipped | escalated | unknown`).
-- Embedding contract pinned at write time: `vector_store_instance_id` (SET NULL), `embedding_provider`, `embedding_model`, `embedding_dims`, `embedding_metric`, optional `embedding_task` (for hosted-provider task formatting). Stamped on every vector's metadata too, so a tenant that later switches their default `VectorStoreInstance` does not retroactively invalidate older cases.
+- Embedding contract pinned at write time: `vector_store_instance_id` (SET NULL), `vector_store_index_id` (SET NULL), `embedding_provider_instance_id`, `embedding_provider`, `embedding_model`, `embedding_dims`, `embedding_metric`, optional `embedding_task` (for hosted-provider task formatting). Stamped on every vector's metadata too, so a tenant that later switches their default `VectorStoreInstance` does not retroactively invalidate older cases.
 - Bookkeeping: `vector_refs_json` (`[{kind, vector_id}]`), `index_status` (`pending | indexed | partial | failed | skipped`), `summary_status` (`generated | fallback | unavailable`), `occurred_at`, `indexed_at`, `last_recalled_at`, `created_at`, `updated_at`.
 
 The migration also extends `ck_message_queue_message_type` to permit `'case_index'`.
@@ -1500,13 +1534,11 @@ The `case_index` handler calls `case_memory_service.index_case`, which is idempo
 
 **Per-trigger Memory Recap.** Each Email, Jira, GitHub, and Webhook trigger can carry a `trigger_recap_config` row exposed at `/api/triggers/{kind}/{id}/recap-config`, with a matching `/test-recap` preview endpoint. The trigger wizard includes a Memory Recap step whenever `case_memory_enabled=true`; trigger detail pages render a Memory Recap section for editing, disabling, and previewing saved configs. Dispatch injects recap output into both the default-agent continuous-task path and bound Flow `trigger_context.source.memory_recap`.
 
-**Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the tenant's default `VectorStoreInstance` carries `extra_config.embedding_dims` (e.g. 768/1536/3072 for Gemini-style hosted embeddings), the contract is read from `extra_config` and pinned on the case row. Changing `embedding_dims` after data exists is rejected by `case_embedding_resolver.reject_post_data_dims_mutation` (defensive helper available for op tooling — the underlying `vector_store_instance_service.update_instance` still allows the column-level change today, so callers should invoke the helper before mutating).
+**Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the selected/default `VectorStoreInstance` carries `extra_config.embedding_*`, those values are treated as the default for future case-memory writes. Each write resolves a `VectorStoreIndex`; changing the default contract later creates/uses a new index inside the same vector-store connection while old cases remain searchable through their snapshotted index/contract.
 
 **Limitations / out-of-scope for 0.7.0** (see §3 of `.private/TRIGGER_MEMORY_RESEARCH.md`):
 - No deletion / retention / compliance workflow.
 - No billing or vendor-cost accounting.
-- No dedicated case-memory vector-store routing (cases share the agent's existing instance).
-- No embedding-provider management UI; hosted Gemini/OpenAI embedding adapters require future work on `EmbeddingService`.
 - No four-vendor metadata-delete parity.
 - No frontend case explorer; the API is operator/debug only.
 - No automatic prompt injection of cases into agent context — invocation is via the explicit skill tool only.
@@ -1519,7 +1551,7 @@ These are deliberately deferred to a post-0.7.0 hardening pass.
 
 ## 11. Vector Stores
 
-Multi-vendor vector DB support. Each tenant can register one or more `VectorStoreInstance` rows and designate a default; agents can override per-agent via `agent.vector_store_instance_id`.
+Multi-vendor vector DB support. Each tenant can register one or more `VectorStoreInstance` rows and designate a default; agents can override per-agent via `agent.vector_store_instance_id`. A `VectorStoreInstance` is the reusable connection/container. A `VectorStoreIndex` is the physical collection/index/namespace used by Agent KB, Project KB, or case memory for one immutable embedding contract.
 
 Model: `backend/models.py:3521-3576` (VectorStoreInstance).
 Adapters: `backend/agent/memory/providers/` — `chroma_adapter.py`, `mongodb_adapter.py`, `pinecone_adapter.py`, `qdrant_adapter.py`. All implement `VectorStoreProvider` (`backend/agent/memory/providers/base.py:41-122`).
@@ -1533,7 +1565,14 @@ Common fields on `VectorStoreInstance`:
 - `is_auto_provisioned`, container fields (`container_name`, `container_port`, `container_status`, `container_image`, `volume_name`, `mem_limit`, `cpu_quota`)
 - `security_config` (JSON): MemGuard thresholds, rate limits, batch limits
 
-Namespace isolation per agent uses pattern `tsushin_{tenant_id}_{agent_id}` (`providers/base.py:49`).
+Common fields on `VectorStoreIndex`:
+- `purpose`: `agent_kb`, `project_kb`, or `case_memory`
+- `owner_type`, `owner_id`: agent, project, or tenant/default ownership
+- embedding provider/model/dimensions/metric/task hints
+- `physical_collection_name`, `physical_index_name`, `physical_namespace`
+- `contract_hash`: stable hash of provider + model + dimensions + metric
+
+Namespace isolation per agent uses pattern `tsushin_{tenant_id}_{agent_id}` for legacy memory paths; new KB/case-memory writes use `VectorStoreIndex` physical names.
 
 ### 11.1 Chroma (local, default)
 Built-in. No external credentials required. Uses `chroma_db_path` per agent or a tenant default.
@@ -1554,6 +1593,8 @@ Adapter: `backend/agent/memory/providers/mongodb_adapter.py`.
 ### UI
 
 Settings → Vector Stores (`frontend/app/settings/vector-stores/page.tsx:21-125`) lets admins pick the default instance (`api.updateDefaultVectorStore`) and run connection tests (`api.testVectorStoreConnection`). The page renders vendor labels for `mongodb`, `pinecone`, `qdrant` (`:8-12`). Health dots reflect `health_status` (`:14-19`).
+
+The Vector Stores UI now also shows the indexes/collections inside the selected instance and exposes the default long-term-memory embedding contract. Updating provider/model/dimensions changes the default for future case-memory indexes; it does not require a new Docker container and does not rewrite old vectors.
 
 Per-agent override uses `agent.vector_store_mode`:
 - `override` — agent uses its configured instance only.
@@ -2486,15 +2527,25 @@ Source: `frontend/app/agents/projects/page.tsx:92-108`.
 
 ### 17.2 Knowledge Base Config (per project)
 
-Source: `backend/models.py:1062-1065`, UI at `page.tsx:99-101, 65-77`.
+Source: `ProjectKnowledgeConfig`, `ProjectKnowledge` snapshots, and UI project create/detail KB panels.
 
 | Field | Default | Options |
 |---|---|---|
 | `kb_chunk_size` | 500 (chars) | integer |
 | `kb_chunk_overlap` | 50 (chars) | integer |
-| `kb_embedding_model` | `"all-MiniLM-L6-v2"` | `all-MiniLM-L6-v2`, `all-mpnet-base-v2`, `paraphrase-multilingual-MiniLM-L12-v2`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`, `text-embedding-004`, `embedding-001` |
+| `kb_embedding_provider_instance_id` | null | tenant-scoped embedding-capable provider instance |
+| `kb_embedding_provider` | `local` | `local`, `openai`, `gemini`, `ollama` |
+| `kb_embedding_model` | `"all-MiniLM-L6-v2"` | provider catalog models such as `gemini-embedding-2` or `text-embedding-3-small` |
+| `kb_embedding_dims` | 384 | model-supported dimensions |
+| `kb_vector_store_instance_id` | null | built-in Chroma or any active tenant vector-store instance |
 
-Embedding model list: `frontend/app/agents/projects/page.tsx:65-77`.
+Project KB documents snapshot provider/model/dimensions/vector index on upload/reprocess. Project search groups documents by snapshot profile, so old 1536d documents remain searchable after the active project config changes to 768d.
+
+Project KB config endpoints:
+- `GET /api/projects/{project_id}/knowledge/config`
+- `PUT /api/projects/{project_id}/knowledge/config`
+- `GET /api/projects/{project_id}/knowledge/embedding-options`
+- `POST /api/projects/{project_id}/knowledge/search` for deterministic KB search/regression checks without invoking an LLM conversation.
 
 ### 17.3 Memory Config (per project)
 
@@ -3196,10 +3247,10 @@ ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** vi
 
 **Two registered local engines** (both share `WhisperInstance` + `WhisperContainerManager` + the per-vendor dispatch table in `VENDOR_CONFIGS`):
 
-| Engine | Image | Endpoint | Auth | Default model | Notes |
-|---|---|---|---|---|---|
-| `speaches` | `ghcr.io/speaches-ai/speaches` | `POST /v1/audio/transcriptions` | Bearer (encrypted Fernet token per instance) | `Systran/faster-distil-whisper-small.en` | OpenAI-compatible. Multilingual default. ~2 GB RAM. |
-| `openai_whisper` | `onerahmet/openai-whisper-asr-webservice` | `POST /asr` (multipart `audio_file`) | None — relies on `tsushin-network` isolation + 127.0.0.1 host bind | `base` (configurable: tiny / base / small / medium / large-v3 / turbo) | Wraps the official `openai/whisper` Python package. `ASR_ENGINE=openai_whisper`. Model is pinned at boot via `ASR_MODEL` env. ~3 GB RAM for `base`. |
+| Engine | Image | Endpoint | Auth | Default model | HF cache mount | Notes |
+|---|---|---|---|---|---|---|
+| `speaches` | `ghcr.io/speaches-ai/speaches` | `POST /v1/audio/transcriptions` | Bearer (encrypted Fernet token per instance) | `Systran/faster-distil-whisper-small.en` | `/home/ubuntu/.cache/huggingface` (image runs as `ubuntu` uid 1000) | OpenAI-compatible. Multilingual default. ~2 GB RAM. `PRELOAD_MODELS` only loads from disk; first-run model download is triggered by `POST {base_url}/v1/models/{model_id}` after provisioning. |
+| `openai_whisper` | `onerahmet/openai-whisper-asr-webservice` | `POST /asr` (multipart `audio_file`) | None — relies on `tsushin-network` isolation + 127.0.0.1 host bind | `base` (configurable: tiny / base / small / medium / large-v3 / turbo) | `/root/.cache` (image runs as `root`) | Wraps the official `openai/whisper` Python package. `ASR_ENGINE=openai_whisper`. Model is pinned at boot via `ASR_MODEL` env. ~3 GB RAM for `base`. |
 
 **Hub Provider Wizard ASR modality.** `frontend/components/provider-wizard/steps/StepModality.tsx` exposes "Speech-to-Text (Audio in)" as a 4th modality. Picking ASR → Cloud surfaces only `openai` (Whisper API; reuses the saved OpenAI key) and skips credentials/test steps because there is no separate provider row to create. Picking ASR → Local surfaces both `openai_whisper` (new) and `speaches`, then routes through the standard container provision step before calling `POST /api/asr-instances` with `auto_provision=true`.
 

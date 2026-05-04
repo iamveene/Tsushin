@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Speaches volume-mount regression fix (2026-05-03)
+
+**Summary.** Audio transcription via the Speaches self-hosted ASR engine was silently failing on every container recreate because the named volume was bound to the wrong path inside the container. The upstream `ghcr.io/speaches-ai/speaches:latest-cpu` image now runs as the non-root `ubuntu` user (uid 1000), so its HuggingFace cache lives at `/home/ubuntu/.cache/huggingface`. Our `WhisperContainerManager` was still binding the volume to `/root/.cache/huggingface` — a path the running user has no reason to read or write — leaving the volume empty and forcing a fresh model download on every restart that PRELOAD_MODELS could not satisfy. With no model on disk, `POST /v1/audio/transcriptions` returned 404, the backend silently fell back to OpenAI Whisper, and (when the tenant's OpenAI key was a placeholder) the user saw only the generic "couldn't process your message" error.
+
+**Backend.**
+- Fixed `backend/services/whisper_container_manager.py:52` — Speaches `volume_bind` now points at `/home/ubuntu/.cache/huggingface`, matching the upstream image's user. Documented the rationale inline so a future image-user change doesn't silently re-introduce the regression.
+- Improved `backend/agent/skills/audio_transcript.py` so when both the local ASR instance and the OpenAI fallback fail, the user-facing error includes both underlying error strings (e.g. `Local ASR instance (14): http_404 …` + `OpenAI fallback: 401 …`). Easier to diagnose without grepping logs.
+
+**Operational.**
+- After deploying the code fix, any pre-existing Speaches container must be recreated so the corrected mount takes effect. Use the existing `WhisperContainerManager.deprovision` + `provision` flow, or the Hub UI "Recreate" action.
+- Speaches's `PRELOAD_MODELS` env loads models from disk; it does not download them. First-run model fetch is now triggered explicitly via `POST {base_url}/v1/models/{model_id}` after provisioning.
+- The shipping `openai_whisper` vendor (self-hosted `onerahmet/openai-whisper-asr-webservice`) handles multi-language transcription locally with no API key. Recommended for tenants that need PT-BR transcription without an OpenAI key.
+
+**Verification.**
+- Programmatic transcription against re-provisioned Speaches instance: EN audio → "This is a concession release 0.7 test recording for English speech recognition." (model: `Systran/faster-distil-whisper-small.en`, English-only).
+- Programmatic transcription against `openai_whisper` instance: PT-BR audio → "Este intestino da Versaus 0.7 do Tissucin para reconhecimento de fala e portugues." (model: `base`, multilingual).
+- WhatsApp E2E for Transcript agent: `/invoke transcript` + audio → bot replies `📝 Transcript: …` to tester.
+- TTS roundtrip via Gemini provider on a conversational agent: audio in → AI reply → audio out → tester receives `audio_*.ogg`.
+- API v1 E2E suite: 29 passed. ASR-route + cascade tests: 10 passed in isolation. Full pytest sweep: 1100 passed; the 7 remaining failures are pre-existing v0.7.0 vector-store / provider-hardening test infrastructure issues unrelated to ASR.
+
 ### Release 0.7.0 — Bug-fix wave from full-validation campaign (2026-05-03)
 
 **Summary.** Closes 4 bugs surfaced by the v0.7.0 full-validation QA campaign and adds DB-level safety nets for trigger deletion. Also patches the onboarding tour with v0.7.0-specific feature bullets that were missing.
