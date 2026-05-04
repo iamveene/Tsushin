@@ -153,6 +153,7 @@ class AudioTranscriptSkill(BaseSkill):
             asr_instance_id = config.get("asr_instance_id")
             resolved_asr_instance_id = asr_instance_id
             resolved_asr_instance = None
+            instance_error: Optional[str] = None
             if tenant_id and db and asr_mode == "instance" and asr_instance_id:
                 try:
                     from services.whisper_instance_service import WhisperInstanceService
@@ -194,12 +195,25 @@ class AudioTranscriptSkill(BaseSkill):
                             transcript = response.text.strip()
                             provider_name = response.provider
                         else:
+                            instance_error = response.error
                             logger.warning(
                                 "ASR instance %s transcription failed, falling back to OpenAI: %s",
                                 resolved_asr_instance_id,
                                 response.error,
                             )
+                    else:
+                        instance_error = (
+                            f"instance_unavailable (id={asr_instance_id}, "
+                            f"is_active={getattr(resolved_asr_instance, 'is_active', None)}, "
+                            f"vendor={getattr(resolved_asr_instance, 'vendor', None)})"
+                        )
+                        logger.warning(
+                            "ASR instance %s unavailable, falling back to OpenAI: %s",
+                            resolved_asr_instance_id,
+                            instance_error,
+                        )
                 except Exception as asr_err:
+                    instance_error = str(asr_err)
                     logger.warning(
                         "ASR instance %s path failed, falling back to OpenAI: %s",
                         resolved_asr_instance_id,
@@ -244,11 +258,21 @@ class AudioTranscriptSkill(BaseSkill):
                     )
                 )
                 if not response.success:
+                    openai_err = response.error or "unknown error"
+                    if instance_error:
+                        combined = (
+                            f"❌ Transcription failed.\n"
+                            f"• Local ASR instance ({resolved_asr_instance_id}): {instance_error}\n"
+                            f"• OpenAI fallback: {openai_err}"
+                        )
+                    else:
+                        combined = f"❌ Transcription failed: {openai_err}"
                     return SkillResult(
                         success=False,
-                        output=f"❌ Transcription failed: {response.error or 'unknown error'}",
+                        output=combined,
                         metadata={
-                            "error": response.error or "transcription_failed",
+                            "error": openai_err,
+                            "instance_error": instance_error,
                             "audio_path": audio_path,
                             "provider": "openai",
                         },
