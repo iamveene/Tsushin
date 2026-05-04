@@ -610,7 +610,7 @@ class ProviderInstanceService:
                 if reassigned_to_instance is not None
                 else None
             ),
-            "unassigned": dependents and reassigned_to_instance is None,
+            "unassigned": bool(dependents) and reassigned_to_instance is None,
         }
 
     @staticmethod

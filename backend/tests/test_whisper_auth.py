@@ -68,15 +68,23 @@ asr_provider_module = _load_module(
 # real `WhisperInstanceService.resolve_api_token` would try to decrypt
 # `instance.api_token_encrypted` and fail.
 #
-# IMPORTANT: only install the stub if the real module hasn't already been
-# imported by another test in this pytest session. If we clobber a real
-# module, downstream tests like test_audio_transcript_skill_asr.py that
-# patch `services.whisper_instance_service.WhisperInstanceService.<method>`
-# fail with AttributeError. The stub class below also exposes the surface
-# (`get_instance`, `get_tenant_default`, `update_instance`) that those
-# downstream tests patch, so even when this file is collected first they
-# can still mock those attributes successfully.
-if "services.whisper_instance_service" not in sys.modules:
+# IMPORTANT: only install the stub if the real module CANNOT be imported.
+# Pytest's collection phase imports every test module up-front (including
+# this one), so a naive ``if "services.whisper_instance_service" not in
+# sys.modules`` install runs BEFORE any other test can import the real
+# module — which leaks the stub into tests like
+# ``test_asr_cascade_on_delete.py`` that need ``create_instance`` on the
+# real service. Probing the real module first ensures we only stub when
+# the real one truly is unavailable (e.g. DB / alembic deps missing).
+def _real_whisper_instance_service_importable():
+    try:
+        import services.whisper_instance_service  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+if not _real_whisper_instance_service_importable():
     _whisper_instance_service_stub = types.ModuleType(
         "services.whisper_instance_service"
     )
@@ -239,7 +247,16 @@ def test_provider_transcribe_sends_bearer_not_basic():
     )
     provider = WhisperASRProvider(instance=instance, db=object(), tenant_id="tenant_test")
 
-    with patch.object(provider_module, "httpx", SimpleNamespace(AsyncClient=_CapturingAsyncClient)):
+    # When the real ``WhisperInstanceService`` is loaded (broader test runs),
+    # ``resolve_api_token`` reads ``instance.api_token_encrypted`` and tries
+    # to decrypt it. Our SimpleNamespace test instance only carries ``_token``,
+    # so patch ``resolve_api_token`` to honour the test contract.
+    from services import whisper_instance_service as wis
+    with patch.object(
+        wis.WhisperInstanceService,
+        "resolve_api_token",
+        staticmethod(lambda inst, db: getattr(inst, "_token", None) or "test-token-bearer-707"),
+    ), patch.object(provider_module, "httpx", SimpleNamespace(AsyncClient=_CapturingAsyncClient)):
         request = ASRRequest(audio_path=audio_path, model="Systran/faster-distil-whisper-small.en")
         response = asyncio.run(provider.transcribe(request))
 

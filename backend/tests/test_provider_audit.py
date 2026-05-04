@@ -36,7 +36,7 @@ except Exception:  # pragma: no cover — defensive
     pass
 
 from api import routes_provider_instances as routes  # noqa: E402
-from models import Base, ProviderInstance  # noqa: E402
+from models import Agent, Base, ProviderInstance  # noqa: E402
 from models_rbac import AuditEvent, Tenant, User  # noqa: E402
 
 
@@ -50,6 +50,9 @@ def db_session():
             User.__table__,
             ProviderInstance.__table__,
             AuditEvent.__table__,
+            # Agent is needed because the v0.7.0 cascade-aware delete path
+            # queries dependent agents before soft-deleting a provider instance.
+            Agent.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
