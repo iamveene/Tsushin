@@ -250,7 +250,11 @@ def test_delete_provider_instance_deprovisions_auto_provisioned_ollama_before_so
         assert instance.is_active is False
         assert instance.container_status == "none"
         assert instance.container_name is None
-        assert result["message"] == "Provider instance 'Managed Ollama' deleted successfully"
+        # delete_provider_instance now returns a CascadeDeleteResponse (Pydantic model)
+        assert result.deleted is True
+        assert result.instance_name == "Managed Ollama"
+        assert result.unassigned is False
+        assert result.reassigned_count == 0
     finally:
         db.close()
 
