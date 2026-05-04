@@ -277,24 +277,15 @@ class VectorStoreInstanceService:
             elif parsed.scheme not in ("mongodb", "mongodb+srv"):
                 raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
 
-        # v0.7.x Wave 1-B: validate the new embedding contract + reject
-        # mid-stream provider/model/dims mutation when cases already
-        # reference this instance. Both helpers raise ``ValueError`` so
-        # the FastAPI route handler converts to a 400.
+        # The VectorStoreInstance is now a reusable container/connection.
+        # extra_config.embedding_* is only the default for future case-memory
+        # indexes; changing it creates/resolves a new VectorStoreIndex rather
+        # than mutating vectors that already exist in prior indexes.
         if "extra_config" in kwargs and kwargs["extra_config"] is not None:
-            from services.case_embedding_resolver import (
-                reject_post_data_contract_mutation,
-                validate_extra_config_embedding,
-            )
+            from services.case_embedding_resolver import validate_extra_config_embedding
 
             new_extra = kwargs["extra_config"] or {}
             validate_extra_config_embedding(new_extra)
-            reject_post_data_contract_mutation(
-                db,
-                tenant_id=tenant_id,
-                instance_id=instance_id,
-                new_extra_config=new_extra,
-            )
 
         # Handle credentials update
         if "credentials" in kwargs:

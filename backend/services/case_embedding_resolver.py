@@ -46,10 +46,6 @@ _DEFAULT_MODEL = "all-MiniLM-L6-v2"
 _DEFAULT_DIMS = 384
 _DEFAULT_METRIC = "cosine"
 
-# Provider-specific dimensionality constraints.
-_GEMINI_VALID_DIMS = {768, 1536, 3072}
-_LOCAL_VALID_DIMS = {384}
-
 
 class EmbeddingDimensionMismatch(Exception):
     """Raised when a generated embedding does not match the resolved contract.
@@ -105,6 +101,8 @@ class EmbeddingContract:
     task_document: str = "RETRIEVAL_DOCUMENT"
     task_query: str = "RETRIEVAL_QUERY"
     vector_store_instance_id: Optional[int] = None
+    vector_store_index_id: Optional[int] = None
+    embedding_provider_instance_id: Optional[int] = None
 
 
 def resolve_for_agent(
@@ -167,6 +165,8 @@ def resolve_for_agent(
             metric=_DEFAULT_METRIC,
             task=None,
             vector_store_instance_id=None,
+            vector_store_index_id=None,
+            embedding_provider_instance_id=None,
         )
 
     extra = getattr(instance, "extra_config", None) or {}
@@ -177,20 +177,72 @@ def resolve_for_agent(
     task_query = str(extra.get("embedding_task_query") or "RETRIEVAL_QUERY")
     legacy_task = extra.get("embedding_task")
 
+    from agent.memory.embedding_catalog import (
+        LOCAL_DIMS,
+        LOCAL_MODEL,
+        normalize_embedding_provider,
+        provider_default_model,
+        validate_embedding_contract,
+    )
+
+    provider_declared = extra.get("embedding_provider") is not None
+    provider = normalize_embedding_provider(extra.get("embedding_provider") or _DEFAULT_PROVIDER)
+    default_model = provider_default_model(provider) or LOCAL_MODEL
+
     # If the instance is the local ChromaDB default with no embedding_dims
     # set, we still treat it as the local 384 contract so the indexer
-    # writes through the bridge cleanly.
+    # writes through the bridge cleanly. Non-local providers should have
+    # dimensions pinned by the provider/vector-store test flow before data
+    # is written.
     dims = extra.get("embedding_dims")
     if dims is None:
+        if provider_declared and provider != _DEFAULT_PROVIDER:
+            try:
+                normalized = validate_embedding_contract(
+                    provider=provider,
+                    model=extra.get("embedding_model") or default_model,
+                    dimensions=None,
+                    allow_ollama_dynamic=False,
+                )
+                dims_value = int(normalized["dimensions"])
+                model_value = str(normalized["model"])
+            except Exception:
+                logger.warning(
+                    "case_embedding_resolver: non-local embedding provider %s has no "
+                    "pinned dimensions for tenant=%s instance=%s; falling back to local",
+                    provider,
+                    tenant_id,
+                    getattr(instance, "id", None),
+                )
+                provider = _DEFAULT_PROVIDER
+                dims_value = _DEFAULT_DIMS
+                model_value = _DEFAULT_MODEL
+        else:
+            dims_value = LOCAL_DIMS
+            model_value = extra.get("embedding_model", LOCAL_MODEL)
         return EmbeddingContract(
-            provider=str(extra.get("embedding_provider") or _DEFAULT_PROVIDER),
-            model=extra.get("embedding_model", _DEFAULT_MODEL),
-            dimensions=_DEFAULT_DIMS,
+            provider=provider,
+            model=model_value,
+            dimensions=dims_value,
             metric=extra.get("metric", _DEFAULT_METRIC),
             task=legacy_task,
             task_document=task_document,
             task_query=task_query,
             vector_store_instance_id=getattr(instance, "id", None),
+            vector_store_index_id=_resolve_case_index_id(
+                db,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                instance=instance,
+                provider=provider,
+                model=model_value,
+                dimensions=dims_value,
+                metric=extra.get("metric", _DEFAULT_METRIC),
+                task_document=task_document,
+                task_query=task_query,
+                provider_instance_id=extra.get("embedding_provider_instance_id"),
+            ),
+            embedding_provider_instance_id=extra.get("embedding_provider_instance_id"),
         )
 
     try:
@@ -206,19 +258,99 @@ def resolve_for_agent(
         )
         dims_int = _DEFAULT_DIMS
 
+    if provider_declared or provider != _DEFAULT_PROVIDER:
+        normalized = validate_embedding_contract(
+            provider=provider,
+            model=str(extra.get("embedding_model") or default_model),
+            dimensions=dims_int,
+            allow_ollama_dynamic=False,
+        )
+    else:
+        # Preserve legacy rows/tests that pinned only ``embedding_dims`` before
+        # the provider-aware contract existed. New create/update paths still
+        # validate local as fixed 384.
+        normalized = {
+            "provider": provider,
+            "model": str(extra.get("embedding_model") or default_model),
+            "dimensions": dims_int,
+            "metric": _DEFAULT_METRIC,
+        }
+
     # v0.7.x Wave 1-B fix: read provider from extra_config.embedding_provider
     # rather than instance.vendor — the latter is the *vector store* vendor
     # (qdrant / mongodb / pinecone), not the *embedding* provider.
     return EmbeddingContract(
-        provider=str(extra.get("embedding_provider") or _DEFAULT_PROVIDER),
-        model=str(extra.get("embedding_model") or _DEFAULT_MODEL),
-        dimensions=dims_int,
-        metric=str(extra.get("metric") or _DEFAULT_METRIC),
+        provider=str(normalized["provider"]),
+        model=str(normalized["model"]),
+        dimensions=int(normalized["dimensions"]),
+        metric=str(extra.get("metric") or normalized.get("metric") or _DEFAULT_METRIC),
         task=legacy_task,
         task_document=task_document,
         task_query=task_query,
         vector_store_instance_id=getattr(instance, "id", None),
+        vector_store_index_id=_resolve_case_index_id(
+            db,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            instance=instance,
+            provider=str(normalized["provider"]),
+            model=str(normalized["model"]),
+            dimensions=int(normalized["dimensions"]),
+            metric=str(extra.get("metric") or normalized.get("metric") or _DEFAULT_METRIC),
+            task_document=task_document,
+            task_query=task_query,
+            provider_instance_id=extra.get("embedding_provider_instance_id"),
+        ),
+        embedding_provider_instance_id=extra.get("embedding_provider_instance_id"),
     )
+
+
+def _resolve_case_index_id(
+    db,
+    *,
+    tenant_id: str,
+    agent_id: int,
+    instance,
+    provider: str,
+    model: str,
+    dimensions: int,
+    metric: str,
+    task_document: str,
+    task_query: str,
+    provider_instance_id: Optional[int],
+) -> Optional[int]:
+    if instance is None or getattr(instance, "id", None) is None:
+        return None
+    try:
+        from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+        index = VectorStoreIndexResolver.resolve_or_create(
+            db,
+            tenant_id=tenant_id,
+            vector_store_instance_id=getattr(instance, "id", None),
+            purpose="case_memory",
+            owner_type="agent",
+            owner_id=agent_id,
+            contract={
+                "embedding_provider_instance_id": provider_instance_id,
+                "embedding_provider": provider,
+                "embedding_model": model,
+                "embedding_dims": dimensions,
+                "embedding_metric": metric,
+                "embedding_task_document": task_document,
+                "embedding_task_query": task_query,
+            },
+        )
+        return index.id
+    except Exception:
+        logger.exception(
+            "case_embedding_resolver: failed to resolve VectorStoreIndex "
+            "(tenant=%s, agent=%s, instance=%s)",
+            tenant_id,
+            agent_id,
+            getattr(instance, "id", None),
+        )
+        return None
 
 
 def validate_vector(
@@ -259,7 +391,7 @@ def validate_extra_config_embedding(extra: Optional[dict]) -> None:
     ``provider=gemini, dims=384`` or ``provider=local, dims=1536``.
 
     Validates:
-      - ``embedding_provider`` (when set) is in ``{local, gemini}``.
+      - ``embedding_provider`` (when set) is in ``{local, openai, gemini, ollama}``.
       - ``embedding_dims`` (when set) is an int.
       - The (provider, dims) pair is one of the allowed combinations.
 
@@ -275,37 +407,27 @@ def validate_extra_config_embedding(extra: Optional[dict]) -> None:
     if provider is None and dims is None:
         return
 
-    if provider is not None:
-        provider_norm = str(provider).lower()
-        if provider_norm not in ("local", "gemini"):
-            raise ValueError(
-                f"Invalid embedding_provider {provider!r}: must be 'local' or 'gemini'"
-            )
-    else:
-        provider_norm = "local"
+    from agent.memory.embedding_catalog import (
+        normalize_embedding_provider,
+        provider_default_model,
+        validate_embedding_contract,
+    )
 
-    if dims is None:
-        return
+    provider_norm = normalize_embedding_provider(provider)
+    model = extra.get("embedding_model") or provider_default_model(provider_norm)
 
-    try:
-        dims_int = int(dims)
-    except (TypeError, ValueError):
+    if provider_norm == "ollama" and dims is None:
         raise ValueError(
-            f"Invalid embedding_dims {dims!r}: must be an integer"
+            "Ollama embedding_dims must be detected by /api/embedding-providers/test "
+            "and pinned before saving"
         )
 
-    if provider_norm == "gemini":
-        if dims_int not in _GEMINI_VALID_DIMS:
-            raise ValueError(
-                "Invalid embedding_dims for Gemini: must be one of "
-                f"{sorted(_GEMINI_VALID_DIMS)}, got {dims_int}"
-            )
-    elif provider_norm == "local":
-        if dims_int not in _LOCAL_VALID_DIMS:
-            raise ValueError(
-                "Invalid embedding_dims for local SentenceTransformer: must be "
-                f"{sorted(_LOCAL_VALID_DIMS)[0]}, got {dims_int}"
-            )
+    validate_embedding_contract(
+        provider=provider_norm,
+        model=model,
+        dimensions=dims,
+        allow_ollama_dynamic=False,
+    )
 
 
 def reject_post_data_contract_mutation(

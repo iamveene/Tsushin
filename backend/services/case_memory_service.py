@@ -390,21 +390,19 @@ def _resolve_credentials_for_contract(
     provider = (getattr(contract, "provider", None) or "").lower()
     if provider in ("local", ""):
         return None
-    instance_id = getattr(contract, "vector_store_instance_id", None)
-    if instance_id is None:
-        return None
-
     try:
-        from services.vector_store_instance_service import VectorStoreInstanceService
+        from services.embedding_provider_service import EmbeddingProviderService
 
-        instance = VectorStoreInstanceService.get_instance(instance_id, tenant_id, db)
-        if instance is None:
-            return None
-        return VectorStoreInstanceService.resolve_credentials(instance, db)
+        return EmbeddingProviderService.resolve_provider_credentials(
+            tenant_id=tenant_id,
+            provider=provider,
+            provider_instance_id=getattr(contract, "embedding_provider_instance_id", None),
+            db=db,
+        )
     except Exception:  # noqa: BLE001 — never break indexing on credential lookup
         logger.exception(
-            "case_memory: failed to resolve credentials for instance=%s tenant=%s",
-            instance_id,
+            "case_memory: failed to resolve embedding credentials for provider=%s tenant=%s",
+            provider,
             tenant_id,
         )
         return None
@@ -440,14 +438,32 @@ def _resolve_case_memory_provider(
         getattr(contract, "vector_store_instance_id", None)
         or getattr(agent, "vector_store_instance_id", None)
     )
+    index_id = getattr(contract, "vector_store_index_id", None)
 
     if bound_instance_id:
         # External instance — go straight to the raw adapter so we don't
         # silently fall back to a different-dim store on transient errors.
         try:
-            provider = registry.get_provider(
-                bound_instance_id, db, tenant_id=tenant_id
-            )
+            if index_id:
+                from models import VectorStoreIndex
+
+                index = (
+                    db.query(VectorStoreIndex)
+                    .filter(
+                        VectorStoreIndex.id == index_id,
+                        VectorStoreIndex.tenant_id == tenant_id,
+                        VectorStoreIndex.vector_store_instance_id == bound_instance_id,
+                        VectorStoreIndex.is_active == True,
+                    )
+                    .first()
+                )
+                if index is None:
+                    return None
+                provider = registry.get_provider_for_index(index, db)
+            else:
+                provider = registry.get_provider(
+                    bound_instance_id, db, tenant_id=tenant_id
+                )
             return provider
         except Exception:
             logger.exception(
@@ -549,6 +565,7 @@ async def _write_vectors_via_bridge(
             "case_id": case_id,
             "wake_event_id": wake_event_id,
             "vector_store_instance_id": contract.vector_store_instance_id,
+            "vector_store_index_id": getattr(contract, "vector_store_index_id", None),
             "origin_kind": origin_kind,
             "trigger_kind": trigger_kind,
             "vector_kind": vector_kind,
@@ -729,6 +746,8 @@ def index_case(
             outcome_summary=outcome_text or None,
             outcome_label=outcome_label,
             vector_store_instance_id=contract.vector_store_instance_id,
+            vector_store_index_id=getattr(contract, "vector_store_index_id", None),
+            embedding_provider_instance_id=getattr(contract, "embedding_provider_instance_id", None),
             embedding_provider=contract.provider,
             embedding_model=contract.model,
             embedding_dims=contract.dimensions,
@@ -778,6 +797,8 @@ def index_case(
             outcome_summary=outcome_text or None,
             outcome_label=outcome_label,
             vector_store_instance_id=contract.vector_store_instance_id,
+            vector_store_index_id=getattr(contract, "vector_store_index_id", None),
+            embedding_provider_instance_id=getattr(contract, "embedding_provider_instance_id", None),
             embedding_provider=contract.provider,
             embedding_model=contract.model,
             embedding_dims=contract.dimensions,
@@ -811,6 +832,8 @@ def index_case(
         outcome_summary=outcome_text or None,
         outcome_label=outcome_label,
         vector_store_instance_id=contract.vector_store_instance_id,
+        vector_store_index_id=getattr(contract, "vector_store_index_id", None),
+        embedding_provider_instance_id=getattr(contract, "embedding_provider_instance_id", None),
         embedding_provider=contract.provider,
         embedding_model=contract.model,
         embedding_dims=contract.dimensions,
@@ -969,7 +992,7 @@ def search_similar_cases(
     from models import Agent, CaseMemory
     from agent.memory.embedding_service import get_shared_embedding_service
     from agent.memory.providers.bridge import ProviderBridgeStore
-    from services.case_embedding_resolver import resolve_for_agent
+    from services.case_embedding_resolver import EmbeddingContract
 
     if not query or not query.strip():
         return []
@@ -997,73 +1020,42 @@ def search_similar_cases(
     if agent is None:
         return []
 
+    case_query = db.query(CaseMemory).filter(CaseMemory.tenant_id == tenant_id)
+    if not include_failed:
+        case_query = case_query.filter(CaseMemory.index_status != "failed")
+    if scope == "agent" and agent_id is not None:
+        case_query = case_query.filter(CaseMemory.agent_id == agent_id)
+    elif scope == "trigger_kind":
+        if agent_id is not None:
+            case_query = case_query.filter(CaseMemory.agent_id == agent_id)
+        if trigger_kind:
+            case_query = case_query.filter(CaseMemory.trigger_kind == trigger_kind)
+
+    case_rows = case_query.all()
+    if not case_rows:
+        return []
+
+    grouped_cases = {}
+    for case in case_rows:
+        key = (
+            case.agent_id,
+            getattr(case, "embedding_provider_instance_id", None),
+            case.embedding_provider or "local",
+            case.embedding_model or "all-MiniLM-L6-v2",
+            int(case.embedding_dims or 384),
+            case.embedding_metric or "cosine",
+            case.vector_store_instance_id,
+            getattr(case, "vector_store_index_id", None),
+            case.embedding_task,
+        )
+        grouped_cases.setdefault(key, case)
+
     backend_root = Path(__file__).resolve().parents[1]
-    persist_directory = str(backend_root / "data" / "memory" / f"agent_{agent.id}")
-
-    # Resolve the embedding contract for the search side, then pre-embed
-    # the query with the right task hint (RETRIEVAL_QUERY for Gemini,
-    # ignored for local). Without this step, Gemini-configured tenants
-    # would silently fall back to local 384-dim embeddings here while
-    # writing 1536-dim Gemini vectors — guaranteeing zero recall.
-    contract = resolve_for_agent(db, tenant_id=tenant_id, agent_id=agent.id)
-    credentials = _resolve_credentials_for_contract(
-        db, tenant_id=tenant_id, contract=contract
-    )
-    try:
-        embedder = get_shared_embedding_service(
-            contract=contract, credentials=credentials
-        )
-    except Exception:
-        logger.exception(
-            "case_memory: failed to resolve contract-aware embedder for "
-            "tenant=%s agent=%s — falling back to local default",
-            tenant_id,
-            agent.id,
-        )
-        embedder = get_shared_embedding_service()
-
-    try:
-        query_embedding = embedder.embed_text(
-            query, task_type=contract.task_query
-        )
-    except TypeError:
-        # Some legacy stand-ins (test fakes) don't accept task_type.
-        query_embedding = embedder.embed_text(query)
-    except Exception:
-        logger.exception(
-            "case_memory: query embedding failed (tenant=%s agent=%s)",
-            tenant_id,
-            agent.id,
-        )
-        return []
-
-    if not query_embedding:
-        return []
-
-    # Mirror the write-side routing: use the raw external provider when
-    # the agent has a bound instance, and only use ChromaDB when the
-    # contract dims match. The ResolvedVectorStore facade silently falls
-    # back to local ChromaDB on circuit-open / probe-failure, which
-    # crashes here with a 384/1536 dim mismatch instead of returning an
-    # empty result. Direct routing preserves recall correctness.
-    provider = _resolve_case_memory_provider(
-        db,
-        tenant_id=tenant_id,
-        agent=agent,
-        contract=contract,
-        persist_directory=persist_directory,
-    )
-    if provider is None:
-        return []
-
-    bridge = ProviderBridgeStore(provider=provider, embedding_service=embedder)
-
     over_fetch = max(k * 4, k + 4)
-    # Decide BEFORE creating the coroutine whether we can use asyncio.run
-    # directly or need a thread. Creating the coroutine first and letting
-    # asyncio.run raise RuntimeError leaves a dangling coroutine that emits
-    # "coroutine was never awaited" — which surfaced as the live-Playground
-    # recall regression on 2026-04-29 (skill invoked, returned 0 cases).
+    all_results = []
+
+    # Decide BEFORE creating coroutines whether we can use asyncio.run
+    # directly or need a thread.
     import asyncio
     try:
         asyncio.get_running_loop()
@@ -1071,38 +1063,99 @@ def search_similar_cases(
     except RuntimeError:
         loop_is_running = False
 
-    def _make_coro():
-        # Use the embedding-aware path so we don't double-embed the
-        # query under the bridge's own embedding_service.
-        return bridge.search_similar_by_embedding(
-            query_embedding=query_embedding,
-            limit=over_fetch,
-            sender_key=None,
+    for sample_case in grouped_cases.values():
+        sample_agent = (
+            db.query(Agent)
+            .filter(Agent.id == sample_case.agent_id, Agent.tenant_id == tenant_id)
+            .first()
         )
+        if sample_agent is None:
+            continue
+        contract = EmbeddingContract(
+            provider=sample_case.embedding_provider or "local",
+            model=sample_case.embedding_model or "all-MiniLM-L6-v2",
+            dimensions=int(sample_case.embedding_dims or 384),
+            metric=sample_case.embedding_metric or "cosine",
+            task=sample_case.embedding_task,
+            task_document="RETRIEVAL_DOCUMENT",
+            task_query="RETRIEVAL_QUERY",
+            vector_store_instance_id=sample_case.vector_store_instance_id,
+            vector_store_index_id=getattr(sample_case, "vector_store_index_id", None),
+            embedding_provider_instance_id=getattr(sample_case, "embedding_provider_instance_id", None),
+        )
+        credentials = _resolve_credentials_for_contract(
+            db, tenant_id=tenant_id, contract=contract
+        )
+        try:
+            embedder = get_shared_embedding_service(
+                contract=contract, credentials=credentials
+            )
+        except Exception:
+            logger.exception(
+                "case_memory: failed to resolve contract-aware embedder for "
+                "tenant=%s agent=%s — falling back to local default",
+                tenant_id,
+                sample_agent.id,
+            )
+            embedder = get_shared_embedding_service()
 
-    try:
-        if loop_is_running:
-            # Caller is inside an active event loop (e.g. FastAPI websocket
-            # handler driving the agent runtime). asyncio.run requires a
-            # fresh loop — run in a worker thread so we don't conflict.
-            import concurrent.futures
+        try:
+            query_embedding = embedder.embed_text(
+                query, task_type=contract.task_query
+            )
+        except TypeError:
+            query_embedding = embedder.embed_text(query)
+        except Exception:
+            logger.exception(
+                "case_memory: query embedding failed (tenant=%s agent=%s)",
+                tenant_id,
+                sample_agent.id,
+            )
+            continue
+        if not query_embedding:
+            continue
 
-            def _runner():
-                return asyncio.run(_make_coro())
+        persist_directory = str(
+            backend_root / "data" / "memory" / f"agent_{sample_agent.id}"
+        )
+        provider = _resolve_case_memory_provider(
+            db,
+            tenant_id=tenant_id,
+            agent=sample_agent,
+            contract=contract,
+            persist_directory=persist_directory,
+        )
+        if provider is None:
+            continue
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                results = executor.submit(_runner).result()
-        else:
-            # No running loop in this thread — asyncio.run is safe.
-            results = asyncio.run(_make_coro())
-    except Exception:
-        logger.exception("case_memory: search failed")
-        return []
+        bridge = ProviderBridgeStore(provider=provider, embedding_service=embedder)
+
+        def _make_coro():
+            return bridge.search_similar_by_embedding(
+                query_embedding=query_embedding,
+                limit=over_fetch,
+                sender_key=None,
+            )
+
+        try:
+            if loop_is_running:
+                import concurrent.futures
+
+                def _runner():
+                    return asyncio.run(_make_coro())
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    all_results.extend(executor.submit(_runner).result() or [])
+            else:
+                all_results.extend(asyncio.run(_make_coro()) or [])
+        except Exception:
+            logger.exception("case_memory: search failed for one embedding contract")
+            continue
 
     # Filter + hydrate.
     out: List[dict] = []
     seen_case_ids: set[int] = set()
-    for record in results or []:
+    for record in all_results or []:
         meta = record.get("metadata") or {}
         if not isinstance(meta, dict):
             continue

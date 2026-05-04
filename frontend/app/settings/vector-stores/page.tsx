@@ -3,7 +3,9 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, VectorStoreInstance, VectorStoreEmbeddingTestResult } from '@/lib/client'
+import { formatVectorStoreIndex, getDefaultVectorStoreIndex, getVectorStoreIndexes } from '@/components/EmbeddingContractControls'
+import { api, VectorStoreEmbeddingTestResult } from '@/lib/client'
+import type { VectorStoreIndex, VectorStoreInstance } from '@/lib/client'
 
 const VENDOR_LABELS: Record<string, string> = {
   mongodb: 'MongoDB',
@@ -23,6 +25,7 @@ export default function VectorStoresSettingsPage() {
   const canEdit = hasPermission('org.settings.write')
 
   const [instances, setInstances] = useState<VectorStoreInstance[]>([])
+  const [indexesByInstanceId, setIndexesByInstanceId] = useState<Record<number, VectorStoreIndex[]>>({})
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [savedId, setSavedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -49,6 +52,17 @@ export default function VectorStoresSettingsPage() {
         api.getDefaultVectorStore(),
       ])
       setInstances(instanceList)
+      const indexPairs = await Promise.all(instanceList.map(async (instance) => {
+        try {
+          const indexes = await api.getVectorStoreIndexes(instance.id)
+          return [instance.id, indexes] as const
+        } catch {
+          return [instance.id, undefined] as const
+        }
+      }))
+      setIndexesByInstanceId(Object.fromEntries(
+        indexPairs.filter((entry): entry is readonly [number, VectorStoreIndex[]] => Array.isArray(entry[1])),
+      ))
       setSelectedId(defaultData.default_vector_store_instance_id)
       setSavedId(defaultData.default_vector_store_instance_id)
     } catch (e: any) {
@@ -117,6 +131,14 @@ export default function VectorStoresSettingsPage() {
   }
 
   const selectedInstance = instances.find(i => i.id === selectedId)
+  const legacyIndexes = getVectorStoreIndexes(selectedInstance)
+  const selectedIndexes = selectedId && indexesByInstanceId[selectedId] !== undefined
+    ? indexesByInstanceId[selectedId]
+    : legacyIndexes
+  const selectedInstanceWithIndexes = selectedInstance
+    ? { ...selectedInstance, indexes: selectedIndexes }
+    : undefined
+  const defaultIndex = getDefaultVectorStoreIndex(selectedInstanceWithIndexes)
   const hasChanges = selectedId !== savedId
 
   if (authLoading || loading) {
@@ -221,15 +243,41 @@ export default function VectorStoresSettingsPage() {
             <p>Health: <span className={selectedInstance.health_status === 'healthy' ? 'text-emerald-400' : 'text-gray-300'}>
               {selectedInstance.health_status}
             </span></p>
-            {/* v0.7.x Wave 2-D: surface the embedding provider/dims pair so
-                operators can see what model the recap loop will use without
-                cracking open extra_config raw JSON. */}
-            <p>Embedding: <span className="text-gray-300">
-              {selectedInstance.extra_config?.embedding_provider || '—'}
-              {selectedInstance.extra_config?.embedding_dims
-                ? ` · ${selectedInstance.extra_config.embedding_dims}d`
-                : ''}
+            <p>Default LTM Contract: <span className="text-gray-300">
+              {defaultIndex
+                ? `${defaultIndex.embedding_provider || 'local'} / ${defaultIndex.embedding_model || 'all-MiniLM-L6-v2'} / ${defaultIndex.embedding_dims || 384}d`
+                : `${selectedInstance.extra_config?.embedding_provider || 'local'} / ${selectedInstance.extra_config?.embedding_model || 'all-MiniLM-L6-v2'} / ${selectedInstance.extra_config?.embedding_dims || 384}d`}
             </span></p>
+          </div>
+
+          <div className="mt-4 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <h3 className="text-sm font-medium text-gray-300">Indexes</h3>
+              <span className="text-xs text-gray-500">{selectedIndexes.length} configured</span>
+            </div>
+            {selectedIndexes.length > 0 ? (
+              <div className="space-y-2">
+                {selectedIndexes.map((index) => (
+                  <div key={index.id} className="flex flex-col gap-1 rounded-md bg-[#0a0a0f] border border-white/5 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-gray-300 truncate" title={formatVectorStoreIndex(index)}>
+                        {formatVectorStoreIndex(index)}
+                      </span>
+                      {index.is_default && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 shrink-0">DEFAULT LTM</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                      {[index.collection_name, index.namespace].filter(Boolean).join(' / ') || 'No collection namespace reported'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">
+                This backend has not reported index rows yet. Legacy collection/index fields are still used as the default contract.
+              </p>
+            )}
           </div>
 
           {/* v0.7.x Wave 2-D: Test Embedding button — probes the configured

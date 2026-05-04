@@ -1,12 +1,10 @@
 'use client'
 
-import { VectorStoreInstance } from '@/lib/client'
-
-const VENDOR_LABELS: Record<string, string> = {
-  mongodb: 'MongoDB',
-  pinecone: 'Pinecone',
-  qdrant: 'Qdrant',
-}
+import { useEffect, useState } from 'react'
+import { api } from '@/lib/client'
+import type { VectorStoreInstance } from '@/lib/client'
+import type { VectorStoreIndex } from '@/lib/client'
+import { formatVectorStoreIndex, getVectorStoreIndexes } from '@/components/EmbeddingContractControls'
 
 function getVendorBadge(instance: VectorStoreInstance): string {
   if (instance.vendor === 'mongodb') {
@@ -53,8 +51,23 @@ export default function VectorStoreCard({
   containerActionLoading,
 }: VectorStoreCardProps) {
   const status = STATUS_STYLES[instance.health_status] || STATUS_STYLES.unknown
-  const vendorLabel = VENDOR_LABELS[instance.vendor] || instance.vendor
   const badge = getVendorBadge(instance)
+  const [fetchedIndexes, setFetchedIndexes] = useState<VectorStoreIndex[] | null>(null)
+  const indexes = fetchedIndexes ?? getVectorStoreIndexes(instance)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getVectorStoreIndexes(instance.id)
+      .then((items) => {
+        if (!cancelled) setFetchedIndexes(items)
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedIndexes(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [instance.id])
 
   return (
     <div className="bg-[#12121a] border border-white/5 rounded-xl p-4 hover:border-white/15 transition-colors">
@@ -113,6 +126,24 @@ export default function VectorStoreCard({
             Index: {instance.extra_config.index_name}
           </div>
         )}
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] px-2 py-2">
+          <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Indexes</div>
+          {indexes.length > 0 ? (
+            <div className="space-y-1">
+              {indexes.slice(0, 3).map((index) => (
+                <div key={index.id} className="text-xs text-gray-400 truncate" title={formatVectorStoreIndex(index)}>
+                  {index.is_default && <span className="text-teal-400 mr-1">Default</span>}
+                  {formatVectorStoreIndex(index)}
+                </div>
+              ))}
+              {indexes.length > 3 && (
+                <div className="text-xs text-gray-500">+{indexes.length - 3} more</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-gray-500">No indexes reported yet</div>
+          )}
+        </div>
         {instance.credentials_configured && (
           <div className="text-xs text-gray-500">
             Key: {instance.credentials_preview || 'configured'}

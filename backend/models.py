@@ -984,6 +984,41 @@ class MCPServerHealth(Base):
     checked_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AgentKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-agent knowledge-base indexing defaults.
+    Stores the current KB embedding/vector/chunking contract; each
+    AgentKnowledge row snapshots these values when a document is indexed.
+    """
+    __tablename__ = "agent_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=800)
+    chunk_overlap = Column(Integer, nullable=False, default=100)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'agent_id', name='uq_agent_knowledge_config_tenant_agent'),
+        Index('idx_agent_knowledge_config_tenant_agent', 'tenant_id', 'agent_id'),
+    )
+
+
 class AgentKnowledge(Base):
     """
     Phase 5.0: Knowledge Base System
@@ -993,6 +1028,7 @@ class AgentKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # "pdf", "txt", "docx", "csv", "json"
     file_path = Column(String(500), nullable=False)  # Path to stored file
@@ -1002,6 +1038,20 @@ class AgentKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1178,6 +1228,7 @@ class ProjectKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, nullable=False, index=True)  # FK to Project
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # pdf, txt, csv, json, etc.
     file_path = Column(String(500), nullable=False)
@@ -1187,7 +1238,57 @@ class ProjectKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProjectKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-project knowledge-base indexing defaults.
+
+    Mirrors AgentKnowledgeConfig so project KB can use external embedding
+    providers and multi-index vector stores without mutating existing docs.
+    """
+    __tablename__ = "project_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=500)
+    chunk_overlap = Column(Integer, nullable=False, default=50)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'project_id', name='uq_project_knowledge_config_tenant_project'),
+        Index('idx_project_knowledge_config_tenant_project', 'tenant_id', 'project_id'),
+    )
 
 
 class ProjectKnowledgeChunk(Base):
@@ -4344,6 +4445,63 @@ class VectorStoreInstance(Base):
     )
 
 
+class VectorStoreIndex(Base):
+    """
+    v0.7.0: Immutable logical/physical index inside a VectorStoreInstance.
+
+    A VectorStoreInstance is the container/cluster/connection. This table
+    records each purpose + owner + embedding contract as a separate
+    collection/index/namespace within that shared connection.
+    """
+    __tablename__ = "vector_store_index"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    purpose = Column(String(32), nullable=False, index=True)  # agent_kb|project_kb|case_memory
+    owner_type = Column(String(32), nullable=False)
+    owner_id = Column(Integer, nullable=False)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False)
+    embedding_model = Column(String(128), nullable=False)
+    embedding_dims = Column(Integer, nullable=False)
+    embedding_metric = Column(String(24), nullable=False, default="cosine")
+    embedding_task_document = Column(String(64), nullable=True)
+    embedding_task_query = Column(String(64), nullable=True)
+    physical_collection_name = Column(String(255), nullable=False)
+    physical_namespace = Column(String(255), nullable=False)
+    physical_index_name = Column(String(255), nullable=True)
+    contract_hash = Column(String(24), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "vector_store_instance_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "contract_hash",
+            name="uq_vector_store_index_contract_owner",
+        ),
+        Index(
+            "idx_vector_store_index_lookup",
+            "tenant_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "embedding_dims",
+        ),
+    )
+
+
 class CaseMemory(Base):
     """
     v0.7.0 Trigger Case Memory MVP — compact post-execution case record.
@@ -4405,6 +4563,12 @@ class CaseMemory(Base):
         ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
         nullable=True,
     )
+    vector_store_index_id = Column(
+        Integer,
+        ForeignKey("vector_store_index.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    embedding_provider_instance_id = Column(Integer, nullable=True)
     embedding_provider = Column(String(32), nullable=True)
     embedding_model = Column(String(128), nullable=True)
     embedding_dims = Column(Integer, nullable=True)
