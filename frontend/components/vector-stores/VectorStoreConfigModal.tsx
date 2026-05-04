@@ -2,10 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
+import EmbeddingContractControls from '@/components/EmbeddingContractControls'
+import type { EmbeddingContractValue } from '@/components/EmbeddingContractControls'
 import MongoAtlasConfigForm from './MongoAtlasConfigForm'
 import PineconeConfigForm from './PineconeConfigForm'
 import QdrantConfigForm from './QdrantConfigForm'
-import { api, Agent, VectorStoreInstance, VectorStoreInstanceCreate } from '@/lib/client'
+import { api } from '@/lib/client'
+import type { Agent, EmbeddingOptionsResponse, VectorStoreInstance } from '@/lib/client'
 
 interface SecurityConfig {
   pre_storage_block_threshold: number
@@ -61,6 +64,7 @@ export default function VectorStoreConfigModal({
   const [credentialsTouched, setCredentialsTouched] = useState(false)
   const [securityExpanded, setSecurityExpanded] = useState(false)
   const [securityConfig, setSecurityConfig] = useState<SecurityConfig>({ ...DEFAULT_SECURITY_CONFIG })
+  const [embeddingOptions, setEmbeddingOptions] = useState<EmbeddingOptionsResponse | null>(null)
 
   // Post-creation agent attachment wizard
   const [showAgentAttachment, setShowAgentAttachment] = useState(false)
@@ -78,6 +82,49 @@ export default function VectorStoreConfigModal({
       setCredentialsTouched(true)
     }
     setConnectionConfig(config)
+  }
+
+  const contractValue: EmbeddingContractValue = {
+    embedding_provider_instance_id: connectionConfig.embedding_provider_instance_id ?? null,
+    embedding_provider: connectionConfig.embedding_provider || 'local',
+    embedding_model: connectionConfig.embedding_model || 'all-MiniLM-L6-v2',
+    embedding_dims: Number(connectionConfig.embedding_dims || 384),
+    embedding_metric: connectionConfig.embedding_metric || connectionConfig.metric || 'cosine',
+  }
+
+  const handleContractChange = (patch: Partial<EmbeddingContractValue>) => {
+    handleConfigChange({
+      ...connectionConfig,
+      ...(patch.embedding_provider_instance_id !== undefined && { embedding_provider_instance_id: patch.embedding_provider_instance_id }),
+      ...(patch.embedding_provider !== undefined && { embedding_provider: patch.embedding_provider }),
+      ...(patch.embedding_model !== undefined && { embedding_model: patch.embedding_model }),
+      ...(patch.embedding_dims !== undefined && { embedding_dims: patch.embedding_dims }),
+      ...(patch.embedding_metric !== undefined && {
+        embedding_metric: patch.embedding_metric,
+        metric: patch.embedding_metric,
+      }),
+    })
+  }
+
+  const resolveDefaultIndex = async (instanceId: number, extraConfig: Record<string, any>) => {
+    try {
+      await api.resolveVectorStoreIndex(instanceId, {
+        purpose: 'case_memory',
+        owner_type: 'tenant',
+        owner_id: 0,
+        embedding_provider_instance_id: extraConfig.embedding_provider_instance_id ?? null,
+        embedding_provider: extraConfig.embedding_provider || 'local',
+        embedding_model: extraConfig.embedding_model || 'all-MiniLM-L6-v2',
+        embedding_dims: Number(extraConfig.embedding_dims || 384),
+        embedding_metric: extraConfig.embedding_metric || extraConfig.metric || 'cosine',
+        physical_collection_name: extraConfig.collection_name || null,
+        physical_index_name: extraConfig.index_name || null,
+        physical_namespace: extraConfig.namespace || null,
+        create: true,
+      })
+    } catch (err) {
+      console.warn('Vector store index resolve skipped:', err)
+    }
   }
 
   // Reset form when modal opens/closes or instance changes
@@ -133,6 +180,13 @@ export default function VectorStoreConfigModal({
     }
   }, [isOpen, instance])
 
+  useEffect(() => {
+    if (!isOpen) return
+    api.getEmbeddingProviderOptions()
+      .then(setEmbeddingOptions)
+      .catch(() => setEmbeddingOptions(null))
+  }, [isOpen])
+
   const handleSave = async () => {
     if (!instanceName.trim()) {
       setError('Instance name is required')
@@ -145,6 +199,16 @@ export default function VectorStoreConfigModal({
     try {
       // Separate credential fields from extra_config
       const { api_key, cluster_uri, base_url: configBaseUrl, ...extraConfig } = connectionConfig
+      const metric = connectionConfig.embedding_metric || connectionConfig.metric || 'cosine'
+      const extraConfigWithContract = {
+        ...extraConfig,
+        embedding_provider: connectionConfig.embedding_provider || 'local',
+        embedding_provider_instance_id: connectionConfig.embedding_provider_instance_id ?? null,
+        embedding_model: connectionConfig.embedding_model || 'all-MiniLM-L6-v2',
+        embedding_dims: Number(connectionConfig.embedding_dims || 384),
+        embedding_metric: metric,
+        metric,
+      }
 
       let baseUrl: string | undefined
       const credentials: Record<string, any> = {}
@@ -166,15 +230,16 @@ export default function VectorStoreConfigModal({
       const shouldSendCredentials = isEditing ? (credentialsTouched && hasNewCredentials) : hasNewCredentials
 
       if (isEditing && instance) {
-        await api.updateVectorStoreInstance(instance.id, {
+        const updatedInstance = await api.updateVectorStoreInstance(instance.id, {
           instance_name: instanceName,
           description: description || undefined,
           base_url: baseUrl,
           credentials: shouldSendCredentials ? credentials : undefined,
-          extra_config: extraConfig,
+          extra_config: extraConfigWithContract,
           security_config: securityConfig,
           is_default: isDefault,
         })
+        await resolveDefaultIndex(updatedInstance.id, extraConfigWithContract)
       } else {
         const newInstance = await api.createVectorStoreInstance({
           vendor,
@@ -182,13 +247,14 @@ export default function VectorStoreConfigModal({
           description: description || undefined,
           base_url: autoProvision ? undefined : baseUrl,
           credentials: autoProvision ? undefined : (hasNewCredentials ? credentials : undefined),
-          extra_config: extraConfig,
+          extra_config: extraConfigWithContract,
           is_default: isDefault,
           auto_provision: autoProvision,
           mem_limit: autoProvision ? memLimit : undefined,
         })
 
         if (newInstance?.id) {
+          await resolveDefaultIndex(newInstance.id, extraConfigWithContract)
           setCreatedInstanceId(newInstance.id)
           try {
             const agentsList = await api.getAgents(true)
@@ -495,6 +561,26 @@ export default function VectorStoreConfigModal({
             )}
           </div>
         )}
+
+        <div className="pt-2 border-t border-white/5">
+          <div className="mb-3">
+            <h3 className="text-sm font-medium text-gray-300">Default Long-Term Memory Contract</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              New memory indexes for this connection use this provider, model, dimensions, and metric.
+            </p>
+          </div>
+          <EmbeddingContractControls
+            value={contractValue}
+            onChange={handleContractChange}
+            embeddingOptions={embeddingOptions}
+            includeVectorStore={false}
+            includeMetric
+            gridClassName="grid grid-cols-1 sm:grid-cols-2 gap-3"
+            labelClassName="block text-sm text-gray-300 mb-1"
+            fieldClassName="w-full px-3 py-2 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm"
+            helperClassName="text-xs text-gray-500 mt-1"
+          />
+        </div>
 
         {/* Security Section (edit mode only) */}
         {isEditing && (

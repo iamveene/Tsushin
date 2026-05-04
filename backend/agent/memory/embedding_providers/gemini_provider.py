@@ -63,10 +63,20 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         return self._dims
 
     @property
+    def provider(self) -> str:
+        return "gemini"
+
+    @property
     def model(self) -> str:
         return self._model
 
     # --- Core call -------------------------------------------------------
+
+    def _format_for_gemini_embedding_2(self, text: str, task_type: str) -> str:
+        """Gemini Embedding 2 uses prompt-style retrieval hints."""
+        if task_type == "RETRIEVAL_QUERY":
+            return f"Represent this query for retrieval: {text or ' '}"
+        return f"Represent this document for retrieval: {text or ' '}"
 
     @retry(
         stop=stop_after_attempt(4),
@@ -79,13 +89,25 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         Returns a list of embedding vectors, one per input text. The
         google-genai SDK packs them into ``response.embeddings[i].values``.
         """
-        response = self._client.models.embed_content(
-            model=self._model,
-            contents=texts,
-            config=genai_types.EmbedContentConfig(
+        contents = [text or " " for text in texts]
+        if self._model == "gemini-embedding-2":
+            contents = [
+                self._format_for_gemini_embedding_2(text, task_type)
+                for text in contents
+            ]
+            config = genai_types.EmbedContentConfig(
+                output_dimensionality=self._dims,
+            )
+        else:
+            config = genai_types.EmbedContentConfig(
                 task_type=task_type,
                 output_dimensionality=self._dims,
-            ),
+            )
+
+        response = self._client.models.embed_content(
+            model=self._model,
+            contents=contents,
+            config=config,
         )
         return [list(e.values) for e in response.embeddings]
 
@@ -123,7 +145,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         for i in range(0, len(texts), batch_size):
             batch = [t if t else " " for t in texts[i : i + batch_size]]
             try:
-                results.extend(self._call_api(batch, task_type))
+                if self._model == "gemini-embedding-2":
+                    for text in batch:
+                        results.extend(self._call_api([text], task_type))
+                else:
+                    results.extend(self._call_api(batch, task_type))
             except Exception:  # noqa: BLE001 — graceful per-batch fallback
                 self._logger.exception(
                     "GeminiEmbeddingProvider: batch %d failed (size=%d)",

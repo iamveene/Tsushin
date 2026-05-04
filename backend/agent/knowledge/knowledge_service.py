@@ -4,18 +4,29 @@ Manages agent knowledge base including document upload, processing, and retrieva
 """
 
 import logging
+import asyncio
+import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from types import SimpleNamespace
+from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from models import AgentKnowledge, KnowledgeChunk
+from models import Agent, AgentKnowledge, AgentKnowledgeConfig, KnowledgeChunk, VectorStoreInstance
 from agent.knowledge.document_processor import DocumentProcessor
+from agent.memory.embedding_catalog import (
+    LOCAL_DIMS,
+    LOCAL_MODEL,
+    normalize_embedding_provider,
+    provider_default_model,
+    validate_embedding_contract,
+)
 from agent.memory.embedding_service import get_shared_embedding_service
 import chromadb
 from chromadb.config import Settings
@@ -26,6 +37,47 @@ _DOCUMENT_METADATA_SUFFIX = ".meta.json"
 _MAX_DOCUMENT_NAME_LENGTH = 255
 _MAX_DOCUMENT_TAGS = 12
 _MAX_DOCUMENT_TAG_LENGTH = 48
+_KB_INDEX_VERSION = 1
+_DEFAULT_CHUNK_SIZE = 800
+_DEFAULT_CHUNK_OVERLAP = 100
+_DEFAULT_SEARCH_TOP_K = 5
+_DEFAULT_SIMILARITY_THRESHOLD = 0.3
+_VALID_CHUNK_STRATEGIES = {"fixed_text", "json_structure", "csv_rows"}
+_VALID_PARSERS = {"auto", "txt", "csv", "json", "pdf", "docx"}
+
+
+@dataclass(frozen=True)
+class KnowledgeIndexProfile:
+    tenant_id: Optional[str]
+    agent_id: int
+    embedding_provider_instance_id: Optional[int]
+    embedding_provider: str
+    embedding_model: str
+    embedding_dims: int
+    embedding_metric: str
+    vector_store_instance_id: Optional[int]
+    vector_store_index_id: Optional[int]
+    vector_collection_name: str
+    vector_namespace: str
+    chunk_strategy: str
+    chunk_size: int
+    chunk_overlap: int
+    parser: str
+    index_version: int = _KB_INDEX_VERSION
+
+    def grouping_key(self) -> Tuple[Any, ...]:
+        return (
+            self.tenant_id,
+            self.agent_id,
+            self.embedding_provider_instance_id,
+            self.embedding_provider,
+            self.embedding_model,
+            self.embedding_dims,
+            self.vector_store_instance_id,
+            self.vector_store_index_id,
+            self.vector_collection_name,
+            self.vector_namespace,
+        )
 
 
 class KnowledgeMetadataError(RuntimeError):
@@ -105,6 +157,564 @@ class KnowledgeService:
         # Storage directory for uploaded files
         self.storage_dir = Path("./data/knowledge")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _tenant_hash(self, tenant_id: Optional[str]) -> str:
+        raw = tenant_id or "system"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+
+    def _collection_base(self, tenant_id: Optional[str], agent_id: int, dims: int) -> str:
+        return f"kb_{self._tenant_hash(tenant_id)}_{agent_id}_{dims}"
+
+    def _legacy_collection_name(self, agent_id: int) -> str:
+        return f"knowledge_agent_{agent_id}"
+
+    def _default_profile(
+        self,
+        *,
+        tenant_id: Optional[str],
+        agent_id: int,
+    ) -> KnowledgeIndexProfile:
+        collection = self._collection_base(tenant_id, agent_id, LOCAL_DIMS)
+        return KnowledgeIndexProfile(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            embedding_provider_instance_id=None,
+            embedding_provider="local",
+            embedding_model=LOCAL_MODEL,
+            embedding_dims=LOCAL_DIMS,
+            embedding_metric="cosine",
+            vector_store_instance_id=None,
+            vector_store_index_id=None,
+            vector_collection_name=collection,
+            vector_namespace=f"kb:{tenant_id or 'system'}:{agent_id}:{LOCAL_DIMS}",
+            chunk_strategy="fixed_text",
+            chunk_size=_DEFAULT_CHUNK_SIZE,
+            chunk_overlap=_DEFAULT_CHUNK_OVERLAP,
+            parser="auto",
+        )
+
+    def _profile_from_config(
+        self,
+        config: AgentKnowledgeConfig,
+        *,
+        tenant_id: str,
+        agent_id: int,
+    ) -> KnowledgeIndexProfile:
+        provider = normalize_embedding_provider(config.embedding_provider)
+        normalized = validate_embedding_contract(
+            provider=provider,
+            model=config.embedding_model or provider_default_model(provider),
+            dimensions=config.embedding_dims,
+            allow_ollama_dynamic=False,
+        )
+        dims = int(normalized["dimensions"])
+        collection = config.vector_collection_name or self._collection_base(tenant_id, agent_id, dims)
+        namespace = config.vector_namespace or f"kb:{tenant_id}:{agent_id}:{dims}"
+        strategy = config.chunk_strategy if config.chunk_strategy in _VALID_CHUNK_STRATEGIES else "fixed_text"
+        parser = config.parser if config.parser in _VALID_PARSERS else "auto"
+        return KnowledgeIndexProfile(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            embedding_provider_instance_id=config.embedding_provider_instance_id,
+            embedding_provider=str(normalized["provider"]),
+            embedding_model=str(normalized["model"]),
+            embedding_dims=dims,
+            embedding_metric=str(config.embedding_metric or normalized.get("metric") or "cosine"),
+            vector_store_instance_id=config.vector_store_instance_id,
+            vector_store_index_id=getattr(config, "vector_store_index_id", None),
+            vector_collection_name=collection,
+            vector_namespace=namespace,
+            chunk_strategy=strategy,
+            chunk_size=int(config.chunk_size or _DEFAULT_CHUNK_SIZE),
+            chunk_overlap=int(config.chunk_overlap or _DEFAULT_CHUNK_OVERLAP),
+            parser=parser,
+        )
+
+    def _profile_from_knowledge(self, knowledge: AgentKnowledge) -> KnowledgeIndexProfile:
+        tenant_id = getattr(knowledge, "tenant_id", None)
+        dims = int(getattr(knowledge, "embedding_dims", None) or LOCAL_DIMS)
+        provider = normalize_embedding_provider(getattr(knowledge, "embedding_provider", None))
+        model = getattr(knowledge, "embedding_model", None) or (
+            provider_default_model(provider) if provider != "ollama" else LOCAL_MODEL
+        )
+        collection = (
+            getattr(knowledge, "vector_collection_name", None)
+            or self._legacy_collection_name(knowledge.agent_id)
+        )
+        namespace = (
+            getattr(knowledge, "vector_namespace", None)
+            or f"kb:{tenant_id or 'system'}:{knowledge.agent_id}:{dims}"
+        )
+        return KnowledgeIndexProfile(
+            tenant_id=tenant_id,
+            agent_id=knowledge.agent_id,
+            embedding_provider_instance_id=getattr(knowledge, "embedding_provider_instance_id", None),
+            embedding_provider=provider,
+            embedding_model=model,
+            embedding_dims=dims,
+            embedding_metric=getattr(knowledge, "embedding_metric", None) or "cosine",
+            vector_store_instance_id=getattr(knowledge, "vector_store_instance_id", None),
+            vector_store_index_id=getattr(knowledge, "vector_store_index_id", None),
+            vector_collection_name=collection,
+            vector_namespace=namespace,
+            chunk_strategy=getattr(knowledge, "chunk_strategy", None) or "fixed_text",
+            chunk_size=int(getattr(knowledge, "chunk_size", None) or _DEFAULT_CHUNK_SIZE),
+            chunk_overlap=int(getattr(knowledge, "chunk_overlap", None) or _DEFAULT_CHUNK_OVERLAP),
+            parser=getattr(knowledge, "parser", None) or "auto",
+            index_version=int(getattr(knowledge, "index_version", None) or 0),
+        )
+
+    def _snapshot_profile(self, knowledge: AgentKnowledge, profile: KnowledgeIndexProfile) -> None:
+        knowledge.tenant_id = profile.tenant_id
+        knowledge.embedding_provider_instance_id = profile.embedding_provider_instance_id
+        knowledge.embedding_provider = profile.embedding_provider
+        knowledge.embedding_model = profile.embedding_model
+        knowledge.embedding_dims = profile.embedding_dims
+        knowledge.embedding_metric = profile.embedding_metric
+        knowledge.vector_store_instance_id = profile.vector_store_instance_id
+        knowledge.vector_store_index_id = profile.vector_store_index_id
+        knowledge.vector_collection_name = profile.vector_collection_name
+        knowledge.vector_namespace = profile.vector_namespace
+        knowledge.chunk_strategy = profile.chunk_strategy
+        knowledge.chunk_size = profile.chunk_size
+        knowledge.chunk_overlap = profile.chunk_overlap
+        knowledge.parser = profile.parser
+        knowledge.index_version = profile.index_version
+
+    def _resolve_agent_profile(self, agent_id: int) -> KnowledgeIndexProfile:
+        try:
+            agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        except Exception:
+            return self._default_profile(tenant_id=None, agent_id=agent_id)
+        tenant_id = getattr(agent, "tenant_id", None) if agent else None
+        if not tenant_id:
+            return self._default_profile(tenant_id=tenant_id, agent_id=agent_id)
+
+        config = (
+            self.db.query(AgentKnowledgeConfig)
+            .filter(
+                AgentKnowledgeConfig.tenant_id == tenant_id,
+                AgentKnowledgeConfig.agent_id == agent_id,
+            )
+            .first()
+        )
+        if not config:
+            profile = self._default_profile(tenant_id=tenant_id, agent_id=agent_id)
+        else:
+            profile = self._profile_from_config(config, tenant_id=tenant_id, agent_id=agent_id)
+
+        if tenant_id:
+            try:
+                profile = self._profile_with_vector_index(
+                    profile,
+                    purpose="agent_kb",
+                    owner_type="agent",
+                    owner_id=agent_id,
+                )
+                if config:
+                    config.vector_store_index_id = profile.vector_store_index_id
+                    config.vector_collection_name = profile.vector_collection_name
+                    config.vector_namespace = profile.vector_namespace
+                    config.updated_at = datetime.utcnow()
+                    self.db.flush()
+            except Exception:
+                logger.exception("Failed to resolve Agent KB vector index")
+                raise
+        return profile
+
+    def _profile_with_vector_index(
+        self,
+        profile: KnowledgeIndexProfile,
+        *,
+        purpose: str,
+        owner_type: str,
+        owner_id: int,
+    ) -> KnowledgeIndexProfile:
+        if not profile.tenant_id:
+            return profile
+        from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+        index = VectorStoreIndexResolver.resolve_or_create(
+            self.db,
+            tenant_id=profile.tenant_id,
+            vector_store_instance_id=profile.vector_store_instance_id,
+            purpose=purpose,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            contract={
+                "embedding_provider_instance_id": profile.embedding_provider_instance_id,
+                "embedding_provider": profile.embedding_provider,
+                "embedding_model": profile.embedding_model,
+                "embedding_dims": profile.embedding_dims,
+                "embedding_metric": profile.embedding_metric,
+            },
+        )
+        return KnowledgeIndexProfile(
+            tenant_id=profile.tenant_id,
+            agent_id=profile.agent_id,
+            embedding_provider_instance_id=profile.embedding_provider_instance_id,
+            embedding_provider=profile.embedding_provider,
+            embedding_model=profile.embedding_model,
+            embedding_dims=profile.embedding_dims,
+            embedding_metric=profile.embedding_metric,
+            vector_store_instance_id=profile.vector_store_instance_id,
+            vector_store_index_id=index.id,
+            vector_collection_name=index.physical_collection_name,
+            vector_namespace=index.physical_namespace,
+            chunk_strategy=profile.chunk_strategy,
+            chunk_size=profile.chunk_size,
+            chunk_overlap=profile.chunk_overlap,
+            parser=profile.parser,
+            index_version=profile.index_version,
+        )
+
+    def get_knowledge_config(self, agent_id: int, tenant_id: str) -> AgentKnowledgeConfig:
+        config = (
+            self.db.query(AgentKnowledgeConfig)
+            .filter(
+                AgentKnowledgeConfig.tenant_id == tenant_id,
+                AgentKnowledgeConfig.agent_id == agent_id,
+            )
+            .first()
+        )
+        if config:
+            return config
+
+        config = AgentKnowledgeConfig(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            embedding_provider="local",
+            embedding_model=LOCAL_MODEL,
+            embedding_dims=LOCAL_DIMS,
+            embedding_metric="cosine",
+            chunk_strategy="fixed_text",
+            chunk_size=_DEFAULT_CHUNK_SIZE,
+            chunk_overlap=_DEFAULT_CHUNK_OVERLAP,
+            parser="auto",
+            search_top_k=_DEFAULT_SEARCH_TOP_K,
+            similarity_threshold=_DEFAULT_SIMILARITY_THRESHOLD,
+        )
+        self.db.add(config)
+        self.db.commit()
+        self.db.refresh(config)
+        return config
+
+    def update_knowledge_config(
+        self,
+        agent_id: int,
+        tenant_id: str,
+        data: Dict[str, Any],
+    ) -> AgentKnowledgeConfig:
+        config = self.get_knowledge_config(agent_id, tenant_id)
+
+        provider = normalize_embedding_provider(data.get("embedding_provider", config.embedding_provider))
+        model = data.get("embedding_model", config.embedding_model) or provider_default_model(provider)
+        dims = data.get("embedding_dims", config.embedding_dims)
+        normalized = validate_embedding_contract(
+            provider=provider,
+            model=model,
+            dimensions=dims,
+            allow_ollama_dynamic=False,
+        )
+
+        provider_instance_id = data.get(
+            "embedding_provider_instance_id",
+            config.embedding_provider_instance_id,
+        )
+        if normalized["provider"] != "local":
+            from models import ProviderInstance
+
+            instance = (
+                self.db.query(ProviderInstance)
+                .filter(
+                    ProviderInstance.id == provider_instance_id,
+                    ProviderInstance.tenant_id == tenant_id,
+                    ProviderInstance.vendor == normalized["provider"],
+                    ProviderInstance.is_active == True,
+                )
+                .first()
+            )
+            if not instance:
+                raise ValueError("A configured embedding provider instance is required")
+        else:
+            provider_instance_id = None
+
+        vector_store_instance_id = data.get(
+            "vector_store_instance_id",
+            config.vector_store_instance_id,
+        )
+        if vector_store_instance_id is not None:
+            instance = self.db.query(VectorStoreInstance).filter(
+                VectorStoreInstance.id == vector_store_instance_id,
+                VectorStoreInstance.tenant_id == tenant_id,
+                VectorStoreInstance.is_active == True,
+            ).first()
+            if not instance:
+                raise ValueError("Vector store instance not found")
+
+        chunk_strategy = data.get("chunk_strategy", config.chunk_strategy or "fixed_text")
+        if chunk_strategy not in _VALID_CHUNK_STRATEGIES:
+            raise ValueError(
+                f"Invalid chunk_strategy {chunk_strategy!r}: must be one of {sorted(_VALID_CHUNK_STRATEGIES)}"
+            )
+        chunk_size = int(data.get("chunk_size", config.chunk_size or _DEFAULT_CHUNK_SIZE))
+        chunk_overlap = int(data.get("chunk_overlap", config.chunk_overlap or _DEFAULT_CHUNK_OVERLAP))
+        if chunk_size < 200 or chunk_size > 8000:
+            raise ValueError("chunk_size must be between 200 and 8000")
+        if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap must be non-negative and smaller than chunk_size")
+
+        parser = data.get("parser", config.parser or "auto")
+        if parser not in _VALID_PARSERS:
+            raise ValueError(f"Invalid parser {parser!r}: must be one of {sorted(_VALID_PARSERS)}")
+
+        config.embedding_provider_instance_id = provider_instance_id
+        config.embedding_provider = normalized["provider"]
+        config.embedding_model = normalized["model"]
+        config.embedding_dims = int(normalized["dimensions"])
+        config.embedding_metric = data.get("embedding_metric", config.embedding_metric or "cosine")
+        config.vector_store_instance_id = vector_store_instance_id
+        config.vector_store_index_id = None
+        config.vector_collection_name = None
+        config.vector_namespace = None
+        config.chunk_strategy = chunk_strategy
+        config.chunk_size = chunk_size
+        config.chunk_overlap = chunk_overlap
+        config.parser = parser
+        config.search_top_k = int(data.get("search_top_k", config.search_top_k or _DEFAULT_SEARCH_TOP_K))
+        config.similarity_threshold = float(
+            data.get("similarity_threshold", config.similarity_threshold or _DEFAULT_SIMILARITY_THRESHOLD)
+        )
+        config.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(config)
+        return config
+
+    def _embedding_credentials(self, profile: KnowledgeIndexProfile) -> Dict[str, Any]:
+        from services.embedding_provider_service import EmbeddingProviderService
+
+        return EmbeddingProviderService.resolve_provider_credentials(
+            tenant_id=profile.tenant_id or "",
+            provider=profile.embedding_provider,
+            provider_instance_id=profile.embedding_provider_instance_id,
+            db=self.db,
+        )
+
+    def _embedding_provider(self, profile: KnowledgeIndexProfile):
+        contract = SimpleNamespace(
+            provider=profile.embedding_provider,
+            model=profile.embedding_model,
+            dimensions=profile.embedding_dims,
+            metric=profile.embedding_metric,
+            vector_store_instance_id=profile.vector_store_instance_id,
+        )
+        return get_shared_embedding_service(
+            contract=contract,
+            credentials=self._embedding_credentials(profile),
+        )
+
+    def _vector_id(self, knowledge_id: int, chunk_id: int) -> str:
+        return f"knowledge_{knowledge_id}_chunk_{chunk_id}"
+
+    def _sender_key(self, profile: KnowledgeIndexProfile) -> str:
+        return f"kb:{profile.tenant_id or 'system'}:{profile.agent_id}"
+
+    def _chroma_collection(self, profile: KnowledgeIndexProfile):
+        return self.chroma_client.get_or_create_collection(
+            name=profile.vector_collection_name,
+            metadata={
+                "description": f"Knowledge base for tenant {profile.tenant_id or 'system'} agent {profile.agent_id}",
+                "purpose": "knowledge_base",
+                "embedding_dimensions": profile.embedding_dims,
+            },
+        )
+
+    def _uses_builtin_chroma(self, profile: KnowledgeIndexProfile) -> bool:
+        if profile.vector_store_instance_id is None:
+            return True
+        instance = self.db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.id == profile.vector_store_instance_id,
+            VectorStoreInstance.tenant_id == profile.tenant_id,
+        ).first()
+        if not instance:
+            return True
+        return (instance.vendor or "").lower() in {"chroma", "chromadb"}
+
+    def _external_vector_provider(self, profile: KnowledgeIndexProfile):
+        if profile.vector_store_instance_id is None:
+            return None
+
+        instance = self.db.query(VectorStoreInstance).filter(
+            VectorStoreInstance.id == profile.vector_store_instance_id,
+            VectorStoreInstance.tenant_id == profile.tenant_id,
+            VectorStoreInstance.is_active == True,
+        ).first()
+        if not instance:
+            return None
+
+        vendor = (instance.vendor or "").lower()
+        if vendor in {"chroma", "chromadb"}:
+            return None
+
+        from services.vector_store_instance_service import VectorStoreInstanceService
+        from agent.memory.providers.base import ProviderConnectionError
+
+        credentials = VectorStoreInstanceService.resolve_credentials(instance, self.db)
+        extra = instance.extra_config or {}
+        if not isinstance(extra, dict):
+            extra = {}
+
+        if vendor == "qdrant":
+            from agent.memory.providers.qdrant_adapter import QdrantVectorAdapter
+
+            if not instance.base_url:
+                raise ProviderConnectionError("Qdrant requires a base URL")
+            return QdrantVectorAdapter(
+                url=instance.base_url,
+                collection_name=profile.vector_collection_name,
+                api_key=credentials.get("api_key"),
+                embedding_dims=profile.embedding_dims,
+            )
+        if vendor == "mongodb":
+            from agent.memory.providers.mongodb_adapter import MongoDBVectorAdapter
+
+            connection_string = credentials.get("connection_string") or instance.base_url
+            if not connection_string:
+                raise ProviderConnectionError("MongoDB requires a connection string")
+            return MongoDBVectorAdapter(
+                connection_string=connection_string,
+                database_name=extra.get("database_name", "tsushin"),
+                collection_name=profile.vector_collection_name,
+                index_name=extra.get("index_name", "vector_index"),
+                embedding_dims=profile.embedding_dims,
+                use_native_search=extra.get("use_native_search", True),
+            )
+        if vendor == "pinecone":
+            from agent.memory.providers.pinecone_adapter import PineconeVectorAdapter
+
+            api_key = credentials.get("api_key", "")
+            if not api_key:
+                raise ProviderConnectionError("Pinecone requires an API key")
+            base_index = extra.get("index_name") or "tsushin"
+            index_name = (
+                profile.vector_collection_name.replace("_", "-")
+                if str(profile.embedding_dims) not in str(base_index)
+                else base_index
+            )
+            return PineconeVectorAdapter(
+                api_key=api_key,
+                index_name=index_name,
+                namespace=profile.vector_namespace,
+                environment=extra.get("environment", ""),
+                embedding_dims=profile.embedding_dims,
+            )
+
+        return None
+
+    def _vector_metadata(
+        self,
+        profile: KnowledgeIndexProfile,
+        knowledge: AgentKnowledge,
+        chunk: KnowledgeChunk,
+        chunk_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "purpose": "knowledge_base",
+            "tenant_id": profile.tenant_id or "",
+            "agent_id": profile.agent_id,
+            "knowledge_id": knowledge.id,
+            "document_id": knowledge.id,
+            "chunk_id": chunk.id,
+            "chunk_index": chunk.chunk_index,
+            "document_name": knowledge.document_name,
+            "embedding_provider": profile.embedding_provider,
+            "embedding_model": profile.embedding_model,
+            "embedding_dims": profile.embedding_dims,
+            "chunk_strategy": profile.chunk_strategy,
+            "parser": profile.parser,
+            "content": chunk.content[:200],
+            "json_path": chunk_data.get("json_path", ""),
+            "row_start": chunk_data.get("row_start", 0),
+            "row_end": chunk_data.get("row_end", 0),
+        }
+
+    async def _store_embeddings(
+        self,
+        profile: KnowledgeIndexProfile,
+        knowledge: AgentKnowledge,
+        chunks: List[KnowledgeChunk],
+        chunk_payloads: List[Dict[str, Any]],
+        embeddings: List[List[float]],
+    ) -> None:
+        records = []
+        for chunk, payload, embedding in zip(chunks, chunk_payloads, embeddings):
+            if len(embedding) != profile.embedding_dims:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {profile.embedding_dims}, got {len(embedding)}"
+                )
+            metadata = self._vector_metadata(profile, knowledge, chunk, payload)
+            records.append(
+                {
+                    "message_id": self._vector_id(knowledge.id, chunk.id),
+                    "sender_key": self._sender_key(profile),
+                    "text": chunk.content,
+                    "embedding": embedding,
+                    "metadata": metadata,
+                }
+            )
+
+        provider = self._external_vector_provider(profile)
+        if provider is not None:
+            await provider.add_batch(records)
+            return
+
+        collection = self._chroma_collection(profile)
+        collection.upsert(
+            ids=[record["message_id"] for record in records],
+            embeddings=[record["embedding"] for record in records],
+            metadatas=[
+                {
+                    "sender_key": record["sender_key"],
+                    "text": record["text"][:1000],
+                    **record["metadata"],
+                }
+                for record in records
+            ],
+            documents=[record["text"] for record in records],
+        )
+
+    async def _delete_vectors_for_chunks(
+        self,
+        profile: KnowledgeIndexProfile,
+        knowledge: AgentKnowledge,
+        chunks: List[KnowledgeChunk],
+    ) -> None:
+        provider = self._external_vector_provider(profile)
+        if provider is not None:
+            for chunk in chunks:
+                try:
+                    await provider.delete_message(self._vector_id(knowledge.id, chunk.id))
+                except Exception as exc:
+                    logger.warning("Error deleting KB vector %s: %s", chunk.id, exc)
+            return
+
+        try:
+            collection = self.chroma_client.get_collection(name=profile.vector_collection_name)
+            ids = [self._vector_id(knowledge.id, chunk.id) for chunk in chunks]
+            if ids:
+                collection.delete(ids=ids)
+        except Exception as exc:
+            logger.warning("Error deleting KB vectors from Chroma: %s", exc)
+
+    def _run_async_cleanup(self, coro) -> None:
+        try:
+            asyncio.run(coro)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(coro)
+            finally:
+                loop.close()
 
     def _metadata_path(self, knowledge: AgentKnowledge) -> Path:
         return Path(f"{knowledge.file_path}{_DOCUMENT_METADATA_SUFFIX}")
@@ -289,6 +899,7 @@ class KnowledgeService:
         try:
             # Get file size
             file_size = os.path.getsize(file_path)
+            profile = self._resolve_agent_profile(agent_id)
 
             # Copy file to storage directory
             agent_dir = self.storage_dir / f"agent_{agent_id}"
@@ -307,12 +918,14 @@ class KnowledgeService:
             # Create database record
             knowledge = AgentKnowledge(
                 agent_id=agent_id,
+                tenant_id=profile.tenant_id,
                 document_name=document_name,
                 document_type=document_type,
                 file_path=str(stored_path),
                 file_size_bytes=file_size,
-                status="pending"
+                status="pending",
             )
+            self._snapshot_profile(knowledge, profile)
 
             self.db.add(knowledge)
             self.db.flush()
@@ -366,18 +979,27 @@ class KnowledgeService:
             knowledge.status = "processing"
             self.db.commit()
 
-            # Process document and create chunks
-            chunks = self.processor.process_document(
+            profile = self._profile_from_knowledge(knowledge)
+
+            # Process document and create chunks using the snapshotted strategy.
+            processor = DocumentProcessor(
+                chunk_size=profile.chunk_size,
+                chunk_overlap=profile.chunk_overlap,
+                chunk_strategy=profile.chunk_strategy,
+            )
+            chunks = processor.process_document(
                 knowledge.file_path,
-                knowledge.document_type
+                knowledge.document_type,
+                chunk_strategy=profile.chunk_strategy,
             )
 
             if not chunks:
                 raise ValueError("No chunks created from document")
 
-            # Store chunks in database and generate embeddings
+            chunk_records: List[KnowledgeChunk] = []
+
+            # Store chunks in database first so vector metadata can reference stable ids.
             for chunk_data in chunks:
-                # Create chunk record
                 chunk = KnowledgeChunk(
                     knowledge_id=knowledge.id,
                     chunk_index=chunk_data["chunk_index"],
@@ -385,40 +1007,28 @@ class KnowledgeService:
                     char_count=chunk_data["char_count"],
                     metadata_json={
                         "start_pos": chunk_data["start_pos"],
-                        "end_pos": chunk_data["end_pos"]
-                    }
+                        "end_pos": chunk_data["end_pos"],
+                        "chunk_strategy": chunk_data.get("chunk_strategy", profile.chunk_strategy),
+                        "json_path": chunk_data.get("json_path"),
+                        "row_start": chunk_data.get("row_start"),
+                        "row_end": chunk_data.get("row_end"),
+                    },
                 )
                 self.db.add(chunk)
-                self.db.flush()  # Get chunk ID
+                self.db.flush()
+                chunk_records.append(chunk)
 
-                # Generate embedding and store in vector store
-                try:
-                    embedding = await self.embedding_service.embed_text_async(chunk_data["content"])
-
-                    # Get or create collection for this agent
-                    collection_name = f"knowledge_agent_{knowledge.agent_id}"
-                    collection = self.chroma_client.get_or_create_collection(
-                        name=collection_name,
-                        metadata={"description": f"Knowledge base for agent {knowledge.agent_id}"}
-                    )
-
-                    # Store in ChromaDB
-                    document_id = f"knowledge_{knowledge.id}_chunk_{chunk.id}"
-                    collection.upsert(
-                        ids=[document_id],
-                        embeddings=[embedding],
-                        metadatas=[{
-                            "knowledge_id": knowledge.id,
-                            "chunk_id": chunk.id,
-                            "chunk_index": chunk_data["chunk_index"],
-                            "document_name": knowledge.document_name,
-                            "content": chunk_data["content"][:200]  # Store preview
-                        }],
-                        documents=[chunk_data["content"]]
-                    )
-                except Exception as e:
-                    logger.error(f"Error generating embedding for chunk {chunk.id}: {e}")
-                    # Continue processing other chunks
+            embedder = self._embedding_provider(profile)
+            embeddings = await embedder.embed_batch_chunked_async(
+                [chunk.content for chunk in chunk_records],
+                batch_size=32,
+                task_type="RETRIEVAL_DOCUMENT",
+            )
+            if len(embeddings) != len(chunk_records):
+                raise ValueError(
+                    f"Embedding provider returned {len(embeddings)} vectors for {len(chunk_records)} chunks"
+                )
+            await self._store_embeddings(profile, knowledge, chunk_records, chunks, embeddings)
 
             # Update knowledge record
             knowledge.num_chunks = len(chunks)
@@ -456,51 +1066,111 @@ class KnowledgeService:
             List of relevant chunks with metadata
         """
         try:
-            # Get collection for this agent
-            collection_name = f"knowledge_agent_{agent_id}"
-            try:
-                collection = self.chroma_client.get_collection(name=collection_name)
-            except:
-                # Collection doesn't exist yet
-                return []
-
-            # Check if collection has any documents
-            if collection.count() == 0:
-                return []
-
-            # Generate query embedding
-            query_embedding = await self.embedding_service.embed_text_async(query)
-
-            # Search ChromaDB
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=max_results
+            knowledge_rows = (
+                self.db.query(AgentKnowledge)
+                .filter(
+                    AgentKnowledge.agent_id == agent_id,
+                    AgentKnowledge.status == "completed",
+                )
+                .all()
             )
+            if not knowledge_rows:
+                return []
 
-            # Filter by similarity threshold and format results
-            formatted_results = []
-            if results['ids'] and len(results['ids'][0]) > 0:
-                for i in range(len(results['ids'][0])):
-                    # Convert distance to similarity (ChromaDB returns L2 distance)
-                    # Lower distance = higher similarity
-                    distance = results['distances'][0][i]
-                    similarity = 1.0 / (1.0 + distance)  # Convert distance to similarity score
+            grouped: Dict[Tuple[Any, ...], KnowledgeIndexProfile] = {}
+            for row in knowledge_rows:
+                profile = self._profile_from_knowledge(row)
+                grouped[profile.grouping_key()] = profile
 
-                    if similarity >= similarity_threshold:
-                        metadata = results['metadatas'][0][i]
-                        chunk_id = metadata.get("chunk_id")
-                        if chunk_id:
-                            chunk = self.db.query(KnowledgeChunk).get(chunk_id)
-                            if chunk:
-                                knowledge = self.db.query(AgentKnowledge).get(chunk.knowledge_id)
-                                formatted_results.append({
-                                    "chunk_id": chunk.id,
-                                    "knowledge_id": knowledge.id,
-                                    "document_name": knowledge.document_name,
-                                    "content": chunk.content,
-                                    "similarity": similarity,
-                                    "chunk_index": chunk.chunk_index
-                                })
+            formatted_results: List[Dict[str, Any]] = []
+            for profile in grouped.values():
+                embedder = self._embedding_provider(profile)
+                query_embedding = await embedder.embed_text_async(
+                    query,
+                    task_type="RETRIEVAL_QUERY",
+                )
+                if len(query_embedding) != profile.embedding_dims:
+                    logger.warning(
+                        "Skipping KB profile due to query embedding dimension mismatch: "
+                        "expected=%s actual=%s profile=%s",
+                        profile.embedding_dims,
+                        len(query_embedding),
+                        profile.grouping_key(),
+                    )
+                    continue
+
+                provider = self._external_vector_provider(profile)
+                records = []
+                if provider is not None:
+                    records = await provider.search_similar(
+                        query_embedding,
+                        limit=max_results,
+                        sender_key=self._sender_key(profile),
+                    )
+                else:
+                    try:
+                        collection = self.chroma_client.get_collection(
+                            name=profile.vector_collection_name
+                        )
+                    except Exception:
+                        continue
+                    if collection.count() == 0:
+                        continue
+                    raw = collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=max_results,
+                    )
+                    if raw.get("ids") and raw["ids"][0]:
+                        from agent.memory.providers.base import VectorRecord
+
+                        for index in range(len(raw["ids"][0])):
+                            meta = raw["metadatas"][0][index] if raw.get("metadatas") else {}
+                            records.append(
+                                VectorRecord(
+                                    message_id=raw["ids"][0][index],
+                                    text=raw["documents"][0][index] if raw.get("documents") else "",
+                                    distance=raw["distances"][0][index] if raw.get("distances") else 0.0,
+                                    sender_key=meta.get("sender_key"),
+                                    metadata=meta or {},
+                                )
+                            )
+
+                for record in records:
+                    metadata = record.metadata or {}
+                    is_legacy_profile = (
+                        profile.index_version == 0
+                        or profile.vector_collection_name == self._legacy_collection_name(agent_id)
+                    )
+                    if not is_legacy_profile:
+                        if metadata.get("purpose") != "knowledge_base":
+                            continue
+                        if str(metadata.get("tenant_id") or "") != str(profile.tenant_id or ""):
+                            continue
+                        if int(metadata.get("agent_id") or 0) != agent_id:
+                            continue
+                    similarity = 1.0 / (1.0 + float(record.distance or 0.0))
+                    if similarity < similarity_threshold:
+                        continue
+                    chunk_id = metadata.get("chunk_id")
+                    if not chunk_id:
+                        continue
+                    chunk = self.db.query(KnowledgeChunk).get(int(chunk_id))
+                    if not chunk:
+                        continue
+                    knowledge = self.db.query(AgentKnowledge).get(chunk.knowledge_id)
+                    if not knowledge or knowledge.agent_id != agent_id:
+                        continue
+                    formatted_results.append({
+                        "chunk_id": chunk.id,
+                        "knowledge_id": knowledge.id,
+                        "document_name": knowledge.document_name,
+                        "content": chunk.content,
+                        "similarity": similarity,
+                        "chunk_index": chunk.chunk_index,
+                    })
+
+            formatted_results.sort(key=lambda item: item["similarity"], reverse=True)
+            formatted_results = formatted_results[:max_results]
 
             logger.info(f"Knowledge search for agent {agent_id}: {len(formatted_results)} results")
             return formatted_results
@@ -567,18 +1237,8 @@ class KnowledgeService:
 
             # Delete chunks from vector store
             chunks = self.get_knowledge_chunks(knowledge_id)
-            collection_name = f"knowledge_agent_{knowledge.agent_id}"
-
-            try:
-                collection = self.chroma_client.get_collection(name=collection_name)
-                for chunk in chunks:
-                    try:
-                        document_id = f"knowledge_{knowledge.id}_chunk_{chunk.id}"
-                        collection.delete(ids=[document_id])
-                    except Exception as e:
-                        logger.warning(f"Error deleting embedding for chunk {chunk.id}: {e}")
-            except Exception as e:
-                logger.warning(f"Error getting collection for deletion: {e}")
+            profile = self._profile_from_knowledge(knowledge)
+            self._run_async_cleanup(self._delete_vectors_for_chunks(profile, knowledge, chunks))
 
             # Delete database records (chunks will cascade)
             self.db.delete(knowledge)
@@ -604,6 +1264,29 @@ class KnowledgeService:
             logger.error(f"Error deleting knowledge {knowledge_id}: {e}")
             self.db.rollback()
             return False
+
+    def prepare_reprocess_document(self, knowledge_id: int) -> Optional[AgentKnowledge]:
+        """Remove old chunks/vectors and snapshot the current agent KB config."""
+        knowledge = self.db.query(AgentKnowledge).get(knowledge_id)
+        if not knowledge:
+            return None
+
+        old_profile = self._profile_from_knowledge(knowledge)
+        chunks = self.get_knowledge_chunks(knowledge_id)
+        self._run_async_cleanup(self._delete_vectors_for_chunks(old_profile, knowledge, chunks))
+        for chunk in chunks:
+            self.db.delete(chunk)
+
+        new_profile = self._resolve_agent_profile(knowledge.agent_id)
+        self._snapshot_profile(knowledge, new_profile)
+        knowledge.status = "pending"
+        knowledge.num_chunks = 0
+        knowledge.error_message = None
+        knowledge.processed_date = None
+        knowledge.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(knowledge)
+        return knowledge
 
     def get_knowledge_stats(self, agent_id: int) -> Dict:
         """

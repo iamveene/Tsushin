@@ -150,6 +150,7 @@ def make_db_session():
         FlowTriggerBinding,
         MessageQueue,
         SentinelProfile,
+        VectorStoreIndex,
         VectorStoreInstance,
         WakeEvent,
     )
@@ -172,6 +173,7 @@ def make_db_session():
             ContinuousRun.__table__,
             MessageQueue.__table__,
             VectorStoreInstance.__table__,
+            VectorStoreIndex.__table__,
             FlowDefinition.__table__,
             FlowNode.__table__,
             FlowRun.__table__,

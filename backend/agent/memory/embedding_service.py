@@ -8,8 +8,8 @@ BUG-001 Fix: Added singleton pattern and batched processing to prevent OOM crash
 on large document uploads.
 
 v0.7.x Wave 1-B: Added ``EmbeddingProvider`` ABC and dispatcher to support
-multiple embedding back-ends (local SentenceTransformer at 384 dims and
-Gemini at 768/1536/3072 dims). The dispatcher in
+multiple embedding back-ends (local SentenceTransformer at 384 dims,
+OpenAI/Gemini managed embeddings, and Ollama self-hosted embeddings). The dispatcher in
 ``get_shared_embedding_service`` accepts an optional
 ``EmbeddingContract`` and routes to the right provider, while keeping the
 zero-arg / ``model_name``-only callers working unchanged.
@@ -22,6 +22,13 @@ import threading
 from typing import List, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
+
+from agent.memory.embedding_catalog import (
+    LOCAL_DIMS,
+    LOCAL_MODEL,
+    provider_default_model,
+    validate_embedding_contract,
+)
 
 # Singleton caches:
 #   _model_cache:  legacy local SentenceTransformer cache (model_name -> EmbeddingService)
@@ -78,6 +85,17 @@ class EmbeddingProvider(abc.ABC):
     @abc.abstractmethod
     def get_embedding_dimension(self) -> int:
         ...
+
+    @property
+    def provider(self) -> str:
+        return self.__class__.__name__
+
+    @property
+    def dimensions(self) -> int:
+        return self.get_embedding_dimension()
+
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        return self.embed_batch_chunked(texts)
 
 
 class LocalSentenceTransformerProvider(EmbeddingProvider):
@@ -140,6 +158,14 @@ class LocalSentenceTransformerProvider(EmbeddingProvider):
     def get_embedding_dimension(self) -> int:
         return self._inner.get_embedding_dimension()
 
+    @property
+    def provider(self) -> str:
+        return "local"
+
+    @property
+    def dimensions(self) -> int:
+        return LOCAL_DIMS
+
 
 def get_shared_embedding_service(
     model_name: str = "all-MiniLM-L6-v2",
@@ -157,8 +183,9 @@ def get_shared_embedding_service(
     Contract-aware:
       - ``contract.provider == "local"`` → local provider (model from
         ``contract.model`` if set, else the function arg).
-      - ``contract.provider == "gemini"`` → ``GeminiEmbeddingProvider``,
-        cached by ``(api_key_fingerprint, model, dims)``.
+      - ``contract.provider == "openai"`` → ``OpenAIEmbeddingProvider``.
+      - ``contract.provider == "gemini"`` → ``GeminiEmbeddingProvider``.
+      - ``contract.provider == "ollama"`` → ``OllamaEmbeddingProvider``.
 
     Failure semantics:
       - If a Gemini provider is requested but ``credentials.api_key`` is
@@ -177,7 +204,7 @@ def get_shared_embedding_service(
     if provider_name in (None, "local"):
         # Local SentenceTransformer path. Use contract.model when present
         # and non-default to allow tenants to switch local model variants.
-        effective_model = contract_model or model_name
+        effective_model = contract_model or model_name or LOCAL_MODEL
 
         global _model_cache
         if effective_model in _model_cache:
@@ -192,6 +219,56 @@ def get_shared_embedding_service(
                 )
 
         return _model_cache[effective_model]
+
+    if provider_name == "openai":
+        from agent.memory.embedding_providers.openai_provider import (
+            OpenAIEmbeddingProvider,
+            fingerprint_openai_config,
+        )
+
+        openai_model = contract_model or provider_default_model("openai")
+        openai_dims = int(contract_dims) if contract_dims is not None else None
+        normalized = validate_embedding_contract(
+            provider="openai",
+            model=openai_model,
+            dimensions=openai_dims,
+        )
+
+        api_key = (credentials or {}).get("api_key") if credentials else None
+        if not api_key:
+            for alt in ("apiKey", "OPENAI_API_KEY", "openai_api_key"):
+                if credentials and credentials.get(alt):
+                    api_key = credentials[alt]
+                    break
+        if not api_key:
+            raise ValueError("OpenAI embedding provider requested but no api_key found")
+
+        base_url = (credentials or {}).get("base_url") or getattr(contract, "base_url", None)
+        cache_key = (
+            "openai",
+            fingerprint_openai_config(api_key, base_url),
+            normalized["model"],
+            normalized["dimensions"],
+        )
+
+        if cache_key in _provider_cache:
+            return _provider_cache[cache_key]
+
+        with _model_lock:
+            if cache_key not in _provider_cache:
+                _provider_cache[cache_key] = OpenAIEmbeddingProvider(
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=normalized["model"],
+                    dimensions=normalized["dimensions"],
+                )
+                logging.getLogger(__name__).info(
+                    "Created shared OpenAI embedding provider: model=%s dims=%d",
+                    normalized["model"],
+                    normalized["dimensions"],
+                )
+
+        return _provider_cache[cache_key]
 
     if provider_name == "gemini":
         from agent.memory.embedding_providers.gemini_provider import (
@@ -212,9 +289,19 @@ def get_shared_embedding_service(
                 "in credentials. Set the API key on the VectorStoreInstance."
             )
 
-        gemini_model = contract_model or "gemini-embedding-001"
-        gemini_dims = int(contract_dims) if contract_dims is not None else 1536
-        cache_key = (fingerprint_api_key(api_key), gemini_model, gemini_dims)
+        gemini_model = contract_model or provider_default_model("gemini")
+        gemini_dims = int(contract_dims) if contract_dims is not None else None
+        normalized = validate_embedding_contract(
+            provider="gemini",
+            model=gemini_model,
+            dimensions=gemini_dims,
+        )
+        cache_key = (
+            "gemini",
+            fingerprint_api_key(api_key),
+            normalized["model"],
+            normalized["dimensions"],
+        )
 
         if cache_key in _provider_cache:
             return _provider_cache[cache_key]
@@ -223,13 +310,61 @@ def get_shared_embedding_service(
             if cache_key not in _provider_cache:
                 _provider_cache[cache_key] = GeminiEmbeddingProvider(
                     api_key=api_key,
-                    model=gemini_model,
-                    output_dimensionality=gemini_dims,
+                    model=normalized["model"],
+                    output_dimensionality=normalized["dimensions"],
                 )
                 logging.getLogger(__name__).info(
                     "Created shared Gemini embedding provider: model=%s dims=%d",
-                    gemini_model,
-                    gemini_dims,
+                    normalized["model"],
+                    normalized["dimensions"],
+                )
+
+        return _provider_cache[cache_key]
+
+    if provider_name == "ollama":
+        from agent.memory.embedding_providers.ollama_provider import (
+            OllamaEmbeddingProvider,
+            fingerprint_ollama_config,
+        )
+
+        ollama_model = contract_model or ""
+        ollama_dims = int(contract_dims) if contract_dims is not None else None
+        normalized = validate_embedding_contract(
+            provider="ollama",
+            model=ollama_model,
+            dimensions=ollama_dims,
+        )
+        base_url = (
+            (credentials or {}).get("base_url")
+            or getattr(contract, "base_url", None)
+            or (credentials or {}).get("ollama_base_url")
+        )
+        if not base_url:
+            from services.provider_instance_service import get_vendor_default_base_url
+
+            base_url = get_vendor_default_base_url("ollama")
+        cache_key = (
+            "ollama",
+            fingerprint_ollama_config(base_url, normalized["model"]),
+            normalized["model"],
+            normalized["dimensions"],
+        )
+
+        if cache_key in _provider_cache:
+            return _provider_cache[cache_key]
+
+        with _model_lock:
+            if cache_key not in _provider_cache:
+                _provider_cache[cache_key] = OllamaEmbeddingProvider(
+                    base_url=base_url,
+                    model=normalized["model"],
+                    dimensions=normalized["dimensions"],
+                )
+                logging.getLogger(__name__).info(
+                    "Created shared Ollama embedding provider: model=%s dims=%s base_url=%s",
+                    normalized["model"],
+                    normalized["dimensions"],
+                    base_url,
                 )
 
         return _provider_cache[cache_key]
