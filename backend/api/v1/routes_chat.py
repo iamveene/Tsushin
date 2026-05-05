@@ -148,6 +148,23 @@ class ThreadMessage(BaseModel):
     message_id: Optional[str] = None
 
 
+def _get_visible_agent(
+    db: Session,
+    agent_id: int,
+    tenant_id: str,
+    *,
+    require_active: bool = False,
+) -> Optional[Agent]:
+    query = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_internal == False,
+    )
+    if require_active:
+        query = query.filter(Agent.is_active == True)
+    return query.first()
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -187,11 +204,7 @@ async def send_chat_message(
     Requires `agents.execute` permission.
     """
     # Validate agent access
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-        Agent.is_active == True,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id, require_active=True)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found or not active")
 
@@ -510,10 +523,7 @@ async def list_threads(
 
     Returns threads ordered by most recently updated. Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -560,10 +570,7 @@ async def get_thread_messages(
     Returns messages with role, content, and timestamp. Supports ascending
     or descending sort order. Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -618,6 +625,10 @@ async def delete_thread(
     Permanently removes the thread and all associated messages.
     Requires `agents.write` permission.
     """
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     # BUG-367: Scope by API client
     thread_query = db.query(ConversationThread).filter(
         ConversationThread.id == thread_id,

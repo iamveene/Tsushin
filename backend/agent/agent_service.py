@@ -40,6 +40,7 @@ class AgentService:
         project_id: Optional[int] = None,
         user_id: Optional[int] = None,
         disable_skills: bool = False,
+        team_run_id: Optional[int] = None,
     ):
         """
         Initialize Agent Service.
@@ -55,6 +56,8 @@ class AgentService:
             on_tool_complete_callback: Async callback(recipient, message) for long-running tool notifications
             project_id: Project ID if in project context (Phase 16)
             user_id: User ID for combined KB (Phase 16)
+            team_run_id: Agent Team run context. Phase 2 stores this only;
+                Phase 4 wires it into memory scoping.
 
         Note: Ring buffer memory deprecated - use Multi-Agent Memory Manager instead
         Note: Legacy tools (search, scraping) migrated to Skills system
@@ -70,6 +73,7 @@ class AgentService:
         self.project_id = project_id  # Phase 16: Project context
         self.user_id = user_id  # Phase 16: User context for combined KB
         self.disable_skills = disable_skills  # A2A: prevent recursive tool use
+        self.team_run_id = team_run_id  # Agent Teams Phase 2 context only
         self.logger = logging.getLogger(__name__)
 
         # Phase 5.0: Initialize knowledge service if agent_id and db provided

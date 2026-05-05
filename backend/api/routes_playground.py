@@ -90,6 +90,14 @@ class ClearHistoryResponse(BaseModel):
     message: str
 
 
+def _get_visible_agent(db: Session, agent_id: int, tenant_id: str) -> Optional[Agent]:
+    return db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_internal == False,
+    ).first()
+
+
 # ============================================================================
 # Playground Endpoints
 # ============================================================================
@@ -111,7 +119,8 @@ async def get_available_agents(
         # HIGH-011: Get only active agents belonging to user's tenant
         agents = db.query(Agent).filter(
             Agent.is_active == True,
-            Agent.tenant_id == current_user.tenant_id
+            Agent.tenant_id == current_user.tenant_id,
+            Agent.is_internal == False,
         ).all()
 
         result = []
@@ -166,10 +175,7 @@ async def send_chat_message(
     """
     try:
         # HIGH-011: Get agent with tenant validation to prevent cross-tenant access
-        agent = db.query(Agent).filter(
-            Agent.id == request.agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, request.agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {request.agent_id} not found")
 
@@ -442,10 +448,7 @@ async def get_conversation_history(
     """
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -491,10 +494,7 @@ async def clear_conversation_history(
     """
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -567,10 +567,7 @@ async def upload_audio(
 
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             return PlaygroundAudioResponse(
                 status="error",
@@ -725,10 +722,7 @@ async def get_agent_audio_capabilities(
     HIGH-011 Fix: Added tenant validation to prevent cross-tenant capability checks.
     """
     # HIGH-011: Verify agent exists AND belongs to user's tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -1150,10 +1144,7 @@ async def get_memory_layers(
     )
 
     # Verify agent exists and user has access
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1418,10 +1409,7 @@ async def get_debug_info(
     import json
 
     # Verify agent exists
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1559,10 +1547,7 @@ async def get_available_tools(
     from models import Agent, SandboxedTool, SandboxedToolCommand, SandboxedToolParameter, AgentSandboxedTool
 
     # Verify agent exists
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -2572,10 +2557,7 @@ async def playground_sse_stream(
         raise HTTPException(status_code=400, detail="Message too long (max 10000 chars)")
 
     # Verify agent exists and belongs to tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
