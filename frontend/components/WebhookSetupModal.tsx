@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import Modal from './ui/Modal'
 import { AlertTriangleIcon, CheckCircleIcon, XCircleIcon } from '@/components/ui/icons'
 import WebhookSecretRevealModal from './WebhookSecretRevealModal'
-import { api, WebhookIntegrationCreate } from '@/lib/client'
+import { api, type TriggerCriteria, type WebhookIntegrationCreate } from '@/lib/client'
+import CriteriaBuilder, { parseCriteriaText } from '@/components/triggers/CriteriaBuilder'
 
 interface Props {
   isOpen: boolean
@@ -34,8 +35,10 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
   const [callbackUrl, setCallbackUrl] = useState('')
   const [rateLimitRpm, setRateLimitRpm] = useState(30)
   const [ipAllowlistText, setIpAllowlistText] = useState('')
+  const [criteriaText, setCriteriaText] = useState('')
   const [plaintextSecret, setPlaintextSecret] = useState('')
   const [createdInboundUrl, setCreatedInboundUrl] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const resetForm = () => {
@@ -48,8 +51,10 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
     setCallbackUrl('')
     setRateLimitRpm(30)
     setIpAllowlistText('')
+    setCriteriaText('')
     setPlaintextSecret('')
     setCreatedInboundUrl('')
+    setFormError(null)
   }
 
   const handleClose = () => {
@@ -57,6 +62,7 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
     onClose()
   }
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (uriMode !== 'custom') {
@@ -85,6 +91,7 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [customSlug, uriMode])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const canSubmit = (() => {
     if (!integrationName.trim() || saving) return false
@@ -96,16 +103,25 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
 
   const handleCreate = async () => {
     if (!canSubmit) return
+    setFormError(null)
     const ipAllowlist = ipAllowlistText
       .split(/[\n,]/)
       .map(s => s.trim())
       .filter(Boolean)
+    let triggerCriteria: TriggerCriteria | null
+    try {
+      triggerCriteria = parseCriteriaText(criteriaText)
+    } catch (error: unknown) {
+      setFormError(error instanceof Error ? error.message : 'Invalid criteria JSON')
+      return
+    }
     const payload: WebhookIntegrationCreate = {
       integration_name: integrationName.trim(),
       callback_enabled: callbackEnabled,
       callback_url: callbackUrl.trim() || null,
       rate_limit_rpm: rateLimitRpm,
       ip_allowlist: ipAllowlist.length > 0 ? ipAllowlist : null,
+      trigger_criteria: triggerCriteria,
     }
     if (uriMode === 'custom') {
       payload.slug = customSlug.trim()
@@ -172,6 +188,12 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
             to a callback URL. Signature is verified with HMAC-SHA256 + timestamp replay protection (±5 min).
           </p>
         </div>
+
+        {formError && (
+          <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            {formError}
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -339,6 +361,8 @@ export default function WebhookSetupModal({ isOpen, onClose, onSubmit, saving, a
             If set, inbound requests from IPs outside the allowlist are rejected.
           </p>
         </div>
+
+        <CriteriaBuilder value={criteriaText} onChange={setCriteriaText} disabled={saving} />
       </div>
     </Modal>
   )

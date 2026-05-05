@@ -59,6 +59,9 @@ from api.routes_shared_memory import router as shared_memory_router, set_engine 
 from api.routes_memory import router as memory_router, set_engine as set_memory_engine
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
 from api.routes_channels import router as channels_router
+from api.routes_triggers import router as triggers_router
+from api.routes_channel_event_rules import router as channel_event_rules_router
+from api.routes_continuous import router as continuous_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -70,6 +73,7 @@ from api.routes_scheduler import router as scheduler_router, set_engine as set_s
 from scheduler.worker import start_scheduler_worker, stop_scheduler_worker
 # Phase 6.6 Multi-Step Flows
 from api.routes_flows import router as flows_router, set_engine as set_flows_engine
+from api.routes_flow_trigger_bindings import router as flow_trigger_bindings_router  # v0.7.0 Wave 4
 # Phase 6.11 Scheduled Flow Executor
 # Phase 6.11.2 WebSocket Manager
 from websocket_manager import manager as ws_manager
@@ -102,8 +106,15 @@ from api.routes_agents_protected import router as agents_protected_router
 from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
-from api.routes_webhook_inbound import router as webhook_inbound_router  # v0.6.0: Webhook-as-Channel
-from api.routes_webhook_instances import router as webhook_instances_router  # v0.6.0: Webhook-as-Channel
+from api.routes_webhook_inbound import router as webhook_inbound_router
+from api.routes_webhook_instances import router as webhook_instances_router
+from api.routes_email_triggers import router as email_triggers_router
+from api.routes_jira_integrations import router as jira_integrations_router
+from api.routes_jira_triggers import router as jira_triggers_router
+from api.routes_schedule_triggers import router as schedule_triggers_router
+from api.routes_github_triggers import router as github_triggers_router
+from api.routes_github_inbound import router as github_inbound_router
+from api.routes_github_integrations import router as github_integrations_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -114,6 +125,7 @@ from api.routes_user_contact_mapping import router as user_contact_mapping_route
 # Phase 7.9: RBAC & Multi-tenancy
 from api.routes_tenants import router as tenants_router
 from api.routes_tenant_settings import router as tenant_settings_router
+from api.routes_default_agents import router as default_agents_router
 from api.routes_team import router as team_router
 # Plans Management
 from api.routes_plans import router as plans_router
@@ -156,6 +168,8 @@ from api.routes_provider_instances import router as provider_instances_router, s
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
 # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
 from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
+# v0.7.0 Track D: ASR Instance Management (per-tenant Whisper/Speaches auto-provisioning)
+from api.routes_asr_instances import router as asr_instances_router, set_engine as set_asr_instances_engine
 # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
 from api.routes_searxng_instances import router as searxng_instances_router, set_engine as set_searxng_instances_engine
 # Hub Providers catalog (AddIntegrationWizard — live registry)
@@ -239,6 +253,8 @@ async def lifespan(app: FastAPI):
     set_vector_stores_engine(engine)
     # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
     set_tts_instances_engine(engine)
+    # v0.7.0 Track D: ASR Instance Management (per-tenant Whisper/Speaches auto-provisioning)
+    set_asr_instances_engine(engine)
     # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
     set_searxng_instances_engine(engine)
 
@@ -613,13 +629,23 @@ async def lifespan(app: FastAPI):
                         if "telegram" in enabled_channels:
                             matching_agents.append(agent)
 
-                    # Fallback: if no agents explicitly linked, try default agent for this tenant
+                    # Fallback: resolve the tenant's Telegram default agent.
                     if not matching_agents and bot_instance:
-                        default_agent = request_session.query(Agent).filter(
-                            Agent.tenant_id == bot_instance.tenant_id,
-                            Agent.is_default == True,
-                            Agent.is_active == True
-                        ).first()
+                        from services.default_agent_service import get_default_agent
+
+                        default_agent_id = get_default_agent(
+                            db=request_session,
+                            tenant_id=bot_instance.tenant_id,
+                            channel_type="telegram",
+                            instance_id=telegram_instance_id,
+                        )
+                        default_agent = (
+                            request_session.query(Agent)
+                            .filter(Agent.id == default_agent_id)
+                            .first()
+                            if default_agent_id
+                            else None
+                        )
 
                         if default_agent:
                             default_channels = default_agent.enabled_channels if isinstance(default_agent.enabled_channels, list) else (
@@ -629,12 +655,6 @@ async def lifespan(app: FastAPI):
                                 matching_agents.append(default_agent)
                                 logging.info(
                                     f"Using default agent {default_agent.id} as fallback for Telegram instance {telegram_instance_id}"
-                                )
-                                # Auto-fix: link this instance to the default agent for future messages
-                                default_agent.telegram_integration_id = telegram_instance_id
-                                request_session.commit()
-                                logging.info(
-                                    f"Auto-linked Telegram instance {telegram_instance_id} to default agent {default_agent.id}"
                                 )
 
                     if not matching_agents:
@@ -886,6 +906,19 @@ async def lifespan(app: FastAPI):
         logging.info("Kokoro TTS instances reconciled at startup")
     except Exception as e:
         logging.warning(f"Kokoro TTS reconcile failed at startup: {e}")
+
+    # v0.7.0 Track D: Reconcile ASR instances stuck in 'creating'
+    try:
+        from services.whisper_container_manager import startup_reconcile as whisper_startup_reconcile
+        ReconcileSession = sessionmaker(bind=engine)
+        reconcile_db = ReconcileSession()
+        try:
+            whisper_startup_reconcile(reconcile_db)
+        finally:
+            reconcile_db.close()
+        logging.info("Whisper ASR instances reconciled at startup")
+    except Exception as e_whisper_reconcile:
+        logging.warning(f"Whisper ASR startup reconcile failed (non-fatal): {e_whisper_reconcile}")
 
     # v0.6.0-patch.6: Reconcile SearXNG instances stuck in 'creating'
     try:
@@ -1283,6 +1316,9 @@ app.include_router(shared_memory_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
+app.include_router(triggers_router)  # Trigger catalog (/api/triggers)
+app.include_router(channel_event_rules_router)  # Channel routing rules (/api/channels/{type}/{id}/routing-rules)
+app.include_router(continuous_router)  # Continuous-agent read APIs (/api/continuous-*)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
@@ -1295,6 +1331,7 @@ app.include_router(shell_ws_router)  # Shell Skill WebSocket (Phase 18.4: WebSoc
 app.include_router(watcher_activity_ws_router)  # Watcher Activity WebSocket (Phase 8: Graph View)
 app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, Calendar)
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
+app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
 app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication
@@ -1307,6 +1344,7 @@ app.include_router(commands_router)  # Phase 16: Slash Commands
 app.include_router(user_contact_mapping_router)  # Playground - User Contact Mapping
 app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
 app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
+app.include_router(default_agents_router)
 app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
@@ -1318,7 +1356,14 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
-app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
+app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/triggers/webhook/*)
+app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
+app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
+app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
+app.include_router(schedule_triggers_router)  # Schedule trigger CRUD (/api/triggers/schedule/*)
+app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
+app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router
@@ -1333,6 +1378,7 @@ app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel 
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
 app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
+app.include_router(asr_instances_router, prefix="/api", tags=["ASR Instances"])  # v0.7.0 Track D: Per-tenant Whisper/Speaches ASR auto-provisioning
 app.include_router(searxng_instances_router, prefix="/api", tags=["SearXNG Instances"])  # v0.6.0-patch.6: Per-tenant SearXNG auto-provisioning
 app.include_router(hub_providers_router)  # AddIntegrationWizard live catalogs (search + travel)
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation

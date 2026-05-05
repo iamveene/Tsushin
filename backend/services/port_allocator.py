@@ -11,6 +11,7 @@ import logging
 from typing import Set
 from sqlalchemy.orm import Session
 from models import WhatsAppMCPInstance
+from services.container_runtime import PORT_RANGES, iter_port_range
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,8 @@ logger = logging.getLogger(__name__)
 class PortAllocator:
     """Allocates ports for MCP containers with conflict detection"""
 
-    DEFAULT_START_PORT = 8080
-    DEFAULT_END_PORT = 8180
-    MAX_PORTS = DEFAULT_END_PORT - DEFAULT_START_PORT  # 100 ports
+    DEFAULT_START_PORT, DEFAULT_END_PORT = PORT_RANGES["mcp"]
+    MAX_PORTS = DEFAULT_END_PORT - DEFAULT_START_PORT + 1
 
     def __init__(self, start_port: int = DEFAULT_START_PORT, end_port: int = DEFAULT_END_PORT):
         """
@@ -32,7 +32,9 @@ class PortAllocator:
         """
         self.start_port = start_port
         self.end_port = end_port
-        self.port_range = range(start_port, end_port)
+        self.port_range = iter_port_range("mcp") if (
+            start_port == self.DEFAULT_START_PORT and end_port == self.DEFAULT_END_PORT
+        ) else range(start_port, end_port + 1)
 
     def allocate_port(self, db: Session) -> int:
         """

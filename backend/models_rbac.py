@@ -38,6 +38,14 @@ class Tenant(Base):
     # URL the tenant must paste into Slack/Discord. Nullable — when unset, the UI
     # shows a "configure this first" warning before allowing HTTP-mode setup.
     public_base_url = Column(String(512), nullable=True)
+    # v0.7.0 Track D: tenant-wide default ASR instance. When NULL, audio
+    # transcription falls back to OpenAI Whisper unless an agent explicitly
+    # pins a local ASR instance.
+    default_asr_instance_id = Column(
+        Integer,
+        ForeignKey('asr_instance.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     # v0.7.3: Per-tenant emergency stop. When True, every channel/trigger for this
     # tenant is blocked at the ingress (MCP filters, agent router, webhook inbound).
     # Orthogonal to the GLOBAL kill switch on Config.emergency_stop, which halts
