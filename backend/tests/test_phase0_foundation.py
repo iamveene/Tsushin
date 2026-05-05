@@ -409,6 +409,9 @@ def test_queue_worker_limits_team_run_dispatch_by_team_concurrency(monkeypatch):
             def count_processing_team_runs(self, tenant_id, team_id):
                 return 1
 
+            def count_active_non_queued_team_runs(self, tenant_id, team_id):
+                return 0
+
         created = []
 
         def fake_create_task(coro):

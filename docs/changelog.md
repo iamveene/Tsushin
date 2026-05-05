@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 8 Team Wizard (2026-05-05)
+
+**Summary.** Added the first end-to-end Agent Teams creation flow in Studio and hardened the Phase 6 queue path before exposing the workflow in the UI.
+
+**Backend.**
+- Split queue stale-reset thresholds so `team_run` rows follow the orchestrator-sized wall-clock budget instead of being reset after the standard 300-second worker threshold.
+- Count active manual or otherwise unqueued team runs against `AgentTeam.max_concurrent_runs`, preventing trigger-queued work from starting while a manual run already occupies capacity.
+- Added an explicit `enqueue_failed` trigger-dispatch outcome for team-run queue insert failures and made multi-team enqueue rollback transactional so no stale runnable queue row survives a partial failure.
+
+**Frontend.**
+- Added a global Team Wizard provider, typed wizard reducer with local draft persistence, and the `/studio/teams?new=1` launch path, including `/agents/teams?new=1` redirect preservation.
+- Implemented Custom/Template, Basics, Topology, Members, Tools, Triggers, Review, and Create steps. Local presets prefill drafts; Webhook/GitHub/Jira trigger bindings use existing active trigger instances; Gmail remains unavailable for v0.7.0.
+- Added `createTeam`, `getTeam`, and team trigger-binding client helpers plus a minimal `/studio/teams/{id}` detail landing so new teams never redirect to a missing page.
+- Cleaned up Phase 7 list behavior: error state no longer falls through into empty state, list stats are scoped consistently, and team-member warnings deep-link to the known team detail page when available.
+
 ### Release 0.7.0 — Agent Teams Phase 7 frontend foundations (2026-05-05)
 
 **Summary.** Added the first Agent Teams frontend foundation without introducing the Team Wizard or Team Builder. Studio now has a canonical `/studio/teams` Teams surface, the Agents create affordance can route users toward Teams, and team-member agents are visually marked before deeper editing surfaces land.

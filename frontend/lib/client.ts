@@ -1034,6 +1034,73 @@ export interface TeamListResponse {
   page_size: number
 }
 
+export type TeamTopology = 'line' | 'mesh'
+export type TeamStatus = 'draft' | 'active' | 'paused' | 'archived'
+export type TeamTriggerBindingKind = 'webhook' | 'github' | 'jira'
+
+export interface TeamMemberCreatePayload {
+  agent_id: number
+  execution_order?: number | null
+  is_required?: boolean
+  position_x?: number | null
+  position_y?: number | null
+}
+
+export interface TeamCreatePayload {
+  name: string
+  description?: string | null
+  goal_text?: string | null
+  topology?: TeamTopology
+  status?: TeamStatus
+  max_steps?: number
+  max_total_tokens?: number | null
+  max_concurrent_runs?: number
+  tools?: TeamToolPool
+  members?: TeamMemberCreatePayload[]
+}
+
+export interface TeamTriggerBindingCreatePayload {
+  trigger_kind: TeamTriggerBindingKind
+  trigger_instance_id: number
+  event_types?: string[]
+  filters?: Record<string, unknown>
+  is_enabled?: boolean
+}
+
+export interface TeamTriggerBindingUpdatePayload {
+  trigger_instance_id?: number
+  event_types?: string[]
+  filters?: Record<string, unknown>
+  is_enabled?: boolean
+}
+
+export interface TeamRunListItem {
+  id: number
+  team_id: number
+  status: string
+  trigger_event_id?: number | null
+  goal_text_snapshot?: string | null
+  topology_snapshot: string
+  total_steps: number
+  completed_steps: number
+  failed_steps: number
+  final_output_summary?: string | null
+  error_json?: Record<string, unknown> | null
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_cents: number
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamDetail extends TeamListItem {
+  members: TeamMemberResponse[]
+  triggers: TeamTriggerResponse[]
+  last_run?: TeamRunListItem | null
+}
+
 // Phase 6 - Graph View: Batch endpoint types
 export interface AgentGraphPreviewItem {
   id: number
@@ -4723,6 +4790,66 @@ export const api = {
     const res = await authenticatedFetch(`${API_URL}/api/teams?${params}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch teams')
     return res.json()
+  },
+
+  async getTeam(id: number): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team')
+    return res.json()
+  },
+
+  async createTeam(team: TeamCreatePayload): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(team),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create team')
+    return res.json()
+  },
+
+  async updateTeam(id: number, team: Partial<TeamCreatePayload>): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(team),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team')
+    return res.json()
+  },
+
+  async archiveTeam(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to archive team')
+  },
+
+  async createTeamTrigger(teamId: number, trigger: TeamTriggerBindingCreatePayload): Promise<TeamTriggerResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trigger),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to bind team trigger')
+    return res.json()
+  },
+
+  async updateTeamTrigger(teamId: number, triggerId: number, trigger: TeamTriggerBindingUpdatePayload): Promise<TeamTriggerResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers/${triggerId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trigger),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team trigger')
+    return res.json()
+  },
+
+  async deleteTeamTrigger(teamId: number, triggerId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers/${triggerId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove team trigger')
   },
 
   // Agents

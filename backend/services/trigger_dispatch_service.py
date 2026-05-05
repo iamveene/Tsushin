@@ -65,6 +65,11 @@ class TriggerDispatchStatus(str, Enum):
     MISSING_DEFAULT_AGENT = "missing_default_agent"
     CROSS_TENANT_MISMATCH = "cross_tenant_mismatch"
     UNSUPPORTED_TRIGGER_TYPE = "unsupported_trigger_type"
+    ENQUEUE_FAILED = "enqueue_failed"
+
+
+class TeamRunQueueEnqueueError(RuntimeError):
+    """Raised when a matched team run cannot be inserted into message_queue."""
 
 
 @dataclass(frozen=True)
@@ -445,14 +450,38 @@ class TriggerDispatchService:
             memory_recap=recap,
         )
 
-        self._enqueue_team_runs(
-            tenant_id=tenant_id,
-            trigger_type=trigger_type,
-            wake_event=wake_event,
-            event=event,
-            payload_ref=payload_ref,
-            runs=team_runs_to_enqueue,
-        )
+        try:
+            self._enqueue_team_runs(
+                tenant_id=tenant_id,
+                trigger_type=trigger_type,
+                wake_event=wake_event,
+                event=event,
+                payload_ref=payload_ref,
+                runs=team_runs_to_enqueue,
+            )
+        except TeamRunQueueEnqueueError:
+            reason = "team_run_queue_enqueue_failed"
+            self._mark_team_enqueue_failed(
+                tenant_id=tenant_id,
+                wake_event_id=wake_event.id,
+                team_run_ids=team_run_ids,
+                dedupe_id=dedupe.id,
+                reason=reason,
+                preserve_wake_for_other_work=bool(run_ids or bound_flow_run_ids),
+            )
+            return TriggerDispatchResult(
+                status=TriggerDispatchStatus.ENQUEUE_FAILED.value,
+                reason=reason,
+                tenant_id=tenant_id,
+                matched_agent_id=agent_id,
+                dedupe_id=dedupe.id,
+                wake_event_id=wake_event.id,
+                continuous_run_ids=run_ids,
+                continuous_subscription_ids=[subscription.id for subscription in subscriptions],
+                team_run_ids=team_run_ids,
+                skipped_team_reasons=skipped_team_reasons,
+                payload_ref=payload_ref,
+            )
 
         return TriggerDispatchResult(
             status=TriggerDispatchStatus.DISPATCHED.value,
@@ -588,12 +617,12 @@ class TriggerDispatchService:
     ) -> None:
         if not runs:
             return
-        try:
-            from services.message_queue_service import MessageQueueService
+        from services.message_queue_service import MessageQueueService
 
-            mqs = MessageQueueService(self.db)
-            sender_key_root = event.sender_key or f"{trigger_type}:{event.instance_id}"
-            for team_run, team in runs:
+        mqs = MessageQueueService(self.db)
+        sender_key_root = event.sender_key or f"{trigger_type}:{event.instance_id}"
+        for team_run, team in runs:
+            try:
                 mqs.enqueue(
                     channel="team",
                     tenant_id=tenant_id,
@@ -615,15 +644,64 @@ class TriggerDispatchService:
                     team_id=team.id,
                     team_run_id=team_run.id,
                     message_type="team_run",
+                    commit=False,
                 )
-        except Exception:  # pragma: no cover — queue failure must not abort persisted run audit
-            logger.exception(
-                "Team-run queue enqueue failed for %s/%s wake_event=%s",
-                trigger_type,
-                event.instance_id,
-                wake_event.id,
-            )
-            self.db.rollback()
+            except Exception as exc:
+                logger.exception(
+                    "Team-run queue enqueue failed for %s/%s wake_event=%s team_run=%s",
+                    trigger_type,
+                    event.instance_id,
+                    wake_event.id,
+                    team_run.id,
+                )
+                self.db.rollback()
+                raise TeamRunQueueEnqueueError("team_run_queue_enqueue_failed") from exc
+        self.db.commit()
+
+    def _mark_team_enqueue_failed(
+        self,
+        *,
+        tenant_id: str,
+        wake_event_id: int,
+        team_run_ids: list[int],
+        dedupe_id: int,
+        reason: str,
+        preserve_wake_for_other_work: bool,
+    ) -> None:
+        now = datetime.utcnow()
+        if team_run_ids:
+            for team_run in (
+                self.db.query(AgentTeamRun)
+                .filter(
+                    AgentTeamRun.tenant_id == tenant_id,
+                    AgentTeamRun.id.in_(team_run_ids),
+                )
+                .all()
+            ):
+                team_run.status = TeamRunStatus.FAILED.value
+                team_run.completed_at = now
+                team_run.error_json = {"reason": reason}
+                self.db.add(team_run)
+
+        wake_event = (
+            self.db.query(WakeEvent)
+            .filter(WakeEvent.tenant_id == tenant_id, WakeEvent.id == wake_event_id)
+            .first()
+        )
+        if wake_event is not None and not preserve_wake_for_other_work:
+            wake_event.status = "failed"
+            self.db.add(wake_event)
+
+        dedupe = (
+            self.db.query(ChannelEventDedupe)
+            .filter(ChannelEventDedupe.id == dedupe_id, ChannelEventDedupe.tenant_id == tenant_id)
+            .first()
+        )
+        if dedupe is not None:
+            dedupe.outcome = reason
+            self.db.add(dedupe)
+
+        self.db.commit()
 
     def _enqueue_continuous_tasks(
         self,
