@@ -410,6 +410,80 @@ class SentinelService:
             scan_mode="skill_scan",
         )
 
+    async def analyze_team_run_start(
+        self,
+        *,
+        team_id: int,
+        topology: str,
+        goal_text: Optional[str],
+        trigger_event_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+    ) -> SentinelAnalysisResult:
+        """Analyze a team run goal before any member receives work."""
+        context = {
+            "source": "agent_team",
+            "stage": "team_run_start",
+            "team_id": team_id,
+            "topology": topology,
+            "trigger_event_id": trigger_event_id,
+        }
+        prompt = (
+            "Agent Team run start security review.\n\n"
+            f"Team context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
+            "Team goal or run objective:\n"
+            f"{goal_text or '[No explicit team goal]'}"
+        )
+        return await self.analyze_prompt(
+            prompt=prompt,
+            sender_key=sender_key or f"team:{team_id}:run_start",
+            context=context,
+            source="team_run_start",
+        )
+
+    async def analyze_team_handoff(
+        self,
+        *,
+        team_id: int,
+        team_run_id: int,
+        topology: str,
+        step_index: int,
+        source_member_id: Optional[int],
+        source_agent_id: Optional[int],
+        summary: Optional[str],
+        content: Optional[str],
+        target_member_id: Optional[int] = None,
+        target_agent_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+    ) -> SentinelAnalysisResult:
+        """Analyze content before it is handed to another team member."""
+        context = {
+            "source": "agent_team",
+            "stage": "team_handoff",
+            "team_id": team_id,
+            "team_run_id": team_run_id,
+            "topology": topology,
+            "step_index": step_index,
+            "source_member_id": source_member_id,
+            "source_agent_id": source_agent_id,
+            "target_member_id": target_member_id,
+            "target_agent_id": target_agent_id,
+        }
+        prompt = (
+            "Agent Team handoff security review.\n\n"
+            f"Handoff context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
+            "Handoff summary:\n"
+            f"{summary or '[No summary]'}\n\n"
+            "Handoff content:\n"
+            f"{content or '[No content]'}"
+        )
+        return await self.analyze_prompt(
+            prompt=prompt,
+            agent_id=target_agent_id or source_agent_id,
+            sender_key=sender_key or f"team:{team_id}:run:{team_run_id}:handoff",
+            context=context,
+            source="team_handoff",
+        )
+
     async def analyze_prompt(
         self,
         prompt: str,

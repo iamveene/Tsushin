@@ -172,6 +172,18 @@ The public agent surfaces enforce the coordinator boundary: `/api/agents` and th
 
 Container smoke scripts for Agent Teams should be invoked from the mounted dev-test path, for example `docker exec tsushin-backend python /app/dev_tests/run_team_line_smoke.py` or `docker exec tsushin-backend python /app/dev_tests/run_team_mesh_smoke.py`.
 
+### 2.4.4 v0.7.0 Agent Teams Phase 4 safety layer
+
+Phase 4 closes the remaining hidden-coordinator public API gaps before expanding the team runtime. API v1 Studio builder get/save/clone, mounted `/api/v2/agents` list/detail/graph/communication/skill-integration/expand-data paths, and A2A permission list/create/update/delete routes now hide or reject `is_internal=true` coordinator agents before reads or mutations.
+
+Team-run memory is now explicitly scoped. Direct memory writes and reads keep `memory.team_run_id IS NULL`; team-run memory writes store `memory.team_run_id` and use a run-scoped effective sender key so direct chats with the same agent cannot load a completed team's ring-buffer or vector memory.
+
+`team_run_scratch_service.py` provides tenant/team/run-validated `set`, `get`, and `list_keys` operations over `team_run_scratch`. `AgentService` exposes internal `team_scratch_set`, `team_scratch_get`, and `team_scratch_list` tools only while a team run context is present; normal direct chats do not see or execute those tools.
+
+Sentinel now has team-specific wrappers for run starts and handoffs. A blocked run-start analysis marks the run `sentinel_blocked` before any member-run rows are created. A blocked handoff stores the Sentinel decision on the relevant member-run evidence, replaces the outbound content with `[Sentinel: handoff content withheld]`, and lets the team continue with the sanitized summary.
+
+`team_membership_service.py` owns backend-only A2A membership choreography. Adding an agent snapshots and disables external A2A permissions, sets `is_team_member` and `current_team_id`, and grants directed in-team permissions idempotently among non-coordinator members. Removing the agent restores snapshot payloads byte-equivalently, clears team flags, and deletes only grants created by the service.
+
 ### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
 
 The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
@@ -1032,7 +1044,7 @@ Two skills drive inter-agent behavior:
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
 
-Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Later phases add public Teams APIs, Team Wizard/Builder, trigger dispatch, Sentinel handoff checks, memory scoping, and Watcher Team Runs UI.
+Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Later phases add public Teams APIs, Team Wizard/Builder, trigger dispatch, and Watcher Team Runs UI.
 
 **Agent Switcher execution modes** (v0.6.0):
 

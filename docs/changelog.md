@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 4 safety layer and guard closure (2026-05-05)
+
+**Summary.** Closes the Phase 3 hidden-coordinator API guard gaps and lands the backend-only Phase 4 safety layer for Agent Teams: run-scoped memory, run scratch state, Sentinel team checks, and A2A membership snapshot/restore. Teams CRUD APIs, trigger dispatch, and frontend Team Builder remain deferred.
+
+**Backend.**
+- Added shared public-agent visibility guards and extended hidden coordinator rejection across API v1 Studio builder get/save/clone, mounted `/api/v2/agents` list/detail/graph/communication/skill-integration/expand-data routes, and A2A permission list/create/update/delete paths.
+- Threaded optional `team_run_id` through the multi-agent memory stack. Direct chats persist and load only `team_run_id IS NULL` rows, while team-run memory uses a run-scoped effective sender key and persists `Memory.team_run_id`.
+- Added `team_run_scratch_service.py` and internal `team_scratch_*` tools that are exposed only when `AgentService` is executing inside a team run.
+- Added Sentinel team-run wrappers and orchestrator wiring. Unsafe team starts finish as `sentinel_blocked` before member runs are created; blocked handoffs are replaced with `[Sentinel: handoff content withheld]`, retain decision JSON, and allow the run to continue.
+- Added `team_membership_service.py` for transactional member add/remove behavior: external A2A permissions are snapshotted and disabled on join, in-team grants are created idempotently, and removal restores snapshots byte-equivalently while deleting only service-created grants.
+
+**Tests.**
+- Extended internal-agent API guard coverage for Studio, `/api/v2/agents`, communication-enabled routes, and A2A permission mutation boundaries.
+- Added focused Phase 4 tests for team memory scoping and scratch-tool gating, Sentinel start/handoff behavior, and A2A membership snapshot/restore.
+
 ### Release 0.7.0 — Agent Teams Phase 3 mesh coordinator runtime (2026-05-05)
 
 **Summary.** Adds the backend-only mesh topology runtime and hidden coordinator boundary for Agent Teams. This remains internal service work only: no Teams CRUD API, queue dispatch, trigger wiring, Sentinel team hook, memory-read scoping, or frontend Team Builder surface is exposed in this slice.
