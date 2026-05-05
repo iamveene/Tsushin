@@ -1017,6 +1017,7 @@ export interface TeamListItem {
   topology: string
   status: string
   coordinator_agent_id?: number | null
+  sentinel_profile_id?: number | null
   member_count: number
   last_run_status?: string | null
   max_steps: number
@@ -1046,12 +1047,20 @@ export interface TeamMemberCreatePayload {
   position_y?: number | null
 }
 
+export interface TeamMemberUpdatePayload {
+  execution_order?: number | null
+  is_required?: boolean
+  position_x?: number | null
+  position_y?: number | null
+}
+
 export interface TeamCreatePayload {
   name: string
   description?: string | null
   goal_text?: string | null
   topology?: TeamTopology
   status?: TeamStatus
+  sentinel_profile_id?: number | null
   max_steps?: number
   max_total_tokens?: number | null
   max_concurrent_runs?: number
@@ -1093,6 +1102,42 @@ export interface TeamRunListItem {
   completed_at?: string | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export interface TeamRunMemberStep {
+  id: number
+  agent_team_member_id?: number | null
+  agent_id?: number | null
+  agent_name?: string | null
+  step_index: number
+  status: string
+  output_summary?: string | null
+  output_text?: string | null
+  sentinel_decision_json?: Record<string, unknown> | null
+  error_json?: Record<string, unknown> | null
+  input_tokens: number
+  output_tokens: number
+  duration_ms?: number | null
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string | null
+}
+
+export interface TeamRunDetail extends TeamRunListItem {
+  member_runs: TeamRunMemberStep[]
+}
+
+export interface TeamRunListResponse {
+  items: TeamRunListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface TeamRunStartResponse {
+  run_id: number
+  status: string
+  poll_url: string
 }
 
 export interface TeamDetail extends TeamListItem {
@@ -4823,6 +4868,74 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to archive team')
+  },
+
+  async addTeamMember(teamId: number, member: TeamMemberCreatePayload): Promise<TeamMemberResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(member),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to add team member')
+    return res.json()
+  },
+
+  async updateTeamMember(teamId: number, agentId: number, member: TeamMemberUpdatePayload): Promise<TeamMemberResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/${agentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(member),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team member')
+    return res.json()
+  },
+
+  async removeTeamAgentMember(teamId: number, agentId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/${agentId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove team member')
+  },
+
+  async reorderTeamMembers(teamId: number, members: Array<{ agent_id: number; execution_order: number }>): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reorder team members')
+    return res.json()
+  },
+
+  async startTeamRun(teamId: number): Promise<TeamRunStartResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start team run')
+    return res.json()
+  },
+
+  async getTeamRuns(teamId: number, options: { page?: number; pageSize?: number } = {}): Promise<TeamRunListResponse> {
+    const params = new URLSearchParams()
+    params.set('page', String(options.page ?? 1))
+    params.set('page_size', String(options.pageSize ?? 20))
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team runs')
+    return res.json()
+  },
+
+  async getTeamRun(teamId: number, runId: number): Promise<TeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs/${runId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team run')
+    return res.json()
+  },
+
+  async cancelTeamRun(teamId: number, runId: number): Promise<TeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs/${runId}/cancel`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to cancel team run')
+    return res.json()
   },
 
   async createTeamTrigger(teamId: number, trigger: TeamTriggerBindingCreatePayload): Promise<TeamTriggerResponse> {

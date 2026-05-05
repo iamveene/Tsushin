@@ -48,6 +48,13 @@ class TeamMemberOrderUpdate(BaseModel):
     members: list[TeamMemberOrderItem] = Field(..., min_length=1)
 
 
+class TeamMemberPatch(BaseModel):
+    execution_order: Optional[int] = Field(None, ge=0)
+    is_required: Optional[bool] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
+
+
 class TeamTriggerCreate(BaseModel):
     trigger_kind: str
     trigger_instance_id: int = Field(..., gt=0)
@@ -102,6 +109,7 @@ class TeamCreate(BaseModel):
     max_steps: int = Field(default=10, ge=1, le=100)
     max_total_tokens: Optional[int] = Field(None, ge=1)
     max_concurrent_runs: int = Field(default=1, ge=1, le=10)
+    sentinel_profile_id: Optional[int] = Field(None, gt=0)
     tools: TeamToolPool = Field(default_factory=TeamToolPool)
     members: list[TeamMemberCreate] = Field(default_factory=list)
 
@@ -139,6 +147,7 @@ class TeamUpdate(BaseModel):
     max_steps: Optional[int] = Field(None, ge=1, le=100)
     max_total_tokens: Optional[int] = Field(None, ge=1)
     max_concurrent_runs: Optional[int] = Field(None, ge=1, le=10)
+    sentinel_profile_id: Optional[int] = Field(None, gt=0)
     tools: Optional[TeamToolPool] = None
 
     @field_validator("name")
@@ -256,6 +265,7 @@ class TeamListItem(BaseModel):
     topology: str
     status: str
     coordinator_agent_id: Optional[int] = None
+    sentinel_profile_id: Optional[int] = None
     member_count: int = 0
     last_run_status: Optional[str] = None
     max_steps: int

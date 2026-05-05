@@ -62,14 +62,16 @@ from api.routes_teams import (  # noqa: E402
     start_team_run,
     create_team_trigger_binding,
     delete_team_trigger_binding,
+    update_member,
     update_team_trigger_binding,
     update_team,
 )
-from api.schemas.teams import TeamCreate, TeamMemberAdd, TeamMemberOrderUpdate, TeamTriggerCreate, TeamTriggerUpdate, TeamUpdate  # noqa: E402
+from api.schemas.teams import TeamCreate, TeamMemberAdd, TeamMemberOrderUpdate, TeamMemberPatch, TeamTriggerCreate, TeamTriggerUpdate, TeamUpdate  # noqa: E402
 from api.v1.routes_teams import (  # noqa: E402
     create_team_trigger_binding as create_v1_team_trigger_binding,
     delete_team_trigger_binding as delete_v1_team_trigger_binding,
     list_teams as list_v1_teams,
+    update_member as update_v1_member,
     update_team_trigger_binding as update_v1_team_trigger_binding,
 )
 from auth_dependencies import TenantContext  # noqa: E402
@@ -86,6 +88,7 @@ from models import (  # noqa: E402
     GitHubChannelInstance,
     GitHubIntegration,
     JiraChannelInstance,
+    SentinelProfile,
     TeamMemberRole,
     TeamMemberRunStatus,
     TeamRunStatus,
@@ -216,6 +219,33 @@ def _create_github_trigger(db, *, tenant_id: str = "tenant-a", trigger_id: int |
     db.add(trigger)
     db.flush()
     return trigger
+
+
+def _create_sentinel_profile(
+    db,
+    *,
+    tenant_id: str | None,
+    name: str,
+    profile_id: int | None = None,
+    is_system: bool = False,
+) -> SentinelProfile:
+    profile = SentinelProfile(
+        id=profile_id,
+        tenant_id=tenant_id,
+        name=name,
+        slug=name.lower().replace(" ", "-"),
+        description=f"{name} profile",
+        is_system=is_system,
+        is_default=False,
+        is_enabled=True,
+        detection_mode="block",
+        okg_detection_mode="block",
+        aggressiveness_level=1,
+        detection_overrides="{}",
+    )
+    db.add(profile)
+    db.flush()
+    return profile
 
 
 async def _create_active_team(db, agents: list[Agent], name: str = "QA Team") -> dict:
@@ -396,6 +426,116 @@ def test_member_add_conflict_and_reorder(db_session):
 
     _run(remove_member(created["id"], agents[2].id, ctx=_ctx(db_session), current_user=_user()))
     assert db_session.get(Agent, agents[2].id).is_team_member is False
+
+
+def test_member_patch_updates_layout_and_v1_mirror_blocks_active_runs(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [
+        _create_agent(db_session, tenant_id="tenant-a", name="A"),
+        _create_agent(db_session, tenant_id="tenant-a", name="B"),
+    ]
+    created = _run(_create_active_team(db_session, agents))
+
+    updated = _run(
+        update_member(
+            created["id"],
+            agents[0].id,
+            payload=TeamMemberPatch(position_x=42.5, position_y=-7.25, is_required=False, execution_order=9),
+            ctx=_ctx(db_session),
+            current_user=_user(),
+        )
+    )
+    assert updated["position_x"] == 42.5
+    assert updated["position_y"] == -7.25
+    assert updated["is_required"] is False
+    assert updated["execution_order"] == 9
+
+    v1_updated = _run(
+        update_v1_member(
+            created["id"],
+            agents[0].id,
+            payload=TeamMemberPatch(position_x=None, position_y=100.0),
+            db=db_session,
+            caller=_caller(),
+        )
+    )
+    assert v1_updated["position_x"] is None
+    assert v1_updated["position_y"] == 100.0
+
+    db_session.add(
+        AgentTeamRun(
+            tenant_id="tenant-a",
+            team_id=created["id"],
+            status=TeamRunStatus.RUNNING.value,
+            goal_text_snapshot="Goal",
+            topology_snapshot=TeamTopology.LINE.value,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as active_exc:
+        _run(
+            update_member(
+                created["id"],
+                agents[0].id,
+                payload=TeamMemberPatch(position_x=1.0),
+                ctx=_ctx(db_session),
+                current_user=_user(),
+            )
+        )
+    assert active_exc.value.status_code == 409
+
+
+def test_team_sentinel_profile_validation_and_serialization(db_session):
+    _create_tenant(db_session, "tenant-a")
+    _create_tenant(db_session, "tenant-b")
+    agent = _create_agent(db_session, tenant_id="tenant-a", name="A")
+    tenant_profile = _create_sentinel_profile(db_session, tenant_id="tenant-a", name="Team Moderate")
+    system_profile = _create_sentinel_profile(db_session, tenant_id=None, name="System Moderate", is_system=True)
+    foreign_profile = _create_sentinel_profile(db_session, tenant_id="tenant-b", name="Foreign Moderate")
+    db_session.commit()
+
+    created = _run(
+        create_team(
+            payload=TeamCreate(
+                name="Profiled Team",
+                goal_text="Goal",
+                status=TeamStatus.ACTIVE.value,
+                sentinel_profile_id=tenant_profile.id,
+                members=[{"agent_id": agent.id}],
+            ),
+            ctx=_ctx(db_session),
+            current_user=_user(),
+        )
+    )
+    assert created["sentinel_profile_id"] == tenant_profile.id
+
+    listed = _run(list_teams(page=1, page_size=20, status_filter=None, include_archived=False, ctx=_ctx(db_session), current_user=_user()))
+    assert listed["items"][0]["sentinel_profile_id"] == tenant_profile.id
+
+    updated = _run(
+        update_team(
+            created["id"],
+            payload=TeamUpdate(sentinel_profile_id=system_profile.id),
+            ctx=_ctx(db_session),
+            current_user=_user(),
+        )
+    )
+    assert updated["sentinel_profile_id"] == system_profile.id
+
+    cleared = _run(update_team(created["id"], payload=TeamUpdate(sentinel_profile_id=None), ctx=_ctx(db_session), current_user=_user()))
+    assert cleared["sentinel_profile_id"] is None
+
+    with pytest.raises(HTTPException) as foreign_exc:
+        _run(
+            update_team(
+                created["id"],
+                payload=TeamUpdate(sentinel_profile_id=foreign_profile.id),
+                ctx=_ctx(db_session),
+                current_user=_user(),
+            )
+        )
+    assert foreign_exc.value.status_code == 404
 
 
 def test_active_team_rejects_removing_last_visible_member(db_session):

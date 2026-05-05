@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from models import (
     GitHubChannelInstance,
     JiraChannelInstance,
     SandboxedTool,
+    SentinelProfile,
     TeamMemberRole,
     TeamRunStatus,
     TeamStatus,
@@ -152,6 +153,7 @@ class AgentTeamApiService:
         self._reject_direct_archive_status(status)
         self._validate_active_ready(status=status, goal_text=data.get("goal_text"), member_count=len(members))
         tool_ids = self._validate_tool_ids(_extract_tool_ids(tools))
+        sentinel_profile_id = self._validate_sentinel_profile_id(data.get("sentinel_profile_id"))
         self._ensure_unique_name(data["name"])
         self._validate_member_payloads(members)
 
@@ -167,6 +169,7 @@ class AgentTeamApiService:
                 max_steps=data.get("max_steps") or 10,
                 max_total_tokens=data.get("max_total_tokens"),
                 max_concurrent_runs=data.get("max_concurrent_runs") or 1,
+                sentinel_profile_id=sentinel_profile_id,
                 tools_json=_team_tools_payload(tool_ids),
                 created_by_user_id=self.user_id,
             )
@@ -212,6 +215,8 @@ class AgentTeamApiService:
                 if field == "status":
                     self._reject_direct_archive_status(data[field])
                 setattr(team, field, data[field])
+        if "sentinel_profile_id" in data:
+            team.sentinel_profile_id = self._validate_sentinel_profile_id(data["sentinel_profile_id"])
         if "tools" in data and data["tools"] is not None:
             tool_ids = self._validate_tool_ids(_extract_tool_ids(data["tools"]))
             team.tools_json = _team_tools_payload(tool_ids)
@@ -276,6 +281,33 @@ class AgentTeamApiService:
         except Exception:
             _rollback_membership_service(service, self.db)
             raise
+
+    def update_member(self, team_id: int, agent_id: int, payload: Any) -> dict[str, Any]:
+        team = self._get_team_or_404(team_id)
+        if team.status == TeamStatus.ARCHIVED.value:
+            raise AgentTeamApiError(409, "Cannot update members on an archived team")
+        if self._has_active_run(team_id):
+            raise AgentTeamApiError(409, "Cannot update members while a team run is active")
+
+        member = self._get_member(team_id, agent_id)
+        if member.role == TeamMemberRole.COORDINATOR.value:
+            raise AgentTeamApiError(404, "Team member not found")
+        agent = (
+            self.db.query(Agent.id)
+            .filter(Agent.id == agent_id, Agent.tenant_id == self.tenant_id, Agent.is_internal.is_(False))
+            .first()
+        )
+        if not agent:
+            raise AgentTeamApiError(404, "Team member not found")
+        data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else dict(payload)
+        if not data:
+            return self.serialize_member(member)
+
+        self._apply_member_patch(member, data)
+        member.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(member)
+        return self.serialize_member(member)
 
     def remove_member(self, team_id: int, agent_id: int) -> None:
         team = self._get_team_or_404(team_id)
@@ -441,6 +473,7 @@ class AgentTeamApiService:
             "topology": team.topology,
             "status": team.status,
             "coordinator_agent_id": team.coordinator_agent_id,
+            "sentinel_profile_id": team.sentinel_profile_id,
             "member_count": member_count,
             "last_run_status": last_run.status if last_run else None,
             "max_steps": team.max_steps,
@@ -664,6 +697,27 @@ class AgentTeamApiService:
             raise AgentTeamApiError(404, f"Sandboxed tool not found or disabled: {missing[0]}")
         return unique_ids
 
+    def _validate_sentinel_profile_id(self, profile_id: Optional[int]) -> Optional[int]:
+        if profile_id is None:
+            return None
+        profile = (
+            self.db.query(SentinelProfile.id)
+            .filter(
+                SentinelProfile.id == profile_id,
+                or_(
+                    SentinelProfile.tenant_id == self.tenant_id,
+                    and_(
+                        SentinelProfile.tenant_id.is_(None),
+                        SentinelProfile.is_system.is_(True),
+                    ),
+                ),
+            )
+            .first()
+        )
+        if not profile:
+            raise AgentTeamApiError(404, "Sentinel profile not found")
+        return int(profile_id)
+
     def _validate_team_trigger_instance(self, trigger_kind: str, trigger_instance_id: int) -> str:
         normalized = (trigger_kind or "").strip().lower()
         if normalized == TeamTriggerKind.GMAIL.value:
@@ -723,6 +777,17 @@ class AgentTeamApiService:
         if query.first():
             raise AgentTeamApiError(409, "A team with this name already exists")
 
+    def _has_active_run(self, team_id: int) -> bool:
+        return bool(
+            self.db.query(AgentTeamRun.id)
+            .filter(
+                AgentTeamRun.tenant_id == self.tenant_id,
+                AgentTeamRun.team_id == team_id,
+                AgentTeamRun.status.in_(ACTIVE_RUN_STATUSES),
+            )
+            .first()
+        )
+
     @staticmethod
     def _apply_member_options(member: AgentTeamMember, data: dict[str, Any]) -> None:
         if data.get("execution_order") is not None:
@@ -733,6 +798,16 @@ class AgentTeamApiService:
             member.position_x = data["position_x"]
         if "position_y" in data:
             member.position_y = data["position_y"]
+
+    @staticmethod
+    def _apply_member_patch(member: AgentTeamMember, data: dict[str, Any]) -> None:
+        for field in ("execution_order", "is_required", "position_x", "position_y"):
+            if field not in data:
+                continue
+            value = data[field]
+            if field == "is_required" and value is not None:
+                value = bool(value)
+            setattr(member, field, value)
 
     @staticmethod
     def _membership_http_error(error_code: str) -> AgentTeamApiError:

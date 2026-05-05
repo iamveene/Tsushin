@@ -133,7 +133,13 @@ class SentinelService:
             SentinelAgentConfig.agent_id == agent_id
         ).first()
 
-    def get_effective_config(self, agent_id: Optional[int] = None, skill_type: Optional[str] = None) -> SentinelEffectiveConfig:
+    def get_effective_config(
+        self,
+        agent_id: Optional[int] = None,
+        skill_type: Optional[str] = None,
+        profile_id: Optional[int] = None,
+        profile_source: str = "explicit",
+    ) -> SentinelEffectiveConfig:
         """
         Get the effective security configuration for analysis.
 
@@ -151,9 +157,22 @@ class SentinelService:
         Returns:
             SentinelEffectiveConfig with resolved settings
         """
+        from .sentinel_profiles_service import SentinelProfilesService
+
+        profiles_service = SentinelProfilesService(self.db, self.tenant_id)
+        if profile_id is not None:
+            try:
+                profile = profiles_service.get_profile(profile_id)
+                if not profile:
+                    raise ValueError("sentinel_profile_not_found")
+                return profiles_service._resolve_profile(profile, profile_source)
+            except ValueError:
+                raise
+            except Exception as e:
+                self.logger.warning(f"Explicit profile resolution failed: {e}")
+                raise
+
         try:
-            from .sentinel_profiles_service import SentinelProfilesService
-            profiles_service = SentinelProfilesService(self.db, self.tenant_id)
             result = profiles_service.get_effective_config(agent_id, skill_type)
             if result:
                 return result
@@ -418,6 +437,7 @@ class SentinelService:
         goal_text: Optional[str],
         trigger_event_id: Optional[int] = None,
         sender_key: Optional[str] = None,
+        sentinel_profile_id: Optional[int] = None,
     ) -> SentinelAnalysisResult:
         """Analyze a team run goal before any member receives work."""
         context = {
@@ -438,6 +458,8 @@ class SentinelService:
             sender_key=sender_key or f"team:{team_id}:run_start",
             context=context,
             source="team_run_start",
+            profile_id=sentinel_profile_id,
+            profile_source="team",
         )
 
     async def analyze_team_handoff(
@@ -454,6 +476,7 @@ class SentinelService:
         target_member_id: Optional[int] = None,
         target_agent_id: Optional[int] = None,
         sender_key: Optional[str] = None,
+        sentinel_profile_id: Optional[int] = None,
     ) -> SentinelAnalysisResult:
         """Analyze content before it is handed to another team member."""
         context = {
@@ -482,6 +505,8 @@ class SentinelService:
             sender_key=sender_key or f"team:{team_id}:run:{team_run_id}:handoff",
             context=context,
             source="team_handoff",
+            profile_id=sentinel_profile_id,
+            profile_source="team",
         )
 
     async def analyze_prompt(
@@ -494,6 +519,8 @@ class SentinelService:
         message_id: Optional[str] = None,
         skill_context: Optional[str] = None,
         skill_type: Optional[str] = None,
+        profile_id: Optional[int] = None,
+        profile_source: str = "explicit",
     ) -> SentinelAnalysisResult:
         """
         Analyze user prompt for security threats.
@@ -530,7 +557,12 @@ class SentinelService:
             )
 
         # Get effective configuration (skill_type enables skill-level profile resolution)
-        config = self.get_effective_config(agent_id, skill_type=skill_type)
+        config = self.get_effective_config(
+            agent_id,
+            skill_type=skill_type,
+            profile_id=profile_id,
+            profile_source=profile_source,
+        )
 
         # Auto-exempt detection types for enabled skills (skill enablement = authorization)
         if agent_id:

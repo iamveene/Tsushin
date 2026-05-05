@@ -3822,6 +3822,7 @@ class AgentTeam(Base):
     topology = Column(String(16), default=TeamTopology.LINE.value, nullable=False)
     status = Column(String(16), default=TeamStatus.DRAFT.value, nullable=False)
     coordinator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    sentinel_profile_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True, index=True)
     max_steps = Column(Integer, default=10, nullable=False)
     max_total_tokens = Column(Integer, nullable=True)
     max_concurrent_runs = Column(Integer, default=1, nullable=False)
@@ -3839,6 +3840,7 @@ class AgentTeam(Base):
         foreign_keys=lambda: [AgentTeam.tenant_id, AgentTeam.coordinator_agent_id],
     )
     created_by_user = relationship("User", foreign_keys=[created_by_user_id])
+    sentinel_profile = relationship("SentinelProfile", foreign_keys=[sentinel_profile_id])
     members = relationship(
         "AgentTeamMember",
         back_populates="team",

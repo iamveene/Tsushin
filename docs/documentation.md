@@ -232,6 +232,18 @@ Creation posts to `/api/teams`, then posts any trigger bindings, clears the pers
 
 The Phase 8 backend hardening keeps the Phase 6 runtime safe for UI-created teams: team-run queue rows use a stale-reset threshold aligned to the 600-second orchestrator budget plus grace, manual and other unqueued active team runs count against `max_concurrent_runs`, and trigger dispatch reports `enqueue_failed` instead of `dispatched` when queue insertion fails. Multi-team enqueue failures roll back uncommitted queue rows so already failed `AgentTeamRun` rows cannot be claimed later.
 
+### 2.4.9 v0.7.0 Agent Teams Phase 9 Team Builder
+
+Phase 9 replaces the minimal `/studio/teams/{id}` landing with the operational Team Builder. The detail page is URL-tabbed with `topology`, `triggers`, `sentinel`, `runs`, and `settings`, so operators can deep-link directly to the builder surface they need while keeping the canonical Studio Teams route.
+
+The Topology tab renders a React Flow `TeamCanvas`. Line teams show ordered member nodes with sequential handoff edges; mesh teams show the hidden coordinator plus member spokes. Active non-team-member agents can be dragged from the sidebar onto the canvas to add them to the team, line teams can be reordered through `/members/order`, and member node drag-stop persists `position_x`/`position_y` through `PATCH /api/teams/{team_id}/members/{agent_id}`. The same member PATCH contract also updates `is_required` and optional order metadata, and the public v1 API mirrors the route.
+
+Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, and Jira trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
+
+The Sentinel tab adds a nullable `agent_team.sentinel_profile_id` override via migration `0085_agent_team_sentinel_profile.py`. When set, team-run start and handoff Sentinel checks resolve that team profile before member or tenant defaults. Clearing the field returns the team to the existing inherited Sentinel profile hierarchy.
+
+The Runs tab exposes the missing run client contract for manual run start, list, detail, and cancel. Operators can start a run, poll run history, drill into member-run timelines, inspect output summaries, token/cost metadata, errors, and `sentinel_decision_json`, and cancel active runs from the same page.
+
 ### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
 
 The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.

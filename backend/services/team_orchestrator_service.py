@@ -602,6 +602,7 @@ class TeamRunOrchestrator:
                 goal_text=team.goal_text,
                 trigger_event_id=trigger_event_id,
                 sender_key=f"team:{team.id}:run:{team_run.id}:start",
+                sentinel_profile_id=team.sentinel_profile_id,
             )
         except Exception as exc:
             return self._sentinel_exception_result("team_run_start", exc)
@@ -633,6 +634,7 @@ class TeamRunOrchestrator:
                 summary=summary,
                 content=content,
                 sender_key=f"team:{team.id}:run:{team_run.id}:handoff:{step_index}",
+                sentinel_profile_id=team.sentinel_profile_id,
             )
         except Exception as exc:
             return self._sentinel_exception_result("team_handoff", exc)
