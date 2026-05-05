@@ -10,7 +10,7 @@
  * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
  *           Replaced with a "You're all set" message pointing to the checklist.
  * BUG-321: Channels step action button launches WhatsApp wizard directly (not just /hub nav).
- * BUG-323: Channels step navigates to /hub?tab=communication, not /hub.
+ * BUG-323: Channels step navigates to the Hub Channels tab, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
  * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
@@ -286,8 +286,8 @@ export default function OnboardingWizard() {
         'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
       ],
       actionButton: {
-        label: 'Open Hub → Communication',
-        action: () => router.push('/hub?tab=communication')
+        label: 'Open Hub → Channels',
+        action: () => router.push('/hub?tab=channels')
       }
     },
     {
@@ -324,7 +324,10 @@ export default function OnboardingWizard() {
         'Semantic recall with configurable top-k + similarity threshold, MMR reranking (lambda 0.5), exponential temporal decay (~69-day half-life)',
         'Memory isolation modes — isolated (per-agent), shared (cross-agent), channel_isolated (per-channel)',
         'Knowledge Base document ingestion — PDF, DOCX, TXT, CSV, JSON — chunked, embedded, and indexed per agent',
-        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default'
+        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default',
+        'NEW in v0.7.0: pluggable embedding providers — OpenAI text-embedding-3 (256/512/1024/1536d), Google Gemini embedding-2 (768/1536/3072d), and self-hosted Ollama; legacy MiniLM-L6-v2 still ships as the default',
+        'NEW in v0.7.0: per-surface embedding contracts — pick provider/model/dimensions independently for Knowledge Base, Project KB, agent Long-Term Memory, and any Vector Store; contracts are immutable once data is written',
+        'NEW in v0.7.0: multi-index Vector Stores — one Qdrant/Mongo instance can host multiple collections at different dimensions, isolated per (owner, contract_hash) so a 1536d KB and a 768d project KB never collide'
       ],
       actionButton: {
         label: 'Open Vector Stores',
@@ -376,10 +379,10 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
+      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to the Hub Channels tab.
       title: 'Communication Channels (Required)',
       targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Custom HTTP events are configured later as Triggers, not conversational channels.',
+      content: 'To receive and respond to conversations, connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to Hub → Channels. Custom HTTP events are configured later as Triggers, not conversational channels.',
       highlightFeatures: [
         'WhatsApp: scan QR code to connect your phone',
         'Telegram: add your bot token',
@@ -395,12 +398,14 @@ export default function OnboardingWizard() {
       // Step 10
       title: 'Flows - Automation & Scheduling',
       targetSelector: 'a[href="/flows"]',
-      content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
+      content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code — mix LLM-powered (agentic) steps with deterministic (programmatic) steps and conditional gates (hybrid).',
       highlightFeatures: [
-        'Visual flow builder',
-        'Scheduled task execution',
-        'Multi-agent workflows',
-        'Trigger conditions and actions'
+        'Visual flow builder with 12 step types across three families: agentic (conversation, skill, summarization), programmatic (message, notification, tool, slash_command), hybrid (gate, browser_automation, source, subflow)',
+        'Five built-in templates ready to instantiate: Daily Email Digest, Weekly Calendar Summary, New Contact Welcome, Jira Weekly Triage, GitHub Release Notes',
+        'NEW in v0.7.0: source step lock — flows bound to a trigger always start from a position-1 source node carrying the wake event payload; downstream steps reference {{source.payload.*}} and prior step outputs via Jinja2',
+        'NEW in v0.7.0: system-managed auto-flows generated from every trigger — a Webhook/Email/Jira/GitHub trigger spawns a 4-node flow (source → gate → conversation → notification) with the is_system_owned flag, kept in sync with the trigger',
+        'Execution methods: immediate, scheduled, recurring (cron-like), keyword-matched, or wake-event-triggered',
+        'Per-step retry, timeout, on_failure routing, and full token-usage / latency traces in the run history'
       ],
       actionButton: {
         label: 'Explore Flows',
@@ -435,6 +440,8 @@ export default function OnboardingWizard() {
         ...voiceProviderBullets,
         'Create a new Voice Assistant OR attach audio_tts/audio_transcript to an existing agent',
         'Pick "Hybrid" to both transcribe incoming voice AND reply with synthesized audio',
+        'NEW in v0.7.0: two ASR (speech-to-text) engines now ship out of the box — self-hosted OpenAI Whisper (official package, runs in your Docker stack with no API key) and self-hosted Speaches (faster-whisper). Cloud OpenAI Whisper still works as a third option.',
+        'Per-agent ASR assignment with cascade-aware delete (removing an ASR provider unbinds the agents using it instead of orphaning them)'
       ],
       actionButton: {
         label: 'Set up voice agent (guided wizard)',
@@ -480,16 +487,19 @@ export default function OnboardingWizard() {
       // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
       title: 'New in v0.7.0 - Triggers & Continuous Agents',
       targetSelector: '[data-testid="hub-triggers-section"]',
-      content: 'Triggers are now separate from conversational channels, and continuous agents expose a read-only control plane for always-on work. Email, Webhook, Jira, Schedule, and GitHub triggers live in the Hub Communication tab; Wake Events and Continuous Agents are linked directly from that Triggers section.',
+      content: 'Triggers are separate from conversational channels, and continuous agents expose the Watcher control plane for always-on work. Four trigger kinds — Email/Gmail, Jira, GitHub, and Webhook — live in Hub → Triggers; Wake Events and Continuous Agents live under Watcher.',
       highlightFeatures: [
-        'Trigger detail pages use the new /api/triggers namespace',
-        'Wake Events browser shows payload_ref instead of raw payload JSON',
-        'Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
-        'Conversational channel routing rules stay limited to WhatsApp, Telegram, Slack, and Discord'
+        'Four trigger kinds: Email (Gmail OAuth + IMAP-style query), Jira (API token + JQL), GitHub (PAT + repo/PR criteria), and Webhook (HMAC-signed inbound HTTP with rotatable secret)',
+        'Dry-run from the UI without firing live: test-query for Email/Jira, test-criteria for GitHub/Webhook, plus poll-now to force an immediate fetch',
+        'Per-trigger Memory Recap (optional, default-off): inject a Jinja2-templated case-memory recap into the agent context at dispatch time, with configurable scope, top-k, similarity threshold, and inject position',
+        'System-managed auto-flow generation: every new trigger spawns a 4-node flow (source → gate → conversation → notification) wired through a flow_trigger_binding row with is_system_managed=true — visible in the trigger detail "Wired Flows" panel',
+        'Trigger detail pages use the new /api/triggers/{kind}/{id} namespace',
+        'Wake Events browser shows payload_ref instead of raw payload JSON; Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
+        'Conversational channel routing (WhatsApp/Telegram/Slack/Discord) stays separate from trigger event routing — same agents, two distinct entry-point layers'
       ],
       actionButton: {
         label: 'Open Hub Triggers',
-        action: () => router.push('/hub?tab=communication')
+        action: () => router.push('/hub/triggers')
       }
     },
     {
@@ -501,7 +511,7 @@ export default function OnboardingWizard() {
       highlightFeatures: [
         'Default agents are already configured',
         'Getting Started checklist tracks your progress on the dashboard',
-        'Connect a channel via the checklist or Hub → Communication tab',
+        'Connect a channel via the checklist or Hub → Channels tab',
         'Access this tour anytime via the ? button'
       ],
       actionButton: {

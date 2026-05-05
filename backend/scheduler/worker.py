@@ -155,16 +155,9 @@ class SchedulerWorker:
                             )
                             # Error is already logged to event.error_message by execute_event
 
-                try:
-                    from channels.schedule.trigger import ScheduleTrigger
-
-                    schedule_results = ScheduleTrigger.poll_due(db)
-                    logger.info(
-                        "Schedule trigger poll completed with %s due trigger(s)",
-                        len(schedule_results),
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to poll schedule triggers: {e}", exc_info=True)
+                # Schedule trigger polling removed in v0.7.0-fix Phase 2.
+                # Cron-based execution lives on FlowDefinition.execution_method='scheduled'
+                # via the dedicated flow scheduler.
 
                 # NOTE: email + jira polls are deliberately NOT inside this
                 # outer with-block — see BUG-684 fix below.

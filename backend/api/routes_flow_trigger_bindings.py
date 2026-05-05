@@ -25,7 +25,16 @@ from sqlalchemy.orm import Session
 
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from db import get_db
-from models import FlowDefinition, FlowNode, FlowRun, FlowTriggerBinding
+from models import (
+    EmailChannelInstance,
+    FlowDefinition,
+    FlowNode,
+    FlowRun,
+    FlowTriggerBinding,
+    GitHubChannelInstance,
+    JiraChannelInstance,
+    WebhookIntegration,
+)
 from services.flow_binding_service import find_source_node_id
 
 logger = logging.getLogger(__name__)
@@ -33,7 +42,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/flow-trigger-bindings", tags=["flow-trigger-bindings"])
 
 
-_VALID_KINDS = {"jira", "email", "github", "schedule", "webhook"}
+_VALID_KINDS = {"jira", "email", "github", "webhook"}
+_TRIGGER_MODELS = {
+    "email": EmailChannelInstance,
+    "jira": JiraChannelInstance,
+    "github": GitHubChannelInstance,
+    "webhook": WebhookIntegration,
+}
 
 
 class FlowTriggerBindingRead(BaseModel):
@@ -55,7 +70,7 @@ class FlowTriggerBindingRead(BaseModel):
 
 class FlowTriggerBindingCreate(BaseModel):
     flow_definition_id: int
-    trigger_kind: str = Field(pattern="^(jira|email|github|schedule|webhook)$")
+    trigger_kind: str = Field(pattern="^(jira|email|github|webhook)$")
     trigger_instance_id: int = Field(ge=1)
     suppress_default_agent: bool = True
     source_node_id: Optional[int] = None
@@ -93,6 +108,24 @@ def _to_read(db: Session, binding: FlowTriggerBinding) -> FlowTriggerBindingRead
     )
 
 
+def _load_trigger_or_404(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+):
+    model = _TRIGGER_MODELS.get(trigger_kind)
+    if model is None:
+        raise HTTPException(status_code=422, detail=f"trigger_kind must be one of {sorted(_VALID_KINDS)}")
+    trigger = db.query(model).filter(model.id == trigger_instance_id).first()
+    if trigger is None:
+        raise HTTPException(status_code=404, detail=f"{trigger_kind} trigger not found")
+    if getattr(trigger, "tenant_id", None) != tenant_id:
+        raise HTTPException(status_code=403, detail=f"{trigger_kind} trigger not owned by tenant")
+    return trigger
+
+
 @router.get("", response_model=list[FlowTriggerBindingRead], dependencies=[Depends(require_permission("flows.read"))])
 def list_bindings(
     trigger_kind: Optional[str] = None,
@@ -111,7 +144,10 @@ def list_bindings(
     if trigger_kind is not None and trigger_kind not in _VALID_KINDS:
         raise HTTPException(status_code=422, detail=f"trigger_kind must be one of {sorted(_VALID_KINDS)}")
 
-    query = db.query(FlowTriggerBinding).filter(FlowTriggerBinding.tenant_id == ctx.tenant_id)
+    query = db.query(FlowTriggerBinding).filter(
+        FlowTriggerBinding.tenant_id == ctx.tenant_id,
+        FlowTriggerBinding.trigger_kind.in_(sorted(_VALID_KINDS)),
+    )
     if trigger_kind is not None:
         query = query.filter(FlowTriggerBinding.trigger_kind == trigger_kind)
     if trigger_id is not None:
@@ -149,6 +185,13 @@ def create_binding(
     )
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
+
+    _load_trigger_or_404(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind=payload.trigger_kind,
+        trigger_instance_id=payload.trigger_instance_id,
+    )
 
     existing = (
         db.query(FlowTriggerBinding)
@@ -209,6 +252,7 @@ def update_binding(
         .filter(
             FlowTriggerBinding.id == binding_id,
             FlowTriggerBinding.tenant_id == ctx.tenant_id,
+            FlowTriggerBinding.trigger_kind.in_(sorted(_VALID_KINDS)),
         )
         .first()
     )
@@ -244,6 +288,7 @@ def delete_binding(
         .filter(
             FlowTriggerBinding.id == binding_id,
             FlowTriggerBinding.tenant_id == ctx.tenant_id,
+            FlowTriggerBinding.trigger_kind.in_(sorted(_VALID_KINDS)),
         )
         .first()
     )

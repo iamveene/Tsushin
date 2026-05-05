@@ -1,0 +1,2569 @@
+{
+  "started_at": "2026-05-03T16:29:31.535Z",
+  "evidence_dir": "/Users/vinicios/code/tsushin/docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z",
+  "agent_id": 6,
+  "agent_name": "CustomerService",
+  "browser": "chromium",
+  "screenshots": [
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/00-login.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/01-post-login-tour-dismissed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-01-before-config.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-02-config-selected.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-03-embedding-test-passed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-04-settings-saved.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-05-uploaded-alert-accepted.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-06-document-row-completed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-07-agent-kb-search-ui.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-08-playground-question-ready.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/10-1536-09-playground-answer.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-01-before-config.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-02-config-selected.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-03-embedding-test-passed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-04-settings-saved.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-05-uploaded-alert-accepted.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-06-document-row-completed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-07-agent-kb-search-ui.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-08-playground-question-ready.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/20-768-09-playground-answer.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/30-coexistence-two-doc-contracts.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/40-projects-page.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/41-project-create-modal-kb-controls.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/42-project-create-modal-filled.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/43-project-detail-overview.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/44-project-detail-kb-controls.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/50-agent-configuration-vector-store-memory.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/51-agent-memory-management-tab.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/52-settings-vector-stores.png"
+  ],
+  "samples": [
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-29-31-534Z/lead-kb-768-2026-05-03T16-29-31-534Z.txt"
+  ],
+  "dialogs": [
+    {
+      "type": "alert",
+      "message": "Document uploaded successfully! Processing will begin shortly."
+    },
+    {
+      "type": "alert",
+      "message": "Document uploaded successfully! Processing will begin shortly."
+    }
+  ],
+  "console": [
+    {
+      "type": "error",
+      "text": "Failed to load data: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getMemoryStats (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:4526)\n    at f (https://localhost/_next/static/chunks/app/page-3674080465ef5aff.js:1:38134)\n    at https://localhost/_next/static/chunks/app/page-3674080465ef5aff.js:1:37901\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116763)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "type": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    },
+    {
+      "type": "error",
+      "text": "Failed to load memory data: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getAgent (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:8638)\n    at K (https://localhost/_next/static/chunks/app/agents/%5Bid%5D/page-0f143475f6800dd4.js:1:4075)\n    at https://localhost/_next/static/chunks/app/agents/%5Bid%5D/page-0f143475f6800dd4.js:1:4003\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116763)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    }
+  ],
+  "network_errors": [
+    {
+      "url": "https://localhost/_next/static/css/b637bda732a2c38e.css",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/stats/memory",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=nn07o",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=1pn8p",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/system/status",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/messages?limit=50",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/messages/count",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=tpiaw",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/agent-runs?limit=50",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/agent-runs/count",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=1j1ph",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/studio/projects/3?_rsc=z62ea",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/studio/projects/3?_rsc=1e7i4",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/studio/projects/5?_rsc=1utbn",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/playground/projects/5?_rsc=cut3x",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/playground/projects/5?_rsc=1i7es",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/agents/6/memory/conversations",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/agents/6",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "requests_failed_or_5xx": [],
+  "api": {
+    "me": {
+      "id": 1,
+      "email": "test@example.com",
+      "full_name": "Test Owner",
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "tenant_name": "Tsushin QA",
+      "is_global_admin": false,
+      "is_active": true,
+      "email_verified": false,
+      "permissions": [
+        "agents.read",
+        "agents.write",
+        "agents.delete",
+        "agents.execute",
+        "contacts.read",
+        "contacts.write",
+        "contacts.delete",
+        "memory.read",
+        "memory.write",
+        "memory.delete",
+        "flows.read",
+        "flows.write",
+        "flows.delete",
+        "flows.execute",
+        "knowledge.read",
+        "knowledge.write",
+        "knowledge.delete",
+        "mcp.instances.read",
+        "mcp.instances.create",
+        "mcp.instances.manage",
+        "mcp.instances.delete",
+        "telegram.instances.create",
+        "telegram.instances.read",
+        "telegram.instances.manage",
+        "telegram.instances.delete",
+        "integrations.slack.read",
+        "integrations.slack.write",
+        "integrations.discord.read",
+        "integrations.discord.write",
+        "integrations.webhook.read",
+        "integrations.webhook.write",
+        "hub.read",
+        "hub.write",
+        "hub.delete",
+        "users.read",
+        "users.invite",
+        "users.manage",
+        "users.remove",
+        "org.settings.read",
+        "org.settings.write",
+        "billing.read",
+        "billing.write",
+        "analytics.read",
+        "audit.read",
+        "audit.export",
+        "tools.read",
+        "tools.manage",
+        "tools.execute",
+        "shell.read",
+        "shell.write",
+        "shell.execute",
+        "shell.approve",
+        "watcher.read",
+        "api_clients.read",
+        "api_clients.write",
+        "api_clients.delete",
+        "scheduler.read",
+        "scheduler.create",
+        "scheduler.edit",
+        "scheduler.cancel",
+        "skills.mcp_server.manage",
+        "skills.custom.create",
+        "skills.custom.read",
+        "skills.custom.execute",
+        "skills.custom.delete",
+        "channel_health.read",
+        "channel_health.write",
+        "agent_communication.read",
+        "agent_communication.write",
+        "vector_stores.read",
+        "vector_stores.write"
+      ],
+      "created_at": "2026-04-06T00:43:33.892205",
+      "last_login_at": "2026-05-03T16:29:32.552538"
+    },
+    "embedding_options": {
+      "providers": [
+        {
+          "provider": "local",
+          "provider_instance_id": null,
+          "instance_name": "Built-in local embeddings",
+          "vendor": "local",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "local",
+              "model": "all-MiniLM-L6-v2",
+              "label": "Local MiniLM",
+              "supported_dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "max_dimensions": 384,
+              "requires_provider_instance": false,
+              "supports_dimensions_parameter": false
+            }
+          ],
+          "default_model": "all-MiniLM-L6-v2",
+          "default_dimensions": 384,
+          "test_status": "built_in"
+        },
+        {
+          "provider": "gemini",
+          "provider_instance_id": 4,
+          "instance_name": "gemini1",
+          "vendor": "gemini",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-2",
+              "label": "Gemini Embedding 2",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-001",
+              "label": "Gemini Embedding 001",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "gemini-embedding-2",
+          "default_dimensions": 1536,
+          "test_status": "healthy"
+        },
+        {
+          "provider": "ollama",
+          "provider_instance_id": 21,
+          "instance_name": "Ollama (Local)",
+          "vendor": "ollama",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": "http://host.docker.internal:11434",
+          "models": [
+            {
+              "provider": "ollama",
+              "model": "nomic-embed-text",
+              "label": "nomic-embed-text",
+              "supported_dimensions": [],
+              "default_dimensions": null,
+              "max_dimensions": null,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "nomic-embed-text",
+          "default_dimensions": null,
+          "test_status": "unknown"
+        },
+        {
+          "provider": "openai",
+          "provider_instance_id": 5,
+          "instance_name": "op1",
+          "vendor": "openai",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-small",
+              "label": "OpenAI text-embedding-3-small",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                1536
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 1536,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-large",
+              "label": "OpenAI text-embedding-3-large",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                3072
+              ],
+              "default_dimensions": 3072,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "text-embedding-3-small",
+          "default_dimensions": 1536,
+          "test_status": "unknown"
+        }
+      ],
+      "default": {
+        "provider": "local",
+        "provider_instance_id": null,
+        "model": "all-MiniLM-L6-v2",
+        "dimensions": 384
+      }
+    },
+    "vector_stores": [
+      {
+        "id": 19,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "vendor": "qdrant",
+        "instance_name": "gemini-1536",
+        "description": "Wave 3 provisioned: Qdrant + Gemini 1536-d for case-memory v2 testing.",
+        "base_url": "http://vs-qdrant-0fe9a9f6-19:6333",
+        "credentials_configured": true,
+        "credentials_preview": "AIza...jEGY",
+        "extra_config": {
+          "embedding_provider": "gemini",
+          "embedding_model": "gemini-embedding-001",
+          "embedding_dims": 1536,
+          "embedding_metric": "cosine",
+          "embedding_task_document": "RETRIEVAL_DOCUMENT",
+          "embedding_task_query": "RETRIEVAL_QUERY",
+          "collection_name": "case_memory_tenant_20260406004333855618_c58c99"
+        },
+        "security_config": {},
+        "health_status": "healthy",
+        "health_status_reason": "Qdrant connected",
+        "last_health_check": "2026-04-29T22:00:18.247185",
+        "is_default": false,
+        "is_active": true,
+        "is_auto_provisioned": true,
+        "container_status": "running",
+        "container_name": "tsushin-vs-qdrant-0fe9a9f6-19",
+        "container_port": 6300,
+        "created_at": "2026-04-29T21:20:53.044105",
+        "updated_at": "2026-04-30T06:25:50.589994"
+      }
+    ],
+    "selected_vector_store_id": 19,
+    "original_agent": {
+      "id": 6,
+      "contact_id": 6,
+      "contact_name": "CustomerService",
+      "system_prompt": "You are CustomerService, a friendly and helpful customer support agent.\n\nYour role:\n- Assist customers with inquiries and issues\n- Provide product/service information\n- Resolve problems efficiently\n- Escalate complex issues when needed\n- Maintain a positive customer experience\n\nCommunication style:\n- Warm and empathetic\n- Patient and understanding\n- Solution-oriented\n- Professional and courteous\n\nBest practices:\n- Listen actively to customer concerns\n- Acknowledge frustrations\n- Provide step-by-step solutions\n- Follow up to ensure resolution\n- Thank customers for their patience",
+      "tone_preset_id": null,
+      "tone_preset_name": null,
+      "custom_tone": null,
+      "persona_id": null,
+      "persona_name": null,
+      "keywords": [],
+      "model_provider": "gemini",
+      "model_name": "gemini-2.5-flash",
+      "response_template": "{response}",
+      "memory_size": null,
+      "trigger_dm_enabled": true,
+      "trigger_group_filters": [],
+      "trigger_number_filters": null,
+      "context_message_count": null,
+      "context_char_limit": null,
+      "enable_semantic_search": true,
+      "semantic_search_results": 10,
+      "semantic_similarity_threshold": 0.5,
+      "memory_decay_enabled": false,
+      "memory_decay_lambda": 0.01,
+      "memory_decay_archive_threshold": 0.05,
+      "memory_decay_mmr_lambda": 0.5,
+      "provider_instance_id": 4,
+      "vector_store_instance_id": null,
+      "vector_store_mode": "override",
+      "max_agentic_rounds": 1,
+      "max_agentic_loop_bytes": 8192,
+      "is_active": true,
+      "is_default": false,
+      "skills_count": 3,
+      "enabled_channels": [
+        "playground",
+        "whatsapp",
+        "telegram"
+      ],
+      "whatsapp_integration_id": 3,
+      "telegram_integration_id": null,
+      "slack_integration_id": null,
+      "discord_integration_id": null,
+      "webhook_integration_id": null,
+      "created_at": "2026-04-06T00:43:33.958760",
+      "updated_at": "2026-05-02T13:43:04.460256"
+    },
+    "original_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "original_docs": []
+  },
+  "qdrant": {
+    "before_1536": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.0031095
+      }
+    },
+    "after_upload_1536": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 1,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 1
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.00006175
+      }
+    },
+    "before_768": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 768,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000289208
+      }
+    },
+    "after_upload_768": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 1,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 768,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 1
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000372208
+      }
+    },
+    "after_cleanup_1536": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000199083
+      }
+    },
+    "after_cleanup_768": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 768,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.00006625
+      }
+    },
+    "case_memory_after_cleanup": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 30,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 30
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000434458
+      }
+    }
+  },
+  "agent_kb": {
+    "10-1536_selects_before": [
+      {
+        "i": 0,
+        "value": "local:local",
+        "options": [
+          {
+            "value": "local:local",
+            "text": "Built-in local embeddings"
+          },
+          {
+            "value": "gemini:4",
+            "text": "gemini1"
+          },
+          {
+            "value": "ollama:21",
+            "text": "Ollama (Local)"
+          },
+          {
+            "value": "openai:5",
+            "text": "op1"
+          }
+        ]
+      },
+      {
+        "i": 1,
+        "value": "all-MiniLM-L6-v2",
+        "options": [
+          {
+            "value": "all-MiniLM-L6-v2",
+            "text": "Local MiniLM"
+          }
+        ]
+      },
+      {
+        "i": 2,
+        "value": "384",
+        "options": [
+          {
+            "value": "384",
+            "text": "384"
+          }
+        ]
+      },
+      {
+        "i": 3,
+        "value": "",
+        "options": [
+          {
+            "value": "",
+            "text": "Built-in Chroma"
+          },
+          {
+            "value": "19",
+            "text": "gemini-1536 (qdrant)"
+          }
+        ]
+      },
+      {
+        "i": 4,
+        "value": "fixed_text",
+        "options": [
+          {
+            "value": "fixed_text",
+            "text": "Fixed text"
+          },
+          {
+            "value": "json_structure",
+            "text": "JSON structure"
+          },
+          {
+            "value": "csv_rows",
+            "text": "CSV rows"
+          }
+        ]
+      },
+      {
+        "i": 5,
+        "value": "auto",
+        "options": [
+          {
+            "value": "auto",
+            "text": "Auto"
+          },
+          {
+            "value": "txt",
+            "text": "TXT"
+          },
+          {
+            "value": "csv",
+            "text": "CSV"
+          },
+          {
+            "value": "json",
+            "text": "JSON"
+          },
+          {
+            "value": "pdf",
+            "text": "PDF"
+          },
+          {
+            "value": "docx",
+            "text": "DOCX"
+          }
+        ]
+      }
+    ],
+    "10-1536_embedding_test": "Embedding test passed: 1536 dimensions, batch 2, 1642 ms.",
+    "10-1536_saved_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": 4,
+      "embedding_provider": "gemini",
+      "embedding_model": "gemini-embedding-2",
+      "embedding_dims": 1536,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": 19,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "10-1536_document": {
+      "id": 8,
+      "agent_id": 6,
+      "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+      "document_type": "txt",
+      "file_size_bytes": 291,
+      "num_chunks": 1,
+      "status": "completed",
+      "error_message": null,
+      "upload_date": "2026-05-03T16:29:41.425058",
+      "processed_date": "2026-05-03T16:29:41.948610",
+      "tags": [],
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "embedding_provider_instance_id": 4,
+      "embedding_provider": "gemini",
+      "embedding_model": "gemini-embedding-2",
+      "embedding_dims": 1536,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": 19,
+      "vector_collection_name": "kb_e1f9f2d476_6_1536",
+      "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "index_version": 1
+    },
+    "10-1536_search_results": [
+      {
+        "chunk_id": 17,
+        "knowledge_id": 8,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+        "similarity": 0.8103488353200587,
+        "chunk_index": 0
+      }
+    ],
+    "10-1536_playground_snippet": "通\nTSUSHIN\nBETA\nTHINK, SECURE, BUILD\nWatcher\nStudio\nHub\nFlows\nPlayground\nCore\nOnline\nT\nTest Owner\nTsushin QA\nLogout\nAGENTS\n12\nTsushin\nVertexAgent\nmovl\nGemini1\nTranscript\nJira QA Agent\nShellboy\nCustomerService\narchsec\nJira Agent\nEmail Agent\nGemma4\nPROJECTS\n1\nNo project active\nTHREADS\n3\nGeneral Conversation\nSANDBOXED TOOLS\n9\n9 available\nGeneral Conversation\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n0\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\n\nNo messages in working memory\n\nThread: playground_u1_a6_t412",
+    "20-768_selects_before": [
+      {
+        "i": 0,
+        "value": "gemini:4",
+        "options": [
+          {
+            "value": "local:local",
+            "text": "Built-in local embeddings"
+          },
+          {
+            "value": "gemini:4",
+            "text": "gemini1"
+          },
+          {
+            "value": "ollama:21",
+            "text": "Ollama (Local)"
+          },
+          {
+            "value": "openai:5",
+            "text": "op1"
+          }
+        ]
+      },
+      {
+        "i": 1,
+        "value": "gemini-embedding-2",
+        "options": [
+          {
+            "value": "gemini-embedding-2",
+            "text": "Gemini Embedding 2"
+          },
+          {
+            "value": "gemini-embedding-001",
+            "text": "Gemini Embedding 001"
+          }
+        ]
+      },
+      {
+        "i": 2,
+        "value": "1536",
+        "options": [
+          {
+            "value": "768",
+            "text": "768"
+          },
+          {
+            "value": "1536",
+            "text": "1536"
+          },
+          {
+            "value": "3072",
+            "text": "3072"
+          }
+        ]
+      },
+      {
+        "i": 3,
+        "value": "19",
+        "options": [
+          {
+            "value": "",
+            "text": "Built-in Chroma"
+          },
+          {
+            "value": "19",
+            "text": "gemini-1536 (qdrant)"
+          }
+        ]
+      },
+      {
+        "i": 4,
+        "value": "fixed_text",
+        "options": [
+          {
+            "value": "fixed_text",
+            "text": "Fixed text"
+          },
+          {
+            "value": "json_structure",
+            "text": "JSON structure"
+          },
+          {
+            "value": "csv_rows",
+            "text": "CSV rows"
+          }
+        ]
+      },
+      {
+        "i": 5,
+        "value": "auto",
+        "options": [
+          {
+            "value": "auto",
+            "text": "Auto"
+          },
+          {
+            "value": "txt",
+            "text": "TXT"
+          },
+          {
+            "value": "csv",
+            "text": "CSV"
+          },
+          {
+            "value": "json",
+            "text": "JSON"
+          },
+          {
+            "value": "pdf",
+            "text": "PDF"
+          },
+          {
+            "value": "docx",
+            "text": "DOCX"
+          }
+        ]
+      }
+    ],
+    "20-768_embedding_test": "Embedding test passed: 768 dimensions, batch 2, 1644 ms.",
+    "20-768_saved_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": 4,
+      "embedding_provider": "gemini",
+      "embedding_model": "gemini-embedding-2",
+      "embedding_dims": 768,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": 19,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "20-768_document": {
+      "id": 9,
+      "agent_id": 6,
+      "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+      "document_type": "txt",
+      "file_size_bytes": 291,
+      "num_chunks": 1,
+      "status": "completed",
+      "error_message": null,
+      "upload_date": "2026-05-03T16:30:06.393335",
+      "processed_date": "2026-05-03T16:30:06.871914",
+      "tags": [],
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "embedding_provider_instance_id": 4,
+      "embedding_provider": "gemini",
+      "embedding_model": "gemini-embedding-2",
+      "embedding_dims": 768,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": 19,
+      "vector_collection_name": "kb_e1f9f2d476_6_768",
+      "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "index_version": 1
+    },
+    "20-768_search_results": [
+      {
+        "chunk_id": 18,
+        "knowledge_id": 9,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "content": "Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.\nThe owner is Ilya Moreno.\nThe secret phrase is LEAD-768-CEDAR.\nThe support queue is verdant-bridge.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+        "similarity": 0.8157894414819957,
+        "chunk_index": 0
+      },
+      {
+        "chunk_id": 17,
+        "knowledge_id": 8,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+        "similarity": 0.7677270517824066,
+        "chunk_index": 0
+      }
+    ],
+    "20-768_playground_snippet": "ROJECTS\n1\nNo project active\nTHREADS\n3\nFor the lead KB regression sample using 1536...\nSANDBOXED TOOLS\n9\n9 available\nFor the lead KB regression sample using 1536...\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\n\nFor the lead KB regression sample using 1536 dimensions:\n\nOwner: Selene Vega\nSupport Queue: argent-lane\nReview Date: 2026-05-03\nSecret Phrase: LEAD-1536-QUARTZ\n01:29 PM\n1 doc used\n(Agent)\nU\nFor the lead KB regression sample using 768 dimensions, report the owner, support queue, review date, and secret phrase.\n01:30 PM\nAI\nFor the lead KB regression sample using 768 dimensions:\n*   **Owner:** Ilya Moreno\n*   **Support Queue:** verdant-bridge\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-768-CEDAR\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n2\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\nUser\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"user_id\":1,\"thread_id\":412}\nAssistant\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"thread_id\":412,\"kb_used\":[{\"document_name\":\"lead-kb-1536-2026-05-03T16-29-31-534Z.txt\",\"similarity\":0.9,\"chunk_index\":0}]}\nThread: playground_u1_a6_t412",
+    "coexistence_search_after_768": [
+      {
+        "chunk_id": 17,
+        "knowledge_id": 8,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+        "similarity": 0.8139896825179762,
+        "chunk_index": 0
+      },
+      {
+        "chunk_id": 18,
+        "knowledge_id": 9,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "content": "Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.\nThe owner is Ilya Moreno.\nThe secret phrase is LEAD-768-CEDAR.\nThe support queue is verdant-bridge.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+        "similarity": 0.7977219231677958,
+        "chunk_index": 0
+      }
+    ]
+  },
+  "project_kb": {
+    "create_modal_text": "",
+    "create_modal_has_custom_embedding_controls": false,
+    "created_project_id": 5,
+    "created_project_name": "Lead Custom Embedding Project 2026-05-03T16-29-31-534Z",
+    "detail_kb_text_excerpt": "Knowledge Base\nMemory\nFacts\nConversations\nAccess\nKnowledge Base\nUpload Document\nChunking Settings\nEmbedding Model\nMiniLM L6 v2 (Fast, Good)\nMPNet Base v2 (Better Quality)\nMultilingual (PT/EN/ES)\nChunk Size\nChunk Overlap\nDocuments (0)\nNo documents uploaded yet\n©\n2026 Tsushin. Think, Secure, Build.\ntsn-core\nv0.7.0",
+    "detail_has_custom_embedding_controls": false
+  },
+  "long_term_memory": {
+    "case_memory_list": {
+      "items": [
+        {
+          "id": 232,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "agent_id": 1,
+          "wake_event_id": 514,
+          "continuous_run_id": null,
+          "flow_run_id": 27497,
+          "origin_kind": "flow_run",
+          "trigger_kind": "email",
+          "subject_digest": "gmail:19dee4e424d94fee",
+          "problem_summary": "[email:email.message.received]\n\n{\n  \"email_trigger_id\": 18,\n  \"gmail_account_email\": \"movl2007@gmail.com\",\n  \"gmail_integration_id\": 1,\n  \"message\": {\n    \"attachments\": [],\n    \"bcc\": \"\",\n    \"body_html\": \"<!doctype html><html xmlns=\\\"http://www.w3.org/1999/xhtml\\\" xmlns:v=\\\"urn:schemas-microsoft-com:vml\\\" xmlns:o=\\\"urn:schemas-microsoft-com:office:office\\\"><head><title></title><!--[if !mso]><!-- --><meta http-equiv=\\\"X-UA-Compatible\\\" content=\\\"IE=edge\\\"><!--<![endif]--><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/html; charset=UTF-8\\\"><meta name=\\\"viewport\\\" content=\\\"width=device-width,initial-scale=1\\\"><style type=\\\"text/css\\\">#outlook a { padding:0; }\\r\\n          body { margin:0;padding:0;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%; }\\r\\n          table, td { border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt; }\\r\\n          img { border:0;height:auto;line-height:100%; outline:none;text-decoration:none;-ms-interpolation-mode:bicubic; }\\r\\n          p { display:block;margin:13px 0; }</style><!--[if mso]>\\r\\n        <xml>\\r\\n        <o:OfficeDocumentSettings>\\r\\n          <o:AllowPNG/>\\r\\n          <o:PixelsPerInch>96</o:PixelsPerInch>\\r\\n        </o:OfficeDocumentSettings>\\r\\n        </xml>\\r\\n        <![endif]--><!--[if lte mso 11]>\\r\\n        <style type=\\\"text/css\\\">\\r\\n          .mj-outlook-group-fix { width:100% !important; }\\r\\n        </style>\\r\\n        <![endif]--><!--[if !mso]><!--><link href=\\\"https://fonts.googleapis.com/css?family=Ubuntu:300,400,500,700\\\" rel=\\\"stylesheet\\\" type=\\\"text/css\\\"><style type=\\\"text/css\\\">@import url(https://fonts.googleapis.com/css?family=Ubuntu:300,400,500,700);</style><!--<![endif]--><style type=\\\"text/css\\\">@media only screen and (min-width:480px) {\\r\\n        .mj-column-per-100 { width:100% !important; max-width: 100%; }\\r\\n      }</style><style type=\\\"text/css\\\">@media only screen and (max-width:480px) {\\r\\n      table.mj-full-width-mobile { width: 100% !important; }\\r\\n      td.mj-full-width-mobile { width: auto !important; }\\r\\n    }</style><style type=\\\"text…",
+          "action_summary": "{\"flow_run_id\": 27497, \"flow_definition_id\": 101, \"status\": \"completed\", \"started_at\": \"2026-05-03T14:46:56.349548\", \"completed_at\": \"2026-05-03T14:46:56.365393\", \"duration_ms\": 15, \"steps_executed\": 1, \"steps_successful\": 1, \"steps_failed\": 0, \"total_execution_time_ms\": 1, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 255, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 1, \"output_summary\": \"Status: completed\", \"error\": null}]}",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "vector_store_instance_id": null,
+          "embedding_provider": "local",
+          "embedding_model": "all-MiniLM-L6-v2",
+          "embedding_dims": 384,
+          "embedding_metric": "cosine",
+          "embedding_task": null,
+          "vector_refs_json": [
+            {
+              "kind": "problem",
+              "vector_id": "case_flow_run_27497_problem"
+            },
+            {
+              "kind": "action",
+              "vector_id": "case_flow_run_27497_action"
+            },
+            {
+              "kind": "outcome",
+              "vector_id": "case_flow_run_27497_outcome"
+            }
+          ],
+          "index_status": "indexed",
+          "summary_status": "generated",
+          "occurred_at": "2026-05-03T14:46:38",
+          "indexed_at": "2026-05-03T14:46:56.827566",
+          "last_recalled_at": null,
+          "created_at": "2026-05-03T14:46:56.528103",
+          "updated_at": "2026-05-03T14:46:56.828458"
+        },
+        {
+          "id": 231,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "agent_id": 1,
+          "wake_event_id": 513,
+          "continuous_run_id": null,
+          "flow_run_id": 26053,
+          "origin_kind": "flow_run",
+          "trigger_kind": "email",
+          "subject_digest": "gmail:19ded70cf73762c4",
+          "problem_summary": "[email:email.message.received]\n\n{\n  \"email_trigger_id\": 18,\n  \"gmail_account_email\": \"movl2007@gmail.com\",\n  \"gmail_integration_id\": 1,\n  \"message\": {\n    \"attachments\": [],\n    \"bcc\": \"\",\n    \"body_html\": \"\",\n    \"body_text\": \"Dear Customer,\\r\\n\\r\\nThis is a courtesy message from VoIP.ms\\r\\n\\r\\nYour account 383677 balance has dropped below $10 \\r\\nYour current balance is $9.55\\r\\n\\r\\nYou may refill your account balance by heading to the following link: https://voip.ms/payment\\r\\n\\r\\nTo change the balance threshold for balance notifications or if you do not wish to receive email notifications from our system anymore, You may do so by logging into the control panel and disabling this feature by selecting 'Account Settings' from the Main Menu.\\r\\n\\r\\nDo not reply to this email, we will not receive your message. Email our support directly if you have questions regarding this email.\\r\\n\\r\\nRegards,\\r\\nVoIP.ms\\r\\n\\r\\n\",\n    \"cc\": \"\",\n    \"cursor\": \"1777805086000:19ded70cf73762c4\",\n    \"date\": \"Sun, 3 May 2026 06:44:46 -0400\",\n    \"from\": \"\\\"VoIP.ms\\\" <noreply@voip.ms>\",\n    \"historyId\": \"15855656\",\n    \"id\": \"19ded70cf73762c4\",\n    \"internalDate\": \"1777805086000\",\n    \"labels\": [\n      \"UNREAD\",\n      \"CATEGORY_UPDATES\",\n      \"INBOX\"\n    ],\n    \"snippet\": \"Dear Customer, This is a courtesy message from VoIP.ms Your account 383677 balance has dropped below $10 Your current balance is $9.55 You may refill your account balance by heading to the following\",\n    \"subject\": \"VoIP.ms - Low Balance\",\n    \"threadId\": \"19ded70cf73762c4\",\n    \"to\": \"movl2007@gmail.com\"\n  },\n  \"provider\": \"gmail\",\n  \"raw_event\": {\n    \"historyId\": \"15855656\",\n    \"id\": \"19ded70cf73762c4\",\n    \"internalDate\": \"1777805086000\",\n    \"labelIds\": [\n      \"UNREAD\",\n      \"CATEGORY_UPDATES\",\n      \"INBOX\"\n    ],\n    \"threadId\": \"19ded70cf73762c4\"\n  }\n}",
+          "action_summary": "{\"flow_run_id\": 26053, \"flow_definition_id\": 101, \"status\": \"completed\", \"started_at\": \"2026-05-03T10:45:36.537368\", \"completed_at\": \"2026-05-03T10:45:36.545971\", \"duration_ms\": 8, \"steps_executed\": 1, \"steps_successful\": 1, \"steps_failed\": 0, \"total_execution_time_ms\": 0, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 255, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}]}",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "vector_store_instance_id": null,
+          "embedding_provider": "local",
+          "embedding_model": "all-MiniLM-L6-v2",
+          "embedding_dims": 384,
+          "embedding_metric": "cosine",
+          "embedding_task": null,
+          "vector_refs_json": [
+            {
+              "kind": "problem",
+              "vector_id": "case_flow_run_26053_problem"
+            },
+            {
+              "kind": "action",
+              "vector_id": "case_flow_run_26053_action"
+            },
+            {
+              "kind": "outcome",
+              "vector_id": "case_flow_run_26053_outcome"
+            }
+          ],
+          "index_status": "indexed",
+          "summary_status": "generated",
+          "occurred_at": "2026-05-03T10:44:46",
+          "indexed_at": "2026-05-03T10:45:36.779723",
+          "last_recalled_at": null,
+          "created_at": "2026-05-03T10:45:36.632997",
+          "updated_at": "2026-05-03T10:45:36.779905"
+        },
+        {
+          "id": 230,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "agent_id": 1,
+          "wake_event_id": 512,
+          "continuous_run_id": null,
+          "flow_run_id": 25936,
+          "origin_kind": "flow_run",
+          "trigger_kind": "email",
+          "subject_digest": "gmail:19ded5f39f5445b7",
+          "problem_summary": "[email:email.message.received]\n\n{\n  \"email_trigger_id\": 18,\n  \"gmail_account_email\": \"movl2007@gmail.com\",\n  \"gmail_integration_id\": 1,\n  \"message\": {\n    \"attachments\": [],\n    \"bcc\": \"\",\n    \"body_html\": \"<div style='font-size:10.0pt;line-height:106%;font-family: \\\"Tahoma\\\",\\\"Arial\\\"' ><p>Marcos V L Penha,</p><p>Esta mensagem refere-se à Nota Fiscal de Serviço Eletrônica convertida pelo RPS &nbsp;número <strong>81238</strong> referente ao serviço prestado no dia 03/05/26 04:37:59 pela empresa:</p><p>Razão Social: SMARTFIT ESCOLA DE GINASTICA E DANCA SA<br/>Nome Fantasia: <strong>SMARTFIT ESCOLA DE GINASTICA E DANCA SA</strong><br/>CNPJ: 07594978041524<br/>Telefone: <a href=\\\"tel:\\\"></a><br/>E-mail: <a href=\\\"mailto:\\\"></a><br/></p><p>O código de verificação da nota é <strong>32052001207594978041524000000016373226050625989519</strong> e deverá ser informado juntamente com o número da NFS-e <strong>163732</strong> caso queira consulta a autenticidade no site do município.<br/>Este e-mail foi enviado automaticamente e não possui o acompanhamento por pessoas. Favor não responder.<br/>Se necessário, entre em contato diretamente com a empresa prestadora do serviço.</p><p>&nbsp;</p><p>Atenciosamente,</p><p>SMARTFIT ESCOLA DE GINASTICA E DANCA SA.</p></div><a style=\\\"display:block;\\\" href=\\\"https://consulta.invoicy.com.br:443/hnuc002.aspx?WBYR1yeDF%2bbzcCjS2AkRoq6cnj5vOgjQ5bla%2bTyhqzc%3d,0,0,0\\\">Link para Baixar o XML</a><a style=\\\"display:block;\\\" href=\\\"https://consulta.invoicy.com.br:443/downloadpdf.aspx?WBYR1yeDF%2bbzcCjS2AkRoq6cnj5vOgjQ5bla%2bTyhqzc%3d\\\">Link para Baixar o PDF</a>\",\n    \"body_text\": \"\",\n    \"cc\": \"\",\n    \"cursor\": \"1777803933000:19ded5f39f5445b7\",\n    \"date\": \"Sun, 3 May 2026 10:25:33 +0000\",\n    \"from\": \"SMARTFIT ESCOLA DE GINASTICA E DANCA SA <invoicy@migrate.info>\",\n    \"historyId\": \"15855599\",\n    \"id\": \"19ded5f39f5445b7\",\n    \"internalDate\": \"1777803933000\",\n    \"labels\": [\n      \"UNREAD\",\n      \"CATEGORY_UPDATES\",\n      \"INBOX\"\n    ],\n    \"snippet\": \"Marcos VL Penha, Esta mensagem refere-se à Nota Fiscal de Serviço Eletrô…",
+          "action_summary": "{\"flow_run_id\": 25936, \"flow_definition_id\": 101, \"status\": \"completed\", \"started_at\": \"2026-05-03T10:26:17.698035\", \"completed_at\": \"2026-05-03T10:26:17.705492\", \"duration_ms\": 7, \"steps_executed\": 1, \"steps_successful\": 1, \"steps_failed\": 0, \"total_execution_time_ms\": 0, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 255, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}]}",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "vector_store_instance_id": null,
+          "embedding_provider": "local",
+          "embedding_model": "all-MiniLM-L6-v2",
+          "embedding_dims": 384,
+          "embedding_metric": "cosine",
+          "embedding_task": null,
+          "vector_refs_json": [
+            {
+              "kind": "problem",
+              "vector_id": "case_flow_run_25936_problem"
+            },
+            {
+              "kind": "action",
+              "vector_id": "case_flow_run_25936_action"
+            },
+            {
+              "kind": "outcome",
+              "vector_id": "case_flow_run_25936_outcome"
+            }
+          ],
+          "index_status": "indexed",
+          "summary_status": "generated",
+          "occurred_at": "2026-05-03T10:25:33",
+          "indexed_at": "2026-05-03T10:26:17.992815",
+          "last_recalled_at": null,
+          "created_at": "2026-05-03T10:26:17.812128",
+          "updated_at": "2026-05-03T10:26:17.993117"
+        },
+        {
+          "id": 229,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "agent_id": 1,
+          "wake_event_id": 511,
+          "continuous_run_id": null,
+          "flow_run_id": 23781,
+          "origin_kind": "flow_run",
+          "trigger_kind": "email",
+          "subject_digest": "gmail:19dec16112d50dde",
+          "problem_summary": "[email:email.message.received]\n\n{\n  \"email_trigger_id\": 18,\n  \"gmail_account_email\": \"movl2007@gmail.com\",\n  \"gmail_integration_id\": 1,\n  \"message\": {\n    \"attachments\": [],\n    \"bcc\": \"\",\n    \"body_html\": \"<!doctype html><html xmlns=\\\"http://www.w3.org/1999/xhtml\\\" xmlns:v=\\\"urn:schemas-microsoft-com:vml\\\" xmlns:o=\\\"urn:schemas-microsoft-com:office:office\\\"><head><title></title><!--[if !mso]><!-- --><meta http-equiv=\\\"X-UA-Compatible\\\" content=\\\"IE=edge\\\"><!--<![endif]--><meta http-equiv=\\\"Content-Type\\\" content=\\\"text/html; charset=UTF-8\\\"><meta name=\\\"viewport\\\" content=\\\"width=device-width,initial-scale=1\\\"><style type=\\\"text/css\\\">#outlook a { padding:0; }\\r\\n          body { margin:0;padding:0;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%; }\\r\\n          table, td { border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt; }\\r\\n          img { border:0;height:auto;line-height:100%; outline:none;text-decoration:none;-ms-interpolation-mode:bicubic; }\\r\\n          p { display:block;margin:13px 0; }</style><!--[if mso]>\\r\\n        <xml>\\r\\n        <o:OfficeDocumentSettings>\\r\\n          <o:AllowPNG/>\\r\\n          <o:PixelsPerInch>96</o:PixelsPerInch>\\r\\n        </o:OfficeDocumentSettings>\\r\\n        </xml>\\r\\n        <![endif]--><!--[if lte mso 11]>\\r\\n        <style type=\\\"text/css\\\">\\r\\n          .mj-outlook-group-fix { width:100% !important; }\\r\\n        </style>\\r\\n        <![endif]--><!--[if !mso]><!--><link href=\\\"https://fonts.googleapis.com/css?family=Ubuntu:300,400,500,700\\\" rel=\\\"stylesheet\\\" type=\\\"text/css\\\"><style type=\\\"text/css\\\">@import url(https://fonts.googleapis.com/css?family=Ubuntu:300,400,500,700);</style><!--<![endif]--><style type=\\\"text/css\\\">@media only screen and (min-width:480px) {\\r\\n        .mj-column-per-100 { width:100% !important; max-width: 100%; }\\r\\n      }</style><style type=\\\"text/css\\\">@media only screen and (max-width:480px) {\\r\\n      table.mj-full-width-mobile { width: 100% !important; }\\r\\n      td.mj-full-width-mobile { width: auto !important; }\\r\\n    }</style><style type=\\\"text…",
+          "action_summary": "{\"flow_run_id\": 23781, \"flow_definition_id\": 101, \"status\": \"completed\", \"started_at\": \"2026-05-03T04:26:12.374893\", \"completed_at\": \"2026-05-03T04:26:12.387123\", \"duration_ms\": 12, \"steps_executed\": 1, \"steps_successful\": 1, \"steps_failed\": 0, \"total_execution_time_ms\": 1, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 255, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 1, \"output_summary\": \"Status: completed\", \"error\": null}]}",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "vector_store_instance_id": null,
+          "embedding_provider": "local",
+          "embedding_model": "all-MiniLM-L6-v2",
+          "embedding_dims": 384,
+          "embedding_metric": "cosine",
+          "embedding_task": null,
+          "vector_refs_json": [
+            {
+              "kind": "problem",
+              "vector_id": "case_flow_run_23781_problem"
+            },
+            {
+              "kind": "action",
+              "vector_id": "case_flow_run_23781_action"
+            },
+            {
+              "kind": "outcome",
+              "vector_id": "case_flow_run_23781_outcome"
+            }
+          ],
+          "index_status": "indexed",
+          "summary_status": "generated",
+          "occurred_at": "2026-05-03T04:26:01",
+          "indexed_at": "2026-05-03T04:26:12.879618",
+          "last_recalled_at": null,
+          "created_at": "2026-05-03T04:26:12.651830",
+          "updated_at": "2026-05-03T04:26:12.880043"
+        },
+        {
+          "id": 228,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "agent_id": 1,
+          "wake_event_id": 510,
+          "continuous_run_id": null,
+          "flow_run_id": 18924,
+          "origin_kind": "flow_run",
+          "trigger_kind": "email",
+          "subject_digest": "gmail:19de92c6743a1e55",
+          "problem_summary": "[email:email.message.received]\n\n{\n  \"email_trigger_id\": 18,\n  \"gmail_account_email\": \"movl2007@gmail.com\",\n  \"gmail_integration_id\": 1,\n  \"message\": {\n    \"attachments\": [],\n    \"bcc\": \"\",\n    \"body_html\": \"<!DOCTYPE html>\\r\\n<html\\r\\n  lang=\\\"en\\\"\\r\\n  xmlns=\\\"http://www.w3.org/1999/xhtml\\\"\\r\\n  xmlns:v=\\\"urn:schemas-microsoft-com:vml\\\"\\r\\n  xmlns:o=\\\"urn:schemas-microsoft-com:office:office\\\"\\r\\n>\\r\\n  <head>\\r\\n    <meta charset=\\\"utf-8\\\" />\\r\\n    <meta name=\\\"viewport\\\" content=\\\"width=device-width\\\" />\\r\\n    <meta http-equiv=\\\"X-UA-Compatible\\\" content=\\\"IE=edge\\\" />\\r\\n    <meta name=\\\"x-apple-disable-message-reformatting\\\" />\\r\\n    <meta\\r\\n      name=\\\"format-detection\\\"\\r\\n      content=\\\"telephone=no,address=no,email=no,date=no,url=no\\\"\\r\\n    />\\r\\n    <meta name=\\\"color-scheme\\\" content=\\\"light\\\" />\\r\\n    <meta name=\\\"supported-color-schemes\\\" content=\\\"light\\\" />\\r\\n    <title></title>\\r\\n    <style type=\\\"text/css\\\">\\r\\n      :root {\\r\\n        color-scheme: light;\\r\\n        supported-color-schemes: light;\\r\\n      }\\r\\n\\r\\n      html,\\r\\n      body {\\r\\n        margin: 0 auto !important;\\r\\n        padding: 0 !important;\\r\\n        height: 100% !important;\\r\\n        width: 100% !important;\\r\\n      }\\r\\n\\r\\n      * {\\r\\n        -ms-text-size-adjust: 100%;\\r\\n        -webkit-text-size-adjust: 100%;\\r\\n      }\\r\\n\\r\\n      div[style*='margin: 16px 0'] {\\r\\n        margin: 0 !important;\\r\\n      }\\r\\n\\r\\n      #MessageViewBody,\\r\\n      #MessageWebViewDiv {\\r\\n        width: 100% !important;\\r\\n      }\\r\\n\\r\\n      table,\\r\\n      td {\\r\\n        mso-table-lspace: 0pt !important;\\r\\n        mso-table-rspace: 0pt !important;\\r\\n      }\\r\\n\\r\\n      img {\\r\\n        -ms-interpolation-mode: bicubic;\\r\\n      }\\r\\n\\r\\n      a {\\r\\n        text-decoration: none;\\r\\n      }\\r\\n\\r\\n      a[x-apple-data-detectors],\\r\\n      .unstyle-auto-detected-links a,\\r\\n      .aBn {\\r\\n        border-bottom: 0 !important;\\r\\n        cursor: default !important;\\r\\n        color: inherit !important;\\r\\n        text-decoration: none !important;\\r\\n  …",
+          "action_summary": "{\"flow_run_id\": 18924, \"flow_definition_id\": 101, \"status\": \"completed\", \"started_at\": \"2026-05-02T14:52:02.401785\", \"completed_at\": \"2026-05-02T14:52:02.415413\", \"duration_ms\": 13, \"steps_executed\": 1, \"steps_successful\": 1, \"steps_failed\": 0, \"total_execution_time_ms\": 1, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 255, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 1, \"output_summary\": \"Status: completed\", \"error\": null}]}",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "vector_store_instance_id": null,
+          "embedding_provider": "local",
+          "embedding_model": "all-MiniLM-L6-v2",
+          "embedding_dims": 384,
+          "embedding_metric": "cosine",
+          "embedding_task": null,
+          "vector_refs_json": [
+            {
+              "kind": "problem",
+              "vector_id": "case_flow_run_18924_problem"
+            },
+            {
+              "kind": "action",
+              "vector_id": "case_flow_run_18924_action"
+            },
+            {
+              "kind": "outcome",
+              "vector_id": "case_flow_run_18924_outcome"
+            }
+          ],
+          "index_status": "indexed",
+          "summary_status": "generated",
+          "occurred_at": "2026-05-02T14:51:34",
+          "indexed_at": "2026-05-02T14:52:06.300334",
+          "last_recalled_at": null,
+          "created_at": "2026-05-02T14:52:02.613307",
+          "updated_at": "2026-05-02T14:52:06.301124"
+        }
+      ],
+      "total": 113,
+      "limit": 5,
+      "offset": 0
+    },
+    "case_memory_search": {
+      "items": [
+        {
+          "case_id": 168,
+          "occurred_at_iso": "2026-05-01T16:52:05.266000",
+          "similarity": 0.4675340686298962,
+          "problem_summary": "[jira:jira.issue.detected]\n\n{\n  \"issue\": {\n    \"expand\": \"renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations\",\n    \"fields\": {\n      \"assignee\": null,\n      \"created\": \"2026-05-01T12:51:57.326-0400\",\n      \"description\": {\n        \"content\": [\n          {\n            \"content\": [\n              {\n                \"text\": \"A new Employee IT Request form has been submitted. A Internal Transfer request for Ryan Klinger on May 01, 2026 has been received. \",\n                \"type\": \"text\"\n              }\n            ],\n            \"type\": \"paragraph\"\n          },\n          {\n            \"content\": [\n              {\n                \"text\": \"If any changes need to be made to this ticket, please respond back to this email confirmation.\",\n                \"type\": \"text\"\n              }\n            ],\n            \"type\": \"paragraph\"\n          },\n          {\n            \"content\": [\n              {\n                \"text\": \"Thank You\",\n                \"type\": \"text\"\n              }\n            ],\n            \"type\": \"paragraph\"\n          },\n          {\n            \"attrs\": {\n              \"isNumberColumnEnabled\": false,\n              \"layout\": \"default\"\n            },\n            \"content\": [\n              {\n                \"content\": [\n                  {\n                    \"attrs\": {},\n                    \"content\": [\n                      {\n                        \"content\": [\n                          {\n                            \"marks\": [\n                              {\n                                \"type\": \"strong\"\n                              }\n                            ],\n                            \"text\": \"Email address\",\n                            \"type\": \"text\"\n                          }\n                        ],\n                        \"type\": \"paragraph\"\n                      }\n                    ],\n                    \"type\": \"tableHeader\"\n                  },\n                  {\n                    \"attrs\": {},\n                    \"content\": [\n                      {\n                        \"cont…",
+          "action_summary": "{\"flow_run_id\": 11387, \"flow_definition_id\": 110, \"status\": \"completed\", \"started_at\": \"2026-05-01T16:53:24.756591\", \"completed_at\": \"2026-05-01T16:53:25.779846\", \"duration_ms\": 1023, \"steps_executed\": 3, \"steps_successful\": 3, \"steps_failed\": 0, \"total_execution_time_ms\": 1000, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 274, \"step_name\": \"Criteria gate\", \"step_type\": \"gate\", \"position\": 2, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 273, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 276, \"step_name\": \"Notification\", \"step_type\": \"notification\", \"position\": 3, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 1000, \"output_summary\": \"Status: completed\", \"error\"…",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "origin_kind": "flow_run",
+          "trigger_kind": "jira",
+          "wake_event_id": null,
+          "continuous_run_id": null,
+          "flow_run_id": null
+        },
+        {
+          "case_id": 216,
+          "occurred_at_iso": "2026-05-01T16:34:42.818000",
+          "similarity": 0.4627117388487134,
+          "problem_summary": "[jira:jira.issue.detected]\n\n{\n  \"issue\": {\n    \"expand\": \"renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations\",\n    \"fields\": {\n      \"assignee\": {\n        \"accountId\": \"633dfa09234d44d406d4b587\",\n        \"accountType\": \"atlassian\",\n        \"active\": true,\n        \"avatarUrls\": {\n          \"16x16\": \"https://secure.gravatar.com/avatar/c2ca2c7d3b80bd5c3daccf081c24a5b6?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FMC-5.png\",\n          \"24x24\": \"https://secure.gravatar.com/avatar/c2ca2c7d3b80bd5c3daccf081c24a5b6?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FMC-5.png\",\n          \"32x32\": \"https://secure.gravatar.com/avatar/c2ca2c7d3b80bd5c3daccf081c24a5b6?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FMC-5.png\",\n          \"48x48\": \"https://secure.gravatar.com/avatar/c2ca2c7d3b80bd5c3daccf081c24a5b6?d=https%3A%2F%2Favatar-management--avatars.us-west-2.prod.public.atl-paas.net%2Finitials%2FMC-5.png\"\n        },\n        \"displayName\": \"Michelle Chan\",\n        \"emailAddress\": \"mchan@questrade.com\",\n        \"self\": \"https://questrade.atlassian.net/rest/api/3/user?accountId=633dfa09234d44d406d4b587\",\n        \"timeZone\": \"America/Toronto\"\n      },\n      \"created\": \"2026-05-01T12:33:56.896-0400\",\n      \"description\": {\n        \"content\": [\n          {\n            \"content\": [\n              {\n                \"text\": \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\",\n                \"type\": \"text\"\n              },\n              {\n                \"type\": \"hardBreak\"\n              },\n              {\n                \"text\": \"📋 SUPPORT REQUEST DETAILS\",\n                \"type\": \"text\"\n              },\n              {\n                \"type\": \"hardBreak\"\n              },\n              {\n                \"text\": \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\",\n                \"type\": \"text\"\n              }\n            ],\n            \"type\": \"paragraph\"\n          },\n          {\n            \"content\": [\n             …",
+          "action_summary": "{\"flow_run_id\": 11585, \"flow_definition_id\": 113, \"status\": \"completed\", \"started_at\": \"2026-05-01T17:18:21.380100\", \"completed_at\": \"2026-05-01T17:18:21.729428\", \"duration_ms\": 349, \"steps_executed\": 3, \"steps_successful\": 3, \"steps_failed\": 0, \"total_execution_time_ms\": 334, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 286, \"step_name\": \"Criteria gate\", \"step_type\": \"gate\", \"position\": 2, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 288, \"step_name\": \"JIRA WhatsApp notification\", \"step_type\": \"notification\", \"position\": 4, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 333, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 285, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 1, \"output_summary\": \"Status: complete…",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "origin_kind": "flow_run",
+          "trigger_kind": "jira",
+          "wake_event_id": 499,
+          "continuous_run_id": null,
+          "flow_run_id": null
+        },
+        {
+          "case_id": 177,
+          "occurred_at_iso": "2026-05-01T17:00:19.622000",
+          "similarity": 0.46222407558854633,
+          "problem_summary": "[jira:jira.issue.detected]\n\n{\n  \"issue\": {\n    \"expand\": \"renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations\",\n    \"fields\": {\n      \"assignee\": {\n        \"accountId\": \"712020:3fc8b78f-f715-47b6-9c80-d0d598dcc59d\",\n        \"accountType\": \"atlassian\",\n        \"active\": true,\n        \"avatarUrls\": {\n          \"16x16\": \"https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:3fc8b78f-f715-47b6-9c80-d0d598dcc59d/68a3516b-e4be-475d-8b3e-2447f9de90aa/16\",\n          \"24x24\": \"https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:3fc8b78f-f715-47b6-9c80-d0d598dcc59d/68a3516b-e4be-475d-8b3e-2447f9de90aa/24\",\n          \"32x32\": \"https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:3fc8b78f-f715-47b6-9c80-d0d598dcc59d/68a3516b-e4be-475d-8b3e-2447f9de90aa/32\",\n          \"48x48\": \"https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:3fc8b78f-f715-47b6-9c80-d0d598dcc59d/68a3516b-e4be-475d-8b3e-2447f9de90aa/48\"\n        },\n        \"displayName\": \"Rodrigo Cardoso de Olanda\",\n        \"emailAddress\": \"rolanda@questrade.com\",\n        \"self\": \"https://questrade.atlassian.net/rest/api/3/user?accountId=712020%3A3fc8b78f-f715-47b6-9c80-d0d598dcc59d\",\n        \"timeZone\": \"America/Toronto\"\n      },\n      \"created\": \"2026-04-29T09:41:55.018-0400\",\n      \"description\": {\n        \"content\": [\n          {\n            \"content\": [\n              {\n                \"text\": \"Following the termination of Cindy Jaglall (Email: cjaglall@questrade.com, Department: Client Services : Customer Service, Company: QuestEnterprise Inc., Business Entity: Brokerage : Enterprise Shared Services-163) on December 31, 2999, please proceed with the necessary actions to disable their access to Salesforce.\",\n                \"type\": \"text\"\n              }\n            ],\n            \"type\": \"paragraph\"\n          }\n        ],\n        \"type\": \"doc\",\n        \"version\": 1\n      },\n      \"issuetype\": {\n        \"avatarId\": 10554,\n        \"description\": \"A task that needs to be don…",
+          "action_summary": "{\"flow_run_id\": 11544, \"flow_definition_id\": 113, \"status\": \"completed\", \"started_at\": \"2026-05-01T17:18:06.893712\", \"completed_at\": \"2026-05-01T17:18:07.261769\", \"duration_ms\": 368, \"steps_executed\": 3, \"steps_successful\": 3, \"steps_failed\": 0, \"total_execution_time_ms\": 343, \"total_tokens\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0, \"estimated_cost\": 0.0}, \"tools_used\": [], \"step_results\": [{\"step_id\": 288, \"step_name\": \"JIRA WhatsApp notification\", \"step_type\": \"notification\", \"position\": 4, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 343, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 286, \"step_name\": \"Criteria gate\", \"step_type\": \"gate\", \"position\": 2, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: completed\", \"error\": null}, {\"step_id\": 285, \"step_name\": \"Source\", \"step_type\": \"source\", \"position\": 1, \"status\": \"completed\", \"retry_count\": 0, \"execution_time_ms\": 0, \"output_summary\": \"Status: complete…",
+          "outcome_summary": "outcome=resolved | status=completed",
+          "outcome_label": "resolved",
+          "origin_kind": "flow_run",
+          "trigger_kind": "jira",
+          "wake_event_id": 460,
+          "continuous_run_id": null,
+          "flow_run_id": null
+        }
+      ],
+      "scope": "tenant",
+      "k": 3,
+      "min_similarity": 0
+    },
+    "configuration_excerpt": "Vector Store\n\nSelect a vector store for long-term memory and knowledge retrieval. Leave blank to use the tenant default.\n\nUsing default: ChromaDB (built-in)\nUse Tenant Default\ngemini-1536 (qdrant)\nTrigger Keywords\n\nKeywords that will trigger this agent in group chats (e.g., @AgentName, mentions)\n\nAdd\nTrigger Configuration\n\nConfigure when this agent should respond. Leave blank to use system defaults.\n\nEnable DM Auto-Response\nAutomatically respond to direct messages (if unchecked, uses system default)\nGroup Filters\n\nGroup names to monitor. If empty, uses system default groups.\n\nAdd\nNumber Filters\n\nPhone numbers to monitor. If empty, uses system default numbers.\n\nAdd\nSkills-Based Configuration\n\nBuilt-in tools (Web Search, Web Scraping, Flight Search) are now managed in the Skills tab. This provides better configuration options, per-agent customization, and unified management.\n\n→ Go to Skills Configuration\nStatus Settings\nActive\nAgent can respond to messages when active\nDefault Agent\nThis agent will respond to contacts without specific agent assignments\nReset\nSave Configuration\n©\n2026 Tsushin. Think, Secure, Build.\ntsn-core\nv0.7.0",
+    "config_has_custom_embedding_controls": true,
+    "memory_has_custom_embedding_controls": false,
+    "settings_has_embedding2_controls": false
+  },
+  "cleanup": {
+    "deleted_agent_docs": [
+      {
+        "id": 9,
+        "name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt"
+      },
+      {
+        "id": 8,
+        "name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt"
+      }
+    ],
+    "restored_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "deleted_project_id": 5,
+    "final_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "final_agent_docs": [],
+    "final_projects_named": []
+  },
+  "bugs": [
+    {
+      "id": "BUG-QA-KB-LEAD-001",
+      "severity": "high",
+      "title": "Project KB does not expose Release 0.7.0 custom embedding provider/dimension/vector-store controls",
+      "create_modal_has_custom_embedding_controls": false,
+      "detail_has_custom_embedding_controls": false
+    }
+  ],
+  "assertions": [
+    {
+      "name": "Gemini Embedding 2 options expose 1536 and 768",
+      "pass": true,
+      "details": [
+        {
+          "provider": "local",
+          "provider_instance_id": null,
+          "instance_name": "Built-in local embeddings",
+          "vendor": "local",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "local",
+              "model": "all-MiniLM-L6-v2",
+              "label": "Local MiniLM",
+              "supported_dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "max_dimensions": 384,
+              "requires_provider_instance": false,
+              "supports_dimensions_parameter": false
+            }
+          ],
+          "default_model": "all-MiniLM-L6-v2",
+          "default_dimensions": 384,
+          "test_status": "built_in"
+        },
+        {
+          "provider": "gemini",
+          "provider_instance_id": 4,
+          "instance_name": "gemini1",
+          "vendor": "gemini",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-2",
+              "label": "Gemini Embedding 2",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-001",
+              "label": "Gemini Embedding 001",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "gemini-embedding-2",
+          "default_dimensions": 1536,
+          "test_status": "healthy"
+        },
+        {
+          "provider": "ollama",
+          "provider_instance_id": 21,
+          "instance_name": "Ollama (Local)",
+          "vendor": "ollama",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": "http://host.docker.internal:11434",
+          "models": [
+            {
+              "provider": "ollama",
+              "model": "nomic-embed-text",
+              "label": "nomic-embed-text",
+              "supported_dimensions": [],
+              "default_dimensions": null,
+              "max_dimensions": null,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "nomic-embed-text",
+          "default_dimensions": null,
+          "test_status": "unknown"
+        },
+        {
+          "provider": "openai",
+          "provider_instance_id": 5,
+          "instance_name": "op1",
+          "vendor": "openai",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-small",
+              "label": "OpenAI text-embedding-3-small",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                1536
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 1536,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-large",
+              "label": "OpenAI text-embedding-3-large",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                3072
+              ],
+              "default_dimensions": 3072,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "text-embedding-3-small",
+          "default_dimensions": 1536,
+          "test_status": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "External Qdrant vector store is available and healthy",
+      "pass": true,
+      "details": [
+        {
+          "id": 19,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "vendor": "qdrant",
+          "instance_name": "gemini-1536",
+          "description": "Wave 3 provisioned: Qdrant + Gemini 1536-d for case-memory v2 testing.",
+          "base_url": "http://vs-qdrant-0fe9a9f6-19:6333",
+          "credentials_configured": true,
+          "credentials_preview": "AIza...jEGY",
+          "extra_config": {
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-001",
+            "embedding_dims": 1536,
+            "embedding_metric": "cosine",
+            "embedding_task_document": "RETRIEVAL_DOCUMENT",
+            "embedding_task_query": "RETRIEVAL_QUERY",
+            "collection_name": "case_memory_tenant_20260406004333855618_c58c99"
+          },
+          "security_config": {},
+          "health_status": "healthy",
+          "health_status_reason": "Qdrant connected",
+          "last_health_check": "2026-04-29T22:00:18.247185",
+          "is_default": false,
+          "is_active": true,
+          "is_auto_provisioned": true,
+          "container_status": "running",
+          "container_name": "tsushin-vs-qdrant-0fe9a9f6-19",
+          "container_port": 6300,
+          "created_at": "2026-04-29T21:20:53.044105",
+          "updated_at": "2026-04-30T06:25:50.589994"
+        }
+      ]
+    },
+    {
+      "name": "10-1536: saved provider gemini",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "10-1536: saved provider instance 4",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "10-1536: saved model gemini-embedding-2",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "10-1536: saved dimensions 1536",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "10-1536: saved vector store",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "10-1536: document completed",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: document provider snapshot",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: document model snapshot",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: document dimension snapshot",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: document vector store snapshot",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: collection includes dims",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: namespace includes dims",
+      "pass": true,
+      "details": {
+        "id": 8,
+        "agent_id": 6,
+        "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:29:41.425058",
+        "processed_date": "2026-05-03T16:29:41.948610",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 1536,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_1536",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:1536",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "10-1536: API search returns uploaded canary",
+      "pass": true,
+      "details": [
+        {
+          "chunk_id": 17,
+          "knowledge_id": 8,
+          "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.8103488353200587,
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "name": "10-1536: Playground answer includes owner",
+      "pass": true,
+      "details": "通\nTSUSHIN\nBETA\nTHINK, SECURE, BUILD\nWatcher\nStudio\nHub\nFlows\nPlayground\nCore\nOnline\nT\nTest Owner\nTsushin QA\nLogout\nAGENTS\n12\nTsushin\nVertexAgent\nmovl\nGemini1\nTranscript\nJira QA Agent\nShellboy\nCustomerService\narchsec\nJira Agent\nEmail Agent\nGemma4\nPROJECTS\n1\nNo project active\nTHREADS\n3\nGeneral Conversation\nSANDBOXED TOOLS\n9\n9 available\nGeneral Conversation\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n0\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\n\nNo messages in working memory\n\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "10-1536: Playground answer includes queue",
+      "pass": true,
+      "details": "通\nTSUSHIN\nBETA\nTHINK, SECURE, BUILD\nWatcher\nStudio\nHub\nFlows\nPlayground\nCore\nOnline\nT\nTest Owner\nTsushin QA\nLogout\nAGENTS\n12\nTsushin\nVertexAgent\nmovl\nGemini1\nTranscript\nJira QA Agent\nShellboy\nCustomerService\narchsec\nJira Agent\nEmail Agent\nGemma4\nPROJECTS\n1\nNo project active\nTHREADS\n3\nGeneral Conversation\nSANDBOXED TOOLS\n9\n9 available\nGeneral Conversation\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n0\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\n\nNo messages in working memory\n\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "10-1536: Playground answer includes secret",
+      "pass": true,
+      "details": "通\nTSUSHIN\nBETA\nTHINK, SECURE, BUILD\nWatcher\nStudio\nHub\nFlows\nPlayground\nCore\nOnline\nT\nTest Owner\nTsushin QA\nLogout\nAGENTS\n12\nTsushin\nVertexAgent\nmovl\nGemini1\nTranscript\nJira QA Agent\nShellboy\nCustomerService\narchsec\nJira Agent\nEmail Agent\nGemma4\nPROJECTS\n1\nNo project active\nTHREADS\n3\nGeneral Conversation\nSANDBOXED TOOLS\n9\n9 available\nGeneral Conversation\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n0\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\n\nNo messages in working memory\n\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "20-768: saved provider gemini",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "20-768: saved provider instance 4",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "20-768: saved model gemini-embedding-2",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "20-768: saved dimensions 768",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "20-768: saved vector store",
+      "pass": true,
+      "details": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    {
+      "name": "20-768: document completed",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: document provider snapshot",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: document model snapshot",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: document dimension snapshot",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: document vector store snapshot",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: collection includes dims",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: namespace includes dims",
+      "pass": true,
+      "details": {
+        "id": 9,
+        "agent_id": 6,
+        "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+        "document_type": "txt",
+        "file_size_bytes": 291,
+        "num_chunks": 1,
+        "status": "completed",
+        "error_message": null,
+        "upload_date": "2026-05-03T16:30:06.393335",
+        "processed_date": "2026-05-03T16:30:06.871914",
+        "tags": [],
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "embedding_provider_instance_id": 4,
+        "embedding_provider": "gemini",
+        "embedding_model": "gemini-embedding-2",
+        "embedding_dims": 768,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": 19,
+        "vector_collection_name": "kb_e1f9f2d476_6_768",
+        "vector_namespace": "kb:tenant_20260406004333855618_c58c99:6:768",
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "index_version": 1
+      }
+    },
+    {
+      "name": "20-768: API search returns uploaded canary",
+      "pass": true,
+      "details": [
+        {
+          "chunk_id": 18,
+          "knowledge_id": 9,
+          "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.\nThe owner is Ilya Moreno.\nThe secret phrase is LEAD-768-CEDAR.\nThe support queue is verdant-bridge.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.8157894414819957,
+          "chunk_index": 0
+        },
+        {
+          "chunk_id": 17,
+          "knowledge_id": 8,
+          "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.7677270517824066,
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "name": "20-768: Playground answer includes owner",
+      "pass": true,
+      "details": "ROJECTS\n1\nNo project active\nTHREADS\n3\nFor the lead KB regression sample using 1536...\nSANDBOXED TOOLS\n9\n9 available\nFor the lead KB regression sample using 1536...\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\n\nFor the lead KB regression sample using 1536 dimensions:\n\nOwner: Selene Vega\nSupport Queue: argent-lane\nReview Date: 2026-05-03\nSecret Phrase: LEAD-1536-QUARTZ\n01:29 PM\n1 doc used\n(Agent)\nU\nFor the lead KB regression sample using 768 dimensions, report the owner, support queue, review date, and secret phrase.\n01:30 PM\nAI\nFor the lead KB regression sample using 768 dimensions:\n*   **Owner:** Ilya Moreno\n*   **Support Queue:** verdant-bridge\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-768-CEDAR\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n2\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\nUser\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"user_id\":1,\"thread_id\":412}\nAssistant\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"thread_id\":412,\"kb_used\":[{\"document_name\":\"lead-kb-1536-2026-05-03T16-29-31-534Z.txt\",\"similarity\":0.9,\"chunk_index\":0}]}\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "20-768: Playground answer includes queue",
+      "pass": true,
+      "details": "ROJECTS\n1\nNo project active\nTHREADS\n3\nFor the lead KB regression sample using 1536...\nSANDBOXED TOOLS\n9\n9 available\nFor the lead KB regression sample using 1536...\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\n\nFor the lead KB regression sample using 1536 dimensions:\n\nOwner: Selene Vega\nSupport Queue: argent-lane\nReview Date: 2026-05-03\nSecret Phrase: LEAD-1536-QUARTZ\n01:29 PM\n1 doc used\n(Agent)\nU\nFor the lead KB regression sample using 768 dimensions, report the owner, support queue, review date, and secret phrase.\n01:30 PM\nAI\nFor the lead KB regression sample using 768 dimensions:\n*   **Owner:** Ilya Moreno\n*   **Support Queue:** verdant-bridge\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-768-CEDAR\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n2\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\nUser\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"user_id\":1,\"thread_id\":412}\nAssistant\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"thread_id\":412,\"kb_used\":[{\"document_name\":\"lead-kb-1536-2026-05-03T16-29-31-534Z.txt\",\"similarity\":0.9,\"chunk_index\":0}]}\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "20-768: Playground answer includes secret",
+      "pass": true,
+      "details": "ROJECTS\n1\nNo project active\nTHREADS\n3\nFor the lead KB regression sample using 1536...\nSANDBOXED TOOLS\n9\n9 available\nFor the lead KB regression sample using 1536...\nU\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n01:29 PM\nAI\n\nFor the lead KB regression sample using 1536 dimensions:\n\nOwner: Selene Vega\nSupport Queue: argent-lane\nReview Date: 2026-05-03\nSecret Phrase: LEAD-1536-QUARTZ\n01:29 PM\n1 doc used\n(Agent)\nU\nFor the lead KB regression sample using 768 dimensions, report the owner, support queue, review date, and secret phrase.\n01:30 PM\nAI\nFor the lead KB regression sample using 768 dimensions:\n*   **Owner:** Ilya Moreno\n*   **Support Queue:** verdant-bridge\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-768-CEDAR\n▋\nMemory\nSkills\nKnowledge\nDebug\nConfig\nMemory Inspector\nWorking:\n2\nSemantic:\n0\nFacts:\n0\nWorking Memory\nSemantic\nFacts\nUser\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions, report the owner, support queue, review date, and secret phrase.\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"user_id\":1,\"thread_id\":412}\nAssistant\nMay 3, 01:29 PM\n\nFor the lead KB regression sample using 1536 dimensions:\n*   **Owner:** Selene Vega\n*   **Support Queue:** argent-lane\n*   **Review Date:** 2026-05-03\n*   **Secret Phrase:** LEAD-1536-QUARTZ\n\nMetadata: {\"source\":\"playground\",\"agent_id\":6,\"thread_id\":412,\"kb_used\":[{\"document_name\":\"lead-kb-1536-2026-05-03T16-29-31-534Z.txt\",\"similarity\":0.9,\"chunk_index\":0}]}\nThread: playground_u1_a6_t412"
+    },
+    {
+      "name": "1536 document remains searchable after switching active KB config to 768",
+      "pass": true,
+      "details": [
+        {
+          "chunk_id": 17,
+          "knowledge_id": 8,
+          "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.8139896825179762,
+          "chunk_index": 0
+        },
+        {
+          "chunk_id": 18,
+          "knowledge_id": 9,
+          "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.\nThe owner is Ilya Moreno.\nThe secret phrase is LEAD-768-CEDAR.\nThe support queue is verdant-bridge.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.7977219231677958,
+          "chunk_index": 0
+        }
+      ]
+    },
+    {
+      "name": "768 document participates in mixed-profile KB search",
+      "pass": true,
+      "details": [
+        {
+          "chunk_id": 17,
+          "knowledge_id": 8,
+          "document_name": "lead-kb-1536-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.\nThe owner is Selene Vega.\nThe secret phrase is LEAD-1536-QUARTZ.\nThe support queue is argent-lane.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.8139896825179762,
+          "chunk_index": 0
+        },
+        {
+          "chunk_id": 18,
+          "knowledge_id": 9,
+          "document_name": "lead-kb-768-2026-05-03T16-29-31-534Z.txt",
+          "content": "Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.\nThe owner is Ilya Moreno.\nThe secret phrase is LEAD-768-CEDAR.\nThe support queue is verdant-bridge.\nThe review date is 2026-05-03.\nThe vector storage target is the external auto-provisioned Qdrant store named gemini-1536.",
+          "similarity": 0.7977219231677958,
+          "chunk_index": 0
+        }
+      ]
+    }
+  ],
+  "completed_at": "2026-05-03T16:30:33.041Z",
+  "finished_at": "2026-05-03T16:30:33.497Z"
+}

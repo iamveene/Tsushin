@@ -149,7 +149,7 @@ class ExecutionMethod(str, Enum):
     RECURRING = "recurring"
     KEYWORD = "keyword"  # BUG-336: Fired when a message matches trigger_keywords
     # v0.7.0 Wave 2/4: Triggers↔Flows Unification — flow is woken by a trigger
-    # event (jira/email/github/schedule/webhook) via flow_trigger_binding.
+    # event (jira/email/github/webhook) via flow_trigger_binding.
     # Wave 2 already added 'triggered' to the legacy VALID_EXECUTION_METHODS set
     # used by the BUG-342 path, but the Pydantic enum used by POST /api/flows/create
     # was missed — caught by Wave 4 deep-link prefill QA when the modal silently
@@ -261,7 +261,7 @@ class FlowStepConfig(BaseModel):
     # trigger_context['source'] is absent).
     trigger_kind: Optional[str] = Field(
         default=None,
-        description="Source-step: 'jira'|'email'|'github'|'schedule'|'webhook'",
+        description="Source-step: 'jira'|'email'|'github'|'webhook'",
     )
     trigger_instance_id: Optional[int] = Field(
         default=None,
@@ -487,6 +487,13 @@ class FlowResponse(BaseModel):
     # `node_count`. v2 callers should read `step_count` but the alias stays
     # populated so clients migrating from legacy don't break.
     node_count: int = 0
+
+    # v0.7.0 release-finishing — system-managed trigger flow metadata.
+    # Mirrors FlowDefinitionResponse so v2 callers see the same fields.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None
 
     @model_validator(mode="after")
     def _mirror_step_node_count(self):

@@ -40,6 +40,7 @@ class AgentService:
         project_id: Optional[int] = None,
         user_id: Optional[int] = None,
         disable_skills: bool = False,
+        team_run_id: Optional[int] = None,
     ):
         """
         Initialize Agent Service.
@@ -55,6 +56,8 @@ class AgentService:
             on_tool_complete_callback: Async callback(recipient, message) for long-running tool notifications
             project_id: Project ID if in project context (Phase 16)
             user_id: User ID for combined KB (Phase 16)
+            team_run_id: Agent Team run context for callers that persist or
+                retrieve memory around this invocation.
 
         Note: Ring buffer memory deprecated - use Multi-Agent Memory Manager instead
         Note: Legacy tools (search, scraping) migrated to Skills system
@@ -70,6 +73,7 @@ class AgentService:
         self.project_id = project_id  # Phase 16: Project context
         self.user_id = user_id  # Phase 16: User context for combined KB
         self.disable_skills = disable_skills  # A2A: prevent recursive tool use
+        self.team_run_id = team_run_id  # Agent Teams Phase 4 memory scope context
         self.logger = logging.getLogger(__name__)
 
         # Phase 5.0: Initialize knowledge service if agent_id and db provided
@@ -632,6 +636,9 @@ class AgentService:
         if skill_class and skill_tools:
             from agent.skills.base import InboundMessage as SkillInboundMessage, SkillResult
 
+            skill_message_metadata = {}
+            if self.team_run_id is not None:
+                skill_message_metadata["team_run_id"] = self.team_run_id
             skill_message = SkillInboundMessage(
                 id=f"tool_call_{tool_name}",
                 sender=sender_key or "tool_caller",
@@ -642,6 +649,7 @@ class AgentService:
                 is_group=False,
                 timestamp=datetime.utcnow(),
                 channel="tool",
+                metadata=skill_message_metadata or None,
             )
 
             if is_shell_tool:
@@ -1360,6 +1368,36 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         ollama_tools.extend(skill_tools)
                     elif skill_tools:
                         ollama_tools = skill_tools
+
+                if self.team_run_id is not None:
+                    try:
+                        from agent.skills.team_scratch_skill import TeamScratchSkill
+
+                        scratch_tool_defs = []
+                        for mcp_def in TeamScratchSkill.get_all_mcp_tool_definitions():
+                            scratch_tool_defs.append(
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": mcp_def["name"],
+                                        "description": mcp_def.get("description", ""),
+                                        "parameters": mcp_def.get("inputSchema", {"type": "object", "properties": {}}),
+                                    },
+                                }
+                            )
+                        skill_tools.extend(scratch_tool_defs)
+                        scratch_prompt = self._build_skill_tools_prompt(scratch_tool_defs)
+                        if scratch_prompt:
+                            system_prompt_with_date = f"{system_prompt_with_date}\n{scratch_prompt}"
+                        if ollama_tools is not None:
+                            ollama_tools.extend(scratch_tool_defs)
+                        else:
+                            ollama_tools = list(scratch_tool_defs)
+                        self.logger.info(
+                            f"[TEAM SCRATCH] Exposed {len(scratch_tool_defs)} team scratch tools for run {self.team_run_id}"
+                        )
+                    except Exception as scratch_tool_err:
+                        self.logger.warning(f"[TEAM SCRATCH] Error exposing team scratch tools: {scratch_tool_err}")
             except Exception as e:
                 self.logger.warning(f"[SKILL TOOLS] Error getting skill tools: {e}")
 
@@ -1504,6 +1542,8 @@ IMPORTANT: When the user asks for system information, server status, file listin
                         skill_message_metadata = {}
                         if self.config.get("comm_depth") is not None:
                             skill_message_metadata["comm_depth"] = self.config["comm_depth"]
+                        if self.team_run_id is not None:
+                            skill_message_metadata["team_run_id"] = self.team_run_id
                         skill_message = SkillInboundMessage(
                             id=f"tool_call_{tool_name}",
                             sender=sender_key or "tool_caller",

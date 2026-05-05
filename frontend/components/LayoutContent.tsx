@@ -119,7 +119,14 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
 
   // Check if nav item is active
   const isActive = (href: string, activePrefix?: string) => {
-    if (href === '/') return pathname === '/'
+    if (href === '/') {
+      return pathname === '/' ||
+        pathname?.startsWith('/wake-events') ||
+        pathname?.startsWith('/continuous-agents')
+    }
+    if (href === '/agents') {
+      return pathname?.startsWith('/agents') || pathname?.startsWith('/studio')
+    }
     const prefix = activePrefix || href
     return pathname?.startsWith(prefix)
   }

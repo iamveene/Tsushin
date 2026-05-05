@@ -1,12 +1,56 @@
 import os
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger, ForeignKeyConstraint, CheckConstraint, and_
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from datetime import datetime
+from enum import Enum
 
 Base = declarative_base()
+
+
+class TeamTopology(str, Enum):
+    LINE = "line"
+    MESH = "mesh"
+
+
+class TeamStatus(str, Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ARCHIVED = "archived"
+
+
+class TeamRunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    GOAL_NOT_ACHIEVED = "goal_not_achieved"
+    TIMEOUT = "timeout"
+    SENTINEL_BLOCKED = "sentinel_blocked"
+
+
+class TeamMemberRunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class TeamTriggerKind(str, Enum):
+    GITHUB = "github"
+    JIRA = "jira"
+    WEBHOOK = "webhook"
+    GMAIL = "gmail"
+
+
+class TeamMemberRole(str, Enum):
+    MEMBER = "member"
+    COORDINATOR = "coordinator"
 
 
 def get_remote_access_stack_name() -> str:
@@ -148,10 +192,12 @@ class Memory(Base):
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent - per-agent memory isolation
     sender_key = Column(String(255), nullable=False, index=True)  # chat_id or phone number
     messages_json = Column(JSON, default=list)  # [{"role": "user", "content": "...", "timestamp": "..."}]
+    team_run_id = Column(Integer, ForeignKey("agent_team_run.id", ondelete="SET NULL"), nullable=True, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
         Index('idx_memory_tenant_agent_sender', 'tenant_id', 'agent_id', 'sender_key'),
+        Index('idx_memory_tenant_agent_sender_team_run', 'tenant_id', 'agent_id', 'sender_key', 'team_run_id'),
     )
 
 
@@ -422,6 +468,12 @@ class Agent(Base):
     is_active = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)  # Default agent for new chats
 
+    # Agent Teams (v0.7.0 Phase 1): inert flags until Team Builder/orchestrator
+    # phases wire service behavior around them.
+    is_team_member = Column(Boolean, default=False, nullable=False)
+    current_team_id = Column(Integer, ForeignKey("agent_team.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_internal = Column(Boolean, default=False, nullable=False)
+
     # Phase 7.6.2: Multi-tenancy support
     tenant_id = Column(String(50), nullable=True, index=True)  # FK to tenant
     user_id = Column(Integer, nullable=True, index=True)  # FK to user who created the agent
@@ -433,6 +485,24 @@ class Agent(Base):
     # Relationships
     # hub_integration removed - use AgentSkillIntegration for skill provider configuration
     whatsapp_integration = relationship("WhatsAppMCPInstance", foreign_keys=[whatsapp_integration_id])
+    current_team = relationship(
+        "AgentTeam",
+        primaryjoin=lambda: and_(
+            Agent.tenant_id == AgentTeam.tenant_id,
+            Agent.current_team_id == AgentTeam.id,
+        ),
+        foreign_keys=lambda: [Agent.tenant_id, Agent.current_team_id],
+        post_update=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "current_team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            name="fk_agent_tenant_current_team",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_tenant_id_id"),
+    )
 
 
 class ContactAgentMapping(Base):
@@ -984,6 +1054,41 @@ class MCPServerHealth(Base):
     checked_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AgentKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-agent knowledge-base indexing defaults.
+    Stores the current KB embedding/vector/chunking contract; each
+    AgentKnowledge row snapshots these values when a document is indexed.
+    """
+    __tablename__ = "agent_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=800)
+    chunk_overlap = Column(Integer, nullable=False, default=100)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'agent_id', name='uq_agent_knowledge_config_tenant_agent'),
+        Index('idx_agent_knowledge_config_tenant_agent', 'tenant_id', 'agent_id'),
+    )
+
+
 class AgentKnowledge(Base):
     """
     Phase 5.0: Knowledge Base System
@@ -993,6 +1098,7 @@ class AgentKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # "pdf", "txt", "docx", "csv", "json"
     file_path = Column(String(500), nullable=False)  # Path to stored file
@@ -1002,6 +1108,20 @@ class AgentKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1178,6 +1298,7 @@ class ProjectKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, nullable=False, index=True)  # FK to Project
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # pdf, txt, csv, json, etc.
     file_path = Column(String(500), nullable=False)
@@ -1187,7 +1308,57 @@ class ProjectKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProjectKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-project knowledge-base indexing defaults.
+
+    Mirrors AgentKnowledgeConfig so project KB can use external embedding
+    providers and multi-index vector stores without mutating existing docs.
+    """
+    __tablename__ = "project_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=500)
+    chunk_overlap = Column(Integer, nullable=False, default=50)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'project_id', name='uq_project_knowledge_config_tenant_project'),
+        Index('idx_project_knowledge_config_tenant_project', 'tenant_id', 'project_id'),
+    )
 
 
 class ProjectKnowledgeChunk(Base):
@@ -2762,8 +2933,18 @@ class SentinelProfileAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    profile = relationship("SentinelProfile", backref="assignments")
-    agent = relationship("Agent", backref="sentinel_profile_assignments")
+    # passive_deletes=True on both backrefs: profile_id is CASCADE+NOT NULL
+    # (deleting a SentinelProfile would fail without this) and agent_id is
+    # CASCADE+nullable=True (without this the row is left as a zombie with NULL
+    # agent_id instead of being deleted as the CASCADE intends).
+    profile = relationship(
+        "SentinelProfile",
+        backref=backref("assignments", passive_deletes=True),
+    )
+    agent = relationship(
+        "Agent",
+        backref=backref("sentinel_profile_assignments", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "skill_type", name="uq_sentinel_profile_assignment_scope"),
@@ -3392,40 +3573,6 @@ class JiraChannelInstance(Base):
     )
 
 
-class ScheduleChannelInstance(Base):
-    """Persisted cron-style trigger configuration for scheduled wake events."""
-
-    __tablename__ = "schedule_channel_instance"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
-    integration_name = Column(String(100), nullable=False)
-    cron_expression = Column(String(120), nullable=False)
-    timezone = Column(String(64), default="UTC", nullable=False)
-    payload_template = Column(JSON, nullable=True)
-    trigger_criteria = Column(JSON, nullable=True)
-    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-    status = Column(String(20), default="active", nullable=False)
-    health_status = Column(String(20), default="unknown", nullable=False)
-    health_status_reason = Column(String(500), nullable=True)
-    last_health_check = Column(DateTime, nullable=True)
-    last_activity_at = Column(DateTime, nullable=True)
-    last_cursor = Column(String(255), nullable=True)
-    next_fire_at = Column(DateTime, nullable=True, index=True)
-    last_fire_at = Column(DateTime, nullable=True)
-    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        Index("idx_schedule_channel_instance_tenant", "tenant_id"),
-        Index("idx_schedule_channel_instance_status", "status"),
-        Index("idx_schedule_channel_instance_next_fire_at", "next_fire_at"),
-        Index("idx_schedule_channel_instance_default_agent_id", "default_agent_id"),
-    )
-
-
 class GitHubChannelInstance(Base):
     """Persisted GitHub trigger configuration for signed webhook deliveries."""
 
@@ -3434,12 +3581,17 @@ class GitHubChannelInstance(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
     integration_name = Column(String(100), nullable=False)
-    auth_method = Column(String(20), default="pat", nullable=False)  # pat | app
+    # v0.7.0-fix Phase 3: GitHub triggers MUST link to a Hub GitHubIntegration
+    # row. Per-trigger PATs were removed; the trigger reads its credentials
+    # from the linked integration at call time.
+    github_integration_id = Column(
+        Integer,
+        ForeignKey("github_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     repo_owner = Column(String(100), nullable=False)
     repo_name = Column(String(100), nullable=False)
-    installation_id = Column(String(64), nullable=True)
-    pat_token_encrypted = Column(Text, nullable=True)
-    pat_token_preview = Column(String(32), nullable=True)
     webhook_secret_encrypted = Column(Text, nullable=True)
     webhook_secret_preview = Column(String(32), nullable=True)
     events = Column(JSON, nullable=True)
@@ -3530,6 +3682,13 @@ class ContinuousAgent(Base):
     tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(128), nullable=True)
+    # v0.7.0-fix Phase 6: every continuous agent must declare its purpose so
+    # operators understand what it does without reading the wrapped Agent's
+    # system prompt.
+    purpose = Column(Text, nullable=True)
+    # action_kind codifies the four shapes a continuous agent can take:
+    # tool_run | send_message | conditional_branch | react_only.
+    action_kind = Column(String(32), nullable=True)
     execution_mode = Column(String(16), default="hybrid", nullable=False)  # autonomous | hybrid | notify_only
     delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
     budget_policy_id = Column(Integer, ForeignKey("budget_policy.id", ondelete="SET NULL"), nullable=True)
@@ -3612,6 +3771,7 @@ class WakeEvent(Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "channel_type", "channel_instance_id", "dedupe_key", name="uq_wake_event_dedupe"),
+        UniqueConstraint("tenant_id", "id", name="uq_wake_event_tenant_id_id"),
         Index("ix_wake_event_tenant_occurred", "tenant_id", "occurred_at"),
         Index("ix_wake_event_continuous_agent", "continuous_agent_id", "occurred_at"),
         Index("ix_wake_event_subscription", "continuous_subscription_id", "occurred_at"),
@@ -3647,6 +3807,345 @@ class ContinuousRun(Base):
     __table_args__ = (
         Index("ix_continuous_run_tenant_status", "tenant_id", "status", "started_at"),
         Index("ix_continuous_run_agent_started", "continuous_agent_id", "started_at"),
+    )
+
+
+class AgentTeam(Base):
+    """Tenant-owned multi-agent team definition (v0.7.0 Agent Teams Phase 1)."""
+    __tablename__ = "agent_team"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    goal_text = Column(Text, nullable=True)
+    topology = Column(String(16), default=TeamTopology.LINE.value, nullable=False)
+    status = Column(String(16), default=TeamStatus.DRAFT.value, nullable=False)
+    coordinator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    sentinel_profile_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True, index=True)
+    max_steps = Column(Integer, default=10, nullable=False)
+    max_total_tokens = Column(Integer, nullable=True)
+    max_concurrent_runs = Column(Integer, default=1, nullable=False)
+    tools_json = Column(JSON, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    coordinator_agent = relationship(
+        "Agent",
+        primaryjoin=lambda: and_(
+            AgentTeam.tenant_id == Agent.tenant_id,
+            AgentTeam.coordinator_agent_id == Agent.id,
+        ),
+        foreign_keys=lambda: [AgentTeam.tenant_id, AgentTeam.coordinator_agent_id],
+    )
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
+    sentinel_profile = relationship("SentinelProfile", foreign_keys=[sentinel_profile_id])
+    members = relationship(
+        "AgentTeamMember",
+        back_populates="team",
+        cascade="save-update, merge",
+        passive_deletes=True,
+        order_by="AgentTeamMember.execution_order",
+    )
+    triggers = relationship(
+        "AgentTeamTrigger",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    runs = relationship(
+        "AgentTeamRun",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "coordinator_agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            name="fk_agent_team_tenant_coordinator_agent",
+        ),
+        UniqueConstraint("tenant_id", "name", name="uq_agent_team_tenant_name"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_tenant_id_id"),
+        Index("ix_agent_team_tenant_status", "tenant_id", "status"),
+    )
+
+
+class AgentTeamMember(Base):
+    """Agent membership in one team. v0.7.0 enforces one team per agent."""
+    __tablename__ = "agent_team_member"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    role = Column(String(16), default=TeamMemberRole.MEMBER.value, nullable=False)
+    execution_order = Column(Integer, nullable=True)
+    is_required = Column(Boolean, default=True, nullable=False)
+    position_x = Column(Float, nullable=True)
+    position_y = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="members")
+    agent = relationship("Agent", overlaps="members,team")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("team_id", "agent_id", name="uq_agent_team_member_team_agent"),
+        UniqueConstraint("agent_id", name="uq_agent_team_member_agent"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_member_tenant_id_id"),
+        Index("ix_agent_team_member_tenant_team", "tenant_id", "team_id"),
+        Index("ix_agent_team_member_agent", "agent_id"),
+    )
+
+
+class AgentTeamTrigger(Base):
+    """Trigger binding prepared for later team-run dispatch phases."""
+    __tablename__ = "agent_team_trigger"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    trigger_kind = Column(String(32), nullable=False)
+    config_json = Column(JSON, nullable=True)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="triggers")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_agent_team_trigger_tenant_kind", "tenant_id", "trigger_kind"),
+        Index("ix_agent_team_trigger_team_enabled", "team_id", "is_enabled"),
+    )
+
+
+class AgentTeamRun(Base):
+    """Execution history for one Agent Team run."""
+    __tablename__ = "agent_team_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    status = Column(String(24), default=TeamRunStatus.PENDING.value, nullable=False)
+    trigger_event_id = Column(Integer, ForeignKey("wake_event.id", ondelete="SET NULL"), nullable=True, index=True)
+    goal_text_snapshot = Column(Text, nullable=True)
+    topology_snapshot = Column(String(16), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    total_steps = Column(Integer, default=0, nullable=False)
+    completed_steps = Column(Integer, default=0, nullable=False)
+    failed_steps = Column(Integer, default=0, nullable=False)
+    final_output_summary = Column(Text, nullable=True)
+    error_json = Column(JSON, nullable=True)
+    total_input_tokens = Column(Integer, default=0, nullable=False)
+    total_output_tokens = Column(Integer, default=0, nullable=False)
+    total_cost_cents = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="runs")
+    trigger_event = relationship(
+        "WakeEvent",
+        primaryjoin=lambda: and_(
+            AgentTeamRun.tenant_id == WakeEvent.tenant_id,
+            AgentTeamRun.trigger_event_id == WakeEvent.id,
+        ),
+        foreign_keys=lambda: [AgentTeamRun.tenant_id, AgentTeamRun.trigger_event_id],
+        viewonly=True,
+    )
+    member_runs = relationship(
+        "AgentTeamMemberRun",
+        back_populates="team_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AgentTeamMemberRun.step_index",
+    )
+    scratch_items = relationship(
+        "TeamRunScratch",
+        back_populates="team_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "trigger_event_id"],
+            ["wake_event.tenant_id", "wake_event.id"],
+            name="fk_agent_team_run_tenant_trigger_event",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_run_tenant_id_id"),
+        UniqueConstraint("tenant_id", "team_id", "id", name="uq_agent_team_run_tenant_team_id_id"),
+        Index("ix_agent_team_run_tenant_status_started", "tenant_id", "status", "started_at"),
+        Index("ix_agent_team_run_team_started", "team_id", "started_at"),
+        Index("ix_agent_team_run_trigger_event", "trigger_event_id"),
+    )
+
+
+class AgentTeamMemberRun(Base):
+    """Per-member audit row inside one team run."""
+    __tablename__ = "agent_team_member_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_run_id = Column(Integer, nullable=False, index=True)
+    agent_team_member_id = Column(
+        Integer,
+        ForeignKey("agent_team_member.id", ondelete="SET NULL", name="fk_agent_team_member_run_member_id"),
+        nullable=True,
+        index=True,
+    )
+    agent_id = Column(Integer, nullable=True, index=True)
+    step_index = Column(Integer, nullable=False)
+    status = Column(String(16), default=TeamMemberRunStatus.PENDING.value, nullable=False)
+    input_context_json = Column(JSON, nullable=True)
+    output_text = Column(Text, nullable=True)
+    output_summary = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, default=0, nullable=False)
+    output_tokens = Column(Integer, default=0, nullable=False)
+    sentinel_decision_json = Column(JSON, nullable=True)
+    error_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team_run = relationship("AgentTeamRun", back_populates="member_runs")
+    team_member = relationship("AgentTeamMember", foreign_keys=[agent_team_member_id], overlaps="member_runs,team_run")
+    agent = relationship("Agent", overlaps="member_runs,team_member,team_run")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_team_member_id"],
+            ["agent_team_member.tenant_id", "agent_team_member.id"],
+            name="fk_agent_team_member_run_tenant_member",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        Index("ix_agent_team_member_run_tenant", "tenant_id", "team_run_id"),
+        Index("ix_agent_team_member_run_run_step", "team_run_id", "step_index"),
+        Index("ix_agent_team_member_run_agent", "agent_id", "started_at"),
+    )
+
+
+class TeamRunScratch(Base):
+    """Cross-agent scratch state scoped to one team run."""
+    __tablename__ = "team_run_scratch"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    team_run_id = Column(Integer, nullable=False, index=True)
+    key = Column(String(255), nullable=False)
+    value_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", overlaps="scratch_items")
+    team_run = relationship("AgentTeamRun", back_populates="scratch_items", overlaps="team")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.team_id", "agent_team_run.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "team_run_id", "key", name="uq_team_run_scratch_tenant_run_key"),
+        Index("ix_team_run_scratch_tenant_run", "tenant_id", "team_run_id"),
+        Index("ix_team_run_scratch_team", "team_id"),
+    )
+
+
+class AgentTeamMemberA2ASnapshot(Base):
+    """Serialized external A2A permission state captured while an agent is in a team."""
+    __tablename__ = "agent_team_member_a2a_snapshot"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    permission_id = Column(Integer, ForeignKey("agent_communication_permission.id", ondelete="SET NULL"), nullable=True, index=True)
+    permission_payload_json = Column(JSON, nullable=False)
+    disabled_at = Column(DateTime, nullable=True)
+    restored_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    team = relationship("AgentTeam")
+    agent = relationship("Agent", overlaps="team")
+    permission = relationship(
+        "AgentCommunicationPermission",
+        primaryjoin=lambda: and_(
+            AgentTeamMemberA2ASnapshot.tenant_id == AgentCommunicationPermission.tenant_id,
+            AgentTeamMemberA2ASnapshot.permission_id == AgentCommunicationPermission.id,
+        ),
+        foreign_keys=lambda: [
+            AgentTeamMemberA2ASnapshot.tenant_id,
+            AgentTeamMemberA2ASnapshot.permission_id,
+        ],
+        viewonly=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "permission_id"],
+            ["agent_communication_permission.tenant_id", "agent_communication_permission.id"],
+            name="fk_agent_team_a2a_snapshot_tenant_permission",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "team_id",
+            "agent_id",
+            "permission_id",
+            name="uq_agent_team_a2a_snapshot_tenant_permission",
+        ),
+        Index("ix_agent_team_a2a_snapshot_tenant_team", "tenant_id", "team_id"),
+        Index("ix_agent_team_a2a_snapshot_agent", "agent_id"),
     )
 
 
@@ -3965,7 +4464,12 @@ class ConversationTag(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="tags")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL, so let Postgres delete
+    # the tag rather than letting SQLAlchemy NULL the FK first (which would fail).
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("tags", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_tag_tenant_user", "tenant_id", "user_id"),
@@ -3991,7 +4495,12 @@ class ConversationInsight(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="insights")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL — same rationale as
+    # ConversationTag above.
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("insights", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_insight_tenant_user", "tenant_id", "user_id"),
@@ -4017,8 +4526,18 @@ class ConversationLink(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    source_thread = relationship("ConversationThread", foreign_keys=[source_thread_id], backref="outgoing_links")
-    target_thread = relationship("ConversationThread", foreign_keys=[target_thread_id], backref="incoming_links")
+    # passive_deletes=True: both *_thread_id columns are CASCADE+NOT NULL, so
+    # let Postgres delete the link row when either thread is removed.
+    source_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[source_thread_id],
+        backref=backref("outgoing_links", passive_deletes=True),
+    )
+    target_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[target_thread_id],
+        backref=backref("incoming_links", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_link_tenant_user", "tenant_id", "user_id"),
@@ -4047,7 +4566,9 @@ class MessageQueue(Base):
     status = Column(String(20), nullable=False, default="pending", index=True)
     # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
-    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=True, index=True)
+    team_id = Column(Integer, nullable=True, index=True)
+    team_run_id = Column(Integer, nullable=True, index=True)
     sender_key = Column(String(255), nullable=False)
 
     payload = Column(JSON, nullable=False)
@@ -4067,7 +4588,25 @@ class MessageQueue(Base):
     completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "((message_type = 'team_run' AND agent_id IS NULL AND team_id IS NOT NULL AND team_run_id IS NOT NULL) "
+            "OR (message_type != 'team_run' AND agent_id IS NOT NULL))",
+            name="ck_mq_agent_or_team_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            name="fk_mq_tenant_team",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.id"],
+            name="fk_mq_tenant_team_run",
+            ondelete="CASCADE",
+        ),
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
+        Index("ix_mq_tenant_team_status", "tenant_id", "team_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
     )
 
@@ -4182,11 +4721,24 @@ class AgentCommunicationPermission(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    source_agent = relationship("Agent", foreign_keys=[source_agent_id], backref="outgoing_comm_permissions")
-    target_agent = relationship("Agent", foreign_keys=[target_agent_id], backref="incoming_comm_permissions")
+    # passive_deletes=True: the FK is ondelete="CASCADE" + NOT NULL, so we let
+    # Postgres delete the row when the parent agent is removed instead of letting
+    # SQLAlchemy try to UPDATE ... SET <agent_id>=NULL first (which violates the
+    # NOT NULL constraint and surfaces as a 409 in the agent delete endpoint).
+    source_agent = relationship(
+        "Agent",
+        foreign_keys=[source_agent_id],
+        backref=backref("outgoing_comm_permissions", passive_deletes=True),
+    )
+    target_agent = relationship(
+        "Agent",
+        foreign_keys=[target_agent_id],
+        backref=backref("incoming_comm_permissions", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_comm_perm_tenant_id_id"),
         Index("ix_agent_comm_perm_tenant", "tenant_id"),
         Index("ix_agent_comm_perm_source", "source_agent_id"),
         Index("ix_agent_comm_perm_target", "target_agent_id"),
@@ -4214,6 +4766,7 @@ class AgentCommunicationSession(Base):
     total_messages = Column(Integer, default=0)
     error_text = Column(Text, nullable=True)
     parent_session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="SET NULL"), nullable=True)
+    team_run_id = Column(Integer, ForeignKey("agent_team_run.id", ondelete="SET NULL"), nullable=True, index=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
@@ -4221,11 +4774,13 @@ class AgentCommunicationSession(Base):
     initiator_agent = relationship("Agent", foreign_keys=[initiator_agent_id])
     target_agent_rel = relationship("Agent", foreign_keys=[target_agent_id])
     parent_session = relationship("AgentCommunicationSession", remote_side=[id], backref="child_sessions")
+    team_run = relationship("AgentTeamRun")
     messages = relationship("AgentCommunicationMessage", back_populates="session", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_agent_comm_session_tenant", "tenant_id"),
         Index("ix_agent_comm_session_tenant_status", "tenant_id", "status"),
+        Index("ix_agent_comm_session_tenant_team_run", "tenant_id", "team_run_id"),
         Index("ix_agent_comm_session_initiator", "initiator_agent_id", "started_at"),
         Index("ix_agent_comm_session_target", "target_agent_id"),
     )
@@ -4321,6 +4876,230 @@ class VectorStoreInstance(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "instance_name", name="uq_vector_store_instance_tenant_name"),
         Index("idx_vsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+class VectorStoreIndex(Base):
+    """
+    v0.7.0: Immutable logical/physical index inside a VectorStoreInstance.
+
+    A VectorStoreInstance is the container/cluster/connection. This table
+    records each purpose + owner + embedding contract as a separate
+    collection/index/namespace within that shared connection.
+    """
+    __tablename__ = "vector_store_index"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    purpose = Column(String(32), nullable=False, index=True)  # agent_kb|project_kb|case_memory
+    owner_type = Column(String(32), nullable=False)
+    owner_id = Column(Integer, nullable=False)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False)
+    embedding_model = Column(String(128), nullable=False)
+    embedding_dims = Column(Integer, nullable=False)
+    embedding_metric = Column(String(24), nullable=False, default="cosine")
+    embedding_task_document = Column(String(64), nullable=True)
+    embedding_task_query = Column(String(64), nullable=True)
+    physical_collection_name = Column(String(255), nullable=False)
+    physical_namespace = Column(String(255), nullable=False)
+    physical_index_name = Column(String(255), nullable=True)
+    contract_hash = Column(String(24), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "vector_store_instance_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "contract_hash",
+            name="uq_vector_store_index_contract_owner",
+        ),
+        Index(
+            "idx_vector_store_index_lookup",
+            "tenant_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "embedding_dims",
+        ),
+    )
+
+
+class CaseMemory(Base):
+    """
+    v0.7.0 Trigger Case Memory MVP — compact post-execution case record.
+
+    Each row is one terminal trigger-driven execution. Up to three vectors
+    (problem/action/outcome) are stored in the configured vector store with
+    deterministic IDs ``case_{origin_kind}_{run_id}_{kind}`` and metadata
+    that joins back to this row via ``case_id``. The embedding contract
+    (provider/model/dims/metric/task) used at write time is stamped here so
+    a tenant that later switches their default ``VectorStoreInstance`` to a
+    different model does not retroactively invalidate older cases.
+
+    Per-tenant gate via ``Tenant.case_memory_enabled`` (DB column, settable
+    from the tenant settings UI; defaults TRUE so every tenant gets the
+    feature out of the box). Opting out is a tenant-level decision.
+    """
+
+    __tablename__ = "case_memory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    agent_id = Column(
+        Integer,
+        ForeignKey("agent.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    wake_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    continuous_run_id = Column(
+        Integer,
+        ForeignKey("continuous_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    flow_run_id = Column(
+        Integer,
+        ForeignKey("flow_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    team_run_id = Column(
+        Integer,
+        ForeignKey("agent_team_run.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    origin_kind = Column(String(24), nullable=False)  # continuous_run | flow_run
+    trigger_kind = Column(String(32), nullable=True)  # email | webhook | jira | github
+    subject_digest = Column(String(128), nullable=True)
+    problem_summary = Column(Text, nullable=True)
+    action_summary = Column(Text, nullable=True)
+    outcome_summary = Column(Text, nullable=True)
+    outcome_label = Column(String(24), nullable=False, default="unknown")
+    # ^ resolved | failed | skipped | escalated | unknown
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    vector_store_index_id = Column(
+        Integer,
+        ForeignKey("vector_store_index.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(32), nullable=True)
+    embedding_model = Column(String(128), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(24), nullable=True)
+    embedding_task = Column(String(64), nullable=True)
+    vector_refs_json = Column(JSON, nullable=True)
+    index_status = Column(String(16), nullable=False, default="pending")
+    # ^ pending | indexed | partial | failed | skipped
+    summary_status = Column(String(16), nullable=False, default="generated")
+    # ^ generated | fallback | unavailable
+    occurred_at = Column(DateTime, nullable=True)
+    indexed_at = Column(DateTime, nullable=True)
+    last_recalled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_case_memory_tenant_agent_occurred", "tenant_id", "agent_id", "occurred_at"),
+        Index("ix_case_memory_tenant_team_run", "tenant_id", "team_run_id"),
+    )
+
+
+class TriggerRecapConfig(Base):
+    """
+    v0.7.x Trigger Memory Recap — per-trigger configuration row.
+
+    One row per ``(tenant_id, trigger_kind, trigger_instance_id)``. When
+    ``enabled=True`` and the parent tenant has ``case_memory_recap_enabled``
+    set TRUE, the trigger dispatcher expands ``query_template`` (Jinja2
+    sandboxed) against the redacted wake event payload, calls
+    ``case_memory_service.search_similar_cases`` with the configured
+    scope/k/min_similarity/vector_kind, renders ``format_template``, and
+    attaches the rendered text to the queue payload under
+    ``memory_recap``. The queue worker injects the recap into the
+    agent's first-turn user message (or as a system addendum, depending
+    on ``inject_position``) so the LLM cannot ignore relevant past
+    cases by cherry-picking the wrong tool result.
+
+    ``trigger_instance_id`` is a *semantic* FK into the per-kind channel
+    tables (email_channel_instance / jira_channel_instance /
+    github_channel_instance / webhook_integration). Cleanup on trigger
+    DELETE is the caller's responsibility.
+
+    Master tenant gate: ``Tenant.case_memory_recap_enabled`` (DB column,
+    settable from the tenant settings UI). Per-trigger ``enabled`` field
+    defaults FALSE so existing triggers don't get recap retroactively;
+    operators opt in by toggling on the trigger detail page or wizard.
+    """
+
+    __tablename__ = "trigger_recap_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'email' | 'jira' | 'github' | 'webhook' (semantic FK).
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+    # Jinja2 template expanded against the redacted payload.
+    query_template = Column(Text, nullable=False, default="")
+    # 'agent' | 'trigger_kind' | 'trigger_instance'
+    scope = Column(String(24), nullable=False, default="trigger_instance")
+    k = Column(Integer, nullable=False, default=3)
+    min_similarity = Column(Float, nullable=False, default=0.35)
+    vector_kind = Column(String(16), nullable=False, default="problem")
+    include_failed = Column(Boolean, nullable=False, default=True)
+    format_template = Column(Text, nullable=False, default="")
+    # 'prepend_user_msg' | 'system_addendum'
+    inject_position = Column(String(24), nullable=False, default="prepend_user_msg")
+    max_recap_chars = Column(Integer, nullable=False, default=1500)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_trigger_recap_config_unique",
+        ),
+        Index(
+            "ix_trigger_recap_config_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id",
+        ),
     )
 
 

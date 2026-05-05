@@ -40,10 +40,8 @@ sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
 
 from api import routes_email_triggers as email_routes  # noqa: E402
 from api.routes_email_triggers import (  # noqa: E402
-    EmailNotificationSubscriptionRequest,
     EmailTriggerCreate,
     EmailTriggerUpdate,
-    create_email_notification_subscription,
     create_email_trigger,
     create_email_triage_subscription,
     delete_email_trigger,
@@ -62,13 +60,17 @@ from models import (  # noqa: E402
     Config,
     DeliveryPolicy,
     EmailChannelInstance,
+    FlowDefinition,
+    FlowNode,
+    FlowNodeRun,
+    FlowRun,
+    FlowTriggerBinding,
     GmailIntegration,
     GitHubChannelInstance,
     HubIntegration,
     JiraChannelInstance,
     JiraIntegration,
     OAuthToken,
-    ScheduleChannelInstance,
     SentinelProfile,
     WakeEvent,
     WebhookIntegration,
@@ -101,10 +103,14 @@ def db_session():
             OAuthToken.__table__,
             GmailIntegration.__table__,
             JiraIntegration.__table__,
+            FlowDefinition.__table__,
+            FlowNode.__table__,
+            FlowRun.__table__,
+            FlowNodeRun.__table__,
+            FlowTriggerBinding.__table__,
             EmailChannelInstance.__table__,
             WebhookIntegration.__table__,
             JiraChannelInstance.__table__,
-            ScheduleChannelInstance.__table__,
             GitHubChannelInstance.__table__,
         ],
     )
@@ -325,6 +331,69 @@ def test_email_trigger_rejects_invalid_trigger_criteria():
             gmail_integration_id=1,
             trigger_criteria={"criteria_version": 1, "filters": {}},
         )
+
+
+def test_update_email_trigger_syncs_managed_flow_default_agent(db_session):
+    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a"))
+    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
+    _seed_contact(db_session, contact_id=101, tenant_id="tenant-a", friendly_name="Alpha")
+    _seed_agent(db_session, agent_id=201, tenant_id="tenant-a", contact_id=101)
+    _seed_contact(db_session, contact_id=102, tenant_id="tenant-a", friendly_name="Beta")
+    _seed_agent(db_session, agent_id=202, tenant_id="tenant-a", contact_id=102)
+    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
+    trigger = EmailChannelInstance(
+        tenant_id="tenant-a",
+        integration_name="Inbox Watcher",
+        provider="gmail",
+        gmail_integration_id=gmail.id,
+        default_agent_id=201,
+        created_by=1,
+    )
+    flow = FlowDefinition(
+        id=801,
+        tenant_id="tenant-a",
+        name="Email: Inbox Watcher",
+        execution_method="triggered",
+        default_agent_id=201,
+        is_system_owned=True,
+    )
+    conversation = FlowNode(
+        id=802,
+        flow_definition_id=801,
+        type="conversation",
+        position=3,
+        name="Default agent",
+        agent_id=201,
+        config_json="{}",
+    )
+    binding = FlowTriggerBinding(
+        id=803,
+        tenant_id="tenant-a",
+        flow_definition_id=801,
+        trigger_kind="email",
+        trigger_instance_id=1,
+        is_system_managed=True,
+        is_active=True,
+        suppress_default_agent=False,
+    )
+    db_session.add_all([trigger, flow, conversation, binding])
+    db_session.flush()
+    binding.trigger_instance_id = trigger.id
+    db_session.commit()
+
+    updated = update_email_trigger(
+        trigger_id=trigger.id,
+        payload=EmailTriggerUpdate(default_agent_id=202),
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    db_session.refresh(flow)
+    db_session.refresh(conversation)
+    assert updated.default_agent_id == 202
+    assert flow.default_agent_id == 202
+    assert conversation.agent_id == 202
 
 
 def test_delete_email_trigger_is_tenant_scoped(db_session):
@@ -576,77 +645,6 @@ def test_create_email_triage_subscription_rejects_send_only_gmail_integration(db
     assert exc_info.value.status_code == 400
     assert "gmail.compose" in exc_info.value.detail
     assert db_session.query(ContinuousAgent).count() == 0
-    assert db_session.query(ContinuousSubscription).count() == 0
-
-
-def test_create_email_notification_subscription_creates_managed_agent_and_action_config(db_session):
-    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a", max_agents=10))
-    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
-    _seed_whatsapp_instance(db_session, instance_id=501, tenant_id="tenant-a", user_id=1)
-    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
-    trigger = EmailChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Inbox Watcher",
-        provider="gmail",
-        gmail_integration_id=gmail.id,
-        default_agent_id=None,
-        search_query="XYZ",
-        created_by=1,
-    )
-    db_session.add(trigger)
-    db_session.commit()
-
-    response = create_email_notification_subscription(
-        trigger_id=trigger.id,
-        payload=EmailNotificationSubscriptionRequest(recipient_phone="+5527999616279"),
-        ctx=_ctx("tenant-a"),
-        current_user=SimpleNamespace(id=1),
-        db=db_session,
-    )
-
-    db_session.refresh(trigger)
-    subscription = db_session.query(ContinuousSubscription).one()
-
-    assert response.created_agent is True
-    assert response.created_subscription is True
-    assert response.recipient_preview == "+5527...6279"
-    assert trigger.default_agent_id == response.agent_id
-    assert subscription.action_config == {
-        "action_type": "whatsapp_notification",
-        "channel": "whatsapp",
-        "recipient_phone": "+5527999616279",
-    }
-    assert db_session.query(Contact).filter(Contact.friendly_name == "Email Agent").count() == 1
-
-
-def test_create_email_notification_subscription_requires_recipient(db_session):
-    db_session.add(Tenant(id="tenant-a", name="Tenant A", slug="tenant-a", max_agents=10))
-    _seed_user(db_session, user_id=1, tenant_id="tenant-a", email="owner@example.com")
-    _seed_whatsapp_instance(db_session, instance_id=501, tenant_id="tenant-a", user_id=1)
-    gmail = _seed_gmail_integration(db_session, tenant_id="tenant-a", email_address="support@example.com")
-    trigger = EmailChannelInstance(
-        tenant_id="tenant-a",
-        integration_name="Inbox Watcher",
-        provider="gmail",
-        gmail_integration_id=gmail.id,
-        default_agent_id=None,
-        search_query="XYZ",
-        created_by=1,
-    )
-    db_session.add(trigger)
-    db_session.commit()
-
-    with pytest.raises(HTTPException) as exc:
-        create_email_notification_subscription(
-            trigger_id=trigger.id,
-            payload=EmailNotificationSubscriptionRequest(),
-            ctx=_ctx("tenant-a"),
-            current_user=SimpleNamespace(id=1),
-            db=db_session,
-        )
-
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "WhatsApp recipient is required"
     assert db_session.query(ContinuousSubscription).count() == 0
 
 

@@ -77,7 +77,13 @@ class SkillResponse(BaseModel):
 
 
 # Helper function for agent ownership verification
-def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent:
+def verify_agent_access(
+    db: Session,
+    agent_id: int,
+    ctx: TenantContext,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
     """
     Verify agent exists and user has access to it.
 
@@ -101,6 +107,13 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    if getattr(agent, "is_internal", False):
+        detail = (
+            f"Agent {agent_id} not found"
+            if internal_status_code == 404
+            else "Internal coordinator agents cannot have public skills attached or modified"
+        )
+        raise HTTPException(status_code=internal_status_code, detail=detail)
     return agent
 
 
@@ -312,7 +325,7 @@ async def update_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
 
@@ -446,7 +459,7 @@ async def disable_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
         success = await skill_manager.disable_skill(db, agent_id, skill_type)
@@ -510,7 +523,7 @@ async def test_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
 

@@ -231,9 +231,9 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
             <AlertTriangleIcon size={14} className="mt-0.5 flex-shrink-0" />
             <span>
               {ingressWarning ? (
-                <>Tenant override is set but invalid: {ingressWarning}. Fix it in Hub → Communication, or ask your admin to enable Remote Access.</>
+                <>Tenant override is set but invalid: {ingressWarning}. Fix it in Hub → Channels, or ask your admin to enable Remote Access.</>
               ) : (
-                <>No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in Hub → Communication.</>
+                <>No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in Hub → Channels.</>
               )}
             </span>
           </p>

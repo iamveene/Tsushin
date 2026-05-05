@@ -15,7 +15,6 @@ from channels.trigger import Trigger
 from channels.types import HealthResult, TriggerEvent
 from hub.google.gmail_service import GmailService
 from models import ContinuousAgent, ContinuousRun, ContinuousSubscription, EmailChannelInstance, GmailIntegration, WakeEvent
-from services.email_notification_service import EMAIL_NOTIFICATION_ACTION_TYPE, send_email_whatsapp_notification
 from services.email_triage_service import create_triage_draft
 from services.trigger_dispatch_service import (
     TriggerDispatchInput,
@@ -744,6 +743,8 @@ class EmailTrigger(Trigger):
                 continue
             action_config = subscription.action_config if isinstance(subscription.action_config, dict) else {}
             action_type = action_config.get("action_type") or "email_triage_draft"
+            if action_type != "email_triage_draft":
+                continue
 
             continuous_agent = (
                 db.query(ContinuousAgent)
@@ -803,24 +804,14 @@ class EmailTrigger(Trigger):
                 pass
 
             try:
-                if action_type == EMAIL_NOTIFICATION_ACTION_TYPE:
-                    action_result = await send_email_whatsapp_notification(
-                        db,
-                        trigger=instance,
-                        continuous_agent=continuous_agent,
-                        email_payload=email_payload,
-                        recipient_phone=str(action_config.get("recipient_phone") or ""),
-                    )
-                    outcome_key = "email_whatsapp_notification"
-                else:
-                    action_result = await create_triage_draft(
-                        db,
-                        trigger=instance,
-                        continuous_agent=continuous_agent,
-                        email_payload=email_payload,
-                        sender_key=sender_key,
-                    )
-                    outcome_key = "triage_draft"
+                action_result = await create_triage_draft(
+                    db,
+                    trigger=instance,
+                    continuous_agent=continuous_agent,
+                    email_payload=email_payload,
+                    sender_key=sender_key,
+                )
+                outcome_key = "triage_draft"
                 success = bool(action_result.get("success"))
                 run.status = "succeeded" if success else "failed"
                 run.outcome_state = {outcome_key: action_result}
@@ -829,7 +820,7 @@ class EmailTrigger(Trigger):
                     db.add(wake_event)
                 outcomes.append(action_result)
             except Exception as exc:
-                outcome_key = "email_whatsapp_notification" if action_type == EMAIL_NOTIFICATION_ACTION_TYPE else "triage_draft"
+                outcome_key = "triage_draft"
                 failure = {
                     "success": False,
                     "error": str(exc),

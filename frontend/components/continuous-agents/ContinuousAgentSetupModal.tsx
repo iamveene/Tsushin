@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import AgentVsFlowExplainer from '@/lib/copy/agent-vs-flow-explainer'
 import {
   api,
   type Agent,
   type ContinuousAgent,
+  type ContinuousAgentActionKind,
   type ContinuousAgentCreate,
   type ContinuousAgentUpdate,
 } from '@/lib/client'
@@ -15,16 +17,28 @@ type AgentStatus = 'active' | 'paused' | 'disabled'
 const EXECUTION_MODES: ExecutionMode[] = ['autonomous', 'hybrid', 'notify_only']
 const STATUSES: AgentStatus[] = ['active', 'paused', 'disabled']
 
+const ACTION_KINDS: { id: ContinuousAgentActionKind; label: string; hint: string }[] = [
+  { id: 'tool_run',           label: 'Run a tool',          hint: 'Execute a sandboxed skill / tool when triggered.' },
+  { id: 'send_message',       label: 'Send a message',      hint: 'Send a notification or reply when triggered.' },
+  { id: 'conditional_branch', label: 'Conditional branch',  hint: 'Inspect the wake event and choose a path (e.g. escalate if X).' },
+  { id: 'react_only',         label: 'React-only',          hint: 'Log/observe the event without taking external action.' },
+]
+
+const PURPOSE_MIN = 30
+
 interface Props {
   isOpen: boolean
   onClose: () => void
   onSaved: (agent: ContinuousAgent) => void
   existing?: ContinuousAgent | null
+  initialAgentId?: number | null
 }
 
 interface FormState {
   agentId: number | ''
   name: string
+  purpose: string
+  actionKind: ContinuousAgentActionKind | ''
   executionMode: ExecutionMode
   status: AgentStatus
 }
@@ -32,6 +46,8 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   agentId: '',
   name: '',
+  purpose: '',
+  actionKind: '',
   executionMode: 'hybrid',
   status: 'active',
 }
@@ -40,7 +56,7 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
-export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }: Props) {
+export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, initialAgentId = null }: Props) {
   const isEdit = Boolean(existing)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [agents, setAgents] = useState<Agent[]>([])
@@ -56,12 +72,17 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         ? {
             agentId: existing.agent_id,
             name: existing.name || '',
+            purpose: existing.purpose || '',
+            actionKind: (existing.action_kind as ContinuousAgentActionKind) || '',
             executionMode: (existing.execution_mode as ExecutionMode) || 'hybrid',
             status: (existing.status as AgentStatus) || 'active',
           }
-        : EMPTY_FORM,
+        : {
+            ...EMPTY_FORM,
+            agentId: initialAgentId ?? '',
+          },
     )
-  }, [isOpen, existing])
+  }, [initialAgentId, isOpen, existing])
 
   useEffect(() => {
     if (!isOpen) return
@@ -83,9 +104,15 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
     }
   }, [isOpen])
 
+  const purposeTrimmed = form.purpose.trim()
+  const purposeValid = purposeTrimmed.length >= PURPOSE_MIN
   const canSubmit = useMemo(() => {
-    return form.agentId !== '' && !submitting
-  }, [form, submitting])
+    if (submitting) return false
+    if (form.agentId === '') return false
+    if (!purposeValid) return false
+    if (!form.actionKind) return false
+    return true
+  }, [form.agentId, form.actionKind, purposeValid, submitting])
 
   if (!isOpen) return null
 
@@ -96,10 +123,13 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
     setError(null)
     try {
       const trimmedName = form.name.trim() || null
+      const actionKind = form.actionKind as ContinuousAgentActionKind
       let saved: ContinuousAgent
       if (existing) {
         const payload: ContinuousAgentUpdate = {
           name: trimmedName,
+          purpose: purposeTrimmed,
+          action_kind: actionKind,
           execution_mode: form.executionMode,
           status: form.status,
         }
@@ -113,6 +143,8 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         const payload: ContinuousAgentCreate = {
           agent_id: form.agentId as number,
           name: trimmedName,
+          purpose: purposeTrimmed,
+          action_kind: actionKind,
           execution_mode: form.executionMode,
           status: form.status,
         }
@@ -120,7 +152,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
       }
       onSaved(saved)
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to save continuous agent'))
+      setError(getErrorMessage(err, 'Failed to save Watcher monitor'))
     } finally {
       setSubmitting(false)
     }
@@ -135,14 +167,15 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         if (event.target === event.currentTarget && !submitting) onClose()
       }}
     >
-      <div className="w-full max-w-lg rounded-2xl border border-tsushin-border bg-tsushin-surface p-6 shadow-2xl">
+      <div className="w-full max-w-2xl rounded-2xl border border-tsushin-border bg-tsushin-surface p-6 shadow-2xl text-white max-h-[90vh] overflow-y-auto">
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-semibold text-white">
-              {isEdit ? 'Edit Continuous Agent' : 'Create Continuous Agent'}
+              {isEdit ? 'Edit Watcher Monitor' : 'Create Watcher Monitor'}
             </h2>
             <p className="mt-1 text-sm text-tsushin-slate">
-              Wraps an existing agent so it can be woken by triggers and run autonomously.
+              Create the always-on monitor for an agent built in Studio. It wakes when an external event fires
+              (email, Jira, GitHub, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong>.
             </p>
           </div>
           <button
@@ -163,6 +196,8 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!isEdit && <AgentVsFlowExplainer kind="agent" />}
+
           <div>
             <label className="mb-1 block text-sm font-medium text-tsushin-fog">Base agent</label>
             <select
@@ -172,7 +207,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
                 setForm((prev) => ({ ...prev, agentId: value === '' ? '' : Number(value) }))
               }}
               disabled={isEdit || loadingAgents || submitting}
-              className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white disabled:opacity-60"
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white disabled:opacity-60"
             >
               <option value="">{loadingAgents ? 'Loading agents…' : 'Select an agent'}</option>
               {agents.map((agent) => (
@@ -184,6 +219,54 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
             {isEdit && (
               <p className="mt-1 text-xs text-tsushin-slate">Base agent cannot be changed after creation.</p>
             )}
+            {!isEdit && initialAgentId && (
+              <p className="mt-1 text-xs text-cyan-200">Preselected from Studio handoff.</p>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-tsushin-fog">
+              Purpose <span className="text-red-400">*</span>
+            </label>
+            <textarea
+              value={form.purpose}
+              maxLength={2000}
+              rows={3}
+              onChange={(event) => setForm((prev) => ({ ...prev, purpose: event.target.value }))}
+              placeholder="e.g. When a new Jira ticket is filed by Support, check severity and notify on-call if P0/P1."
+              disabled={submitting}
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            />
+            <p className={`mt-1 text-xs ${purposeValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
+              {purposeTrimmed.length}/{PURPOSE_MIN}+ characters — explain what the agent does when it wakes.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-tsushin-fog">
+              Action kind <span className="text-red-400">*</span>
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ACTION_KINDS.map((kind) => {
+                const selected = form.actionKind === kind.id
+                return (
+                  <button
+                    key={kind.id}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, actionKind: kind.id }))}
+                    disabled={submitting}
+                    className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                      selected
+                        ? 'border-cyan-500/60 bg-cyan-500/10 text-white'
+                        : 'border-tsushin-border bg-tsushin-ink text-tsushin-slate hover:text-white'
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{kind.label}</div>
+                    <div className="mt-0.5 text-xs leading-snug text-tsushin-slate">{kind.hint}</div>
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
           <div>
@@ -195,7 +278,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
               placeholder="e.g. Email Watcher"
               disabled={submitting}
-              className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white"
+              className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white placeholder:text-tsushin-slate"
             />
           </div>
 
@@ -229,7 +312,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing }
                   setForm((prev) => ({ ...prev, status: event.target.value as AgentStatus }))
                 }
                 disabled={submitting}
-                className="w-full rounded-lg border border-tsushin-border bg-tsushin-bg px-3 py-2 text-sm text-white"
+                className="w-full rounded-lg border border-tsushin-border bg-tsushin-ink px-3 py-2 text-sm text-white"
               >
                 {STATUSES.map((status) => (
                   <option key={status} value={status}>

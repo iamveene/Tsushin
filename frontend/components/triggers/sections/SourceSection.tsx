@@ -3,25 +3,18 @@
 /**
  * SourceSection
  *
- * Per-kind input field grid for the Trigger Overview tab. Wave 2 of the
- * Triggers ↔ Flows unification — handles `jira`, `github`, and `schedule`.
- * Wave 3 adds `email` and `webhook` branches, retiring the standalone fork
- * pages.
- *
- * Lifted from `TriggerDetailShell.renderSourceSummary` (jira/schedule/github
- * branches), and from the Inbox Binding (email) / Inbound Endpoint (webhook)
- * cards of the pre-Wave-3 fork pages.
+ * Per-kind input field grid for the Trigger Overview tab. Handles
+ * `jira`, `github`, `email`, and `webhook` (schedule retired in v0.7.0-fix Phase 2).
  */
 
 import type { ReactNode } from 'react'
 import Link from 'next/link'
-import type { EmailTrigger, GitHubTrigger, JiraTrigger, PublicIngressInfo, ScheduleTrigger, WebhookIntegration } from '@/lib/client'
-import { formatDateTime } from '@/lib/dateUtils'
+import type { EmailTrigger, GitHubTrigger, JiraTrigger, PublicIngressInfo, WebhookIntegration } from '@/lib/client'
 import EmailSourceCard, { type EmailGmailIntegrationSummary } from './EmailSourceCard'
 import WebhookSourceCard from './WebhookSourceCard'
 
-type SourceKind = 'jira' | 'github' | 'schedule' | 'email' | 'webhook'
-type SourceTrigger = JiraTrigger | GitHubTrigger | ScheduleTrigger | EmailTrigger | WebhookIntegration
+type SourceKind = 'jira' | 'github' | 'email' | 'webhook'
+type SourceTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: SourceKind
@@ -95,24 +88,11 @@ export default function SourceSection({
           label="Jira connection"
           value={jira.jira_integration_name
             ? <Link href="/hub?tab=tool-apis" className="text-cyan-200 hover:text-white">{jira.jira_integration_name}</Link>
-            : <Link href="/hub?tab=tool-apis" className="text-yellow-200 hover:text-white">Legacy trigger credentials</Link>}
+            : <Link href="/hub?tab=tool-apis" className="text-yellow-200 hover:text-white">{jira.jira_integration_id ? `Integration #${jira.jira_integration_id}` : 'Connection not linked'}</Link>}
         />
         <Field label="Site" value={jira.site_url} />
         <Field label="Project" value={jira.project_key || 'Any project in JQL'} />
         <Field label="Poll interval" value={`${jira.poll_interval_seconds}s`} />
-        <Field label="Auth email" value={jira.auth_email || 'Not reported'} />
-      </div>
-    )
-  }
-
-  if (kind === 'schedule') {
-    const schedule = trigger as ScheduleTrigger
-    return (
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Field label="Cron" value={<code className="text-amber-200">{schedule.cron_expression}</code>} />
-        <Field label="Timezone" value={schedule.timezone} />
-        <Field label="Next fire" value={schedule.next_fire_at ? formatDateTime(schedule.next_fire_at) : 'Not scheduled'} />
-        <Field label="Last fire" value={schedule.last_fire_at ? formatDateTime(schedule.last_fire_at) : 'No fires recorded'} />
       </div>
     )
   }
@@ -144,7 +124,12 @@ export default function SourceSection({
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
         <Field label="Repository" value={`${github.repo_owner}/${github.repo_name}`} />
-        <Field label="Auth method" value={github.auth_method} />
+        <Field
+          label="Hub integration"
+          value={github.github_integration_name
+            ? <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{github.github_integration_name}</Link>
+            : <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{`Integration #${github.github_integration_id}`}</Link>}
+        />
         <Field label="Events" value={(github.events || []).length > 0 ? github.events!.join(', ') : 'Default'} />
         <Field label="Branch" value={github.branch_filter || 'Any branch'} />
       </div>

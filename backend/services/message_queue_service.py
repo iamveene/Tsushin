@@ -9,9 +9,21 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_, or_
 
-from models import MessageQueue
+from models import AgentTeamRun, MessageQueue, TeamRunStatus
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_STALE_RESET_SECONDS = 300
+TEAM_RUN_ORCHESTRATOR_WALL_CLOCK_SECONDS = 600
+TEAM_RUN_STALE_RESET_GRACE_SECONDS = 60
+DEFAULT_TEAM_RUN_STALE_RESET_SECONDS = (
+    TEAM_RUN_ORCHESTRATOR_WALL_CLOCK_SECONDS
+    + TEAM_RUN_STALE_RESET_GRACE_SECONDS
+)
+ACTIVE_TEAM_RUN_STATUSES = (
+    TeamRunStatus.PENDING.value,
+    TeamRunStatus.RUNNING.value,
+)
 
 
 class MessageQueueService:
@@ -24,30 +36,76 @@ class MessageQueueService:
         self,
         channel: str,
         tenant_id: str,
-        agent_id: int,
+        agent_id: Optional[int],
         sender_key: str,
         payload: dict,
         priority: int = 0,
         message_type: str = "inbound_message",
+        team_id: Optional[int] = None,
+        team_run_id: Optional[int] = None,
+        commit: bool = True,
     ) -> MessageQueue:
         """Queue a message for processing."""
+        if message_type == "team_run":
+            if agent_id is not None:
+                raise ValueError("team_run queue rows must not set agent_id")
+            if team_id is None or team_run_id is None:
+                raise ValueError("team_run queue rows require team_id and team_run_id")
+        elif agent_id is None:
+            raise ValueError("agent_id is required for non-team_run queue rows")
+
         item = MessageQueue(
             tenant_id=tenant_id,
             channel=channel,
             message_type=message_type,
             agent_id=agent_id,
+            team_id=team_id,
+            team_run_id=team_run_id,
             sender_key=sender_key,
             payload=payload,
             priority=priority,
         )
         self.db.add(item)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         self.db.refresh(item)
         logger.info(
             f"Enqueued message queue item {item.id} "
             f"(type={message_type}, channel={channel}, tenant={tenant_id}, agent={agent_id})"
         )
         return item
+
+    def enqueue_team_run(
+        self,
+        *,
+        tenant_id: str,
+        team_id: int,
+        team_run_id: int,
+        wake_event_id: Optional[int] = None,
+        payload: Optional[dict] = None,
+        priority: int = 0,
+        sender_key: Optional[str] = None,
+    ) -> MessageQueue:
+        """Queue an Agent Team run for asynchronous execution."""
+        queue_payload = dict(payload or {})
+        queue_payload.setdefault("team_id", team_id)
+        queue_payload.setdefault("team_run_id", team_run_id)
+        if wake_event_id is not None:
+            queue_payload.setdefault("wake_event_id", wake_event_id)
+
+        return self.enqueue(
+            channel="team",
+            tenant_id=tenant_id,
+            agent_id=None,
+            team_id=team_id,
+            team_run_id=team_run_id,
+            sender_key=sender_key or f"team:{team_id}:run:{team_run_id}",
+            payload=queue_payload,
+            priority=priority,
+            message_type="team_run",
+        )
 
     def claim_next(self, tenant_id: str, agent_id: int) -> Optional[MessageQueue]:
         """
@@ -60,6 +118,7 @@ class MessageQueueService:
                 MessageQueue.tenant_id == tenant_id,
                 MessageQueue.agent_id == agent_id,
                 MessageQueue.status == "pending",
+                MessageQueue.message_type != "team_run",
             )
             .order_by(MessageQueue.priority.desc(), MessageQueue.queued_at.asc())
             .limit(1)
@@ -71,6 +130,30 @@ class MessageQueueService:
             item.processing_started_at = datetime.utcnow()
             self.db.commit()
             logger.info(f"Claimed queue item {item.id} for processing")
+        return item
+
+    def claim_next_team_run(self, tenant_id: str, team_id: int) -> Optional[MessageQueue]:
+        """
+        Claim next pending team_run item for a (tenant_id, team_id) lane.
+        """
+        item = self.db.execute(
+            select(MessageQueue)
+            .where(
+                MessageQueue.tenant_id == tenant_id,
+                MessageQueue.team_id == team_id,
+                MessageQueue.message_type == "team_run",
+                MessageQueue.status == "pending",
+            )
+            .order_by(MessageQueue.priority.desc(), MessageQueue.queued_at.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        ).scalar_one_or_none()
+
+        if item:
+            item.status = "processing"
+            item.processing_started_at = datetime.utcnow()
+            self.db.commit()
+            logger.info(f"Claimed team_run queue item {item.id} for processing")
         return item
 
     def mark_completed(self, queue_id: int, result: dict = None):
@@ -132,18 +215,35 @@ class MessageQueueService:
         return count
 
     def get_queue_status(
-        self, tenant_id: str, agent_id: int = None
+        self, tenant_id: str, agent_id: int = None, team_id: int = None
     ) -> List[MessageQueue]:
-        """Get all pending/processing items for a tenant, optionally filtered by agent."""
+        """Get all pending/processing items for a tenant, optionally filtered by agent or team."""
         q = self.db.query(MessageQueue).filter(
             MessageQueue.tenant_id == tenant_id,
             MessageQueue.status.in_(["pending", "processing"]),
         )
         if agent_id:
             q = q.filter(MessageQueue.agent_id == agent_id)
+        if team_id:
+            q = q.filter(MessageQueue.team_id == team_id)
         return (
             q.order_by(MessageQueue.priority.desc(), MessageQueue.queued_at.asc())
             .all()
+        )
+
+    def get_team_run_status(
+        self, tenant_id: str, team_run_id: int
+    ) -> Optional[MessageQueue]:
+        """Return the queue row for a team run, if it exists."""
+        return (
+            self.db.query(MessageQueue)
+            .filter(
+                MessageQueue.tenant_id == tenant_id,
+                MessageQueue.team_run_id == team_run_id,
+                MessageQueue.message_type == "team_run",
+            )
+            .order_by(MessageQueue.queued_at.desc())
+            .first()
         )
 
     def get_pending_agents(self) -> list:
@@ -153,23 +253,96 @@ class MessageQueueService:
         """
         results = (
             self.db.query(MessageQueue.tenant_id, MessageQueue.agent_id)
-            .filter(MessageQueue.status == "pending")
+            .filter(
+                MessageQueue.status == "pending",
+                MessageQueue.agent_id.isnot(None),
+                MessageQueue.message_type != "team_run",
+            )
             .distinct()
             .all()
         )
         return [(r.tenant_id, r.agent_id) for r in results]
 
-    def reset_stale(self, threshold_seconds: int = 300) -> int:
+    def get_pending_teams(self) -> list:
+        """
+        Get list of (tenant_id, team_id) pairs that have pending team_run items.
+        """
+        results = (
+            self.db.query(MessageQueue.tenant_id, MessageQueue.team_id)
+            .filter(
+                MessageQueue.status == "pending",
+                MessageQueue.message_type == "team_run",
+                MessageQueue.team_id.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        return [(r.tenant_id, r.team_id) for r in results]
+
+    def count_processing_team_runs(self, tenant_id: str, team_id: int) -> int:
+        """Count currently claimed team_run queue rows for a team."""
+        return (
+            self.db.query(func.count(MessageQueue.id))
+            .filter(
+                MessageQueue.tenant_id == tenant_id,
+                MessageQueue.team_id == team_id,
+                MessageQueue.message_type == "team_run",
+                MessageQueue.status == "processing",
+            )
+            .scalar()
+            or 0
+        )
+
+    def count_active_non_queued_team_runs(self, tenant_id: str, team_id: int) -> int:
+        """Count active AgentTeamRun rows that are not represented in the queue."""
+        queued_run_exists = (
+            self.db.query(MessageQueue.id)
+            .filter(
+                MessageQueue.tenant_id == AgentTeamRun.tenant_id,
+                MessageQueue.team_run_id == AgentTeamRun.id,
+                MessageQueue.message_type == "team_run",
+                MessageQueue.status.in_(["pending", "processing"]),
+            )
+            .exists()
+        )
+        return (
+            self.db.query(func.count(AgentTeamRun.id))
+            .filter(
+                AgentTeamRun.tenant_id == tenant_id,
+                AgentTeamRun.team_id == team_id,
+                AgentTeamRun.status.in_(ACTIVE_TEAM_RUN_STATUSES),
+                ~queued_run_exists,
+            )
+            .scalar()
+            or 0
+        )
+
+    def reset_stale(
+        self,
+        threshold_seconds: int = DEFAULT_STALE_RESET_SECONDS,
+        team_run_threshold_seconds: int = DEFAULT_TEAM_RUN_STALE_RESET_SECONDS,
+    ) -> int:
         """
         Reset processing items older than threshold back to pending.
         This recovers from worker crashes or stuck processing.
         """
-        cutoff = datetime.utcnow() - timedelta(seconds=threshold_seconds)
+        now = datetime.utcnow()
+        standard_cutoff = now - timedelta(seconds=threshold_seconds)
+        team_run_cutoff = now - timedelta(seconds=team_run_threshold_seconds)
         stale = (
             self.db.query(MessageQueue)
             .filter(
                 MessageQueue.status == "processing",
-                MessageQueue.processing_started_at < cutoff,
+                or_(
+                    and_(
+                        MessageQueue.message_type == "team_run",
+                        MessageQueue.processing_started_at < team_run_cutoff,
+                    ),
+                    and_(
+                        MessageQueue.message_type != "team_run",
+                        MessageQueue.processing_started_at < standard_cutoff,
+                    ),
+                ),
             )
             .all()
         )

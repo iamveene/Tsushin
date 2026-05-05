@@ -5,14 +5,18 @@ Covers:
 - custom script skills failing closed on empty stdout
 - custom skill test endpoint rejecting empty-success script results
 - Vertex AI saved-instance discovery using curated fallback models
+- flow creation rejecting invalid execution method/source configurations
 """
 
 import asyncio
 import os
 import sys
 import types
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
@@ -112,6 +116,12 @@ routes_provider_instances = _load_module(
     "api.routes_provider_instances",
     os.path.join("api", "routes_provider_instances.py"),
 )
+routes_flows = _load_module(
+    "api.routes_flows",
+    os.path.join("api", "routes_flows.py"),
+)
+from schemas import FlowCreate, FlowStepConfig, FlowStepCreate  # noqa: E402
+from models import FlowDefinition, FlowNode  # noqa: E402
 
 
 def _make_session():
@@ -165,6 +175,48 @@ def _seed_provider_instance(db, tenant_id: str) -> ProviderInstance:
     db.commit()
     db.refresh(instance)
     return instance
+
+
+def _flow_request():
+    return SimpleNamespace(client=None, headers={})
+
+
+def _flow_ctx():
+    return SimpleNamespace(tenant_id="tenant-alpha", user=SimpleNamespace(id=1))
+
+
+def _source_step(position: int = 1, **config_overrides) -> FlowStepCreate:
+    config = {"trigger_kind": "email", "trigger_instance_id": 123}
+    config.update(config_overrides)
+    return FlowStepCreate(
+        name="Source",
+        type="source",
+        position=position,
+        config=FlowStepConfig(**config),
+    )
+
+
+def _message_step(position: int = 2) -> FlowStepCreate:
+    return FlowStepCreate(
+        name="Notify",
+        type="message",
+        position=position,
+        config=FlowStepConfig(content="hello"),
+    )
+
+
+def _create_flow(db, payload: FlowCreate):
+    return routes_flows.create_flow_v2(
+        payload,
+        request=_flow_request(),
+        db=db,
+        tenant_context=_flow_ctx(),
+    )
+
+
+def _assert_no_flow_persisted(db):
+    assert db.query(FlowDefinition).count() == 0
+    assert db.query(FlowNode).count() == 0
 
 
 def test_custom_skill_adapter_fails_closed_on_empty_stdout(monkeypatch):
@@ -275,5 +327,137 @@ def test_vertex_saved_instance_discovery_uses_curated_fallback():
         assert result["count"] > 0
         assert result["models"] == instance.available_models
         assert "gemini-2.5-flash" in result["models"]
+    finally:
+        db.close()
+
+
+def test_create_triggered_flow_accepts_valid_source_step(monkeypatch):
+    monkeypatch.setattr(routes_flows, "log_tenant_event", lambda *args, **kwargs: None)
+    db = _make_session()
+    try:
+        out = _create_flow(
+            db,
+            FlowCreate(
+                name="Email triage",
+                execution_method="triggered",
+                steps=[_source_step(), _message_step()],
+            ),
+        )
+
+        assert out.name == "Email triage"
+        assert out.execution_method == "triggered"
+        assert out.node_count == 2
+        stored_source = db.query(FlowNode).filter(FlowNode.position == 1).one()
+        assert stored_source.type == "source"
+        assert '"trigger_kind": "email"' in stored_source.config_json
+        assert '"trigger_instance_id": 123' in stored_source.config_json
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        (
+            FlowCreate(name="Missing source", execution_method="triggered", steps=[_message_step(position=1)]),
+            "must declare exactly one Source step",
+        ),
+        (
+            FlowCreate(
+                name="Duplicate source",
+                execution_method="triggered",
+                steps=[_source_step(), _source_step(trigger_instance_id=124)],
+            ),
+            "exactly one Source step",
+        ),
+        (
+            FlowCreate(
+                name="Source moved",
+                execution_method="triggered",
+                steps=[_source_step(position=2)],
+            ),
+            "Source step must be at position 1",
+        ),
+        (
+            FlowCreate(
+                name="Bad trigger kind",
+                execution_method="triggered",
+                steps=[_source_step(trigger_kind="schedule"), _message_step()],
+            ),
+            "trigger_kind must be one of",
+        ),
+        (
+            FlowCreate(
+                name="Bad trigger id",
+                execution_method="triggered",
+                steps=[_source_step(trigger_instance_id=0), _message_step()],
+            ),
+            "trigger_instance_id must be greater than 0",
+        ),
+        (
+            FlowCreate(name="Immediate source", execution_method="immediate", steps=[_source_step()]),
+            "Source steps are only supported",
+        ),
+        (
+            FlowCreate(name="Scheduled missing time", execution_method="scheduled"),
+            "scheduled_at is required",
+        ),
+        (
+            FlowCreate(name="Recurring missing rule", execution_method="recurring"),
+            "recurrence_rule is required",
+        ),
+        (
+            FlowCreate(name="Keyword empty", execution_method="keyword", trigger_keywords=[" ", ""]),
+            "At least one non-empty trigger keyword",
+        ),
+    ],
+)
+def test_create_flow_rejects_invalid_execution_configs_before_persist(monkeypatch, payload, detail):
+    monkeypatch.setattr(routes_flows, "log_tenant_event", lambda *args, **kwargs: None)
+    db = _make_session()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            _create_flow(db, payload)
+
+        assert exc.value.status_code == 422
+        assert detail in exc.value.detail
+        _assert_no_flow_persisted(db)
+    finally:
+        db.close()
+
+
+def test_create_scheduled_recurring_and_keyword_valid_payloads_still_work(monkeypatch):
+    monkeypatch.setattr(routes_flows, "log_tenant_event", lambda *args, **kwargs: None)
+    db = _make_session()
+    try:
+        scheduled = _create_flow(
+            db,
+            FlowCreate(
+                name="Scheduled",
+                execution_method="scheduled",
+                scheduled_at=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+        )
+        recurring = _create_flow(
+            db,
+            FlowCreate(
+                name="Recurring",
+                execution_method="recurring",
+                recurrence_rule={"frequency": "daily", "interval": 1},
+            ),
+        )
+        keyword = _create_flow(
+            db,
+            FlowCreate(
+                name="Keyword",
+                execution_method="keyword",
+                trigger_keywords=["run report"],
+            ),
+        )
+
+        assert scheduled.execution_method == "scheduled"
+        assert recurring.execution_method == "recurring"
+        assert keyword.execution_method == "keyword"
+        assert db.query(FlowDefinition).count() == 3
     finally:
         db.close()

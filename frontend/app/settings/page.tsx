@@ -207,13 +207,6 @@ export default function SettingsHubPage() {
       permission: 'org.settings.read',
     },
     {
-      title: 'ASR / Whisper',
-      description: 'Set the default transcription backend and manage local Speaches instances',
-      icon: icons.audio,
-      href: '/settings/asr',
-      permission: 'org.settings.read',
-    },
-    {
       title: 'Prompts & Patterns',
       description: 'Manage system prompts, tone presets, and command patterns',
       icon: icons.ai,

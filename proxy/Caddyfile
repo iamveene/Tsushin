@@ -1,10 +1,10 @@
 :80 {
 	# Backend API + WebSocket — prefix preserved, no rewrite
 	handle /api/* {
-		reverse_proxy backend:8081
+		reverse_proxy {$TSN_STACK_NAME:tsushin}-backend:8081
 	}
 	handle /ws/* {
-		reverse_proxy backend:8081
+		reverse_proxy {$TSN_STACK_NAME:tsushin}-backend:8081
 	}
 
 	# BUG-712: Prometheus /metrics — route directly to backend so Next.js
@@ -12,12 +12,12 @@
 	# `Authorization: Bearer <TSN_METRICS_SCRAPE_TOKEN>` when the env is set
 	# (see backend/services/metrics_service.py:110), so no extra gate here.
 	handle /metrics {
-		reverse_proxy backend:8081
+		reverse_proxy {$TSN_STACK_NAME:tsushin}-backend:8081
 	}
 
 	# Frontend (Next.js)
 	handle {
-		reverse_proxy frontend:3030
+		reverse_proxy {$TSN_STACK_NAME:tsushin}-frontend:3030
 	}
 
 	log {

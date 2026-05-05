@@ -70,7 +70,7 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         display_name="Email",
         description="Watch Gmail inbox activity and wake agents from matching messages.",
         requires_setup=True,
-        setup_hint="Create an email trigger under Hub -> Communication -> Triggers.",
+        setup_hint="Create an email trigger under Hub → Triggers.",
         icon_hint="gmail",
     ),
     EntryPointInfo(
@@ -78,7 +78,7 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         display_name="Webhook",
         description="Receive signed external events and optionally call back a customer system.",
         requires_setup=True,
-        setup_hint="Create a webhook trigger under Hub -> Communication -> Triggers.",
+        setup_hint="Create a webhook trigger under Hub → Triggers.",
         icon_hint="webhook",
     ),
     EntryPointInfo(
@@ -86,23 +86,15 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         display_name="Jira",
         description="Watch Jira issues with JQL and wake agents from matching issues.",
         requires_setup=True,
-        setup_hint="Create a Jira trigger under Hub -> Communication -> Triggers.",
+        setup_hint="Create a Jira trigger under Hub → Triggers.",
         icon_hint="jira",
-    ),
-    EntryPointInfo(
-        id="schedule",
-        display_name="Schedule",
-        description="Wake agents on cron schedules with structured payloads.",
-        requires_setup=True,
-        setup_hint="Create a schedule trigger under Hub -> Communication -> Triggers.",
-        icon_hint="schedule",
     ),
     EntryPointInfo(
         id="github",
         display_name="GitHub",
         description="Receive signed repository events and wake agents from matching activity.",
         requires_setup=True,
-        setup_hint="Create a GitHub trigger under Hub -> Communication -> Triggers.",
+        setup_hint="Create a GitHub trigger under Hub → Triggers.",
         icon_hint="github",
     ),
 ]

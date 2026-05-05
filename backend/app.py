@@ -74,6 +74,8 @@ from scheduler.worker import start_scheduler_worker, stop_scheduler_worker
 # Phase 6.6 Multi-Step Flows
 from api.routes_flows import router as flows_router, set_engine as set_flows_engine
 from api.routes_flow_trigger_bindings import router as flow_trigger_bindings_router  # v0.7.0 Wave 4
+from api.routes_case_memory import router as case_memory_router  # v0.7.0 Trigger Case Memory MVP
+from api.routes_feature_flags import router as feature_flags_router  # v0.7.x — read-only env-flag introspection
 # Phase 6.11 Scheduled Flow Executor
 # Phase 6.11.2 WebSocket Manager
 from websocket_manager import manager as ws_manager
@@ -111,8 +113,8 @@ from api.routes_webhook_instances import router as webhook_instances_router
 from api.routes_email_triggers import router as email_triggers_router
 from api.routes_jira_integrations import router as jira_integrations_router
 from api.routes_jira_triggers import router as jira_triggers_router
-from api.routes_schedule_triggers import router as schedule_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
+from api.routes_wizards import router as wizards_router
 from api.routes_github_inbound import router as github_inbound_router
 from api.routes_github_integrations import router as github_integrations_router
 # Playground Feature
@@ -127,6 +129,8 @@ from api.routes_tenants import router as tenants_router
 from api.routes_tenant_settings import router as tenant_settings_router
 from api.routes_default_agents import router as default_agents_router
 from api.routes_team import router as team_router
+from api.routes_teams import router as agent_teams_router
+from api.routes_watcher_team_runs import router as watcher_team_runs_router
 # Plans Management
 from api.routes_plans import router as plans_router
 # SSO Configuration
@@ -164,6 +168,8 @@ from api.routes_audit import router as audit_router
 from api.routes_syslog import router as syslog_config_router
 # Phase 21: Provider Instance Management
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
+# v0.7.0: Shared embedding provider options/test API
+from api.routes_embedding_providers import router as embedding_providers_router, set_engine as set_embedding_providers_engine
 # v0.6.0: Vector Store Instance Management
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
 # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
@@ -249,6 +255,7 @@ async def lifespan(app: FastAPI):
 
     # Phase 21: Provider Instance Management
     set_provider_instances_engine(engine)
+    set_embedding_providers_engine(engine)
     # v0.6.0: Vector Store Instance Management
     set_vector_stores_engine(engine)
     # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
@@ -278,6 +285,32 @@ async def lifespan(app: FastAPI):
         ollama_startup_reconcile()  # uses its own db session
     except Exception as e:
         logger.warning(f"Ollama startup reconcile failed: {e}")
+
+    # v0.7.0: Bootstrap orphan vendor agents.
+    # Materialise an active provider_instance for every (tenant, vendor) pair
+    # that has agents but zero active instances, and relink agents whose
+    # provider_instance_id was nulled by a stale soft-delete. After this runs,
+    # the Hub catalogue and the runtime AIClient see the same data — closing
+    # the "ghost vendor" inconsistency where an agent worked at runtime via
+    # the legacy hardcoded Ollama URL but the UI showed nothing.
+    try:
+        from services.provider_instance_service import ProviderInstanceService
+        from sqlalchemy.orm import sessionmaker
+        BootSession = sessionmaker(bind=engine)
+        boot_db = BootSession()
+        try:
+            stats = ProviderInstanceService.bootstrap_orphan_vendor_agents(boot_db)
+            if stats["instances_created"] or stats["agents_relinked"]:
+                logger.info(
+                    "bootstrap_orphan_vendor_agents: tenants=%s instances_created=%s agents_relinked=%s",
+                    stats["tenants_processed"],
+                    stats["instances_created"],
+                    stats["agents_relinked"],
+                )
+        finally:
+            boot_db.close()
+    except Exception as e:
+        logger.warning(f"bootstrap_orphan_vendor_agents failed: {e}")
 
     async def _prewarm_embedding_models() -> None:
         """Warm the default embedder off the request path."""
@@ -1332,6 +1365,15 @@ app.include_router(watcher_activity_ws_router)  # Watcher Activity WebSocket (Ph
 app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, Calendar)
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
 app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
+
+# v0.7.x Trigger Case Memory — case-memory routes are always mounted.
+# Per-tenant opt-in is via Agent.vector_store_instance_id binding +
+# TriggerRecapConfig.enabled flag — there is no global env kill-switch.
+app.include_router(case_memory_router)
+# v0.7.x — Read-only /api/feature-flags surface so the frontend can
+# gate UI affordances (e.g. case-memory wizard) on env-driven flags
+# without baking values into the build.
+app.include_router(feature_flags_router)
 app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication
@@ -1346,6 +1388,8 @@ app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
 app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
 app.include_router(default_agents_router)
 app.include_router(team_router)  # Phase 7.9 - Team Management
+app.include_router(agent_teams_router)  # v0.7.0 Agent Teams CRUD API
+app.include_router(watcher_team_runs_router)  # v0.7.0 Agent Teams Watcher read API
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
 app.include_router(global_users_router)  # Global User Management
@@ -1360,8 +1404,8 @@ app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/trigg
 app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
 app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
 app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
-app.include_router(schedule_triggers_router)  # Schedule trigger CRUD (/api/triggers/schedule/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
 app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
 # v0.6.0 Item 38: Channel Health Monitor
@@ -1376,6 +1420,7 @@ app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Securit
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
+app.include_router(embedding_providers_router, prefix="/api", tags=["Embedding Providers"])  # v0.7.0: KB/case memory embedding options
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
 app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
 app.include_router(asr_instances_router, prefix="/api", tags=["ASR Instances"])  # v0.7.0 Track D: Per-tenant Whisper/Speaches ASR auto-provisioning

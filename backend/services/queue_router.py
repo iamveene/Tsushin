@@ -31,6 +31,12 @@ class QueueRouter:
         if message_type == "flow_run_triggered":
             # v0.7.0 Wave 3 — Triggers↔Flows Unification.
             return await self._dispatch_flow_run_triggered(worker, db, item)
+        if message_type == "case_index":
+            # v0.7.0 Trigger Case Memory MVP (default-off).
+            return await self._dispatch_case_index(worker, db, item)
+        if message_type == "team_run":
+            # v0.7.0 Agent Teams trigger queue substrate.
+            return await self._dispatch_team_run(worker, db, item)
         raise ValueError(f"Unknown message_type: {message_type}")
 
     async def _dispatch_inbound_message(self, worker: Any, db: Any, item: Any) -> Any:
@@ -240,6 +246,43 @@ class QueueRouter:
             importance=payload.get("importance"),
         )
 
+        # v0.7.x Wave 1-A — Trigger Memory Recap injection. The dispatcher
+        # built a recap dict (or omitted it) and stored it under
+        # ``payload.memory_recap``. When ``inject_position == "system_addendum"``
+        # the recap is exposed to AgentService as a system override; otherwise
+        # (default ``prepend_user_msg``) the recap is prepended to the first
+        # user turn so the LLM cannot ignore it. Failure here MUST NOT abort
+        # the run — recap is enrichment, not load-bearing.
+        system_addendum: Optional[str] = None
+        try:
+            recap = payload.get("memory_recap") if isinstance(payload, dict) else None
+            if isinstance(recap, dict):
+                rendered_text = recap.get("rendered_text")
+                if isinstance(rendered_text, str) and rendered_text.strip():
+                    snapshot = recap.get("config_snapshot") or {}
+                    inject_position = (
+                        snapshot.get("inject_position")
+                        if isinstance(snapshot, dict)
+                        else None
+                    ) or "prepend_user_msg"
+                    if inject_position == "system_addendum":
+                        system_addendum = rendered_text
+                    else:
+                        user_message = rendered_text + "\n\n---\n\n" + user_message
+                    logger.info(
+                        "continuous_task: injected memory_recap "
+                        "(run_id=%s mode=%s chars=%d cases=%s)",
+                        run.id,
+                        inject_position,
+                        len(rendered_text),
+                        recap.get("cases_used"),
+                    )
+        except Exception:
+            logger.exception(
+                "continuous_task: failed to inject memory_recap (run_id=%s)",
+                getattr(run, "id", None),
+            )
+
         # BUG #26: emit Watcher Graph View activity around the wake-driven
         # invocation. AgentService.process_message bypasses agent/router.py
         # (which is the only path that emits agent_processing for chat-driven
@@ -264,14 +307,20 @@ class QueueRouter:
             pass
 
         try:
-            result = await _invoke_agent_for_continuous_run(
-                db=db,
-                agent=agent,
-                continuous_agent=continuous_agent,
-                run=run,
-                sender_key=sender_key,
-                message_text=user_message,
-            )
+            invoke_kwargs: dict = {
+                "db": db,
+                "agent": agent,
+                "continuous_agent": continuous_agent,
+                "run": run,
+                "sender_key": sender_key,
+                "message_text": user_message,
+            }
+            # Only pass ``system_addendum`` when set so older test stubs
+            # that monkey-patch ``_invoke_agent_for_continuous_run`` with a
+            # narrower signature still work.
+            if system_addendum:
+                invoke_kwargs["system_addendum"] = system_addendum
+            result = await _invoke_agent_for_continuous_run(**invoke_kwargs)
             answer = (result or {}).get("answer") or ""
             error_text = (result or {}).get("error")
             if error_text:
@@ -304,6 +353,34 @@ class QueueRouter:
             run.finished_at = datetime.utcnow()
             db.add(run)
             db.commit()
+            # v0.7.0 Trigger Case Memory MVP — enqueue a `case_index` job
+            # after the run reaches a terminal status. Default-off; the
+            # try/except guards the original run from any case-memory
+            # bookkeeping failure.
+            try:
+                if run.status in ("succeeded", "failed"):
+                    wake_event_ids_list = run.wake_event_ids or []
+                    case_wake_event_id = wake_event_ids_list[0] if wake_event_ids_list else wake_event_id
+                    if case_wake_event_id is not None:
+                        from services.message_queue_service import MessageQueueService
+
+                        MessageQueueService(db).enqueue(
+                            channel="case_memory",
+                            tenant_id=item.tenant_id,
+                            agent_id=agent.id,
+                            sender_key=f"case:continuous_run:{run.id}",
+                            payload={
+                                "origin_kind": "continuous_run",
+                                "continuous_run_id": run.id,
+                                "wake_event_id": case_wake_event_id,
+                            },
+                            message_type="case_index",
+                        )
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to enqueue case_index for continuous_run %s",
+                    getattr(run, "id", None),
+                )
             try:
                 emit_agent_processing_async(
                     tenant_id=run.tenant_id,
@@ -372,6 +449,37 @@ class QueueRouter:
                 trigger_event_id=trigger_event_id,
                 binding_id=binding_id,
             )
+            # v0.7.0 Trigger Case Memory MVP — enqueue a `case_index` job
+            # for trigger-origin FlowRuns once they reach a terminal
+            # state. Manual / scheduled flows have trigger_event_id=None
+            # and are intentionally skipped per MVP scope (§3 of the
+            # research doc).
+            try:
+                if (
+                    getattr(flow_run, "trigger_event_id", None) is not None
+                    and getattr(flow_run, "status", None)
+                    in ("completed", "completed_with_errors", "failed")
+                ):
+                    from services.message_queue_service import MessageQueueService
+
+                    MessageQueueService(db).enqueue(
+                        channel="case_memory",
+                        tenant_id=item.tenant_id,
+                        agent_id=item.agent_id,
+                        sender_key=f"case:flow_run:{flow_run.id}",
+                        payload={
+                            "origin_kind": "flow_run",
+                            "flow_run_id": flow_run.id,
+                            "wake_event_id": flow_run.trigger_event_id,
+                        },
+                        message_type="case_index",
+                    )
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to enqueue case_index for flow_run %s",
+                    getattr(flow_run, "id", None),
+                )
+
             return {
                 "status": flow_run.status,
                 "flow_run_id": flow_run.id,
@@ -391,6 +499,227 @@ class QueueRouter:
                 "binding_id": binding_id,
                 "reason": "flow_engine_error",
             }
+
+    async def _dispatch_case_index(self, worker: Any, db: Any, item: Any) -> Any:
+        """v0.7.0 Trigger Case Memory MVP — handle a ``case_index`` queue row.
+
+        Reads ``origin_kind``, the matching run id, and the wake event
+        id from ``item.payload`` and calls
+        ``case_memory_service.index_case``. Outcomes:
+          * Success → ``mqs.mark_completed`` with a small result blob.
+          * ``EmbeddingDimensionMismatch`` → ``mqs.mark_failed`` with no
+            retry (we set retry_count to max so it lands in dead_letter
+            on the next claim).
+          * Any other exception → ``mqs.mark_failed`` (normal retry +
+            dead-letter).
+        """
+        from services.case_embedding_resolver import EmbeddingDimensionMismatch
+        from services.case_memory_service import index_case
+        from services.message_queue_service import MessageQueueService
+
+        payload = item.payload or {}
+        origin_kind = payload.get("origin_kind")
+        run_id = payload.get("continuous_run_id") or payload.get("flow_run_id")
+        wake_event_id = payload.get("wake_event_id")
+
+        if origin_kind not in ("continuous_run", "flow_run") or run_id is None:
+            MessageQueueService(db).mark_failed(
+                item.id, error="case_index_payload_invalid"
+            )
+            return {"status": "failed", "reason": "case_index_payload_invalid"}
+
+        try:
+            case = index_case(
+                db,
+                tenant_id=item.tenant_id,
+                agent_id=item.agent_id,
+                origin_kind=origin_kind,
+                run_id=int(run_id),
+                wake_event_id=int(wake_event_id) if wake_event_id is not None else None,
+            )
+        except EmbeddingDimensionMismatch as exc:
+            # No retry: bump retry_count to max_retries before marking failed
+            # so the next claim moves the row to dead_letter.
+            try:
+                fresh = db.get(type(item), item.id)
+                if fresh is not None:
+                    fresh.retry_count = fresh.max_retries or 3
+                    db.add(fresh)
+                    db.commit()
+            except Exception:
+                logger.exception(
+                    "case_memory: failed to bump retry_count after dim mismatch"
+                )
+            MessageQueueService(db).mark_failed(
+                item.id, error=f"embedding_dimension_mismatch:{exc}"
+            )
+            return {"status": "failed", "reason": "embedding_dimension_mismatch"}
+        except Exception as exc:  # noqa: BLE001 — last-resort error path
+            logger.exception(
+                "case_memory: case-index handler failed (queue_item=%s)",
+                getattr(item, "id", None),
+            )
+            MessageQueueService(db).mark_failed(item.id, error=str(exc))
+            return {"status": "failed", "reason": "indexer_error"}
+
+        result = {
+            "status": "completed",
+            "case_id": getattr(case, "id", None) if case else None,
+            "index_status": getattr(case, "index_status", None) if case else None,
+        }
+        MessageQueueService(db).mark_completed(item.id, result=result)
+        return result
+
+    async def _dispatch_team_run(self, worker: Any, db: Any, item: Any) -> Any:
+        """v0.7.0 Agent Teams — consume a ``team_run`` queue row."""
+        from models import AgentTeamRun, TeamRunStatus, WakeEvent
+        from services.team_orchestrator_service import TeamRunOrchestrator
+
+        payload = item.payload or {}
+        team_id = getattr(item, "team_id", None) or payload.get("team_id")
+        team_run_id = getattr(item, "team_run_id", None) or payload.get("team_run_id")
+        wake_event_id = payload.get("wake_event_id")
+
+        if team_id is None:
+            raise ValueError("team_run queue item missing team_id")
+        if team_run_id is None:
+            raise ValueError("team_run queue item missing team_run_id")
+
+        team_run = (
+            db.query(AgentTeamRun)
+            .filter(
+                AgentTeamRun.id == int(team_run_id),
+                AgentTeamRun.team_id == int(team_id),
+                AgentTeamRun.tenant_id == item.tenant_id,
+            )
+            .first()
+        )
+        if team_run is None:
+            if wake_event_id is not None:
+                self._mark_wake_event_terminal(
+                    db,
+                    tenant_id=item.tenant_id,
+                    wake_event_id=int(wake_event_id),
+                    status="failed",
+                )
+            return {"status": "skipped", "reason": "team_run_not_found"}
+
+        if wake_event_id is None and team_run.trigger_event_id is not None:
+            wake_event_id = team_run.trigger_event_id
+
+        if wake_event_id is not None:
+            wake_event = (
+                db.query(WakeEvent)
+                .filter(
+                    WakeEvent.id == int(wake_event_id),
+                    WakeEvent.tenant_id == item.tenant_id,
+                )
+                .first()
+            )
+            if wake_event is not None:
+                wake_event.status = "claimed"
+                db.add(wake_event)
+                db.commit()
+
+        try:
+            orchestrator = TeamRunOrchestrator(
+                db,
+                tenant_id=item.tenant_id,
+                team_id=int(team_id),
+                existing_run_id=int(team_run_id),
+            )
+            run = await orchestrator.run(
+                trigger_event_id=int(wake_event_id) if wake_event_id is not None else None
+            )
+        except Exception:
+            logger.exception(
+                "team_run dispatch failed: tenant=%s team=%s run=%s wake_event=%s",
+                item.tenant_id,
+                team_id,
+                team_run_id,
+                wake_event_id,
+            )
+            failed_run = (
+                db.query(AgentTeamRun)
+                .filter(
+                    AgentTeamRun.id == int(team_run_id),
+                    AgentTeamRun.team_id == int(team_id),
+                    AgentTeamRun.tenant_id == item.tenant_id,
+                )
+                .first()
+            )
+            if failed_run is not None and failed_run.status in (
+                TeamRunStatus.PENDING.value,
+                TeamRunStatus.RUNNING.value,
+            ):
+                failed_run.status = TeamRunStatus.FAILED.value
+                failed_run.completed_at = datetime.utcnow()
+                failed_run.error_json = {
+                    "reason": "team_run_queue_dispatch_exception",
+                }
+                db.add(failed_run)
+                db.commit()
+                try:
+                    from services.watcher_activity_service import emit_team_run_async
+
+                    emit_team_run_async(
+                        tenant_id=item.tenant_id,
+                        team_run_id=failed_run.id,
+                        team_id=failed_run.team_id,
+                        status=failed_run.status,
+                        event="failed",
+                        error_json=failed_run.error_json,
+                    )
+                except Exception:
+                    logger.debug("Watcher team_run failure event skipped", exc_info=True)
+            if wake_event_id is not None:
+                self._mark_wake_event_terminal(
+                    db,
+                    tenant_id=item.tenant_id,
+                    wake_event_id=int(wake_event_id),
+                    status="failed",
+                )
+            raise
+
+        terminal_success = run.status == TeamRunStatus.COMPLETED.value
+        if wake_event_id is not None:
+            self._mark_wake_event_terminal(
+                db,
+                tenant_id=item.tenant_id,
+                wake_event_id=int(wake_event_id),
+                status="processed" if terminal_success else "failed",
+            )
+
+        return {
+            "status": run.status,
+            "team_id": run.team_id,
+            "team_run_id": run.id,
+            "wake_event_id": wake_event_id,
+        }
+
+    def _mark_wake_event_terminal(
+        self,
+        db: Any,
+        *,
+        tenant_id: str,
+        wake_event_id: int,
+        status: str,
+    ) -> None:
+        from models import WakeEvent
+
+        wake_event = (
+            db.query(WakeEvent)
+            .filter(
+                WakeEvent.id == wake_event_id,
+                WakeEvent.tenant_id == tenant_id,
+            )
+            .first()
+        )
+        if wake_event is None:
+            return
+        wake_event.status = status
+        db.add(wake_event)
+        db.commit()
 
 
 def self_fail_run(db: Any, run: Any, reason: str) -> None:
@@ -514,18 +843,34 @@ async def _invoke_agent_for_continuous_run(
     run: Any,
     sender_key: str,
     message_text: str,
+    system_addendum: Optional[str] = None,
 ) -> dict:
     """Invoke ``AgentService.process_message`` for a continuous run.
 
     Kept as a free function so tests can monkeypatch a stub without having to
     construct a full AgentService graph.
+
+    ``system_addendum`` (v0.7.x Wave 1-A) — optional extra text appended to
+    the agent's ``system_prompt`` for this single invocation. Used by the
+    Trigger Memory Recap injector when ``inject_position == "system_addendum"``.
+    Empty / None → no change to the system prompt.
     """
     from agent.agent_service import AgentService
+
+    base_system_prompt = agent.system_prompt or ""
+    if system_addendum:
+        effective_system_prompt = (
+            f"{base_system_prompt}\n\n---\n\n{system_addendum}"
+            if base_system_prompt
+            else system_addendum
+        )
+    else:
+        effective_system_prompt = base_system_prompt
 
     config = {
         "model_provider": agent.model_provider,
         "model_name": agent.model_name,
-        "system_prompt": agent.system_prompt,
+        "system_prompt": effective_system_prompt,
         "memory_size": getattr(agent, "memory_size", None) or 1000,
         "context_message_count": getattr(agent, "context_message_count", None) or 10,
         "context_char_limit": getattr(agent, "context_char_limit", None) or 1000,

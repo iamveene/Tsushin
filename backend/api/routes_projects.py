@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db import get_db
@@ -126,6 +126,15 @@ class ProjectCreate(BaseModel):
     kb_chunk_size: int = 500
     kb_chunk_overlap: int = 50
     kb_embedding_model: str = "all-MiniLM-L6-v2"
+    kb_embedding_provider_instance_id: Optional[int] = None
+    kb_embedding_provider: str = "local"
+    kb_embedding_dims: int = 384
+    kb_embedding_metric: str = "cosine"
+    kb_vector_store_instance_id: Optional[int] = None
+    kb_chunk_strategy: str = "fixed_text"
+    kb_parser: str = "auto"
+    kb_search_top_k: int = 5
+    kb_similarity_threshold: float = 0.3
     # Phase 16: Memory Configuration
     enable_semantic_memory: bool = True
     semantic_memory_results: int = 10
@@ -149,6 +158,15 @@ class ProjectUpdate(BaseModel):
     kb_chunk_size: Optional[int] = None
     kb_chunk_overlap: Optional[int] = None
     kb_embedding_model: Optional[str] = None
+    kb_embedding_provider_instance_id: Optional[int] = None
+    kb_embedding_provider: Optional[str] = None
+    kb_embedding_dims: Optional[int] = None
+    kb_embedding_metric: Optional[str] = None
+    kb_vector_store_instance_id: Optional[int] = None
+    kb_chunk_strategy: Optional[str] = None
+    kb_parser: Optional[str] = None
+    kb_search_top_k: Optional[int] = None
+    kb_similarity_threshold: Optional[float] = None
     # Phase 16: Memory Configuration
     enable_semantic_memory: Optional[bool] = None
     semantic_memory_results: Optional[int] = None
@@ -176,6 +194,19 @@ class ProjectResponse(BaseModel):
     kb_chunk_size: int = 500
     kb_chunk_overlap: int = 50
     kb_embedding_model: str = "all-MiniLM-L6-v2"
+    kb_embedding_provider_instance_id: Optional[int] = None
+    kb_embedding_provider: str = "local"
+    kb_embedding_dims: int = 384
+    kb_embedding_metric: str = "cosine"
+    kb_vector_store_instance_id: Optional[int] = None
+    kb_vector_store_index_id: Optional[int] = None
+    kb_vector_collection_name: Optional[str] = None
+    kb_vector_namespace: Optional[str] = None
+    kb_chunk_strategy: str = "fixed_text"
+    kb_parser: str = "auto"
+    kb_search_top_k: int = 5
+    kb_similarity_threshold: float = 0.3
+    kb_config: Optional[Dict[str, Any]] = None
     # Phase 16: Memory Configuration
     enable_semantic_memory: bool = True
     semantic_memory_results: int = 10
@@ -280,6 +311,73 @@ class DocumentResponse(BaseModel):
     status: str
     error: Optional[str] = None
     upload_date: Optional[str] = None
+    embedding_provider_instance_id: Optional[int] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dims: Optional[int] = None
+    embedding_metric: Optional[str] = None
+    vector_store_instance_id: Optional[int] = None
+    vector_store_index_id: Optional[int] = None
+    vector_collection_name: Optional[str] = None
+    vector_namespace: Optional[str] = None
+    chunk_strategy: Optional[str] = None
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    parser: Optional[str] = None
+    index_version: Optional[int] = None
+
+
+class ProjectKnowledgeConfigResponse(BaseModel):
+    id: int
+    tenant_id: str
+    project_id: int
+    embedding_provider_instance_id: Optional[int] = None
+    embedding_provider: str
+    embedding_model: str
+    embedding_dims: int
+    embedding_metric: str
+    vector_store_instance_id: Optional[int] = None
+    vector_store_index_id: Optional[int] = None
+    vector_collection_name: Optional[str] = None
+    vector_namespace: Optional[str] = None
+    chunk_strategy: str
+    chunk_size: int
+    chunk_overlap: int
+    parser: str
+    search_top_k: int
+    similarity_threshold: float
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ProjectKnowledgeConfigUpdate(BaseModel):
+    embedding_provider_instance_id: Optional[int] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dims: Optional[int] = None
+    embedding_metric: Optional[str] = None
+    vector_store_instance_id: Optional[int] = None
+    chunk_strategy: Optional[str] = None
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    parser: Optional[str] = None
+    search_top_k: Optional[int] = None
+    similarity_threshold: Optional[float] = None
+
+
+class ProjectKnowledgeSearchRequest(BaseModel):
+    query: str
+    max_results: int = 5
+
+
+class ProjectKnowledgeSearchResult(BaseModel):
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    similarity: float
+    document_id: int
+    document_name: str
+    chunk_id: int
+    chunk_index: int
 
 
 # ============================================================================
@@ -330,6 +428,15 @@ async def create_project(
         kb_chunk_size=data.kb_chunk_size,
         kb_chunk_overlap=data.kb_chunk_overlap,
         kb_embedding_model=data.kb_embedding_model,
+        kb_embedding_provider_instance_id=data.kb_embedding_provider_instance_id,
+        kb_embedding_provider=data.kb_embedding_provider,
+        kb_embedding_dims=data.kb_embedding_dims,
+        kb_embedding_metric=data.kb_embedding_metric,
+        kb_vector_store_instance_id=data.kb_vector_store_instance_id,
+        kb_chunk_strategy=data.kb_chunk_strategy,
+        kb_parser=data.kb_parser,
+        kb_search_top_k=data.kb_search_top_k,
+        kb_similarity_threshold=data.kb_similarity_threshold,
         # Phase 16: Memory Configuration
         enable_semantic_memory=data.enable_semantic_memory,
         semantic_memory_results=data.semantic_memory_results,
@@ -426,12 +533,72 @@ async def delete_project(
 # Project Knowledge Routes
 # ============================================================================
 
+@router.get("/api/projects/{project_id}/knowledge/config", response_model=ProjectKnowledgeConfigResponse)
+async def get_project_knowledge_config(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required),
+):
+    """Get the per-project KB embedding/vector/chunking defaults."""
+    from models import Project
+
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.tenant_id == current_user.tenant_id,
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    service = ProjectService(db)
+    config = service.get_project_knowledge_config(project_id, current_user.tenant_id)
+    return ProjectKnowledgeConfigResponse(**service._project_kb_config_to_dict(config))
+
+
+@router.put("/api/projects/{project_id}/knowledge/config", response_model=ProjectKnowledgeConfigResponse)
+async def update_project_knowledge_config(
+    project_id: int,
+    data: ProjectKnowledgeConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required),
+):
+    """Update project KB indexing defaults used by future uploads/reprocesses."""
+    service = ProjectService(db)
+    try:
+        config = service.update_project_knowledge_config_sync(
+            project_id=project_id,
+            tenant_id=current_user.tenant_id,
+            data=data.model_dump(exclude_unset=True),
+            commit=True,
+        )
+        return ProjectKnowledgeConfigResponse(**service._project_kb_config_to_dict(config))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/api/projects/{project_id}/knowledge/embedding-options")
+async def get_project_knowledge_embedding_options(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required),
+):
+    """Return embedding provider/model options scoped for this project's tenant."""
+    from models import Project
+    from services.embedding_provider_service import EmbeddingProviderService
+
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.tenant_id == current_user.tenant_id,
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return EmbeddingProviderService.list_options(current_user.tenant_id, db)
+
+
 @router.post("/api/projects/{project_id}/knowledge/upload", response_model=DocumentResponse)
 async def upload_project_document(
     project_id: int,
     file: UploadFile = File(...),
-    chunk_size: int = 500,
-    chunk_overlap: int = 50,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user_required)
 ):
@@ -512,6 +679,33 @@ async def list_project_documents(
         project_id=project_id
     )
     return [DocumentResponse(**d) for d in documents]
+
+
+@router.post("/api/projects/{project_id}/knowledge/search", response_model=List[ProjectKnowledgeSearchResult])
+async def search_project_knowledge(
+    project_id: int,
+    data: ProjectKnowledgeSearchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_required),
+):
+    """Search project knowledge directly for deterministic KB regression checks."""
+    from models import Project
+
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.tenant_id == current_user.tenant_id,
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    query = (data.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+
+    max_results = max(1, min(int(data.max_results or 5), 20))
+    service = ProjectService(db)
+    results = await service._search_project_knowledge(project, query, max_results)
+    return [ProjectKnowledgeSearchResult(**item) for item in results]
 
 
 @router.get("/api/projects/{project_id}/knowledge/{doc_id}/chunks")

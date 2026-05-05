@@ -16,11 +16,23 @@ from channels.trigger_criteria import validate_criteria
 from db import get_db
 from hub.google.gmail_service import GmailService
 from models import Agent, Contact, EmailChannelInstance, GmailIntegration
-from services.email_notification_service import (
-    email_notification_status,
-    ensure_email_notification_subscription,
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+    sync_system_managed_flow_default_agent,
 )
 from services.email_triage_service import ensure_email_triage_subscription
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +51,8 @@ class EmailTriggerCreate(BaseModel):
     trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int = Field(default=60, ge=30, le=3600)
     is_active: bool = True
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("integration_name")
     @classmethod
@@ -105,15 +119,6 @@ class EmailTriggerUpdate(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
-class EmailManagedNotificationStatus(BaseModel):
-    status: str
-    recipient_preview: Optional[str] = None
-    agent_id: Optional[int] = None
-    agent_name: Optional[str] = None
-    continuous_agent_id: Optional[int] = None
-    continuous_subscription_id: Optional[int] = None
-
-
 class EmailTriggerRead(BaseModel):
     id: int
     tenant_id: str
@@ -134,17 +139,11 @@ class EmailTriggerRead(BaseModel):
     last_health_check: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     last_cursor: Optional[str] = None
-    managed_notification_enabled: bool = False
-    managed_notification_status: Optional[EmailManagedNotificationStatus] = None
-    notification_subscription_status: Optional[str] = None
-    notification_recipient_preview: Optional[str] = None
-    managed_notification_agent_id: Optional[int] = None
-    managed_notification_agent_name: Optional[str] = None
-    managed_notification_recipient_preview: Optional[str] = None
-    managed_notification_continuous_agent_id: Optional[int] = None
-    managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    auto_flow_id: Optional[int] = None
+    # Notification config now lives on the auto-flow's Notification node and
+    # is discovered via auto_flow_id.
 
 
 class EmailTriageSubscriptionRead(BaseModel):
@@ -155,33 +154,6 @@ class EmailTriageSubscriptionRead(BaseModel):
     created_agent: bool
     created_subscription: bool
     status: str = "active"
-
-
-class EmailNotificationSubscriptionRead(BaseModel):
-    email_trigger_id: int
-    continuous_agent_id: int
-    continuous_subscription_id: int
-    agent_id: int
-    recipient_preview: str
-    created_agent: bool
-    created_subscription: bool
-
-
-class EmailNotificationSubscriptionRequest(BaseModel):
-    recipient_phone: Optional[str] = Field(default=None, min_length=5, max_length=64)
-    recipient: Optional[str] = Field(default=None, min_length=5, max_length=64)
-    agent_id: Optional[int] = Field(default=None, ge=1)
-
-    @field_validator("recipient_phone", "recipient")
-    @classmethod
-    def _normalize_recipient(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
-
-    def resolved_recipient(self) -> Optional[str]:
-        return self.recipient_phone or self.recipient
 
 
 class EmailTestQueryRequest(BaseModel):
@@ -317,7 +289,17 @@ def _criteria_email_search_query(criteria: Optional[dict[str, Any]]) -> Optional
 
 
 def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
-    notification = email_notification_status(db, tenant_id=instance.tenant_id, email_trigger_id=instance.id)
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=instance.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=instance.id,
+    )
     gmail_integration = None
     if instance.gmail_integration_id:
         gmail_integration = db.query(GmailIntegration).filter(
@@ -327,20 +309,6 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
     gmail_integration_name = None
     if gmail_integration is not None:
         gmail_integration_name = gmail_integration.display_name or gmail_integration.name
-    notification_status_value = None
-    if notification["continuous_subscription_id"] is not None:
-        notification_status_value = "active" if notification["enabled"] else "inactive"
-    notification_agent_name = _agent_name(db, instance.tenant_id, notification["agent_id"])
-    managed_notification_status = None
-    if notification_status_value is not None:
-        managed_notification_status = EmailManagedNotificationStatus(
-            status=notification_status_value,
-            recipient_preview=notification["recipient_preview"],
-            agent_id=notification["agent_id"],
-            agent_name=notification_agent_name,
-            continuous_agent_id=notification["continuous_agent_id"],
-            continuous_subscription_id=notification["continuous_subscription_id"],
-        )
     return EmailTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -361,17 +329,9 @@ def _to_read(db: Session, instance: EmailChannelInstance) -> EmailTriggerRead:
         last_health_check=instance.last_health_check,
         last_activity_at=instance.last_activity_at,
         last_cursor=instance.last_cursor,
-        managed_notification_enabled=bool(notification["enabled"]),
-        managed_notification_status=managed_notification_status,
-        notification_subscription_status=notification_status_value,
-        notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_agent_id=notification["agent_id"],
-        managed_notification_agent_name=notification_agent_name,
-        managed_notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_continuous_agent_id=notification["continuous_agent_id"],
-        managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -525,6 +485,8 @@ def create_email_trigger(
                 trigger_kind="email",
                 trigger_instance_id=instance.id,
                 default_agent_id=instance.default_agent_id,
+                notification_recipient=payload.notification_recipient,
+                notification_enabled=payload.notification_enabled,
             )
             db.commit()
     except Exception:
@@ -600,96 +562,6 @@ async def run_saved_email_test_query(
         raise HTTPException(status_code=502, detail=f"Email query failed: {type(exc).__name__}") from exc
 
 
-@router.post("/{trigger_id}/notification-subscription", response_model=EmailNotificationSubscriptionRead)
-def create_email_notification_subscription(
-    trigger_id: int,
-    payload: EmailNotificationSubscriptionRequest = EmailNotificationSubscriptionRequest(),
-    ctx: TenantContext = Depends(get_tenant_context),
-    current_user=Depends(require_permission("hub.write")),
-    db: Session = Depends(get_db),
-) -> EmailNotificationSubscriptionRead:
-    recipient = payload.resolved_recipient()
-    if recipient is None:
-        raise HTTPException(status_code=400, detail="WhatsApp recipient is required")
-    if payload.agent_id is not None:
-        instance = _load_email_trigger(db, ctx.tenant_id, trigger_id)
-        _load_active_agent(db, ctx.tenant_id, payload.agent_id)
-        instance.default_agent_id = payload.agent_id
-        db.add(instance)
-        db.flush()
-    # v0.7.0 Wave 4 — auto-flow notification write-through.
-    try:
-        from config.feature_flags import flows_auto_generation_enabled
-        from services.flow_binding_service import update_auto_flow_notification
-
-        if flows_auto_generation_enabled():
-            update_auto_flow_notification(
-                db,
-                tenant_id=ctx.tenant_id,
-                trigger_kind="email",
-                trigger_instance_id=trigger_id,
-                enabled=True,
-                recipient_phone=recipient,
-            )
-    except Exception:
-        logger.exception(
-            "Auto-flow notification write-through failed for email trigger %s; legacy path proceeds",
-            trigger_id,
-        )
-
-    try:
-        result = ensure_email_notification_subscription(
-            db,
-            tenant_id=ctx.tenant_id,
-            email_trigger_id=trigger_id,
-            created_by=getattr(current_user, "id", None),
-            recipient_phone=recipient,
-        )
-    except ValueError as exc:
-        reason = str(exc)
-        if reason == "email_trigger_not_found":
-            raise HTTPException(status_code=404, detail="Email trigger not found") from exc
-        if reason in {"invalid_whatsapp_recipient"}:
-            raise HTTPException(status_code=400, detail="Invalid WhatsApp recipient") from exc
-        if reason in {"agent_limit_reached"}:
-            raise HTTPException(status_code=409, detail="Agent limit reached for this tenant") from exc
-        if reason in {"default_agent_not_found"}:
-            raise HTTPException(status_code=400, detail="Email trigger default agent is not active") from exc
-        if reason in {
-            "unsupported_email_provider",
-            "missing_gmail_integration",
-            "gmail_integration_not_found",
-            "gmail_integration_tenant_mismatch",
-            "gmail_integration_type_mismatch",
-            "gmail_integration_inactive",
-            "gmail_integration_missing_token",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail="Email notifications require an active tenant-owned Gmail integration.",
-            ) from exc
-        if reason in {
-            "whatsapp_channel_disabled",
-            "whatsapp_integration_unavailable",
-            "whatsapp_integration_ambiguous",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail="Email notifications require a single active tenant-owned WhatsApp agent instance.",
-            ) from exc
-        raise HTTPException(status_code=400, detail=reason) from exc
-
-    return EmailNotificationSubscriptionRead(
-        email_trigger_id=result.email_trigger_id,
-        continuous_agent_id=result.continuous_agent_id,
-        continuous_subscription_id=result.continuous_subscription_id,
-        agent_id=result.agent_id,
-        recipient_preview=result.recipient_preview,
-        created_agent=result.created_agent,
-        created_subscription=result.created_subscription,
-    )
-
-
 @router.post("/{trigger_id}/poll-now", response_model=EmailPollNowResponse)
 async def poll_email_trigger_now(
     trigger_id: int,
@@ -736,6 +608,13 @@ def update_email_trigger(
         if data["default_agent_id"] is not None:
             _load_active_agent(db, ctx.tenant_id, data["default_agent_id"])
         instance.default_agent_id = data["default_agent_id"]
+        sync_system_managed_flow_default_agent(
+            db,
+            tenant_id=ctx.tenant_id,
+            trigger_kind="email",
+            trigger_instance_id=instance.id,
+            default_agent_id=instance.default_agent_id,
+        )
     if "integration_name" in data:
         instance.integration_name = data["integration_name"]
     if "search_query" in data:
@@ -764,9 +643,101 @@ def delete_email_trigger(
     db: Session = Depends(get_db),
 ) -> None:
     instance = _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+    )
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+    )
     db.delete(instance)
     db.commit()
     return None
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def get_email_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    return get_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+    )
+
+
+@router.put("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def put_email_trigger_recap_config(
+    trigger_id: int,
+    payload: TriggerRecapConfigWrite,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    return put_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{trigger_id}/recap-config", status_code=status.HTTP_204_NO_CONTENT)
+def delete_email_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> None:
+    _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    delete_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+    )
+    return None
+
+
+@router.post("/{trigger_id}/test-recap", response_model=TriggerRecapTestResponse)
+def post_email_trigger_test_recap(
+    trigger_id: int,
+    payload: TriggerRecapTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _load_email_trigger(db, ctx.tenant_id, trigger_id)
+    return run_test_recap_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="email",
+        trigger_instance_id=trigger_id,
+        body=payload,
+    )
 
 
 @router.post("/{trigger_id}/triage-subscription", response_model=EmailTriageSubscriptionRead)

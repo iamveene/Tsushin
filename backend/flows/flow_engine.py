@@ -365,7 +365,7 @@ class NotificationStepHandler(FlowStepHandler):
             if recipients_list and len(recipients_list) > 0:
                 recipient = recipients_list[0]  # Take first recipient for single notification
 
-        message_template = config.get("message_template", config.get("content", ""))
+        message_template = config.get("message_template") or config.get("content") or ""
 
         # Add current timestamp to context for template rendering
         enriched_data = {
@@ -375,7 +375,7 @@ class NotificationStepHandler(FlowStepHandler):
         }
 
         # Variable replacement
-        recipient = self._replace_variables(recipient, enriched_data)
+        recipient = self._replace_variables(recipient or "", enriched_data)
         message = self._replace_variables(message_template, enriched_data)
 
         if channel == "whatsapp":
@@ -521,11 +521,11 @@ class MessageStepHandler(FlowStepHandler):
         if recipient and recipient not in recipients:
             recipients.append(recipient)
 
-        message_template = config.get("message_template", config.get("content", ""))
+        message_template = config.get("message_template") or config.get("content") or ""
 
         # Variable replacement
         message = self._replace_variables(message_template, input_data)
-        recipients = [self._replace_variables(r, input_data) for r in recipients]
+        recipients = [self._replace_variables(r or "", input_data) for r in recipients]
 
         if not message.strip():
             logger.warning("Rendered message is empty, skipping send")
@@ -1157,7 +1157,7 @@ class ConversationStepHandler(FlowStepHandler):
     Enhancement 2026-01-07: Added contact reference resolution for auto-discovery.
     """
 
-    def _resolve_recipient(self, recipient: str) -> str:
+    def _resolve_recipient(self, recipient: str, tenant_id: Optional[str] = None) -> str:
         """
         Resolve @ContactName or phone to best WhatsApp identifier.
 
@@ -1179,8 +1179,16 @@ class ConversationStepHandler(FlowStepHandler):
             contact_name = recipient[1:]  # Remove @ prefix
 
             try:
+                if not tenant_id:
+                    logger.warning(
+                        "Cannot resolve @%s without tenant context; using recipient as-is.",
+                        contact_name,
+                    )
+                    return recipient
+
                 contact = self.db.query(Contact).filter(
-                    Contact.friendly_name == contact_name
+                    Contact.friendly_name == contact_name,
+                    Contact.tenant_id == tenant_id,
                 ).first()
 
                 if contact:
@@ -1267,7 +1275,7 @@ class ConversationStepHandler(FlowStepHandler):
 
         # Enhancement 2026-01-07: Resolve contact references (@ContactName) to WhatsApp IDs
         # This allows users to use friendly names instead of cryptic WhatsApp Business IDs
-        recipient = self._resolve_recipient(recipient)
+        recipient = self._resolve_recipient(recipient, tenant_id=(flow_run.tenant_id if flow_run else None))
 
         # Variable replacement
         recipient = self._replace_variables(recipient, input_data)
@@ -2901,13 +2909,22 @@ class FlowEngine:
                 context["steps"][position] = step_data
 
             # Add by name if available: network_scan, notify_user, etc.
-            if name:
+            # v0.7.0: Source step is addressable as `step_1` and via the
+            # trigger-context root merge ({{source.payload.*}}). Skipping
+            # the by-name merge here prevents the source step's compact
+            # output from clobbering the full trigger-context `source` dict
+            # (which carries `payload`) when the step is conventionally
+            # named "Source".
+            if name and step_type not in ("source", "Source"):
                 # Normalize name for context key (replace spaces, etc.)
                 context_key = name.replace(" ", "_").replace("-", "_").lower()
-                context[context_key] = step_data
-                # Also add original name if different
-                if context_key != name:
-                    context[name] = step_data
+                # Guard against root-level reserved keys that come from the
+                # trigger_context merge ("source" carries the full payload).
+                if context_key not in ("source", "flow", "previous_step", "steps"):
+                    context[context_key] = step_data
+                    # Also add original name if different
+                    if context_key != name:
+                        context[name] = step_data
 
             # Phase 13.1: Add by output_alias if configured
             # Example: output_alias="scan_results" allows {{scan_results.status}}
@@ -2920,8 +2937,14 @@ class FlowEngine:
             # Update previous_step to most recent
             context["previous_step"] = step_data
 
-            # Also merge output fields at root level for backward compatibility
-            context.update(output)
+            # Also merge output fields at root level for backward compatibility.
+            # Skip keys that would clobber reserved/trigger-context roots
+            # (notably "source" which holds the full trigger payload).
+            reserved_roots = {"source", "flow", "previous_step", "steps"}
+            for k, v in output.items():
+                if k in reserved_roots:
+                    continue
+                context[k] = v
 
         return context
 

@@ -7,7 +7,7 @@
  * effectful concerns (dynamic imports, callback fanout, localStorage).
  */
 
-export type Modality = 'llm' | 'tts' | 'image'
+export type Modality = 'llm' | 'tts' | 'image' | 'asr'
 export type Hosting = 'cloud' | 'local'
 
 export type StepKey =
@@ -129,19 +129,33 @@ export function getStepOrder(draft: WizardDraft): StepKey[] {
 
   const mid: StepKey[] = ['vendor']
 
+  // ASR cloud uses the existing OpenAI API key configured under the LLM
+  // OpenAI provider — no per-instance credential to collect — so we skip
+  // straight to Review. ASR local runs through the container provision step.
+  // ASR also has no model-test/expose step (the model is fixed at boot).
+  const isAsr = draft.modality === 'asr'
+  const isAsrCloud = isAsr && draft.hosting === 'cloud'
+  const isAsrLocal = isAsr && draft.hosting === 'local'
+
   // Branch: credentials (cloud) vs container (local).
   const configStep: StepKey =
     draft.hosting === 'local' ? 'container' : 'credentials'
-  const configSteps: StepKey[] = [configStep]
+  const configSteps: StepKey[] = isAsrCloud ? [] : [configStep]
 
   const isOllamaLocal = draft.vendor === 'ollama' && draft.hosting === 'local'
 
   // Ollama local: one consolidated pullModels step.
   // Cloud/Image: the usual testAndModels step (connection test + expose list).
-  const modelsSteps: StepKey[] = isOllamaLocal ? ['pullModels'] : ['testAndModels']
+  // ASR: no testAndModels — the model is pinned at container boot.
+  const modelsSteps: StepKey[] = isAsr
+    ? []
+    : isOllamaLocal
+      ? ['pullModels']
+      : ['testAndModels']
 
   // Post-create assign step — LLM only (TTS has its own assign-to-agent flow;
-  // Image doesn't bind to a specific agent LLM the same way). Only visible
+  // Image doesn't bind to a specific agent LLM the same way; ASR is selected
+  // per-agent via the AudioTranscriptFields skill UI). Only visible
   // after the instance has been created, so it sits AFTER `progress` in the
   // flow but isn't surfaced in the step pills counter.
   const tail: StepKey[] = ['review', 'progress']

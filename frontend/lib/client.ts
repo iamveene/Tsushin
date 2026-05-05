@@ -73,30 +73,53 @@ function isAbortError(error: unknown): boolean {
 /**
  * Helper function to handle API response errors with user-friendly messages
  */
+/**
+ * Error class enriched with the FastAPI `detail` payload so callers can
+ * branch on stable codes (e.g. `error.code === 'agent_has_pending_wake_events'`)
+ * instead of regex-matching the human-readable message.
+ */
+export class ApiError extends Error {
+  status: number
+  code?: string
+  detail?: unknown
+
+  constructor(message: string, status: number, detail?: unknown, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+    this.code = code
+  }
+}
+
 async function handleApiError(res: Response, defaultMessage: string): Promise<never> {
   if (res.status === 403) {
-    throw new Error('Permission denied. You do not have access to perform this action.')
+    throw new ApiError('Permission denied. You do not have access to perform this action.', 403)
   }
   if (res.status === 401) {
-    throw new Error('Session expired. Please log in again.')
+    throw new ApiError('Session expired. Please log in again.', 401)
   }
   if (res.status === 404) {
-    throw new Error('Resource not found.')
+    throw new ApiError('Resource not found.', 404)
   }
   if (res.status === 409) {
-    // Try to extract specific error message (e.g., plan limit reached) before falling back to generic
     try {
       const data = await res.json()
-      if (data.detail && typeof data.detail === 'string') {
-        throw new Error(data.detail)
+      if (typeof data.detail === 'string') {
+        throw new ApiError(data.detail, 409, data.detail)
+      }
+      if (data.detail && typeof data.detail === 'object') {
+        const code = typeof data.detail.code === 'string' ? data.detail.code : undefined
+        const message = typeof data.detail.message === 'string'
+          ? data.detail.message
+          : (defaultMessage || 'Conflict')
+        throw new ApiError(message, 409, data.detail, code)
       }
     } catch (jsonErr) {
-      // Re-throw our own error (thrown from data.detail check above); swallow SyntaxErrors (non-JSON body)
-      if (!(jsonErr instanceof SyntaxError)) {
-        throw jsonErr
-      }
+      if (jsonErr instanceof ApiError) throw jsonErr
+      if (!(jsonErr instanceof SyntaxError)) throw jsonErr
     }
-    throw new Error('Conflict: This resource already exists or cannot be modified.')
+    throw new ApiError(defaultMessage || 'Conflict', 409)
   }
   // Try to extract error message from response body
   let detail: string | undefined
@@ -108,6 +131,10 @@ async function handleApiError(res: Response, defaultMessage: string): Promise<ne
       } else if (Array.isArray(data.detail)) {
         // Pydantic validation errors come as array of objects with msg field
         detail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+      } else if (typeof data.detail === 'object') {
+        // Some routes return { error, message, ...context } — prefer the human-readable message
+        const messageField = (data.detail as any).message
+        detail = typeof messageField === 'string' ? messageField : JSON.stringify(data.detail)
       } else {
         detail = String(data.detail)
       }
@@ -199,6 +226,22 @@ export interface Message {
   matched_filter: boolean
   seen_at: string
   channel?: 'whatsapp' | 'playground' | 'telegram' | 'slack' | 'discord'  // Phase 10.1.1 + v0.6.0: Channel tracking
+}
+
+export interface QueueItem {
+  id: number
+  status: string
+  channel: string
+  agent_id: number | null
+  sender_key: string | null
+  priority: number
+  retry_count: number
+  position?: number
+  error_message?: string | null
+  result?: unknown
+  queued_at: string | null
+  processing_started_at: string | null
+  completed_at?: string | null
 }
 
 // Sandboxed Tools (formerly CustomTools - renamed in Skills-as-Tools Phase 6)
@@ -925,11 +968,226 @@ export interface Agent {
   max_agentic_rounds?: number | null
   max_agentic_loop_bytes?: number | null
 
+  // v0.7.0 Agent Teams
+  is_team_member?: boolean
+  current_team_id?: number | null
+
   is_active: boolean
   is_default: boolean
   skills_count?: number  // Number of enabled skills
   created_at: string
   updated_at: string
+}
+
+export interface TeamToolPool {
+  sandboxed_tool_ids: number[]
+}
+
+export interface TeamMemberResponse {
+  id: number
+  team_id: number
+  agent_id: number
+  agent_name?: string | null
+  role: string
+  execution_order?: number | null
+  is_required: boolean
+  position_x?: number | null
+  position_y?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamTriggerResponse {
+  id: number
+  trigger_kind: string
+  trigger_instance_id: number
+  event_types: string[]
+  filters: Record<string, unknown>
+  config_json?: Record<string, unknown> | null
+  is_enabled: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamListItem {
+  id: number
+  name: string
+  description?: string | null
+  goal_text?: string | null
+  topology: string
+  status: string
+  coordinator_agent_id?: number | null
+  sentinel_profile_id?: number | null
+  member_count: number
+  last_run_status?: string | null
+  max_steps: number
+  max_total_tokens?: number | null
+  max_concurrent_runs: number
+  tools: TeamToolPool
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamListResponse {
+  items: TeamListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type TeamTopology = 'line' | 'mesh'
+export type TeamStatus = 'draft' | 'active' | 'paused' | 'archived'
+export type TeamTriggerBindingKind = 'webhook' | 'github' | 'jira'
+
+export interface TeamMemberCreatePayload {
+  agent_id: number
+  execution_order?: number | null
+  is_required?: boolean
+  position_x?: number | null
+  position_y?: number | null
+}
+
+export interface TeamMemberUpdatePayload {
+  execution_order?: number | null
+  is_required?: boolean
+  position_x?: number | null
+  position_y?: number | null
+}
+
+export interface TeamCreatePayload {
+  name: string
+  description?: string | null
+  goal_text?: string | null
+  topology?: TeamTopology
+  status?: TeamStatus
+  sentinel_profile_id?: number | null
+  max_steps?: number
+  max_total_tokens?: number | null
+  max_concurrent_runs?: number
+  tools?: TeamToolPool
+  members?: TeamMemberCreatePayload[]
+}
+
+export interface TeamTriggerBindingCreatePayload {
+  trigger_kind: TeamTriggerBindingKind
+  trigger_instance_id: number
+  event_types?: string[]
+  filters?: Record<string, unknown>
+  is_enabled?: boolean
+}
+
+export interface TeamTriggerBindingUpdatePayload {
+  trigger_instance_id?: number
+  event_types?: string[]
+  filters?: Record<string, unknown>
+  is_enabled?: boolean
+}
+
+export interface TeamRunListItem {
+  id: number
+  team_id: number
+  status: string
+  trigger_event_id?: number | null
+  goal_text_snapshot?: string | null
+  topology_snapshot: string
+  total_steps: number
+  completed_steps: number
+  failed_steps: number
+  final_output_summary?: string | null
+  error_json?: Record<string, unknown> | null
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_cents: number
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamRunMemberStep {
+  id: number
+  agent_team_member_id?: number | null
+  agent_id?: number | null
+  agent_name?: string | null
+  step_index: number
+  status: string
+  output_summary?: string | null
+  output_text?: string | null
+  sentinel_decision_json?: Record<string, unknown> | null
+  error_json?: Record<string, unknown> | null
+  input_tokens: number
+  output_tokens: number
+  duration_ms?: number | null
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string | null
+}
+
+export interface TeamRunDetail extends TeamRunListItem {
+  member_runs: TeamRunMemberStep[]
+}
+
+export interface TeamRunListResponse {
+  items: TeamRunListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface TeamRunStartResponse {
+  run_id: number
+  status: string
+  poll_url: string
+}
+
+export interface WatcherTeamRunCoordinatorCommand {
+  member_run_id: number
+  step_index: number
+  agent_id?: number | null
+  agent_name?: string | null
+  command: Record<string, unknown>
+  created_at?: string | null
+}
+
+export interface WatcherTeamRunListItem extends TeamRunListItem {
+  tenant_id: string
+  team_name: string
+  team_status: string
+  member_count: number
+  coordinator_commands: WatcherTeamRunCoordinatorCommand[]
+}
+
+export interface WatcherTeamRunDetail extends WatcherTeamRunListItem {
+  member_runs: TeamRunMemberStep[]
+}
+
+export interface WatcherTeamRunListResponse {
+  items: WatcherTeamRunListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface WatcherTeamRunEvent {
+  type: 'team_run'
+  team_run_id: number
+  team_id: number
+  status: string
+  event: string
+  timestamp: string
+  team_name?: string
+  member_run_id?: number
+  step_index?: number
+  agent_id?: number
+  agent_name?: string
+  coordinator_command?: Record<string, unknown>
+  error_json?: Record<string, unknown>
+}
+
+export interface TeamDetail extends TeamListItem {
+  members: TeamMemberResponse[]
+  triggers: TeamTriggerResponse[]
+  last_run?: TeamRunListItem | null
 }
 
 // Phase 6 - Graph View: Batch endpoint types
@@ -1338,6 +1596,28 @@ export interface TriggerCatalogEntry {
   tenant_has_configured: boolean
 }
 
+export interface WizardKindDependency {
+  kind: string
+  label: string
+  create_endpoint: string
+  required_dependency?: string | null
+  dependency_endpoint?: string | null
+  dependency_create_endpoint?: string | null
+  request_field?: string | null
+  notes?: string | null
+}
+
+export interface WizardManifest {
+  id: string
+  label: string
+  component_path: string
+  catalog_endpoint: string
+  catalog_module: string
+  dispatches_to: string[]
+  integration_required?: string | null
+  kind_dependencies: WizardKindDependency[]
+}
+
 export interface DefaultAgentOption {
   id: number
   name: string
@@ -1372,7 +1652,7 @@ export interface DefaultAgentsSettings {
   user_defaults: UserChannelDefaultAgent[]
 }
 
-export type TriggerKind = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
+export type TriggerKind = 'email' | 'webhook' | 'jira' | 'github'
 export type TriggerCriteria = Record<string, unknown>
 
 export interface TriggerInstanceBase {
@@ -1391,6 +1671,7 @@ export interface TriggerInstanceBase {
   last_cursor?: string | null
   created_at: string
   updated_at?: string | null
+  auto_flow_id?: number | null
 }
 
 export interface EmailTrigger {
@@ -1413,17 +1694,9 @@ export interface EmailTrigger {
   last_health_check?: string | null
   last_activity_at?: string | null
   last_cursor?: string | null
-  managed_notification_enabled?: boolean
-  managed_notification_status?: JiraManagedNotificationStatus | null
-  notification_subscription_status?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_agent_id?: number | null
-  managed_notification_agent_name?: string | null
-  managed_notification_recipient_preview?: string | null
-  managed_notification_continuous_agent_id?: number | null
-  managed_notification_subscription_id?: number | null
   created_at: string
   updated_at?: string | null
+  auto_flow_id?: number | null
 }
 
 export interface EmailTriggerCreateRequest {
@@ -1454,22 +1727,6 @@ export interface EmailTriageSubscription {
   created_agent: boolean
   created_subscription: boolean
   status: string
-}
-
-export interface EmailNotificationSubscriptionRequest {
-  recipient_phone?: string
-  recipient?: string
-  agent_id?: number | null
-}
-
-export interface EmailNotificationSubscriptionResponse {
-  email_trigger_id: number
-  continuous_agent_id: number
-  continuous_subscription_id: number
-  agent_id: number
-  recipient_preview: string
-  created_agent: boolean
-  created_subscription: boolean
 }
 
 export interface EmailTestQueryRequest {
@@ -1532,28 +1789,14 @@ export interface JiraTrigger extends TriggerInstanceBase {
   site_url: string
   project_key?: string | null
   jql: string
-  auth_email?: string | null
-  api_token_preview?: string | null
   poll_interval_seconds: number
-  managed_notification_enabled?: boolean
-  managed_notification_status?: JiraManagedNotificationStatus | null
-  notification_subscription_status?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_recipient_preview?: string | null
-  managed_notification_agent_id?: number | null
-  managed_notification_agent_name?: string | null
-  managed_notification_continuous_agent_id?: number | null
-  managed_notification_subscription_id?: number | null
 }
 
 export interface JiraTriggerCreateRequest {
   integration_name: string
-  jira_integration_id?: number | null
-  site_url?: string | null
+  jira_integration_id: number
   project_key?: string | null
   jql: string
-  auth_email?: string | null
-  api_token?: string | null
   trigger_criteria?: TriggerCriteria | null
   poll_interval_seconds?: number
   default_agent_id?: number | null
@@ -1564,10 +1807,7 @@ export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
 
 export interface JiraTriggerTestQueryRequest {
   jira_integration_id?: number | null
-  site_url?: string | null
   jql?: string | null
-  auth_email?: string | null
-  api_token?: string | null
   max_results?: number
 }
 
@@ -1637,39 +1877,8 @@ export interface JiraTriggerTestQueryResponse {
   issue_count?: number | null
   issues?: JiraIssuePreview[]
   sample_issues?: JiraIssuePreview[]
-  recipient_preview?: string | null
-  notification_recipient_preview?: string | null
-  managed_notification_status?: JiraManagedNotificationStatus | null
   error?: string | null
   message?: string | null
-}
-
-export interface JiraNotificationSubscriptionRequest {
-  recipient_phone?: string
-  recipient?: string
-  agent_id?: number | null
-}
-
-export interface JiraManagedNotificationStatus {
-  status?: string | null
-  recipient_preview?: string | null
-  agent_id?: number | null
-  agent_name?: string | null
-  continuous_agent_id?: number | null
-  continuous_subscription_id?: number | null
-  created_agent?: boolean
-  created_subscription?: boolean
-  message?: string | null
-}
-
-export interface JiraNotificationSubscriptionResponse extends JiraManagedNotificationStatus {
-  jira_trigger_id?: number
-  agent_id?: number
-  recipient_preview?: string
-  continuous_agent_id?: number
-  continuous_subscription_id?: number
-  created_agent?: boolean
-  created_subscription?: boolean
 }
 
 export interface JiraPollNowResponse {
@@ -1699,50 +1908,17 @@ export interface JiraPollNowResponse {
   details?: Record<string, unknown> | null
 }
 
-export interface ScheduleTrigger extends TriggerInstanceBase {
-  cron_expression: string
-  timezone: string
-  payload_template?: Record<string, unknown> | null
-  next_fire_at?: string | null
-  last_fire_at?: string | null
-}
+// Schedule trigger removed in v0.7.0-fix Phase 2; cron-based execution
+// now lives on FlowDefinition.execution_method='scheduled'.
 
-export interface ScheduleTriggerCreateRequest {
-  integration_name: string
-  cron_expression: string
-  timezone?: string
-  payload_template?: Record<string, unknown> | null
-  trigger_criteria?: TriggerCriteria | null
-  default_agent_id?: number | null
-  is_active?: boolean
-}
-
-export type ScheduleTriggerUpdateRequest = Partial<ScheduleTriggerCreateRequest>
-
-export interface SchedulePreviewRequest {
-  cron_expression: string
-  timezone?: string
-  payload_template?: Record<string, unknown> | null
-}
-
-export interface SchedulePreviewResponse {
-  next_fire_times?: string[]
-  next_fire_preview?: string[]
-  next_runs?: string[]
-  timezone?: string
-  error?: string | null
-  message?: string | null
-}
-
-export type GitHubTriggerAuthMethod = 'pat' | 'app'
+// GitHubTriggerAuthMethod was retired in v0.7.0-fix Phase 3 — every GitHub
+// trigger now reads its credentials from a linked Hub GitHubIntegration.
 
 export interface GitHubTrigger extends TriggerInstanceBase {
-  auth_method: GitHubTriggerAuthMethod
+  github_integration_id: number
+  github_integration_name?: string | null
   repo_owner: string
   repo_name: string
-  installation_id?: string | null
-  has_pat_token?: boolean
-  pat_token_preview?: string | null
   webhook_secret_preview?: string | null
   events?: string[] | null
   branch_filter?: string | null
@@ -1754,11 +1930,9 @@ export interface GitHubTrigger extends TriggerInstanceBase {
 
 export interface GitHubTriggerCreateRequest {
   integration_name: string
-  auth_method?: GitHubTriggerAuthMethod
+  github_integration_id: number
   repo_owner: string
   repo_name: string
-  installation_id?: string | null
-  pat_token?: string | null
   webhook_secret?: string | null
   events?: string[] | null
   branch_filter?: string | null
@@ -1771,29 +1945,12 @@ export interface GitHubTriggerCreateRequest {
 
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
 
-export interface GitHubTriggerTestConnectionRequest {
-  auth_method?: GitHubTriggerAuthMethod
-  repo_owner: string
-  repo_name: string
-  installation_id?: string | null
-  pat_token?: string | null
-}
-
-export interface GitHubTriggerTestConnectionResponse {
-  success: boolean
-  ok?: boolean
-  status?: string
-  status_code?: number | null
-  detail?: string | null
-  message?: string | null
-  error?: string | null
-  repository?: string | null
-}
+// GitHubTriggerTestConnection types removed in v0.7.0-fix Phase 3 — connectivity
+// is verified at the integration level (Hub → Developer Tools), not per trigger.
 
 // v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
-// shared PAT + default owner/repo so the code_repository skill and GitHub
-// triggers can reuse one connection per tenant.
-export type GitHubProviderMode = 'programmatic' | 'agentic'
+// shared GitHub connection + default owner/repo so the code_repository skill
+// and GitHub triggers can reuse one connection per tenant.
 
 export interface GitHubIntegration {
   id: number
@@ -1802,9 +1959,7 @@ export interface GitHubIntegration {
   name?: string | null
   default_owner?: string | null
   default_repo?: string | null
-  pat_token_preview?: string | null
   is_active: boolean
-  provider_mode?: GitHubProviderMode
   health_status?: string | null
   health_status_reason?: string | null
   last_health_check?: string | null
@@ -1822,7 +1977,6 @@ export interface GitHubIntegrationCreateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
-  provider_mode?: GitHubProviderMode
 }
 
 export interface GitHubIntegrationUpdateRequest {
@@ -1831,26 +1985,6 @@ export interface GitHubIntegrationUpdateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
-  provider_mode?: GitHubProviderMode
-}
-
-export interface GitHubIntegrationTestConnectionRequest {
-  pat_token?: string | null
-  owner?: string | null
-  repo?: string | null
-}
-
-export interface GitHubIntegrationTestConnectionResponse {
-  success: boolean
-  ok?: boolean
-  status?: string
-  status_code?: number | null
-  detail?: string | null
-  message?: string | null
-  error?: string | null
-  repository?: string | null
-  full_name?: string | null
-  default_branch?: string | null
 }
 
 // v0.7.0: PR Submitted criteria envelope — matches the backend canonical
@@ -1912,12 +2046,16 @@ export interface PageParams {
   offset?: number
 }
 
+export type ContinuousAgentActionKind = 'tool_run' | 'send_message' | 'conditional_branch' | 'react_only'
+
 export interface ContinuousAgent {
   id: number
   tenant_id: string
   agent_id: number
   agent_name?: string | null
   name?: string | null
+  purpose?: string | null
+  action_kind?: ContinuousAgentActionKind | null
   execution_mode: string
   status: string
   delivery_policy_id?: number | null
@@ -1990,6 +2128,10 @@ export interface WakeEventPayload {
 export interface ContinuousAgentCreate {
   agent_id: number
   name?: string | null
+  // v0.7.0-fix Phase 6: required at API level (min 30 chars). Tells operators
+  // what the agent does when it wakes; surfaced in lists and the run history UI.
+  purpose: string
+  action_kind: ContinuousAgentActionKind
   execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
   delivery_policy_id?: number | null
   budget_policy_id?: number | null
@@ -1999,6 +2141,8 @@ export interface ContinuousAgentCreate {
 
 export interface ContinuousAgentUpdate {
   name?: string | null
+  purpose?: string | null
+  action_kind?: ContinuousAgentActionKind | null
   execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
   delivery_policy_id?: number | null
   budget_policy_id?: number | null
@@ -2158,7 +2302,7 @@ export interface ChannelRoutingRuleReorderRequest {
 export type ChannelRoutingRuleListParams = PageParams
 
 export type TriggerDetailKind = TriggerKind
-export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | ScheduleTrigger | GitHubTrigger
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger
 
 // v0.7.0 Wave 4: Triggers ↔ Flows binding model
 export interface FlowTriggerBinding {
@@ -2202,6 +2346,7 @@ export interface FlowTriggerBindingUpdate {
 export interface AgentKnowledge {
   id: number
   agent_id: number
+  tenant_id?: string | null
   document_name: string
   document_type: string
   file_path: string
@@ -2212,6 +2357,19 @@ export interface AgentKnowledge {
   upload_date: string
   processed_date?: string
   tags?: string[]
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  vector_store_instance_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy?: string | null
+  chunk_size?: number | null
+  chunk_overlap?: number | null
+  parser?: string | null
+  index_version?: number | null
 }
 
 export interface AgentKnowledgeUpdate {
@@ -2227,6 +2385,119 @@ export interface KnowledgeChunk {
   char_count: number
   metadata_json: Record<string, any>
 }
+
+export interface KnowledgeSearchResult {
+  chunk_id: number
+  knowledge_id: number
+  document_name: string
+  content: string
+  similarity: number
+  chunk_index: number
+}
+
+export interface EmbeddingModelOption {
+  provider: string
+  model: string
+  label: string
+  supported_dimensions: number[]
+  default_dimensions?: number | null
+  max_dimensions?: number | null
+  requires_provider_instance: boolean
+  supports_dimensions_parameter: boolean
+}
+
+export interface EmbeddingProviderOption {
+  provider: string
+  provider_instance_id: number | null
+  instance_name: string
+  vendor: string
+  configured: boolean
+  health_status: string
+  base_url?: string | null
+  models: EmbeddingModelOption[]
+  default_model?: string | null
+  default_dimensions?: number | null
+  test_status?: string | null
+}
+
+export interface EmbeddingOptionsResponse {
+  providers: EmbeddingProviderOption[]
+  default: {
+    provider: string
+    provider_instance_id: number | null
+    model: string
+    dimensions: number
+  }
+}
+
+export interface EmbeddingProviderTestRequest {
+  provider: string
+  provider_instance_id?: number | null
+  model: string
+  dimensions?: number | null
+  text?: string
+}
+
+export interface EmbeddingProviderTestResult {
+  success: boolean
+  provider: string
+  provider_instance_id?: number | null
+  model: string
+  requested_dimensions?: number | null
+  actual_dimensions: number
+  batch_count: number
+  sample_norm: number
+  latency_ms: number
+  error?: string | null
+}
+
+export interface AgentKnowledgeConfig {
+  id: number
+  tenant_id: string
+  agent_id: number
+  embedding_provider_instance_id: number | null
+  embedding_provider: string
+  embedding_model: string
+  embedding_dims: number
+  embedding_metric: string
+  vector_store_instance_id: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy: string
+  chunk_size: number
+  chunk_overlap: number
+  parser: string
+  search_top_k: number
+  similarity_threshold: number
+}
+
+export type AgentKnowledgeConfigUpdate = Partial<Omit<AgentKnowledgeConfig, 'id' | 'tenant_id' | 'agent_id'>>
+
+export interface ProjectKnowledgeConfig {
+  id: number
+  tenant_id: string
+  project_id: number
+  embedding_provider_instance_id: number | null
+  embedding_provider: string
+  embedding_model: string
+  embedding_dims: number
+  embedding_metric: string
+  vector_store_instance_id: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy: string
+  chunk_size: number
+  chunk_overlap: number
+  parser: string
+  search_top_k: number
+  similarity_threshold: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type ProjectKnowledgeConfigUpdate = Partial<Omit<ProjectKnowledgeConfig, 'id' | 'tenant_id' | 'project_id' | 'created_at' | 'updated_at'>>
 
 // Task 3: Shared Knowledge
 export interface SharedKnowledge {
@@ -2328,6 +2599,14 @@ export interface FlowDefinition {
   execution_count?: number
   // BUG-336: Keyword triggers
   trigger_keywords?: string[] | null
+  // v0.7.0 release-finishing — system-managed (auto-generated from a trigger)
+  // metadata. Lets the UI render a per-kind badge and disable Delete on
+  // auto-generated flows. All fields default to user-authored behaviour
+  // when absent so older API responses keep working.
+  is_system_owned?: boolean
+  editable_by_tenant?: boolean
+  deletable_by_tenant?: boolean
+  system_trigger_kind?: 'jira' | 'email' | 'github' | 'webhook' | null
 }
 
 export interface FlowNode {
@@ -2741,6 +3020,56 @@ export interface TelegramHealthStatus {
 }
 
 // v0.6.0: Webhook-as-a-Channel Integration (v0.7.1 adds human-readable slug)
+// ==================== v0.7.x Wave 2-C — Per-trigger Memory Recap config ====================
+//
+// Mirrors backend `TriggerRecapConfigRead`/`TriggerRecapConfigWrite` shapes
+// (see backend/api/routes_trigger_recap.py and the per-kind trigger routers).
+// One config row per trigger instance regardless of kind.
+export interface TriggerRecapConfig {
+  id?: number | null
+  enabled: boolean
+  query_template: string
+  scope: 'agent' | 'trigger_kind' | 'trigger_instance'
+  k: number
+  min_similarity: number
+  vector_kind: 'problem' | 'action' | 'outcome' | 'any'
+  include_failed: boolean
+  format_template: string
+  inject_position: 'prepend_user_msg' | 'system_addendum'
+  max_recap_chars: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TriggerRecapTestResult {
+  rendered_text: string | null
+  cases_used: number
+  config_snapshot: Record<string, unknown>
+  elapsed_ms: number
+  used_sample: boolean
+}
+
+export interface VectorStoreEmbeddingTestResult {
+  success: boolean
+  dims: number
+  sample_norm: number
+  latency_ms: number
+  provider: string
+  model: string
+  error?: string | null
+}
+
+// v0.7.x Wave 2-D — tenant-scoped feature flags surfaced via
+// `GET /api/feature-flags`. Frontend uses these to gate optional UI
+// (e.g. the wizard's Memory Recap step). Older backends without the
+// route 404 — callers should default to permissive flags.
+export interface FeatureFlags {
+  case_memory_enabled: boolean
+  case_memory_recap_enabled?: boolean
+  trigger_binding_enabled?: boolean
+  auto_generation_enabled?: boolean
+}
+
 export interface WebhookIntegration {
   id: number
   tenant_id: string
@@ -2764,6 +3093,7 @@ export interface WebhookIntegration {
   created_at: string
   updated_at: string | null
   inbound_url: string
+  auto_flow_id?: number | null
 }
 
 export interface WebhookIntegrationCreate {
@@ -3122,8 +3452,18 @@ export interface OrganizationData {
   status: string
   user_count: number
   agent_count: number
+  // v0.7.x Trigger Case Memory — per-tenant gates surfaced on the same
+  // payload so the Organization settings UI can render the toggles
+  // without an extra round-trip.
+  case_memory_enabled?: boolean
+  case_memory_recap_enabled?: boolean
   created_at?: string
   updated_at?: string
+}
+
+export interface CaseMemoryConfig {
+  case_memory_enabled: boolean
+  case_memory_recap_enabled: boolean
 }
 
 export interface OrganizationStats {
@@ -3155,6 +3495,7 @@ export interface Project {
   icon: string
   color: string
   agent_id?: number
+  agent_ids?: number[]
   system_prompt_override?: string
   enabled_tools: string[]
   enabled_custom_tools: number[]
@@ -3164,7 +3505,16 @@ export interface Project {
   // Phase 16: KB Configuration
   kb_chunk_size?: number
   kb_chunk_overlap?: number
+  kb_embedding_provider_instance_id?: number | null
+  kb_embedding_provider?: string | null
   kb_embedding_model?: string
+  kb_embedding_dims?: number | null
+  kb_embedding_metric?: string | null
+  kb_vector_store_instance_id?: number | null
+  kb_vector_store_index_id?: number | null
+  kb_vector_collection_name?: string | null
+  kb_vector_namespace?: string | null
+  kb_config?: ProjectKnowledgeConfig | null
   // Phase 16: Memory Configuration
   enable_semantic_memory?: boolean
   semantic_memory_results?: number
@@ -3252,6 +3602,23 @@ export interface ProjectCreate {
   color?: string
   agent_id?: number
   system_prompt_override?: string
+  kb_chunk_size?: number
+  kb_chunk_overlap?: number
+  kb_embedding_provider_instance_id?: number | null
+  kb_embedding_provider?: string | null
+  kb_embedding_model?: string
+  kb_embedding_dims?: number | null
+  kb_embedding_metric?: string | null
+  kb_vector_store_instance_id?: number | null
+  kb_vector_store_index_id?: number | null
+  kb_vector_collection_name?: string | null
+  kb_vector_namespace?: string | null
+  enable_semantic_memory?: boolean
+  semantic_memory_results?: number
+  semantic_similarity_threshold?: number
+  enable_factual_memory?: boolean
+  factual_extraction_threshold?: number
+  agent_ids?: number[]
 }
 
 export interface ProjectConversation {
@@ -3274,6 +3641,20 @@ export interface ProjectDocument {
   status: string
   error?: string
   upload_date?: string
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  vector_store_instance_id?: number | null
+  vector_store_index_id?: number | null
+  vector_collection_name?: string | null
+  vector_namespace?: string | null
+  chunk_strategy?: string | null
+  chunk_size?: number | null
+  chunk_overlap?: number | null
+  parser?: string | null
+  index_version?: number | null
 }
 
 // Phase 15: Skill Projects - Session Management
@@ -3699,6 +4080,52 @@ export interface ProviderInstanceCreate {
   is_default?: boolean
 }
 
+// v0.7.0 — LLM Provider catalog (single source of truth across wizard, Studio, Hub)
+export interface LlmCatalogInstance {
+  id: number
+  instance_name: string
+  base_url: string | null
+  is_default: boolean
+  available_models: string[]
+  health_status: string
+  health_status_reason: string | null
+  is_auto_provisioned: boolean
+  container_status: string | null
+}
+
+export interface LlmCatalogVendor {
+  vendor: string
+  display_name: string
+  default_base_url: string | null
+  supports_discovery: boolean
+  creatable: boolean
+  instances: LlmCatalogInstance[]
+}
+
+export interface ProviderInstanceUsageAgent {
+  id: number
+  name: string
+  model_provider: string
+  model_name: string
+  is_active: boolean
+}
+
+export interface ProviderInstanceUsage {
+  instance_id: number
+  vendor: string
+  instance_name: string
+  agents: ProviderInstanceUsageAgent[]
+  dependent_count: number
+}
+
+export interface CascadeDeleteResult {
+  instance_name: string
+  deleted: boolean
+  reassigned_count: number
+  reassigned_to?: { id: number; instance_name: string; vendor: string } | null
+  unassigned: boolean
+}
+
 /**
  * Vendor catalog entry returned by GET /api/providers/vendors.
  *
@@ -3715,6 +4142,56 @@ export interface VendorInfo {
 }
 
 // ==================== Vector Store Instances (v0.6.0) ====================
+
+export interface VectorStoreIndex {
+  id: number
+  tenant_id?: string
+  vector_store_instance_id?: number | null
+  purpose?: string | null
+  owner_type?: string | null
+  owner_id?: number | null
+  collection_name?: string | null
+  namespace?: string | null
+  index_name?: string | null
+  physical_collection_name?: string | null
+  physical_namespace?: string | null
+  physical_index_name?: string | null
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  embedding_task?: string | null
+  embedding_task_document?: string | null
+  embedding_task_query?: string | null
+  contract_hash?: string | null
+  vector_count?: number | null
+  document_count?: number | null
+  chunk_count?: number | null
+  health_status?: string | null
+  is_default?: boolean
+  is_active?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface VectorStoreIndexResolveRequest {
+  purpose: string
+  owner_type?: string
+  owner_id?: number
+  contract?: Record<string, any>
+  embedding_provider_instance_id?: number | null
+  embedding_provider?: string | null
+  embedding_model?: string | null
+  embedding_dims?: number | null
+  embedding_metric?: string | null
+  embedding_task_document?: string | null
+  embedding_task_query?: string | null
+  physical_collection_name?: string | null
+  physical_index_name?: string | null
+  physical_namespace?: string | null
+  create?: boolean
+}
 
 export interface VectorStoreInstance {
   id: number
@@ -3736,6 +4213,10 @@ export interface VectorStoreInstance {
   container_status?: string | null  // none | creating | running | stopped | error
   container_name?: string | null
   container_port?: number | null
+  indexes?: VectorStoreIndex[]
+  default_index?: VectorStoreIndex | null
+  default_vector_store_index_id?: number | null
+  long_term_memory_index_id?: number | null
   created_at?: string | null
   updated_at?: string | null
 }
@@ -3759,7 +4240,7 @@ export interface VectorStoreInstanceCreate {
 export interface ASRInstance {
   id: number
   tenant_id: string
-  vendor: string  // speaches
+  vendor: string  // 'speaches' | 'openai_whisper'
   instance_name: string
   description?: string | null
   base_url?: string | null
@@ -3790,6 +4271,19 @@ export interface ASRInstanceCreate {
   mem_limit?: string
   cpu_quota?: number
   default_model?: string
+}
+
+/** Cascade summary returned by DELETE /api/asr-instances/{id} — describes
+ * what happened to agent_skill rows pinned to the deleted instance. */
+export interface ASRCascadeSummary {
+  reassigned: number
+  disabled: number
+  successor_instance_id: number | null
+}
+
+export interface ASRDeleteResponse {
+  detail: string
+  cascade: ASRCascadeSummary
 }
 
 // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
@@ -4374,6 +4868,176 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete project pattern')
   },
 
+  // Agent Teams
+  async getTeams(options: { page?: number; pageSize?: number; status?: string; includeArchived?: boolean } = {}): Promise<TeamListResponse> {
+    const params = new URLSearchParams()
+    params.set('page', String(options.page ?? 1))
+    params.set('page_size', String(options.pageSize ?? 20))
+    if (options.status) params.set('status', options.status)
+    if (options.includeArchived) params.set('include_archived', 'true')
+
+    const res = await authenticatedFetch(`${API_URL}/api/teams?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch teams')
+    return res.json()
+  },
+
+  async getTeam(id: number): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team')
+    return res.json()
+  },
+
+  async createTeam(team: TeamCreatePayload): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(team),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create team')
+    return res.json()
+  },
+
+  async updateTeam(id: number, team: Partial<TeamCreatePayload>): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(team),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team')
+    return res.json()
+  },
+
+  async archiveTeam(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to archive team')
+  },
+
+  async addTeamMember(teamId: number, member: TeamMemberCreatePayload): Promise<TeamMemberResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(member),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to add team member')
+    return res.json()
+  },
+
+  async updateTeamMember(teamId: number, agentId: number, member: TeamMemberUpdatePayload): Promise<TeamMemberResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/${agentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(member),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team member')
+    return res.json()
+  },
+
+  async removeTeamAgentMember(teamId: number, agentId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/${agentId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove team member')
+  },
+
+  async reorderTeamMembers(teamId: number, members: Array<{ agent_id: number; execution_order: number }>): Promise<TeamDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reorder team members')
+    return res.json()
+  },
+
+  async startTeamRun(teamId: number): Promise<TeamRunStartResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start team run')
+    return res.json()
+  },
+
+  async getTeamRuns(teamId: number, options: { page?: number; pageSize?: number } = {}): Promise<TeamRunListResponse> {
+    const params = new URLSearchParams()
+    params.set('page', String(options.page ?? 1))
+    params.set('page_size', String(options.pageSize ?? 20))
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team runs')
+    return res.json()
+  },
+
+  async getTeamRun(teamId: number, runId: number): Promise<TeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs/${runId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch team run')
+    return res.json()
+  },
+
+  async getWatcherTeamRuns(options: {
+    limit?: number
+    offset?: number
+    teamId?: number | null
+    status?: string
+    createdAfter?: string
+    createdBefore?: string
+    tenantId?: string
+  } = {}): Promise<WatcherTeamRunListResponse> {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 50))
+    params.set('offset', String(options.offset ?? 0))
+    if (options.teamId) params.set('team_id', String(options.teamId))
+    if (options.status) params.set('status', options.status)
+    if (options.createdAfter) params.set('created_after', options.createdAfter)
+    if (options.createdBefore) params.set('created_before', options.createdBefore)
+    if (options.tenantId) params.set('tenant_id', options.tenantId)
+
+    const res = await authenticatedFetch(`${API_URL}/api/watcher/team-runs?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch watcher team runs')
+    return res.json()
+  },
+
+  async getWatcherTeamRun(runId: number): Promise<WatcherTeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/watcher/team-runs/${runId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch watcher team run')
+    return res.json()
+  },
+
+  async cancelTeamRun(teamId: number, runId: number): Promise<TeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs/${runId}/cancel`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to cancel team run')
+    return res.json()
+  },
+
+  async createTeamTrigger(teamId: number, trigger: TeamTriggerBindingCreatePayload): Promise<TeamTriggerResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trigger),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to bind team trigger')
+    return res.json()
+  },
+
+  async updateTeamTrigger(teamId: number, triggerId: number, trigger: TeamTriggerBindingUpdatePayload): Promise<TeamTriggerResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers/${triggerId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trigger),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update team trigger')
+    return res.json()
+  },
+
+  async deleteTeamTrigger(teamId: number, triggerId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/triggers/${triggerId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to remove team trigger')
+  },
+
   // Agents
   async getAgents(activeOnly = false): Promise<Agent[]> {
     const params = new URLSearchParams()
@@ -4700,6 +5364,12 @@ export const api = {
   async getTriggerCatalog(): Promise<TriggerCatalogEntry[]> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch trigger catalog')
+    return res.json()
+  },
+
+  async getWizardManifests(): Promise<WizardManifest[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/wizards/manifests`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wizard manifests')
     return res.json()
   },
 
@@ -5082,6 +5752,44 @@ export const api = {
     return res.json()
   },
 
+  async getAgentKnowledgeConfig(agentId: number): Promise<AgentKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge configuration')
+    return res.json()
+  },
+
+  async updateAgentKnowledgeConfig(agentId: number, config: AgentKnowledgeConfigUpdate): Promise<AgentKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save knowledge configuration')
+    return res.json()
+  },
+
+  async getAgentKnowledgeEmbeddingOptions(agentId: number): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/embedding-options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch embedding options')
+    return res.json()
+  },
+
+  async getEmbeddingProviderOptions(): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/embedding-providers/options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch embedding provider options')
+    return res.json()
+  },
+
+  async testEmbeddingProvider(request: EmbeddingProviderTestRequest): Promise<EmbeddingProviderTestResult> {
+    const res = await authenticatedFetch(`${API_URL}/api/embedding-providers/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test embedding provider')
+    return res.json()
+  },
+
   async getKnowledgeDocument(agentId: number, docId: number): Promise<AgentKnowledge> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch knowledge document')
@@ -5123,13 +5831,21 @@ export const api = {
     return res.json()
   },
 
-  async searchAgentKnowledge(agentId: number, query: string, maxResults = 5): Promise<KnowledgeChunk[]> {
+  async searchAgentKnowledge(agentId: number, query: string, maxResults = 5): Promise<KnowledgeSearchResult[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, max_results: maxResults }),
     })
     if (!res.ok) await handleApiError(res, 'Failed to search agent knowledge')
+    return res.json()
+  },
+
+  async reprocessKnowledgeDocument(agentId: number, docId: number): Promise<{ message: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}/reprocess`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reprocess knowledge document')
     return res.json()
   },
 
@@ -6269,16 +6985,6 @@ export const api = {
     return res.json()
   },
 
-  async createEmailNotificationSubscription(id: number, data: EmailNotificationSubscriptionRequest): Promise<EmailNotificationSubscriptionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/notification-subscription`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to enable email notification subscription')
-    return res.json()
-  },
-
   async pollEmailTriggerNow(id: number): Promise<EmailPollNowResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/poll-now`, {
       method: 'POST',
@@ -6399,70 +7105,11 @@ export const api = {
     return res.json()
   },
 
-  async createJiraNotificationSubscription(id: number, data: JiraNotificationSubscriptionRequest): Promise<JiraNotificationSubscriptionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/notification-subscription`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to enable Jira notification subscription')
-    return res.json()
-  },
-
   async pollJiraTriggerNow(id: number): Promise<JiraPollNowResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/poll-now`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to poll Jira trigger')
-    return res.json()
-  },
-
-  async listScheduleTriggers(): Promise<ScheduleTrigger[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule triggers')
-    return res.json()
-  },
-
-  async getScheduleTrigger(id: number): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`)
-    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule trigger')
-    return res.json()
-  },
-
-  async createScheduleTrigger(data: ScheduleTriggerCreateRequest): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to create schedule trigger')
-    return res.json()
-  },
-
-  async updateScheduleTrigger(id: number, data: ScheduleTriggerUpdateRequest): Promise<ScheduleTrigger> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to update schedule trigger')
-    return res.json()
-  },
-
-  async deleteScheduleTrigger(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete schedule trigger')
-  },
-
-  async previewScheduleTrigger(data: SchedulePreviewRequest): Promise<SchedulePreviewResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to preview schedule')
     return res.json()
   },
 
@@ -6505,17 +7152,7 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
   },
 
-  async testGitHubTriggerConnection(data: GitHubTriggerTestConnectionRequest): Promise<GitHubTriggerTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
-
-  // ---- v0.7.0: GitHub Hub Integrations (shared PAT, mirrors Jira) ----
+  // ---- v0.7.0: GitHub Hub Integrations (mirrors Jira) ----
 
   async listGitHubIntegrations(): Promise<GitHubIntegration[]> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`)
@@ -6550,26 +7187,6 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
   },
 
-  async testGitHubConnection(data: GitHubIntegrationTestConnectionRequest): Promise<GitHubIntegrationTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
-
-  async testGitHubConnectionForId(id: number, data: GitHubIntegrationTestConnectionRequest = {}): Promise<GitHubIntegrationTestConnectionResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
-    return res.json()
-  },
-
   // PR Submitted criteria evaluator. Posts the criteria + an optional sample
   // payload to the backend, which runs the same matcher used by the
   // production webhook dispatcher and returns `{matched, reason}`.
@@ -6598,7 +7215,6 @@ export const api = {
       email: `/api/triggers/email/${id}`,
       webhook: `/api/triggers/webhook/${id}`,
       jira: `/api/triggers/jira/${id}`,
-      schedule: `/api/triggers/schedule/${id}`,
       github: `/api/triggers/github/${id}`,
     }
     const path = pathByKind[kind]
@@ -6666,6 +7282,113 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
+    return res.json()
+  },
+
+  // v0.7.x Wave 2-C/D — per-trigger Memory Recap config CRUD + test endpoint.
+  // Single endpoint family per kind: /api/triggers/{kind}/{id}/recap-config and
+  // /api/triggers/{kind}/{id}/test-recap. Modern backends return a disabled
+  // default object when no row exists; keep 404-as-null for older deployments.
+  async getTriggerRecapConfig(kind: string, id: number): Promise<TriggerRecapConfig | null> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`)
+    if (res.status === 404) return null
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger recap config')
+    return res.json()
+  },
+
+  async putTriggerRecapConfig(
+    kind: string,
+    id: number,
+    config: Partial<TriggerRecapConfig>,
+  ): Promise<TriggerRecapConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save trigger recap config')
+    return res.json()
+  },
+
+  async deleteTriggerRecapConfig(kind: string, id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/recap-config`, {
+      method: 'DELETE',
+    })
+    if (!res.ok && res.status !== 404) {
+      await handleApiError(res, 'Failed to delete trigger recap config')
+    }
+  },
+
+  async testTriggerRecap(
+    kind: string,
+    id: number,
+    body: { query?: string; sample_payload?: unknown },
+  ): Promise<TriggerRecapTestResult> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/${kind}/${id}/test-recap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to run test recap')
+    return res.json()
+  },
+
+  // v0.7.x Wave 2-D — tenant feature flags. Returns a permissive default
+  // when the backend route is missing (older deployments) so optional UI
+  // remains visible rather than being silently hidden.
+  async getFeatureFlags(): Promise<FeatureFlags> {
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/feature-flags`)
+      if (res.status === 404) {
+        console.debug('[feature-flags] endpoint missing — defaulting case_memory_enabled=true')
+        return { case_memory_enabled: true }
+      }
+      if (!res.ok) await handleApiError(res, 'Failed to fetch feature flags')
+      return res.json()
+    } catch (err) {
+      console.debug('[feature-flags] fetch failed — defaulting case_memory_enabled=true', err)
+      return { case_memory_enabled: true }
+    }
+  },
+
+  async testEmbedding(instanceId: number, text: string): Promise<VectorStoreEmbeddingTestResult> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/vector-stores/${instanceId}/test-embedding`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      },
+    )
+    if (!res.ok) {
+      // Surface backend error body when present so the inline panel can
+      // render `error ✗ | <message>` without throwing the whole UI.
+      try {
+        const data = await res.json()
+        const message = typeof data?.detail === 'string'
+          ? data.detail
+          : (typeof data?.error === 'string' ? data.error : 'Failed to test embedding')
+        return {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: message,
+        }
+      } catch {
+        return {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: `HTTP ${res.status}`,
+        }
+      }
+    }
     return res.json()
   },
 
@@ -7066,6 +7789,23 @@ export const api = {
     return res.json()
   },
 
+  // v0.7.x Trigger Case Memory — per-tenant gates. Routed through the
+  // tenant self-service settings router (org.settings.write permission).
+  // tenant_id is accepted for symmetry with other org-scoped methods,
+  // but the endpoint resolves the tenant from the authenticated session.
+  async updateOrganizationCaseMemoryConfig(
+    _tenantId: string,
+    config: { case_memory_enabled?: boolean; case_memory_recap_enabled?: boolean }
+  ): Promise<CaseMemoryConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/tenant/me/case-memory-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update case memory config')
+    return res.json()
+  },
+
   // Phase 14.4: Projects API
   async getProjects(includeArchived: boolean = false): Promise<Project[]> {
     const params = new URLSearchParams()
@@ -7109,11 +7849,37 @@ export const api = {
   },
 
   // Project Knowledge
-  async uploadProjectDocument(projectId: number, file: File): Promise<ProjectDocument> {
+  async getProjectKnowledgeConfig(projectId: number): Promise<ProjectKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/config`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project knowledge configuration')
+    return res.json()
+  },
+
+  async updateProjectKnowledgeConfig(projectId: number, config: ProjectKnowledgeConfigUpdate): Promise<ProjectKnowledgeConfig> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save project knowledge configuration')
+    return res.json()
+  },
+
+  async getProjectKnowledgeEmbeddingOptions(projectId: number): Promise<EmbeddingOptionsResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/embedding-options`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch project embedding options')
+    return res.json()
+  },
+
+  async uploadProjectDocument(projectId: number, file: File, chunkSize?: number, chunkOverlap?: number): Promise<ProjectDocument> {
     const formData = new FormData()
     formData.append('file', file)
+    const params = new URLSearchParams()
+    if (typeof chunkSize === 'number') params.set('chunk_size', String(chunkSize))
+    if (typeof chunkOverlap === 'number') params.set('chunk_overlap', String(chunkOverlap))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
 
-    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/upload`, {
+    const res = await authenticatedFetch(`${API_URL}/api/projects/${projectId}/knowledge/upload${suffix}`, {
       method: 'POST',
       body: formData,
     })
@@ -9051,11 +9817,50 @@ export const api = {
     return res.json()
   },
 
-  async deleteProviderInstance(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete provider instance')
+  async deleteProviderInstance(
+    id: number,
+    options?: { reassignToInstanceId?: number; unassign?: boolean },
+  ): Promise<CascadeDeleteResult> {
+    const body =
+      options?.reassignToInstanceId !== undefined || options?.unassign !== undefined
+        ? {
+            reassign_to_instance_id: options?.reassignToInstanceId,
+            unassign: options?.unassign ?? false,
+          }
+        : undefined
+    const init: RequestInit = { method: 'DELETE' }
+    if (body) {
+      init.headers = { 'Content-Type': 'application/json' }
+      init.body = JSON.stringify(body)
+    }
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}`, init)
+    if (!res.ok) {
+      // 409 → dependents_require_decision: surface the embedded usage payload
+      // so the caller can show the pre-delete reassign modal.
+      if (res.status === 409) {
+        let detail: any = null
+        try { detail = (await res.json()).detail } catch { /* swallow */ }
+        const err: any = new Error(detail?.message || 'Provider instance has dependents')
+        err.status = 409
+        err.code = detail?.error || 'dependents_require_decision'
+        err.usage = detail?.usage as ProviderInstanceUsage | undefined
+        throw err
+      }
+      await handleApiError(res, 'Failed to delete provider instance')
+    }
+    return res.json()
+  },
+
+  async getProviderInstanceUsage(id: number): Promise<ProviderInstanceUsage> {
+    const res = await authenticatedFetch(`${API_URL}/api/provider-instances/${id}/usage`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch provider instance usage')
+    return res.json()
+  },
+
+  async getLlmProvidersCatalog(): Promise<LlmCatalogVendor[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/llm-providers/catalog`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch LLM providers catalog')
+    return res.json()
   },
 
   async testProviderConnection(id: number, model?: string): Promise<{ success: boolean; message: string; latency_ms?: number }> {
@@ -9192,18 +9997,27 @@ export const api = {
     return res.json()
   },
 
-  async deleteVectorStoreInstance(id: number): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}`, {
-      method: 'DELETE',
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to delete vector store instance')
-  },
-
   async testVectorStoreConnection(id: number): Promise<{ success: boolean; message: string; latency_ms?: number; vector_count?: number }> {
     const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/test`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to test vector store connection')
+    return res.json()
+  },
+
+  async getVectorStoreIndexes(id: number): Promise<VectorStoreIndex[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/indexes`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch vector store indexes')
+    return res.json()
+  },
+
+  async resolveVectorStoreIndex(id: number, data: VectorStoreIndexResolveRequest): Promise<VectorStoreIndex> {
+    const res = await authenticatedFetch(`${API_URL}/api/vector-stores/${id}/indexes/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to resolve vector store index')
     return res.json()
   },
 
@@ -9373,11 +10187,14 @@ export const api = {
     return res.json()
   },
 
-  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<void> {
+  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<ASRDeleteResponse> {
+    // Returns the cascade summary so the Hub ASR card can surface a banner
+    // describing how many agent_skill rows were reassigned vs disabled.
     const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}?remove_volume=${removeVolume}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete ASR instance')
+    return res.json()
   },
 
   async asrContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
@@ -9400,20 +10217,10 @@ export const api = {
     return res.json()
   },
 
-  async getDefaultASRInstance(): Promise<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null }> {
-    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`)
-    if (!res.ok) await handleApiError(res, 'Failed to get default ASR instance')
-    return res.json()
-  },
-
-  async setDefaultASRInstance(instanceId: number | null): Promise<void> {
-    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ default_asr_instance_id: instanceId }),
-    })
-    if (!res.ok) await handleApiError(res, 'Failed to update default ASR instance')
-  },
+  // getDefaultASRInstance / setDefaultASRInstance were removed when the
+  // tenant-level ASR default concept was retired. Audio agents now pin a
+  // specific ASR instance via the audio_transcript skill (asr_mode='instance'
+  // + asr_instance_id) — no tenant-wide default exists.
 
   // ==================== SearXNG Instances (v0.6.0-patch.7 per-tenant) ====================
 

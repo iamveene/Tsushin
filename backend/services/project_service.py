@@ -9,6 +9,8 @@ Projects are now tenant-scoped (not user-owned) with agent-based access control.
 import os
 import logging
 import uuid
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +20,47 @@ from sqlalchemy.orm import Session
 from agent.response_helpers import extract_response_text
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_KB_INDEX_VERSION = 1
+_DEFAULT_PROJECT_CHUNK_SIZE = 500
+_DEFAULT_PROJECT_CHUNK_OVERLAP = 50
+_DEFAULT_PROJECT_TOP_K = 5
+_DEFAULT_PROJECT_SIMILARITY_THRESHOLD = 0.3
+
+
+@dataclass(frozen=True)
+class ProjectKnowledgeIndexProfile:
+    tenant_id: str
+    project_id: int
+    embedding_provider_instance_id: Optional[int]
+    embedding_provider: str
+    embedding_model: str
+    embedding_dims: int
+    embedding_metric: str
+    vector_store_instance_id: Optional[int]
+    vector_store_index_id: Optional[int]
+    vector_collection_name: str
+    vector_namespace: str
+    chunk_strategy: str
+    chunk_size: int
+    chunk_overlap: int
+    parser: str
+    index_version: int = _PROJECT_KB_INDEX_VERSION
+
+    def grouping_key(self):
+        return (
+            self.tenant_id,
+            self.project_id,
+            self.embedding_provider_instance_id,
+            self.embedding_provider,
+            self.embedding_model,
+            self.embedding_dims,
+            self.embedding_metric,
+            self.vector_store_instance_id,
+            self.vector_store_index_id,
+            self.vector_collection_name,
+            self.vector_namespace,
+        )
 
 
 class ProjectService:
@@ -60,6 +103,15 @@ class ProjectService:
         kb_chunk_size: int = 500,
         kb_chunk_overlap: int = 50,
         kb_embedding_model: str = "all-MiniLM-L6-v2",
+        kb_embedding_provider_instance_id: Optional[int] = None,
+        kb_embedding_provider: str = "local",
+        kb_embedding_dims: int = 384,
+        kb_embedding_metric: str = "cosine",
+        kb_vector_store_instance_id: Optional[int] = None,
+        kb_chunk_strategy: str = "fixed_text",
+        kb_parser: str = "auto",
+        kb_search_top_k: int = _DEFAULT_PROJECT_TOP_K,
+        kb_similarity_threshold: float = _DEFAULT_PROJECT_SIMILARITY_THRESHOLD,
         # Phase 16: Memory Configuration
         enable_semantic_memory: bool = True,
         semantic_memory_results: int = 10,
@@ -118,6 +170,26 @@ class ProjectService:
             )
             self.db.add(project)
             self.db.flush()  # Get project ID
+
+            self.update_project_knowledge_config_sync(
+                project_id=project.id,
+                tenant_id=tenant_id,
+                data={
+                    "embedding_provider_instance_id": kb_embedding_provider_instance_id,
+                    "embedding_provider": kb_embedding_provider,
+                    "embedding_model": kb_embedding_model,
+                    "embedding_dims": kb_embedding_dims,
+                    "embedding_metric": kb_embedding_metric,
+                    "vector_store_instance_id": kb_vector_store_instance_id,
+                    "chunk_strategy": kb_chunk_strategy,
+                    "chunk_size": kb_chunk_size,
+                    "chunk_overlap": kb_chunk_overlap,
+                    "parser": kb_parser,
+                    "search_top_k": kb_search_top_k,
+                    "similarity_threshold": kb_similarity_threshold,
+                },
+                commit=False,
+            )
 
             # Phase 15: Grant agent access
             if agent_ids:
@@ -345,6 +417,20 @@ class ProjectService:
         if not project:
             return {"status": "error", "error": "Project not found"}
 
+        kb_update_fields = {
+            'kb_embedding_provider_instance_id',
+            'kb_embedding_provider',
+            'kb_embedding_model',
+            'kb_embedding_dims',
+            'kb_embedding_metric',
+            'kb_vector_store_instance_id',
+            'kb_chunk_strategy',
+            'kb_chunk_size',
+            'kb_chunk_overlap',
+            'kb_parser',
+            'kb_search_top_k',
+            'kb_similarity_threshold',
+        }
         allowed_fields = [
             'name', 'description', 'icon', 'color', 'agent_id',
             'system_prompt_override', 'enabled_tools', 'enabled_sandboxed_tools',
@@ -357,9 +443,18 @@ class ProjectService:
         ]
 
         updates = updates or {}
+        kb_updates = {field[3:]: value for field, value in updates.items() if field in kb_update_fields}
         for field, value in updates.items():
             if field in allowed_fields:
                 setattr(project, field, value)
+
+        if kb_updates:
+            self.update_project_knowledge_config_sync(
+                project_id=project_id,
+                tenant_id=tenant_id,
+                data=kb_updates,
+                commit=False,
+            )
 
         # Phase 15: Handle agent access updates
         if 'agent_ids' in updates:
@@ -414,6 +509,12 @@ class ProjectService:
             return {"status": "error", "error": "Project not found"}
 
         try:
+            # Delete vectors before removing knowledge/chunk rows; vector IDs are derived from chunk IDs.
+            try:
+                await self._delete_project_embeddings(project)
+            except Exception as e:
+                self.logger.warning(f"Failed to delete embeddings: {e}")
+
             # Delete knowledge chunks
             knowledge_ids = [k.id for k in self.db.query(ProjectKnowledge).filter(
                 ProjectKnowledge.project_id == project_id
@@ -454,12 +555,6 @@ class ProjectService:
                 ProjectFactMemory.project_id == project_id
             ).delete()
 
-            # Delete embeddings from ChromaDB
-            try:
-                await self._delete_project_embeddings(project)
-            except Exception as e:
-                self.logger.warning(f"Failed to delete embeddings: {e}")
-
             # Delete project
             self.db.delete(project)
             self.db.commit()
@@ -475,6 +570,406 @@ class ProjectService:
     # Project Knowledge
     # =========================================================================
 
+    def _tenant_hash(self, tenant_id: str) -> str:
+        import hashlib
+
+        return hashlib.sha1((tenant_id or "system").encode("utf-8")).hexdigest()[:10]
+
+    def _legacy_project_collection_name(self, project_id: int) -> str:
+        return f"project_{project_id}"
+
+    def _project_collection_base(self, tenant_id: str, project_id: int, dims: int) -> str:
+        return f"project_kb_{self._tenant_hash(tenant_id)}_{project_id}_{dims}"
+
+    def get_project_knowledge_config(self, project_id: int, tenant_id: str):
+        from agent.memory.embedding_catalog import LOCAL_DIMS, LOCAL_MODEL
+        from models import ProjectKnowledgeConfig
+
+        config = (
+            self.db.query(ProjectKnowledgeConfig)
+            .filter(
+                ProjectKnowledgeConfig.tenant_id == tenant_id,
+                ProjectKnowledgeConfig.project_id == project_id,
+            )
+            .first()
+        )
+        if config:
+            return config
+
+        config = ProjectKnowledgeConfig(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            embedding_provider="local",
+            embedding_model=LOCAL_MODEL,
+            embedding_dims=LOCAL_DIMS,
+            embedding_metric="cosine",
+            chunk_strategy="fixed_text",
+            chunk_size=_DEFAULT_PROJECT_CHUNK_SIZE,
+            chunk_overlap=_DEFAULT_PROJECT_CHUNK_OVERLAP,
+            parser="auto",
+            search_top_k=_DEFAULT_PROJECT_TOP_K,
+            similarity_threshold=_DEFAULT_PROJECT_SIMILARITY_THRESHOLD,
+        )
+        self.db.add(config)
+        self.db.commit()
+        self.db.refresh(config)
+        return config
+
+    def update_project_knowledge_config_sync(
+        self,
+        *,
+        project_id: int,
+        tenant_id: str,
+        data: Dict[str, Any],
+        commit: bool = True,
+    ):
+        from agent.memory.embedding_catalog import (
+            normalize_embedding_provider,
+            provider_default_model,
+            validate_embedding_contract,
+        )
+        from models import Project, ProjectKnowledgeConfig, ProviderInstance, VectorStoreInstance
+
+        project = (
+            self.db.query(Project)
+            .filter(Project.id == project_id, Project.tenant_id == tenant_id)
+            .first()
+        )
+        if not project:
+            raise ValueError("Project not found")
+
+        config = (
+            self.db.query(ProjectKnowledgeConfig)
+            .filter(
+                ProjectKnowledgeConfig.tenant_id == tenant_id,
+                ProjectKnowledgeConfig.project_id == project_id,
+            )
+            .first()
+        )
+        if not config:
+            config = ProjectKnowledgeConfig(tenant_id=tenant_id, project_id=project_id)
+            self.db.add(config)
+            self.db.flush()
+
+        provider = normalize_embedding_provider(data.get("embedding_provider", config.embedding_provider or "local"))
+        model = data.get("embedding_model", config.embedding_model) or provider_default_model(provider)
+        dims = data.get("embedding_dims", config.embedding_dims or 384)
+        normalized = validate_embedding_contract(
+            provider=provider,
+            model=model,
+            dimensions=dims,
+            allow_ollama_dynamic=False,
+        )
+
+        provider_instance_id = data.get(
+            "embedding_provider_instance_id",
+            config.embedding_provider_instance_id,
+        )
+        if normalized["provider"] != "local":
+            provider_instance = (
+                self.db.query(ProviderInstance)
+                .filter(
+                    ProviderInstance.id == provider_instance_id,
+                    ProviderInstance.tenant_id == tenant_id,
+                    ProviderInstance.vendor == normalized["provider"],
+                    ProviderInstance.is_active == True,
+                )
+                .first()
+            )
+            if not provider_instance:
+                raise ValueError("A configured embedding provider instance is required")
+        else:
+            provider_instance_id = None
+
+        vector_store_instance_id = data.get(
+            "vector_store_instance_id",
+            config.vector_store_instance_id,
+        )
+        if vector_store_instance_id is not None:
+            instance = (
+                self.db.query(VectorStoreInstance)
+                .filter(
+                    VectorStoreInstance.id == vector_store_instance_id,
+                    VectorStoreInstance.tenant_id == tenant_id,
+                    VectorStoreInstance.is_active == True,
+                )
+                .first()
+            )
+            if not instance:
+                raise ValueError("Vector store instance not found")
+
+        chunk_size = int(data.get("chunk_size", config.chunk_size or _DEFAULT_PROJECT_CHUNK_SIZE))
+        chunk_overlap = int(data.get("chunk_overlap", config.chunk_overlap or _DEFAULT_PROJECT_CHUNK_OVERLAP))
+        if chunk_size < 200 or chunk_size > 8000:
+            raise ValueError("chunk_size must be between 200 and 8000")
+        if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap must be non-negative and smaller than chunk_size")
+
+        chunk_strategy = data.get("chunk_strategy", config.chunk_strategy or "fixed_text")
+        if chunk_strategy not in {"fixed_text", "json_structure", "csv_rows"}:
+            raise ValueError("Invalid chunk_strategy")
+        parser = data.get("parser", config.parser or "auto")
+        if parser not in {"auto", "txt", "csv", "json", "pdf", "docx"}:
+            raise ValueError("Invalid parser")
+
+        config.embedding_provider_instance_id = provider_instance_id
+        config.embedding_provider = str(normalized["provider"])
+        config.embedding_model = str(normalized["model"])
+        config.embedding_dims = int(normalized["dimensions"])
+        config.embedding_metric = data.get("embedding_metric", config.embedding_metric or "cosine")
+        config.vector_store_instance_id = vector_store_instance_id
+        config.vector_store_index_id = None
+        config.vector_collection_name = None
+        config.vector_namespace = None
+        config.chunk_strategy = chunk_strategy
+        config.chunk_size = chunk_size
+        config.chunk_overlap = chunk_overlap
+        config.parser = parser
+        config.search_top_k = int(data.get("search_top_k", config.search_top_k or _DEFAULT_PROJECT_TOP_K))
+        config.similarity_threshold = float(
+            data.get("similarity_threshold", config.similarity_threshold or _DEFAULT_PROJECT_SIMILARITY_THRESHOLD)
+        )
+        config.updated_at = datetime.utcnow()
+
+        project.kb_chunk_size = chunk_size
+        project.kb_chunk_overlap = chunk_overlap
+        project.kb_embedding_model = str(normalized["model"])
+
+        profile = self._project_profile_from_config(config, tenant_id=tenant_id, project_id=project_id)
+        profile = self._project_profile_with_vector_index(profile)
+        config.vector_store_index_id = profile.vector_store_index_id
+        config.vector_collection_name = profile.vector_collection_name
+        config.vector_namespace = profile.vector_namespace
+
+        if commit:
+            self.db.commit()
+            self.db.refresh(config)
+        return config
+
+    def _project_profile_from_config(
+        self,
+        config,
+        *,
+        tenant_id: str,
+        project_id: int,
+    ) -> ProjectKnowledgeIndexProfile:
+        from agent.memory.embedding_catalog import (
+            normalize_embedding_provider,
+            provider_default_model,
+            validate_embedding_contract,
+        )
+
+        provider = normalize_embedding_provider(config.embedding_provider)
+        normalized = validate_embedding_contract(
+            provider=provider,
+            model=config.embedding_model or provider_default_model(provider),
+            dimensions=config.embedding_dims,
+            allow_ollama_dynamic=False,
+        )
+        dims = int(normalized["dimensions"])
+        collection = config.vector_collection_name or self._project_collection_base(tenant_id, project_id, dims)
+        namespace = config.vector_namespace or f"project_kb:{tenant_id}:{project_id}:{dims}"
+        return ProjectKnowledgeIndexProfile(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            embedding_provider_instance_id=config.embedding_provider_instance_id,
+            embedding_provider=str(normalized["provider"]),
+            embedding_model=str(normalized["model"]),
+            embedding_dims=dims,
+            embedding_metric=str(config.embedding_metric or normalized.get("metric") or "cosine"),
+            vector_store_instance_id=config.vector_store_instance_id,
+            vector_store_index_id=getattr(config, "vector_store_index_id", None),
+            vector_collection_name=collection,
+            vector_namespace=namespace,
+            chunk_strategy=config.chunk_strategy or "fixed_text",
+            chunk_size=int(config.chunk_size or _DEFAULT_PROJECT_CHUNK_SIZE),
+            chunk_overlap=int(config.chunk_overlap or _DEFAULT_PROJECT_CHUNK_OVERLAP),
+            parser=config.parser or "auto",
+        )
+
+    def _project_profile_from_knowledge(self, project, knowledge) -> ProjectKnowledgeIndexProfile:
+        from agent.memory.embedding_catalog import LOCAL_DIMS, LOCAL_MODEL, normalize_embedding_provider, provider_default_model
+
+        tenant_id = getattr(knowledge, "tenant_id", None) or project.tenant_id
+        dims = int(getattr(knowledge, "embedding_dims", None) or LOCAL_DIMS)
+        provider = normalize_embedding_provider(getattr(knowledge, "embedding_provider", None))
+        model = getattr(knowledge, "embedding_model", None) or (
+            provider_default_model(provider) if provider != "ollama" else LOCAL_MODEL
+        )
+        collection = (
+            getattr(knowledge, "vector_collection_name", None)
+            or self._legacy_project_collection_name(project.id)
+        )
+        namespace = (
+            getattr(knowledge, "vector_namespace", None)
+            or f"project_kb:{tenant_id}:{project.id}:{dims}"
+        )
+        return ProjectKnowledgeIndexProfile(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            embedding_provider_instance_id=getattr(knowledge, "embedding_provider_instance_id", None),
+            embedding_provider=provider,
+            embedding_model=model,
+            embedding_dims=dims,
+            embedding_metric=getattr(knowledge, "embedding_metric", None) or "cosine",
+            vector_store_instance_id=getattr(knowledge, "vector_store_instance_id", None),
+            vector_store_index_id=getattr(knowledge, "vector_store_index_id", None),
+            vector_collection_name=collection,
+            vector_namespace=namespace,
+            chunk_strategy=getattr(knowledge, "chunk_strategy", None) or "fixed_text",
+            chunk_size=int(getattr(knowledge, "chunk_size", None) or _DEFAULT_PROJECT_CHUNK_SIZE),
+            chunk_overlap=int(getattr(knowledge, "chunk_overlap", None) or _DEFAULT_PROJECT_CHUNK_OVERLAP),
+            parser=getattr(knowledge, "parser", None) or "auto",
+            index_version=int(getattr(knowledge, "index_version", None) or 0),
+        )
+
+    def _project_profile_with_vector_index(
+        self,
+        profile: ProjectKnowledgeIndexProfile,
+    ) -> ProjectKnowledgeIndexProfile:
+        from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+        index = VectorStoreIndexResolver.resolve_or_create(
+            self.db,
+            tenant_id=profile.tenant_id,
+            vector_store_instance_id=profile.vector_store_instance_id,
+            purpose="project_kb",
+            owner_type="project",
+            owner_id=profile.project_id,
+            contract={
+                "embedding_provider_instance_id": profile.embedding_provider_instance_id,
+                "embedding_provider": profile.embedding_provider,
+                "embedding_model": profile.embedding_model,
+                "embedding_dims": profile.embedding_dims,
+                "embedding_metric": profile.embedding_metric,
+            },
+        )
+        return ProjectKnowledgeIndexProfile(
+            tenant_id=profile.tenant_id,
+            project_id=profile.project_id,
+            embedding_provider_instance_id=profile.embedding_provider_instance_id,
+            embedding_provider=profile.embedding_provider,
+            embedding_model=profile.embedding_model,
+            embedding_dims=profile.embedding_dims,
+            embedding_metric=profile.embedding_metric,
+            vector_store_instance_id=profile.vector_store_instance_id,
+            vector_store_index_id=index.id,
+            vector_collection_name=index.physical_collection_name,
+            vector_namespace=index.physical_namespace,
+            chunk_strategy=profile.chunk_strategy,
+            chunk_size=profile.chunk_size,
+            chunk_overlap=profile.chunk_overlap,
+            parser=profile.parser,
+            index_version=profile.index_version,
+        )
+
+    def _resolve_current_project_profile(self, project) -> ProjectKnowledgeIndexProfile:
+        config = self.get_project_knowledge_config(project.id, project.tenant_id)
+        profile = self._project_profile_from_config(
+            config,
+            tenant_id=project.tenant_id,
+            project_id=project.id,
+        )
+        profile = self._project_profile_with_vector_index(profile)
+        config.vector_store_index_id = profile.vector_store_index_id
+        config.vector_collection_name = profile.vector_collection_name
+        config.vector_namespace = profile.vector_namespace
+        self.db.flush()
+        return profile
+
+    def _snapshot_project_profile(self, knowledge, profile: ProjectKnowledgeIndexProfile) -> None:
+        knowledge.tenant_id = profile.tenant_id
+        knowledge.embedding_provider_instance_id = profile.embedding_provider_instance_id
+        knowledge.embedding_provider = profile.embedding_provider
+        knowledge.embedding_model = profile.embedding_model
+        knowledge.embedding_dims = profile.embedding_dims
+        knowledge.embedding_metric = profile.embedding_metric
+        knowledge.vector_store_instance_id = profile.vector_store_instance_id
+        knowledge.vector_store_index_id = profile.vector_store_index_id
+        knowledge.vector_collection_name = profile.vector_collection_name
+        knowledge.vector_namespace = profile.vector_namespace
+        knowledge.chunk_strategy = profile.chunk_strategy
+        knowledge.chunk_size = profile.chunk_size
+        knowledge.chunk_overlap = profile.chunk_overlap
+        knowledge.parser = profile.parser
+        knowledge.index_version = profile.index_version
+
+    def _project_embedding_credentials(self, profile: ProjectKnowledgeIndexProfile) -> Dict[str, Any]:
+        from services.embedding_provider_service import EmbeddingProviderService
+
+        return EmbeddingProviderService.resolve_provider_credentials(
+            tenant_id=profile.tenant_id,
+            provider=profile.embedding_provider,
+            provider_instance_id=profile.embedding_provider_instance_id,
+            db=self.db,
+        )
+
+    def _project_embedding_provider(self, profile: ProjectKnowledgeIndexProfile):
+        from agent.memory.embedding_service import get_shared_embedding_service
+
+        contract = SimpleNamespace(
+            provider=profile.embedding_provider,
+            model=profile.embedding_model,
+            dimensions=profile.embedding_dims,
+            metric=profile.embedding_metric,
+            vector_store_instance_id=profile.vector_store_instance_id,
+        )
+        return get_shared_embedding_service(
+            contract=contract,
+            credentials=self._project_embedding_credentials(profile),
+        )
+
+    def _project_vector_id(self, knowledge_id: int, chunk_id: int) -> str:
+        return f"project_knowledge_{knowledge_id}_chunk_{chunk_id}"
+
+    def _project_sender_key(self, profile: ProjectKnowledgeIndexProfile) -> str:
+        return f"project_kb:{profile.tenant_id}:{profile.project_id}"
+
+    def _project_external_vector_provider(self, profile: ProjectKnowledgeIndexProfile):
+        if profile.vector_store_instance_id is None:
+            return None
+        from models import VectorStoreIndex, VectorStoreInstance
+
+        instance = (
+            self.db.query(VectorStoreInstance)
+            .filter(
+                VectorStoreInstance.id == profile.vector_store_instance_id,
+                VectorStoreInstance.tenant_id == profile.tenant_id,
+                VectorStoreInstance.is_active == True,
+            )
+            .first()
+        )
+        if not instance:
+            return None
+        vendor = (instance.vendor or "").lower()
+        if vendor in {"chroma", "chromadb"}:
+            return None
+
+        from agent.memory.providers.registry import VectorStoreRegistry
+
+        if profile.vector_store_index_id:
+            index = (
+                self.db.query(VectorStoreIndex)
+                .filter(
+                    VectorStoreIndex.id == profile.vector_store_index_id,
+                    VectorStoreIndex.tenant_id == profile.tenant_id,
+                    VectorStoreIndex.is_active == True,
+                )
+                .first()
+            )
+            if index:
+                return VectorStoreRegistry().get_provider_for_index(index, self.db)
+
+        return VectorStoreRegistry().get_provider(
+            profile.vector_store_instance_id,
+            self.db,
+            tenant_id=profile.tenant_id,
+            collection_name=profile.vector_collection_name,
+            namespace=profile.vector_namespace,
+            index_name=profile.vector_collection_name.replace("_", "-"),
+            embedding_dims=profile.embedding_dims,
+        )
+
     async def upload_project_document(
         self,
         tenant_id: str,
@@ -482,8 +977,8 @@ class ProjectService:
         project_id: int = None,
         file_data: bytes = None,
         filename: str = None,
-        chunk_size: int = 500,
-        chunk_overlap: int = 50
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Upload a document to a project's knowledge base.
@@ -513,6 +1008,27 @@ class ProjectService:
             if len(file_data) > doc_service.MAX_FILE_SIZE:
                 return {"status": "error", "error": "File too large"}
 
+            profile = self._resolve_current_project_profile(project)
+            if chunk_size is not None:
+                profile = ProjectKnowledgeIndexProfile(
+                    tenant_id=profile.tenant_id,
+                    project_id=profile.project_id,
+                    embedding_provider_instance_id=profile.embedding_provider_instance_id,
+                    embedding_provider=profile.embedding_provider,
+                    embedding_model=profile.embedding_model,
+                    embedding_dims=profile.embedding_dims,
+                    embedding_metric=profile.embedding_metric,
+                    vector_store_instance_id=profile.vector_store_instance_id,
+                    vector_store_index_id=profile.vector_store_index_id,
+                    vector_collection_name=profile.vector_collection_name,
+                    vector_namespace=profile.vector_namespace,
+                    chunk_strategy=profile.chunk_strategy,
+                    chunk_size=int(chunk_size),
+                    chunk_overlap=int(chunk_overlap if chunk_overlap is not None else profile.chunk_overlap),
+                    parser=profile.parser,
+                    index_version=profile.index_version,
+                )
+
             # Save file - use project_id for path (tenant-scoped)
             storage_path = self._get_project_storage_path(tenant_id, project.creator_id or 0, project_id)
             doc_id = str(uuid.uuid4())
@@ -530,6 +1046,7 @@ class ProjectService:
                 file_size_bytes=len(file_data),
                 status="processing"
             )
+            self._snapshot_project_profile(knowledge, profile)
             self.db.add(knowledge)
             self.db.commit()
             self.db.refresh(knowledge)
@@ -538,7 +1055,7 @@ class ProjectService:
             processing_committed = False
             try:
                 text = await doc_service._extract_text(file_path, knowledge.document_type)
-                chunks = doc_service._chunk_text(text, chunk_size, chunk_overlap)
+                chunks = doc_service._chunk_text(text, profile.chunk_size, profile.chunk_overlap)
 
                 # Store chunks
                 for i, chunk_text in enumerate(chunks):
@@ -559,17 +1076,27 @@ class ProjectService:
                 knowledge.status = "completed"
                 knowledge.processed_date = datetime.utcnow()
 
-                # BUG-389 fix: Commit the completed status BEFORE attempting embeddings.
-                # If embedding storage fails (model download, ChromaDB init, etc.),
-                # the document status is still properly marked as completed with chunks.
+                # Persist chunks first so vector metadata can reference stable chunk IDs.
                 self.db.commit()
+                self.db.refresh(knowledge)
 
-                # BUG-400 fix: Skip embedding storage in the request handler entirely.
-                # The sentence-transformer model loading can crash the uvicorn worker
-                # on memory-constrained fresh installs. Embeddings will be generated
-                # lazily when the user triggers "Regenerate Embeddings" from the UI,
-                # or on the next upload after the model has been warmed up.
-                self.logger.info(f"Document processed: {len(chunks)} chunks. Embeddings deferred (use Regenerate Embeddings).")
+                stored_chunks = self.db.query(ProjectKnowledgeChunk).filter(
+                    ProjectKnowledgeChunk.knowledge_id == knowledge.id
+                ).order_by(ProjectKnowledgeChunk.chunk_index).all()
+                try:
+                    await self._store_project_embeddings(project, knowledge, stored_chunks)
+                    self.db.commit()
+                    self.logger.info(
+                        f"Document processed and indexed: {len(stored_chunks)} chunks for {knowledge.document_name}"
+                    )
+                except Exception as embedding_error:
+                    knowledge.status = "failed"
+                    knowledge.error_message = str(embedding_error)
+                    self.db.commit()
+                    self.logger.error(
+                        f"Document embedding storage failed: {embedding_error}",
+                        exc_info=True,
+                    )
                 processing_committed = True
 
             except Exception as e:
@@ -594,7 +1121,22 @@ class ProjectService:
                     "size_bytes": knowledge.file_size_bytes,
                     "num_chunks": knowledge.num_chunks,
                     "status": knowledge.status,
-                    "error": knowledge.error_message
+                    "error": knowledge.error_message,
+                    "upload_date": knowledge.upload_date.isoformat() if knowledge.upload_date else None,
+                    "embedding_provider_instance_id": knowledge.embedding_provider_instance_id,
+                    "embedding_provider": knowledge.embedding_provider,
+                    "embedding_model": knowledge.embedding_model,
+                    "embedding_dims": knowledge.embedding_dims,
+                    "embedding_metric": knowledge.embedding_metric,
+                    "vector_store_instance_id": knowledge.vector_store_instance_id,
+                    "vector_store_index_id": getattr(knowledge, "vector_store_index_id", None),
+                    "vector_collection_name": knowledge.vector_collection_name,
+                    "vector_namespace": knowledge.vector_namespace,
+                    "chunk_strategy": knowledge.chunk_strategy,
+                    "chunk_size": knowledge.chunk_size,
+                    "chunk_overlap": knowledge.chunk_overlap,
+                    "parser": knowledge.parser,
+                    "index_version": knowledge.index_version,
                 }
             }
 
@@ -637,7 +1179,21 @@ class ProjectService:
                 "num_chunks": doc.num_chunks,
                 "status": doc.status,
                 "error": doc.error_message,
-                "upload_date": doc.upload_date.isoformat() if doc.upload_date else None
+                "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
+                "embedding_provider_instance_id": getattr(doc, "embedding_provider_instance_id", None),
+                "embedding_provider": getattr(doc, "embedding_provider", None),
+                "embedding_model": getattr(doc, "embedding_model", None),
+                "embedding_dims": getattr(doc, "embedding_dims", None),
+                "embedding_metric": getattr(doc, "embedding_metric", None),
+                "vector_store_instance_id": getattr(doc, "vector_store_instance_id", None),
+                "vector_store_index_id": getattr(doc, "vector_store_index_id", None),
+                "vector_collection_name": getattr(doc, "vector_collection_name", None),
+                "vector_namespace": getattr(doc, "vector_namespace", None),
+                "chunk_strategy": getattr(doc, "chunk_strategy", None),
+                "chunk_size": getattr(doc, "chunk_size", None),
+                "chunk_overlap": getattr(doc, "chunk_overlap", None),
+                "parser": getattr(doc, "parser", None),
+                "index_version": getattr(doc, "index_version", None),
             }
             for doc in docs
         ]
@@ -674,6 +1230,9 @@ class ProjectService:
             return {"status": "error", "error": "Document not found"}
 
         try:
+            # Delete vectors before removing chunk rows; vector IDs are derived from chunk IDs.
+            await self._delete_document_embeddings(project, doc)
+
             # Delete chunks
             self.db.query(ProjectKnowledgeChunk).filter(
                 ProjectKnowledgeChunk.knowledge_id == doc_id
@@ -682,9 +1241,6 @@ class ProjectService:
             # Delete file
             if os.path.exists(doc.file_path):
                 os.remove(doc.file_path)
-
-            # Delete embeddings
-            await self._delete_document_embeddings(project, doc)
 
             # Delete record
             self.db.delete(doc)
@@ -970,6 +1526,11 @@ class ProjectService:
             ProjectSemanticMemory.project_id == project.id
         ).count()
 
+        try:
+            kb_config = self.get_project_knowledge_config(project.id, project.tenant_id)
+        except Exception:
+            kb_config = None
+
         return {
             "id": project.id,
             "name": project.name,
@@ -987,6 +1548,19 @@ class ProjectService:
             "kb_chunk_size": project.kb_chunk_size or 500,
             "kb_chunk_overlap": project.kb_chunk_overlap or 50,
             "kb_embedding_model": project.kb_embedding_model or "all-MiniLM-L6-v2",
+            "kb_embedding_provider_instance_id": getattr(kb_config, "embedding_provider_instance_id", None) if kb_config else None,
+            "kb_embedding_provider": getattr(kb_config, "embedding_provider", "local") if kb_config else "local",
+            "kb_embedding_dims": getattr(kb_config, "embedding_dims", 384) if kb_config else 384,
+            "kb_embedding_metric": getattr(kb_config, "embedding_metric", "cosine") if kb_config else "cosine",
+            "kb_vector_store_instance_id": getattr(kb_config, "vector_store_instance_id", None) if kb_config else None,
+            "kb_vector_store_index_id": getattr(kb_config, "vector_store_index_id", None) if kb_config else None,
+            "kb_vector_collection_name": getattr(kb_config, "vector_collection_name", None) if kb_config else None,
+            "kb_vector_namespace": getattr(kb_config, "vector_namespace", None) if kb_config else None,
+            "kb_chunk_strategy": getattr(kb_config, "chunk_strategy", "fixed_text") if kb_config else "fixed_text",
+            "kb_parser": getattr(kb_config, "parser", "auto") if kb_config else "auto",
+            "kb_search_top_k": getattr(kb_config, "search_top_k", _DEFAULT_PROJECT_TOP_K) if kb_config else _DEFAULT_PROJECT_TOP_K,
+            "kb_similarity_threshold": getattr(kb_config, "similarity_threshold", _DEFAULT_PROJECT_SIMILARITY_THRESHOLD) if kb_config else _DEFAULT_PROJECT_SIMILARITY_THRESHOLD,
+            "kb_config": self._project_kb_config_to_dict(kb_config) if kb_config else None,
             # Phase 16: Memory Configuration
             "enable_semantic_memory": project.enable_semantic_memory if project.enable_semantic_memory is not None else True,
             "semantic_memory_results": project.semantic_memory_results or 10,
@@ -998,6 +1572,30 @@ class ProjectService:
             "semantic_memory_count": semantic_memory_count,
             "created_at": project.created_at.isoformat() if project.created_at else None,
             "updated_at": project.updated_at.isoformat() if project.updated_at else None
+        }
+
+    def _project_kb_config_to_dict(self, config) -> Dict[str, Any]:
+        return {
+            "id": config.id,
+            "tenant_id": config.tenant_id,
+            "project_id": config.project_id,
+            "embedding_provider_instance_id": config.embedding_provider_instance_id,
+            "embedding_provider": config.embedding_provider,
+            "embedding_model": config.embedding_model,
+            "embedding_dims": config.embedding_dims,
+            "embedding_metric": config.embedding_metric,
+            "vector_store_instance_id": config.vector_store_instance_id,
+            "vector_store_index_id": getattr(config, "vector_store_index_id", None),
+            "vector_collection_name": config.vector_collection_name,
+            "vector_namespace": config.vector_namespace,
+            "chunk_strategy": config.chunk_strategy,
+            "chunk_size": config.chunk_size,
+            "chunk_overlap": config.chunk_overlap,
+            "parser": config.parser,
+            "search_top_k": config.search_top_k,
+            "similarity_threshold": config.similarity_threshold,
+            "created_at": config.created_at.isoformat() if config.created_at else None,
+            "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         }
 
     def _conversation_to_dict(self, conversation) -> Dict[str, Any]:
@@ -1053,14 +1651,15 @@ class ProjectService:
             if not chunks:
                 return {"status": "error", "error": "No chunks found for document"}
 
-            # Extract chunk text
-            chunk_texts = [chunk.content for chunk in chunks]
-
             # Delete old embeddings if they exist
             await self._delete_document_embeddings(project, knowledge)
 
             # Store new embeddings
-            await self._store_project_embeddings(project, knowledge, chunk_texts)
+            if not getattr(knowledge, "embedding_provider", None):
+                profile = self._resolve_current_project_profile(project)
+                self._snapshot_project_profile(knowledge, profile)
+                self.db.flush()
+            await self._store_project_embeddings(project, knowledge, chunks)
 
             # Update status
             knowledge.status = "completed"
@@ -1068,9 +1667,9 @@ class ProjectService:
 
             return {
                 "status": "success",
-                "message": f"Regenerated embeddings for {len(chunk_texts)} chunks",
+                "message": f"Regenerated embeddings for {len(chunks)} chunks",
                 "document_id": doc_id,
-                "chunks_processed": len(chunk_texts)
+                "chunks_processed": len(chunks)
             }
 
         except Exception as e:
@@ -1090,7 +1689,7 @@ class ProjectService:
         """Get ChromaDB collection name for project."""
         return f"project_{project.id}"
 
-    async def _store_project_embeddings(self, project, knowledge, chunks: List[str]):
+    async def _store_project_embeddings(self, project, knowledge, chunks: List[Any]):
         """
         Store embeddings for project document.
 
@@ -1098,68 +1697,129 @@ class ProjectService:
         to prevent OOM crashes on large documents.
         """
         try:
-            import chromadb
-            from agent.memory.embedding_service import get_shared_embedding_service
             import settings
 
-            persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            profile = self._project_profile_from_knowledge(project, knowledge)
+            chunk_texts = [chunk.content if hasattr(chunk, "content") else str(chunk) for chunk in chunks]
+            if not chunk_texts:
+                return
 
-            collection_name = self._get_collection_name(project)
-            collection = client.get_or_create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
+            embedding_service = self._project_embedding_provider(profile)
+            embeddings = await embedding_service.embed_batch_chunked_async(
+                chunk_texts,
+                batch_size=32,
+                task_type="RETRIEVAL_DOCUMENT",
             )
 
-            # BUG-001 Fix: Use shared service with batched processing (async)
-            embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
-            embeddings = await embedding_service.embed_batch_chunked_async(chunks, batch_size=50)
-
             # Validate we got embeddings for all chunks
-            if len(embeddings) != len(chunks):
+            if len(embeddings) != len(chunk_texts):
                 self.logger.warning(
-                    f"Embedding count mismatch: {len(embeddings)} embeddings for {len(chunks)} chunks"
+                    f"Embedding count mismatch: {len(embeddings)} embeddings for {len(chunk_texts)} chunks"
                 )
                 # Only process chunks we have embeddings for
                 chunks = chunks[:len(embeddings)]
+                chunk_texts = chunk_texts[:len(embeddings)]
 
-            ids = [f"{knowledge.id}_{i}" for i in range(len(chunks))]
-            metadatas = [
-                {
+            records = []
+            for chunk, chunk_text, embedding in zip(chunks, chunk_texts, embeddings):
+                if len(embedding) != profile.embedding_dims:
+                    raise ValueError(
+                        f"Embedding dimension mismatch: expected {profile.embedding_dims}, got {len(embedding)}"
+                    )
+                chunk_id = getattr(chunk, "id", None)
+                chunk_index = getattr(chunk, "chunk_index", 0)
+                metadata = {
+                    "purpose": "project_kb",
+                    "tenant_id": profile.tenant_id,
+                    "project_id": profile.project_id,
                     "document_id": knowledge.id,
+                    "knowledge_id": knowledge.id,
+                    "chunk_id": chunk_id,
+                    "chunk_index": chunk_index,
                     "document_name": knowledge.document_name,
-                    "chunk_index": i
+                    "embedding_provider": profile.embedding_provider,
+                    "embedding_model": profile.embedding_model,
+                    "embedding_dims": profile.embedding_dims,
+                    "vector_store_index_id": profile.vector_store_index_id,
                 }
-                for i in range(len(chunks))
-            ]
+                records.append(
+                    {
+                        "message_id": self._project_vector_id(knowledge.id, chunk_id or chunk_index),
+                        "sender_key": self._project_sender_key(profile),
+                        "text": chunk_text,
+                        "embedding": embedding,
+                        "metadata": metadata,
+                    }
+                )
 
-            collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=chunks,
-                metadatas=metadatas
-            )
+            provider = self._project_external_vector_provider(profile)
+            if provider is not None:
+                await provider.add_batch(records)
+            else:
+                persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
+                from chroma_client_factory import get_chroma_client
+
+                client = get_chroma_client(persist_dir)
+                collection = client.get_or_create_collection(
+                    name=profile.vector_collection_name,
+                    metadata={
+                        "hnsw:space": "cosine",
+                        "purpose": "project_kb",
+                        "embedding_dimensions": profile.embedding_dims,
+                    },
+                )
+                collection.upsert(
+                    ids=[record["message_id"] for record in records],
+                    embeddings=[record["embedding"] for record in records],
+                    documents=[record["text"] for record in records],
+                    metadatas=[
+                        {
+                            "sender_key": record["sender_key"],
+                            "text": record["text"][:1000],
+                            **record["metadata"],
+                        }
+                        for record in records
+                    ],
+                )
 
             self.logger.info(f"Stored {len(embeddings)} embeddings for document {knowledge.document_name}")
 
         except Exception as e:
             self.logger.error(f"Failed to store embeddings: {e}", exc_info=True)
+            raise
 
     async def _delete_document_embeddings(self, project, doc):
         """Delete embeddings for a document."""
         try:
-            import chromadb
             import settings
+            from models import ProjectKnowledgeChunk
+
+            profile = self._project_profile_from_knowledge(project, doc)
+            chunks = self.db.query(ProjectKnowledgeChunk).filter(
+                ProjectKnowledgeChunk.knowledge_id == doc.id
+            ).order_by(ProjectKnowledgeChunk.chunk_index).all()
+            provider = self._project_external_vector_provider(profile)
+            if provider is not None:
+                for chunk in chunks:
+                    try:
+                        await provider.delete_message(self._project_vector_id(doc.id, chunk.id))
+                    except Exception as exc:
+                        self.logger.warning("Failed to delete project vector %s: %s", chunk.id, exc)
+                return
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            from chroma_client_factory import get_chroma_client
 
-            collection_name = self._get_collection_name(project)
+            client = get_chroma_client(persist_dir)
+
             try:
-                collection = client.get_collection(name=collection_name)
-                ids = [f"{doc.id}_{i}" for i in range(doc.num_chunks)]
+                collection = client.get_collection(name=profile.vector_collection_name)
+                ids = [self._project_vector_id(doc.id, chunk.id) for chunk in chunks]
                 if ids:
                     collection.delete(ids=ids)
+                legacy_ids = [f"{doc.id}_{i}" for i in range(doc.num_chunks or 0)]
+                if legacy_ids:
+                    collection.delete(ids=legacy_ids)
             except Exception:
                 pass
 
@@ -1169,17 +1829,31 @@ class ProjectService:
     async def _delete_project_embeddings(self, project):
         """Delete all embeddings for a project."""
         try:
-            import chromadb
             import settings
+            from models import ProjectKnowledge
+
+            collections = {
+                self._legacy_project_collection_name(project.id),
+            }
+            docs = self.db.query(ProjectKnowledge).filter(
+                ProjectKnowledge.project_id == project.id
+            ).all()
+            for doc in docs:
+                profile = self._project_profile_from_knowledge(project, doc)
+                if self._project_external_vector_provider(profile) is not None:
+                    await self._delete_document_embeddings(project, doc)
+                    continue
+                collections.add(profile.vector_collection_name)
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            from chroma_client_factory import get_chroma_client
 
-            collection_name = self._get_collection_name(project)
-            try:
-                client.delete_collection(name=collection_name)
-            except Exception:
-                pass
+            client = get_chroma_client(persist_dir)
+            for collection_name in collections:
+                try:
+                    client.delete_collection(name=collection_name)
+                except Exception:
+                    pass
 
         except Exception as e:
             self.logger.warning(f"Failed to delete project embeddings: {e}")
@@ -1192,42 +1866,114 @@ class ProjectService:
     ) -> List[Dict[str, Any]]:
         """Search project knowledge base."""
         try:
-            import chromadb
-            from agent.memory.embedding_service import get_shared_embedding_service
             import settings
+            from agent.memory.providers.base import VectorRecord
+            from models import ProjectKnowledge, ProjectKnowledgeChunk
+
+            knowledge_rows = (
+                self.db.query(ProjectKnowledge)
+                .filter(
+                    ProjectKnowledge.project_id == project.id,
+                    ProjectKnowledge.status == "completed",
+                )
+                .all()
+            )
+            if not knowledge_rows:
+                return []
+
+            grouped: Dict[Any, ProjectKnowledgeIndexProfile] = {}
+            for row in knowledge_rows:
+                profile = self._project_profile_from_knowledge(project, row)
+                grouped[profile.grouping_key()] = profile
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
+            from chroma_client_factory import get_chroma_client
 
-            collection_name = self._get_collection_name(project)
-            try:
-                collection = client.get_collection(name=collection_name)
-            except Exception:
-                return []
+            client = get_chroma_client(persist_dir)
+            formatted: List[Dict[str, Any]] = []
+            for profile in grouped.values():
+                embedder = self._project_embedding_provider(profile)
+                query_embedding = await embedder.embed_text_async(
+                    query,
+                    task_type="RETRIEVAL_QUERY",
+                )
+                if len(query_embedding) != profile.embedding_dims:
+                    self.logger.warning(
+                        "Skipping Project KB profile with query dim mismatch expected=%s actual=%s",
+                        profile.embedding_dims,
+                        len(query_embedding),
+                    )
+                    continue
 
-            embedding_service = get_shared_embedding_service("all-MiniLM-L6-v2")
-            query_embedding = await embedding_service.embed_text_async(query)
+                records: List[VectorRecord] = []
+                provider = self._project_external_vector_provider(profile)
+                if provider is not None:
+                    records = await provider.search_similar(
+                        query_embedding,
+                        limit=max_results,
+                        sender_key=self._project_sender_key(profile),
+                    )
+                else:
+                    try:
+                        collection = client.get_collection(name=profile.vector_collection_name)
+                    except Exception:
+                        continue
+                    if collection.count() == 0:
+                        continue
+                    raw = collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=max_results,
+                    )
+                    if raw.get("ids") and raw["ids"][0]:
+                        for index in range(len(raw["ids"][0])):
+                            meta = raw["metadatas"][0][index] if raw.get("metadatas") else {}
+                            records.append(
+                                VectorRecord(
+                                    message_id=raw["ids"][0][index],
+                                    text=raw["documents"][0][index] if raw.get("documents") else "",
+                                    distance=raw["distances"][0][index] if raw.get("distances") else 0.0,
+                                    sender_key=meta.get("sender_key"),
+                                    metadata=meta or {},
+                                )
+                            )
 
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=max_results
-            )
+                for record in records:
+                    metadata = record.metadata or {}
+                    is_legacy_profile = (
+                        profile.index_version == 0
+                        or profile.vector_collection_name == self._legacy_project_collection_name(project.id)
+                    )
+                    if not is_legacy_profile:
+                        if metadata.get("purpose") != "project_kb":
+                            continue
+                        if str(metadata.get("tenant_id") or "") != str(profile.tenant_id):
+                            continue
+                        if int(metadata.get("project_id") or 0) != project.id:
+                            continue
+                    chunk_id = metadata.get("chunk_id")
+                    if not chunk_id:
+                        continue
+                    chunk = self.db.query(ProjectKnowledgeChunk).get(int(chunk_id))
+                    if not chunk:
+                        continue
+                    knowledge = self.db.query(ProjectKnowledge).get(chunk.knowledge_id)
+                    if not knowledge or knowledge.project_id != project.id:
+                        continue
+                    similarity = 1.0 / (1.0 + float(record.distance or 0.0))
+                    formatted.append(
+                        {
+                            "content": chunk.content,
+                            "metadata": metadata,
+                            "similarity": similarity,
+                            "document_id": knowledge.id,
+                            "document_name": knowledge.document_name,
+                            "chunk_id": chunk.id,
+                            "chunk_index": chunk.chunk_index,
+                        }
+                    )
 
-            if not results or not results.get('documents'):
-                return []
-
-            documents = results.get('documents', [[]])[0]
-            metadatas = results.get('metadatas', [[]])[0]
-            distances = results.get('distances', [[]])[0]
-
-            return [
-                {
-                    "content": doc,
-                    "metadata": meta,
-                    "similarity": 1 - dist
-                }
-                for doc, meta, dist in zip(documents, metadatas, distances)
-            ]
+            formatted.sort(key=lambda item: item["similarity"], reverse=True)
+            return formatted[:max_results]
 
         except Exception as e:
             self.logger.error(f"Search failed: {e}")

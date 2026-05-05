@@ -26,6 +26,25 @@ export default function StepContainerProvision() {
   const vendor = draft.vendor || ''
   const isOllama = vendor === 'ollama'
   const isKokoro = vendor === 'kokoro'
+  const isOpenAIWhisper = vendor === 'openai_whisper'
+  const isSpeaches = vendor === 'speaches'
+  const isASRLocal = isOpenAIWhisper || isSpeaches
+
+  // Seed sensible defaults the first time the user lands on this step for
+  // openai_whisper / speaches: ASR vendors need slightly different defaults
+  // than the LLM-tuned 4 GB baseline.
+  useEffect(() => {
+    if (isOpenAIWhisper && (draft.mem_limit === '4g' || !draft.mem_limit)) {
+      patchDraft({ mem_limit: '3g' })
+    } else if (isSpeaches && (draft.mem_limit === '4g' || !draft.mem_limit)) {
+      patchDraft({ mem_limit: '2g' })
+    }
+    // Seed instance_name so the Review row never shows "(unnamed)".
+    if (isASRLocal && !draft.instance_name) {
+      patchDraft({ instance_name: isOpenAIWhisper ? 'OpenAI Whisper' : 'Local Whisper' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendor])
 
   useEffect(() => {
     markStepComplete('container', isContainerValid(draft))
@@ -38,8 +57,11 @@ export default function StepContainerProvision() {
       <div>
         <h3 className="text-base font-semibold text-white mb-1">Container setup</h3>
         <p className="text-xs text-tsushin-slate">
-          Tsushin will provision a dedicated <span className="text-white font-medium">{isOllama ? 'Ollama' : isKokoro ? 'Kokoro' : vendor}</span> container
+          Tsushin will provision a dedicated <span className="text-white font-medium">{isOllama ? 'Ollama' : isKokoro ? 'Kokoro' : isOpenAIWhisper ? 'OpenAI Whisper' : isSpeaches ? 'Speaches' : vendor}</span> container
           for this tenant. These settings can be adjusted later.
+          {isOpenAIWhisper && (
+            <> The <span className="font-mono text-white">base</span> model is loaded at boot and kept warm; switch to <span className="font-mono text-white">small</span>/<span className="font-mono text-white">large-v3</span>/<span className="font-mono text-white">turbo</span> later in Settings → ASR.</>
+          )}
         </p>
       </div>
 

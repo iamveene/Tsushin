@@ -12,6 +12,7 @@ from .routes_resources import router as resources_router
 from .routes_flows import router as flows_router
 from .routes_hub import router as hub_router
 from .routes_studio import router as studio_router
+from .routes_teams import router as teams_router
 
 v1_router = APIRouter(tags=["Public API v1"])
 v1_router.include_router(oauth_router, tags=["OAuth"])
@@ -21,3 +22,4 @@ v1_router.include_router(resources_router, tags=["Resources API"])
 v1_router.include_router(flows_router, tags=["Flows API"])
 v1_router.include_router(hub_router, tags=["Hub API"])
 v1_router.include_router(studio_router, tags=["Studio API"])
+v1_router.include_router(teams_router, tags=["Teams API"])

@@ -1,0 +1,952 @@
+{
+  "started_at": "2026-05-03T16:28:08.403Z",
+  "evidence_dir": "/Users/vinicios/code/tsushin/docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z",
+  "agent_id": 6,
+  "agent_name": "CustomerService",
+  "browser": "chromium",
+  "screenshots": [
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z/00-login.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z/01-post-login-tour-dismissed.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z/10-1536-01-before-config.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z/10-1536-02-config-selected.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/final-run-2026-05-03T16-28-08-401Z/99-error-state.png"
+  ],
+  "samples": [],
+  "dialogs": [],
+  "console": [
+    {
+      "type": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    },
+    {
+      "type": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    },
+    {
+      "type": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    }
+  ],
+  "network_errors": [
+    {
+      "url": "https://localhost/api/contacts/",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/agents?",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "requests_failed_or_5xx": [],
+  "api": {
+    "me": {
+      "id": 1,
+      "email": "test@example.com",
+      "full_name": "Test Owner",
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "tenant_name": "Tsushin QA",
+      "is_global_admin": false,
+      "is_active": true,
+      "email_verified": false,
+      "permissions": [
+        "agents.read",
+        "agents.write",
+        "agents.delete",
+        "agents.execute",
+        "contacts.read",
+        "contacts.write",
+        "contacts.delete",
+        "memory.read",
+        "memory.write",
+        "memory.delete",
+        "flows.read",
+        "flows.write",
+        "flows.delete",
+        "flows.execute",
+        "knowledge.read",
+        "knowledge.write",
+        "knowledge.delete",
+        "mcp.instances.read",
+        "mcp.instances.create",
+        "mcp.instances.manage",
+        "mcp.instances.delete",
+        "telegram.instances.create",
+        "telegram.instances.read",
+        "telegram.instances.manage",
+        "telegram.instances.delete",
+        "integrations.slack.read",
+        "integrations.slack.write",
+        "integrations.discord.read",
+        "integrations.discord.write",
+        "integrations.webhook.read",
+        "integrations.webhook.write",
+        "hub.read",
+        "hub.write",
+        "hub.delete",
+        "users.read",
+        "users.invite",
+        "users.manage",
+        "users.remove",
+        "org.settings.read",
+        "org.settings.write",
+        "billing.read",
+        "billing.write",
+        "analytics.read",
+        "audit.read",
+        "audit.export",
+        "tools.read",
+        "tools.manage",
+        "tools.execute",
+        "shell.read",
+        "shell.write",
+        "shell.execute",
+        "shell.approve",
+        "watcher.read",
+        "api_clients.read",
+        "api_clients.write",
+        "api_clients.delete",
+        "scheduler.read",
+        "scheduler.create",
+        "scheduler.edit",
+        "scheduler.cancel",
+        "skills.mcp_server.manage",
+        "skills.custom.create",
+        "skills.custom.read",
+        "skills.custom.execute",
+        "skills.custom.delete",
+        "channel_health.read",
+        "channel_health.write",
+        "agent_communication.read",
+        "agent_communication.write",
+        "vector_stores.read",
+        "vector_stores.write"
+      ],
+      "created_at": "2026-04-06T00:43:33.892205",
+      "last_login_at": "2026-05-03T16:28:09.328165"
+    },
+    "embedding_options": {
+      "providers": [
+        {
+          "provider": "local",
+          "provider_instance_id": null,
+          "instance_name": "Built-in local embeddings",
+          "vendor": "local",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "local",
+              "model": "all-MiniLM-L6-v2",
+              "label": "Local MiniLM",
+              "supported_dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "max_dimensions": 384,
+              "requires_provider_instance": false,
+              "supports_dimensions_parameter": false
+            }
+          ],
+          "default_model": "all-MiniLM-L6-v2",
+          "default_dimensions": 384,
+          "test_status": "built_in"
+        },
+        {
+          "provider": "gemini",
+          "provider_instance_id": 4,
+          "instance_name": "gemini1",
+          "vendor": "gemini",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-2",
+              "label": "Gemini Embedding 2",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-001",
+              "label": "Gemini Embedding 001",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "gemini-embedding-2",
+          "default_dimensions": 1536,
+          "test_status": "healthy"
+        },
+        {
+          "provider": "ollama",
+          "provider_instance_id": 21,
+          "instance_name": "Ollama (Local)",
+          "vendor": "ollama",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": "http://host.docker.internal:11434",
+          "models": [
+            {
+              "provider": "ollama",
+              "model": "nomic-embed-text",
+              "label": "nomic-embed-text",
+              "supported_dimensions": [],
+              "default_dimensions": null,
+              "max_dimensions": null,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "nomic-embed-text",
+          "default_dimensions": null,
+          "test_status": "unknown"
+        },
+        {
+          "provider": "openai",
+          "provider_instance_id": 5,
+          "instance_name": "op1",
+          "vendor": "openai",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-small",
+              "label": "OpenAI text-embedding-3-small",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                1536
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 1536,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-large",
+              "label": "OpenAI text-embedding-3-large",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                3072
+              ],
+              "default_dimensions": 3072,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "text-embedding-3-small",
+          "default_dimensions": 1536,
+          "test_status": "unknown"
+        }
+      ],
+      "default": {
+        "provider": "local",
+        "provider_instance_id": null,
+        "model": "all-MiniLM-L6-v2",
+        "dimensions": 384
+      }
+    },
+    "vector_stores": [
+      {
+        "id": 19,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "vendor": "qdrant",
+        "instance_name": "gemini-1536",
+        "description": "Wave 3 provisioned: Qdrant + Gemini 1536-d for case-memory v2 testing.",
+        "base_url": "http://vs-qdrant-0fe9a9f6-19:6333",
+        "credentials_configured": true,
+        "credentials_preview": "AIza...jEGY",
+        "extra_config": {
+          "embedding_provider": "gemini",
+          "embedding_model": "gemini-embedding-001",
+          "embedding_dims": 1536,
+          "embedding_metric": "cosine",
+          "embedding_task_document": "RETRIEVAL_DOCUMENT",
+          "embedding_task_query": "RETRIEVAL_QUERY",
+          "collection_name": "case_memory_tenant_20260406004333855618_c58c99"
+        },
+        "security_config": {},
+        "health_status": "healthy",
+        "health_status_reason": "Qdrant connected",
+        "last_health_check": "2026-04-29T22:00:18.247185",
+        "is_default": false,
+        "is_active": true,
+        "is_auto_provisioned": true,
+        "container_status": "running",
+        "container_name": "tsushin-vs-qdrant-0fe9a9f6-19",
+        "container_port": 6300,
+        "created_at": "2026-04-29T21:20:53.044105",
+        "updated_at": "2026-04-30T06:25:50.589994"
+      }
+    ],
+    "selected_vector_store_id": 19,
+    "original_agent": {
+      "id": 6,
+      "contact_id": 6,
+      "contact_name": "CustomerService",
+      "system_prompt": "You are CustomerService, a friendly and helpful customer support agent.\n\nYour role:\n- Assist customers with inquiries and issues\n- Provide product/service information\n- Resolve problems efficiently\n- Escalate complex issues when needed\n- Maintain a positive customer experience\n\nCommunication style:\n- Warm and empathetic\n- Patient and understanding\n- Solution-oriented\n- Professional and courteous\n\nBest practices:\n- Listen actively to customer concerns\n- Acknowledge frustrations\n- Provide step-by-step solutions\n- Follow up to ensure resolution\n- Thank customers for their patience",
+      "tone_preset_id": null,
+      "tone_preset_name": null,
+      "custom_tone": null,
+      "persona_id": null,
+      "persona_name": null,
+      "keywords": [],
+      "model_provider": "gemini",
+      "model_name": "gemini-2.5-flash",
+      "response_template": "{response}",
+      "memory_size": null,
+      "trigger_dm_enabled": true,
+      "trigger_group_filters": [],
+      "trigger_number_filters": null,
+      "context_message_count": null,
+      "context_char_limit": null,
+      "enable_semantic_search": true,
+      "semantic_search_results": 10,
+      "semantic_similarity_threshold": 0.5,
+      "memory_decay_enabled": false,
+      "memory_decay_lambda": 0.01,
+      "memory_decay_archive_threshold": 0.05,
+      "memory_decay_mmr_lambda": 0.5,
+      "provider_instance_id": 4,
+      "vector_store_instance_id": null,
+      "vector_store_mode": "override",
+      "max_agentic_rounds": 1,
+      "max_agentic_loop_bytes": 8192,
+      "is_active": true,
+      "is_default": false,
+      "skills_count": 3,
+      "enabled_channels": [
+        "playground",
+        "whatsapp",
+        "telegram"
+      ],
+      "whatsapp_integration_id": 3,
+      "telegram_integration_id": null,
+      "slack_integration_id": null,
+      "discord_integration_id": null,
+      "webhook_integration_id": null,
+      "created_at": "2026-04-06T00:43:33.958760",
+      "updated_at": "2026-05-02T13:43:04.460256"
+    },
+    "original_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "original_docs": []
+  },
+  "qdrant": {
+    "before_1536": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000420125
+      }
+    },
+    "after_cleanup_1536": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000427375
+      }
+    },
+    "after_cleanup_768": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 0,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 768,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 0
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000112417
+      }
+    },
+    "case_memory_after_cleanup": {
+      "status": 200,
+      "ok": true,
+      "data": {
+        "result": {
+          "status": "green",
+          "optimizer_status": "ok",
+          "indexed_vectors_count": 0,
+          "points_count": 30,
+          "segments_count": 2,
+          "config": {
+            "params": {
+              "vectors": {
+                "size": 1536,
+                "distance": "Cosine"
+              },
+              "shard_number": 1,
+              "replication_factor": 1,
+              "write_consistency_factor": 1,
+              "on_disk_payload": true
+            },
+            "hnsw_config": {
+              "m": 16,
+              "ef_construct": 100,
+              "full_scan_threshold": 10000,
+              "max_indexing_threads": 0,
+              "on_disk": false
+            },
+            "optimizer_config": {
+              "deleted_threshold": 0.2,
+              "vacuum_min_vector_number": 1000,
+              "default_segment_number": 0,
+              "max_segment_size": null,
+              "memmap_threshold": null,
+              "indexing_threshold": 20000,
+              "flush_interval_sec": 5,
+              "max_optimization_threads": null
+            },
+            "wal_config": {
+              "wal_capacity_mb": 32,
+              "wal_segments_ahead": 0
+            },
+            "quantization_config": null,
+            "strict_mode_config": {
+              "enabled": false
+            }
+          },
+          "payload_schema": {
+            "sender_key": {
+              "data_type": "keyword",
+              "points": 30
+            }
+          }
+        },
+        "status": "ok",
+        "time": 0.000100166
+      }
+    }
+  },
+  "agent_kb": {
+    "10-1536_selects_before": [
+      {
+        "i": 0,
+        "value": "local:local",
+        "options": [
+          {
+            "value": "local:local",
+            "text": "Built-in local embeddings"
+          },
+          {
+            "value": "gemini:4",
+            "text": "gemini1"
+          },
+          {
+            "value": "ollama:21",
+            "text": "Ollama (Local)"
+          },
+          {
+            "value": "openai:5",
+            "text": "op1"
+          }
+        ]
+      },
+      {
+        "i": 1,
+        "value": "all-MiniLM-L6-v2",
+        "options": [
+          {
+            "value": "all-MiniLM-L6-v2",
+            "text": "Local MiniLM"
+          }
+        ]
+      },
+      {
+        "i": 2,
+        "value": "384",
+        "options": [
+          {
+            "value": "384",
+            "text": "384"
+          }
+        ]
+      },
+      {
+        "i": 3,
+        "value": "",
+        "options": [
+          {
+            "value": "",
+            "text": "Built-in Chroma"
+          },
+          {
+            "value": "19",
+            "text": "gemini-1536 (qdrant)"
+          }
+        ]
+      },
+      {
+        "i": 4,
+        "value": "fixed_text",
+        "options": [
+          {
+            "value": "fixed_text",
+            "text": "Fixed text"
+          },
+          {
+            "value": "json_structure",
+            "text": "JSON structure"
+          },
+          {
+            "value": "csv_rows",
+            "text": "CSV rows"
+          }
+        ]
+      },
+      {
+        "i": 5,
+        "value": "auto",
+        "options": [
+          {
+            "value": "auto",
+            "text": "Auto"
+          },
+          {
+            "value": "txt",
+            "text": "TXT"
+          },
+          {
+            "value": "csv",
+            "text": "CSV"
+          },
+          {
+            "value": "json",
+            "text": "JSON"
+          },
+          {
+            "value": "pdf",
+            "text": "PDF"
+          },
+          {
+            "value": "docx",
+            "text": "DOCX"
+          }
+        ]
+      }
+    ]
+  },
+  "project_kb": {},
+  "long_term_memory": {},
+  "cleanup": {
+    "deleted_agent_docs": [],
+    "restored_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "final_kb_config": {
+      "id": 2,
+      "tenant_id": "tenant_20260406004333855618_c58c99",
+      "agent_id": 6,
+      "embedding_provider_instance_id": null,
+      "embedding_provider": "local",
+      "embedding_model": "all-MiniLM-L6-v2",
+      "embedding_dims": 384,
+      "embedding_metric": "cosine",
+      "vector_store_instance_id": null,
+      "vector_collection_name": null,
+      "vector_namespace": null,
+      "chunk_strategy": "fixed_text",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "parser": "auto",
+      "search_top_k": 5,
+      "similarity_threshold": 0.3
+    },
+    "final_agent_docs": [],
+    "final_projects_named": []
+  },
+  "bugs": [],
+  "assertions": [
+    {
+      "name": "Gemini Embedding 2 options expose 1536 and 768",
+      "pass": true,
+      "details": [
+        {
+          "provider": "local",
+          "provider_instance_id": null,
+          "instance_name": "Built-in local embeddings",
+          "vendor": "local",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "local",
+              "model": "all-MiniLM-L6-v2",
+              "label": "Local MiniLM",
+              "supported_dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "max_dimensions": 384,
+              "requires_provider_instance": false,
+              "supports_dimensions_parameter": false
+            }
+          ],
+          "default_model": "all-MiniLM-L6-v2",
+          "default_dimensions": 384,
+          "test_status": "built_in"
+        },
+        {
+          "provider": "gemini",
+          "provider_instance_id": 4,
+          "instance_name": "gemini1",
+          "vendor": "gemini",
+          "configured": true,
+          "health_status": "healthy",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-2",
+              "label": "Gemini Embedding 2",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "gemini",
+              "model": "gemini-embedding-001",
+              "label": "Gemini Embedding 001",
+              "supported_dimensions": [
+                768,
+                1536,
+                3072
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "gemini-embedding-2",
+          "default_dimensions": 1536,
+          "test_status": "healthy"
+        },
+        {
+          "provider": "ollama",
+          "provider_instance_id": 21,
+          "instance_name": "Ollama (Local)",
+          "vendor": "ollama",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": "http://host.docker.internal:11434",
+          "models": [
+            {
+              "provider": "ollama",
+              "model": "nomic-embed-text",
+              "label": "nomic-embed-text",
+              "supported_dimensions": [],
+              "default_dimensions": null,
+              "max_dimensions": null,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "nomic-embed-text",
+          "default_dimensions": null,
+          "test_status": "unknown"
+        },
+        {
+          "provider": "openai",
+          "provider_instance_id": 5,
+          "instance_name": "op1",
+          "vendor": "openai",
+          "configured": true,
+          "health_status": "unknown",
+          "base_url": null,
+          "models": [
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-small",
+              "label": "OpenAI text-embedding-3-small",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                1536
+              ],
+              "default_dimensions": 1536,
+              "max_dimensions": 1536,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            },
+            {
+              "provider": "openai",
+              "model": "text-embedding-3-large",
+              "label": "OpenAI text-embedding-3-large",
+              "supported_dimensions": [
+                256,
+                512,
+                1024,
+                3072
+              ],
+              "default_dimensions": 3072,
+              "max_dimensions": 3072,
+              "requires_provider_instance": true,
+              "supports_dimensions_parameter": true
+            }
+          ],
+          "default_model": "text-embedding-3-small",
+          "default_dimensions": 1536,
+          "test_status": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "External Qdrant vector store is available and healthy",
+      "pass": true,
+      "details": [
+        {
+          "id": 19,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "vendor": "qdrant",
+          "instance_name": "gemini-1536",
+          "description": "Wave 3 provisioned: Qdrant + Gemini 1536-d for case-memory v2 testing.",
+          "base_url": "http://vs-qdrant-0fe9a9f6-19:6333",
+          "credentials_configured": true,
+          "credentials_preview": "AIza...jEGY",
+          "extra_config": {
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-001",
+            "embedding_dims": 1536,
+            "embedding_metric": "cosine",
+            "embedding_task_document": "RETRIEVAL_DOCUMENT",
+            "embedding_task_query": "RETRIEVAL_QUERY",
+            "collection_name": "case_memory_tenant_20260406004333855618_c58c99"
+          },
+          "security_config": {},
+          "health_status": "healthy",
+          "health_status_reason": "Qdrant connected",
+          "last_health_check": "2026-04-29T22:00:18.247185",
+          "is_default": false,
+          "is_active": true,
+          "is_auto_provisioned": true,
+          "container_status": "running",
+          "container_name": "tsushin-vs-qdrant-0fe9a9f6-19",
+          "container_port": 6300,
+          "created_at": "2026-04-29T21:20:53.044105",
+          "updated_at": "2026-04-30T06:25:50.589994"
+        }
+      ]
+    }
+  ],
+  "error": {
+    "message": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /test embedding/i }).first()\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"px-4 py-2 rounded-md bg-tsushin-elevated hover:bg-tsushin-border text-white disabled:opacity-50\">Test Embedding</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is not stable\u001b[22m\n\u001b[2m  13 × retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is visible, enabled and stable\u001b[22m\n\u001b[2m    - scrolling into view if needed\u001b[22m\n\u001b[2m    - done scrolling\u001b[22m\n\u001b[2m    - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is visible, enabled and stable\u001b[22m\n\u001b[2m    - scrolling into view if needed\u001b[22m\n\u001b[2m    - done scrolling\u001b[22m\n\u001b[2m    - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n",
+    "stack": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /test embedding/i }).first()\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"px-4 py-2 rounded-md bg-tsushin-elevated hover:bg-tsushin-border text-white disabled:opacity-50\">Test Embedding</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is not stable\u001b[22m\n\u001b[2m  13 × retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is visible, enabled and stable\u001b[22m\n\u001b[2m    - scrolling into view if needed\u001b[22m\n\u001b[2m    - done scrolling\u001b[22m\n\u001b[2m    - <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is visible, enabled and stable\u001b[22m\n\u001b[2m    - scrolling into view if needed\u001b[22m\n\u001b[2m    - done scrolling\u001b[22m\n\u001b[2m    - <h2 class=\"text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4\">Welcome to Tsushin!</h2> from <div class=\"fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\n    at configureKb (/Users/vinicios/code/tsushin/backend/dev_tests/kb_custom_embedding_lead_browser_regression.js:197:73)\n    at async main (/Users/vinicios/code/tsushin/backend/dev_tests/kb_custom_embedding_lead_browser_regression.js:504:5)"
+  },
+  "finished_at": "2026-05-03T16:28:42.365Z"
+}
