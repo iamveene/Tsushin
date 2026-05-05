@@ -21,6 +21,7 @@ from models import (
     AgentTeamMember,
     AgentTeamMemberRun,
     AgentTeamRun,
+    Contact,
     TeamMemberRole,
     TeamMemberRunStatus,
     TeamRunStatus,
@@ -332,6 +333,7 @@ class TeamRunOrchestrator:
             previous_summary = summary
             prior_summaries.append(summary)
             self.db.commit()
+            self._emit_member_run_event(team_run, member_run)
 
             if self._stop_if_cancelled(
                 team_run,
@@ -361,6 +363,7 @@ class TeamRunOrchestrator:
         team_run.final_output_summary = previous_summary or previous_output[:1000]
         self.db.commit()
         self.db.refresh(team_run)
+        self._emit_team_run_event(team_run, "goal_achieved")
         return team_run
 
     async def run_mesh(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
@@ -432,6 +435,7 @@ class TeamRunOrchestrator:
             )
             self._add_tokens(team_run, input_tokens, output_tokens)
             self.db.commit()
+            self._emit_member_run_event(team_run, coordinator_run, coordinator_command=command.raw)
 
             if self._stop_if_cancelled(team_run, skipped_members=[], first_skipped_step=step_index):
                 return team_run
@@ -446,6 +450,7 @@ class TeamRunOrchestrator:
                 team_run.final_output_summary = command.summary
                 self.db.commit()
                 self.db.refresh(team_run)
+                self._emit_team_run_event(team_run, "goal_achieved")
                 return team_run
 
             if command.command == "escalate":
@@ -563,6 +568,7 @@ class TeamRunOrchestrator:
                     }
                 )
                 self.db.commit()
+                self._emit_member_run_event(team_run, member_run)
 
                 if self._stop_if_cancelled(
                     team_run,
@@ -827,6 +833,7 @@ class TeamRunOrchestrator:
         team_run.completed_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(team_run)
+        self._emit_team_run_event(team_run, "sentinel_blocked")
 
     def _load_active_team(self) -> AgentTeam:
         team = (
@@ -920,6 +927,7 @@ class TeamRunOrchestrator:
             team_run.failed_steps = 0
             self.db.commit()
             self.db.refresh(team_run)
+            self._emit_team_run_event(team_run, "start")
             return team_run
 
         team_run = AgentTeamRun(
@@ -937,6 +945,7 @@ class TeamRunOrchestrator:
         self.db.add(team_run)
         self.db.commit()
         self.db.refresh(team_run)
+        self._emit_team_run_event(team_run, "start")
         return team_run
 
     def _create_member_run(
@@ -1174,6 +1183,10 @@ class TeamRunOrchestrator:
         if team_run.status != TeamRunStatus.CANCELLED.value:
             return False
 
+        cancel_already_emitted = (
+            isinstance(team_run.error_json, dict)
+            and team_run.error_json.get("reason") == "cancelled_by_user"
+        )
         for offset, runnable in enumerate(skipped_members):
             self.db.add(
                 AgentTeamMemberRun(
@@ -1193,6 +1206,8 @@ class TeamRunOrchestrator:
             team_run.completed_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(team_run)
+        if not cancel_already_emitted:
+            self._emit_team_run_event(team_run, "cancelled")
         return True
 
     def _remaining_dispatch_runnables(
@@ -1266,7 +1281,76 @@ class TeamRunOrchestrator:
         team_run.completed_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(team_run)
+        self._emit_team_run_event(team_run, self._team_run_event_for_status(status))
 
     @staticmethod
     def _elapsed(start_monotonic: float) -> float:
         return time.monotonic() - start_monotonic
+
+    @staticmethod
+    def _team_run_event_for_status(status: str) -> str:
+        if status == TeamRunStatus.COMPLETED.value:
+            return "goal_achieved"
+        if status == TeamRunStatus.GOAL_NOT_ACHIEVED.value:
+            return "goal_not_achieved"
+        if status == TeamRunStatus.SENTINEL_BLOCKED.value:
+            return "sentinel_blocked"
+        if status == TeamRunStatus.CANCELLED.value:
+            return "cancelled"
+        return "failed"
+
+    def _agent_name(self, agent_id: Optional[int]) -> Optional[str]:
+        if agent_id is None:
+            return None
+        row = (
+            self.db.query(Contact.friendly_name)
+            .join(Agent, Agent.contact_id == Contact.id)
+            .filter(Agent.id == agent_id, Agent.tenant_id == self.tenant_id)
+            .first()
+        )
+        return row.friendly_name if row else None
+
+    def _team_name(self, team_run: AgentTeamRun) -> Optional[str]:
+        team = getattr(team_run, "team", None)
+        if team is not None:
+            return team.name
+        row = (
+            self.db.query(AgentTeam.name)
+            .filter(AgentTeam.id == team_run.team_id, AgentTeam.tenant_id == self.tenant_id)
+            .first()
+        )
+        return row.name if row else None
+
+    def _emit_team_run_event(self, team_run: AgentTeamRun, event: str, **kwargs: Any) -> None:
+        try:
+            from services.watcher_activity_service import emit_team_run_async
+
+            emit_team_run_async(
+                tenant_id=self.tenant_id,
+                team_run_id=team_run.id,
+                team_id=team_run.team_id,
+                status=team_run.status,
+                event=event,
+                team_name=self._team_name(team_run),
+                **kwargs,
+            )
+        except Exception:
+            # Watcher events are observability only; execution must not depend on them.
+            return
+
+    def _emit_member_run_event(
+        self,
+        team_run: AgentTeamRun,
+        member_run: AgentTeamMemberRun,
+        *,
+        coordinator_command: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._emit_team_run_event(
+            team_run,
+            "coordinator_decision" if coordinator_command else "step_completed",
+            member_run_id=member_run.id,
+            step_index=member_run.step_index,
+            agent_id=member_run.agent_id,
+            agent_name=self._agent_name(member_run.agent_id),
+            coordinator_command=coordinator_command,
+        )

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 10 Watcher Team Runs (2026-05-05)
+
+**Summary.** Added the Agent Teams Watcher observability slice. Operators now have a tenant-wide, read-only Team Runs surface for listing, filtering, live-monitoring, and drilling into team executions without leaving Watcher.
+
+**API and runtime.**
+- Added Watcher-scoped tenant-wide read endpoints backed by `AgentTeamRun` and `AgentTeamMemberRun`, separate from the single-team `/api/teams/{team_id}/runs` history used by Team Builder:
+  - `GET /api/watcher/team-runs` with `limit`, `offset`, `team_id`, `status`, `created_after`, `created_before`, and global-admin `tenant_id` filters.
+  - `GET /api/watcher/team-runs/{run_id}` with optional global-admin `tenant_id` filtering.
+- Extended the Watcher activity WebSocket with `type="team_run"` lifecycle events carrying `team_run_id`, `team_id`, `status`, `event`, `timestamp`, and optional team/member/agent/coordinator/error metadata.
+- Covered run start, member step completion, coordinator decisions, goal achieved/not achieved, failed, Sentinel blocked, and cancelled transitions, including manual/background/queue failure paths.
+- Preserve the hidden-coordinator boundary while exposing coordinator dispatch decisions as read-only run evidence; public agent list/detail/mutation surfaces must continue to hide or reject internal coordinator agents.
+- Surface Sentinel handoff decisions through member-run `sentinel_decision_json`, terminal errors through `error_json`, and coordinator decisions through read-only `coordinator_commands`.
+
+**Frontend.**
+- Added a read-only Watcher `Team Runs` tab with filters for team, status, and date range.
+- Add a detail panel or drill-down showing the ordered run timeline, member-run cards, mesh coordinator command log, Sentinel decisions, trigger or wake-event origin, final output, errors, and token/cost summary.
+- Consume `team_run` WebSocket events to append/update rows live without requiring a page refresh.
+
+**Validation.**
+- Backend targeted Agent Teams/Watcher suite: `40 passed, 1101 warnings`.
+- Frontend: `npm run typecheck` passed; `npm run lint` passed with `0 errors, 220 warnings` matching the existing warning baseline.
+- OpenAPI regenerated from the backend container and parsed successfully with `/api/watcher/team-runs` and `WatcherTeamRunListResponse` present.
+- Browser QA against `https://localhost` passed with evidence under `.private/qa/v0.7.0/p10/`: real Watcher Team Runs tab, webhook-created run, live WebSocket row updates, detail panel, coordinator log, Sentinel-blocked detail, filters, filtered empty state, existing Watcher tab regression, zero console errors, zero 4xx/5xx network anomalies, and cleanup verified.
+
 ### Release 0.7.0 — Agent Teams Phase 9 Team Builder (2026-05-05)
 
 **Summary.** Replaced the minimal Team detail landing with the operational Team Builder surface and added the missing API/runtime contract for layout editing, team-run monitoring, and team-level Sentinel overrides.

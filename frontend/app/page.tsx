@@ -20,6 +20,7 @@ import BillingTab from '@/components/watcher/BillingTab'
 import SecurityTab from '@/components/watcher/SecurityTab'
 import ChannelHealthTab from '@/components/watcher/ChannelHealthTab'
 import CommunicationTab from '@/components/watcher/CommunicationTab'
+import TeamRunsTab from '@/components/watcher/TeamRunsTab'
 import WakeEventsPage from '@/app/wake-events/page'
 import ContinuousAgentsPage from '@/app/continuous-agents/page'
 
@@ -30,7 +31,7 @@ const LockClosedIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing' | 'wake-events' | 'continuous-agents'
+type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing' | 'wake-events' | 'continuous-agents' | 'team-runs'
 
 export default function WatcherPage() {
   const [activeTab, setActiveTab] = useState<WatcherTab>('dashboard')
@@ -47,6 +48,7 @@ export default function WatcherPage() {
     { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel Security Events' },
     { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
     { id: 'communication' as WatcherTab, label: 'A2A Comms', description: 'Inter-Agent Messaging' },
+    { id: 'team-runs' as WatcherTab, label: 'Team Runs', description: 'Agent Team Executions' },
     { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
     { id: 'wake-events' as WatcherTab, label: 'Wake Events', description: 'Trigger event browser' },
     { id: 'continuous-agents' as WatcherTab, label: 'Continuous Agents', description: 'Always-on inventory' },
@@ -126,6 +128,7 @@ export default function WatcherPage() {
         {activeTab === 'security' && <SecurityTab />}
         {activeTab === 'channel-health' && <ChannelHealthTab />}
         {activeTab === 'communication' && <CommunicationTab />}
+        {activeTab === 'team-runs' && <TeamRunsTab />}
         {activeTab === 'billing' && <BillingTab />}
         {activeTab === 'wake-events' && <WakeEventsPage />}
         {activeTab === 'continuous-agents' && <ContinuousAgentsPage />}

@@ -244,6 +244,22 @@ The Sentinel tab adds a nullable `agent_team.sentinel_profile_id` override via m
 
 The Runs tab exposes the missing run client contract for manual run start, list, detail, and cancel. Operators can start a run, poll run history, drill into member-run timelines, inspect output summaries, token/cost metadata, errors, and `sentinel_decision_json`, and cancel active runs from the same page.
 
+### 2.4.10 v0.7.0 Agent Teams Phase 10 Watcher Team Runs
+
+Phase 10 is the Watcher observability slice for Agent Teams. The implementation contract is a tenant-scoped run history outside Team Builder: operators can list team runs across all visible teams, filter by team/status/date range, and open read-only details without changing team configuration.
+
+The Watcher API is a tenant-wide list/detail surface backed by `agent_team_run` plus `agent_team_member_run`. This complements the single-team run endpoints from Phase 5/9 rather than replacing them. Both routes require `watcher.read`; non-global users are scoped to their tenant, while global admins may pass `tenant_id` to inspect a specific tenant.
+
+`GET /api/watcher/team-runs` returns `{items,total,limit,offset}`. Query parameters are `limit` (1-100, default 50), `offset` (default 0), `team_id`, `status`, `created_after`, `created_before`, and optional global-admin `tenant_id`. List items include run id, tenant id, team id/name/status, visible member count, run status, trigger event id when present, goal/topology snapshots, step counters, final output summary, `error_json`, token/cost totals, mesh `coordinator_commands`, and timing fields.
+
+`GET /api/watcher/team-runs/{run_id}` returns the same run envelope plus ordered `member_runs`. Each member run includes member/agent ids, agent name when available, step index, status, output summary/text, `sentinel_decision_json`, `error_json`, token counts, duration, and timestamps. The route is read-only and exposes no start, cancel, retry, edit, or archive controls.
+
+The `/ws/watcher/activity` channel emits `team_run` events shaped as `type`, `team_run_id`, `team_id`, `status`, `event`, and `timestamp`, with optional `team_name`, `member_run_id`, `step_index`, `agent_id`, `agent_name`, `coordinator_command`, and `error_json`. Known lifecycle event values include `start`, `step_completed`, `coordinator_decision`, `goal_achieved`, `goal_not_achieved`, `failed`, `sentinel_blocked`, and `cancelled`. The Watcher UI uses these events to append or replace rows live so an operator can see a run move from `pending`/`running` to a terminal state without refreshing.
+
+The Watcher `Team Runs` tab is read-only. It exposes filters for team, status, and date range, and shows a clear empty state when no runs match. The detail view shows ordered member-run cards, mesh coordinator dispatch decisions, Sentinel decision JSON, final output, error JSON, and token/cost summary. Hidden coordinator agents remain internal: Watcher may show coordinator decisions as run evidence, but public agent list/detail/mutation surfaces must keep the Phase 3/4 coordinator visibility boundary.
+
+Final integrated browser evidence for this phase is stored under `.private/qa/v0.7.0/p10/`. The run used a real authenticated Watcher session, a temporary webhook-backed Agent Team, live `team_run` WebSocket frames, mesh coordinator evidence, a Sentinel-blocked run, filter checks, existing Watcher tab regression, and cleanup verification for the temporary team/webhook.
+
 ### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
 
 The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
@@ -1104,7 +1120,7 @@ Two skills drive inter-agent behavior:
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
 
-Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Phase 6 adds backend Webhook/GitHub/Jira trigger bindings and `team_run` queue dispatch for external-event-driven team runs. Phase 7 adds the Studio Teams list foundation, split create affordance, Team badges, and team-member warnings. Phase 8 adds the Studio Team Wizard for UI team creation, local template presets, existing trigger binding, draft persistence, and a minimal team detail landing. Later phases add Team Builder/canvas editing and Watcher Team Runs UI.
+Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Phase 6 adds backend Webhook/GitHub/Jira trigger bindings and `team_run` queue dispatch for external-event-driven team runs. Phase 7 adds the Studio Teams list foundation, split create affordance, Team badges, and team-member warnings. Phase 8 adds the Studio Team Wizard for UI team creation, local template presets, existing trigger binding, draft persistence, and a minimal team detail landing. Phase 9 adds Team Builder/canvas editing, Team-level Sentinel overrides, and run drill-down inside Studio. Phase 10 adds Watcher Team Runs observability: a tenant-wide read-only run list/detail surface with live WebSocket updates, Sentinel visibility, and mesh coordinator evidence.
 
 **Agent Switcher execution modes** (v0.6.0):
 
@@ -3949,7 +3965,7 @@ Source files: `backend/services/syslog_service.py`, `backend/services/syslog_for
 
 ### 24.1 Watcher dashboard tabs
 
-Watcher is the frontend observability surface. Tabs per `README.md:178-188`:
+Watcher is the frontend observability surface. The table below covers the existing documented tabs plus the Phase 10 Team Runs observability surface:
 
 | Tab | Purpose |
 |---|---|
@@ -3959,6 +3975,7 @@ Watcher is the frontend observability surface. Tabs per `README.md:178-188`:
 | **Billing** | Token usage and cost analytics per agent/model. |
 | **Security** | Sentinel threat events with severity filtering. |
 | **Graph View** | Interactive system topology (agents, users, projects) with Dagre auto-layout, node expand/collapse, fullscreen mode. |
+| **Team Runs** | Phase 10 read-only Agent Teams observability surface: tenant-wide run filters/detail via `GET /api/watcher/team-runs`, live `team_run` WebSocket updates, Sentinel decisions, and mesh coordinator evidence. No Team Builder controls are exposed here. Browser evidence is stored under `.private/qa/v0.7.0/p10/`. |
 
 Access requires the `watcher.read` permission (`backend/migrations/add_rbac_tables.py:387-388`).
 

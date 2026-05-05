@@ -52,6 +52,30 @@ class AgentTeamApiError(ValueError):
         self.detail = detail
 
 
+def _emit_team_run_event(
+    *,
+    tenant_id: str,
+    team_run_id: int,
+    team_id: int,
+    status: str,
+    event: str,
+    error_json: Optional[dict[str, Any]] = None,
+) -> None:
+    try:
+        from services.watcher_activity_service import emit_team_run_async
+
+        emit_team_run_async(
+            tenant_id=tenant_id,
+            team_run_id=team_run_id,
+            team_id=team_id,
+            status=status,
+            event=event,
+            error_json=error_json,
+        )
+    except Exception:
+        logger.debug("Watcher team_run event emission skipped", exc_info=True)
+
+
 def _membership_service(db: Session, tenant_id: str) -> TeamMembershipService:
     try:
         return TeamMembershipService(db, tenant_id, auto_commit=False)
@@ -115,12 +139,20 @@ def _canonical_trigger_config(
 
 
 class AgentTeamApiService:
-    def __init__(self, db: Session, tenant_id: str, *, user_id: Optional[int] = None):
-        if not tenant_id:
+    def __init__(
+        self,
+        db: Session,
+        tenant_id: Optional[str],
+        *,
+        user_id: Optional[int] = None,
+        is_global_admin: bool = False,
+    ):
+        if not tenant_id and not is_global_admin:
             raise AgentTeamApiError(400, "Tenant context is required")
         self.db = db
         self.tenant_id = tenant_id
         self.user_id = user_id
+        self.is_global_admin = is_global_admin
 
     def list_teams(
         self,
@@ -451,6 +483,74 @@ class AgentTeamApiService:
         self._get_team_or_404(team_id)
         return self.serialize_run(self._get_run_or_404(team_id, run_id), detail=True)
 
+    def list_watcher_team_runs(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        team_id: Optional[int] = None,
+        status: Optional[str] = None,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        query = (
+            self.db.query(AgentTeamRun, AgentTeam)
+            .join(
+                AgentTeam,
+                and_(
+                    AgentTeamRun.tenant_id == AgentTeam.tenant_id,
+                    AgentTeamRun.team_id == AgentTeam.id,
+                ),
+            )
+        )
+        if not self.is_global_admin:
+            query = query.filter(AgentTeamRun.tenant_id == self.tenant_id)
+        if team_id is not None:
+            query = query.filter(AgentTeamRun.team_id == team_id)
+        if status:
+            query = query.filter(AgentTeamRun.status == status)
+        if created_after is not None:
+            query = query.filter(AgentTeamRun.created_at >= created_after)
+        if created_before is not None:
+            query = query.filter(AgentTeamRun.created_at <= created_before)
+
+        total = query.count()
+        rows = (
+            query.order_by(AgentTeamRun.created_at.desc(), AgentTeamRun.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return {
+            "items": [
+                self.serialize_watcher_run(run, team=team, detail=False)
+                for run, team in rows
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    def get_watcher_team_run(self, run_id: int) -> dict[str, Any]:
+        query = (
+            self.db.query(AgentTeamRun, AgentTeam)
+            .join(
+                AgentTeam,
+                and_(
+                    AgentTeamRun.tenant_id == AgentTeam.tenant_id,
+                    AgentTeamRun.team_id == AgentTeam.id,
+                ),
+            )
+            .filter(AgentTeamRun.id == run_id)
+        )
+        if not self.is_global_admin:
+            query = query.filter(AgentTeamRun.tenant_id == self.tenant_id)
+        row = query.first()
+        if not row:
+            raise AgentTeamApiError(404, "Team run not found")
+        run, team = row
+        return self.serialize_watcher_run(run, team=team, detail=True)
+
     def cancel_run(self, team_id: int, run_id: int) -> dict[str, Any]:
         run = self._get_run_or_404(team_id, run_id)
         if run.status not in ACTIVE_RUN_STATUSES:
@@ -460,6 +560,14 @@ class AgentTeamApiService:
         run.error_json = {"reason": "cancelled_by_user"}
         self.db.commit()
         self.db.refresh(run)
+        _emit_team_run_event(
+            tenant_id=run.tenant_id,
+            team_run_id=run.id,
+            team_id=run.team_id,
+            status=run.status,
+            event="cancelled",
+            error_json=run.error_json,
+        )
         return self.serialize_run(run, detail=True)
 
     def serialize_team(self, team: AgentTeam, *, detail: bool) -> dict[str, Any]:
@@ -549,7 +657,7 @@ class AgentTeamApiService:
             member_runs = (
                 self.db.query(AgentTeamMemberRun)
                 .filter(
-                    AgentTeamMemberRun.tenant_id == self.tenant_id,
+                    AgentTeamMemberRun.tenant_id == run.tenant_id,
                     AgentTeamMemberRun.team_run_id == run.id,
                 )
                 .order_by(AgentTeamMemberRun.step_index, AgentTeamMemberRun.id)
@@ -578,6 +686,49 @@ class AgentTeamApiService:
                 for row in member_runs
             ]
         return data
+
+    def serialize_watcher_run(self, run: AgentTeamRun, *, team: Optional[AgentTeam], detail: bool) -> dict[str, Any]:
+        data = self.serialize_run(run, detail=detail) or {}
+        data.update(
+            {
+                "tenant_id": run.tenant_id,
+                "team_name": team.name if team else None,
+                "team_status": team.status if team else None,
+                "member_count": self._member_count_for_tenant(run.tenant_id, run.team_id),
+                "coordinator_commands": self._coordinator_commands_for_run(run),
+            }
+        )
+        return data
+
+    def _coordinator_commands_for_run(self, run: AgentTeamRun) -> list[dict[str, Any]]:
+        member_runs = (
+            self.db.query(AgentTeamMemberRun)
+            .filter(
+                AgentTeamMemberRun.tenant_id == run.tenant_id,
+                AgentTeamMemberRun.team_run_id == run.id,
+            )
+            .order_by(AgentTeamMemberRun.step_index, AgentTeamMemberRun.id)
+            .all()
+        )
+        name_map = _agent_name_map(self.db, [row.agent_id for row in member_runs if row.agent_id])
+        commands: list[dict[str, Any]] = []
+        for row in member_runs:
+            context = row.input_context_json if isinstance(row.input_context_json, dict) else {}
+            parsed_summary = context.get("parsed_summary") if isinstance(context.get("parsed_summary"), dict) else {}
+            command = parsed_summary.get("coordinator_command") if isinstance(parsed_summary, dict) else None
+            if not isinstance(command, dict):
+                continue
+            commands.append(
+                {
+                    "member_run_id": row.id,
+                    "step_index": row.step_index,
+                    "agent_id": row.agent_id,
+                    "agent_name": name_map.get(row.agent_id) if row.agent_id else None,
+                    "command": command,
+                    "created_at": row.created_at,
+                }
+            )
+        return commands
 
     def _get_team_or_404(self, team_id: int) -> AgentTeam:
         team = (
@@ -632,14 +783,17 @@ class AgentTeamApiService:
         return member
 
     def _visible_members(self, team_id: int) -> list[AgentTeamMember]:
+        return self._visible_members_for_tenant(self.tenant_id, team_id)
+
+    def _visible_members_for_tenant(self, tenant_id: str, team_id: int) -> list[AgentTeamMember]:
         return (
             self.db.query(AgentTeamMember)
             .join(Agent, Agent.id == AgentTeamMember.agent_id)
             .filter(
-                AgentTeamMember.tenant_id == self.tenant_id,
+                AgentTeamMember.tenant_id == tenant_id,
                 AgentTeamMember.team_id == team_id,
                 AgentTeamMember.role != TeamMemberRole.COORDINATOR.value,
-                Agent.tenant_id == self.tenant_id,
+                Agent.tenant_id == tenant_id,
                 Agent.is_internal.is_(False),
             )
             .order_by(AgentTeamMember.execution_order, AgentTeamMember.id)
@@ -648,6 +802,9 @@ class AgentTeamApiService:
 
     def _member_count(self, team_id: int) -> int:
         return len(self._visible_members(team_id))
+
+    def _member_count_for_tenant(self, tenant_id: str, team_id: int) -> int:
+        return len(self._visible_members_for_tenant(tenant_id, team_id))
 
     def _last_run(self, team_id: int) -> Optional[AgentTeamRun]:
         return (
@@ -847,5 +1004,13 @@ def run_team_background(*, tenant_id: str, team_id: int, run_id: int) -> None:
             run.error_json = {"reason": "background_run_exception", "message": str(exc)[:500]}
             run.completed_at = datetime.utcnow()
             db.commit()
+            _emit_team_run_event(
+                tenant_id=run.tenant_id,
+                team_run_id=run.id,
+                team_id=run.team_id,
+                status=run.status,
+                event="failed",
+                error_json=run.error_json,
+            )
     finally:
         db.close()

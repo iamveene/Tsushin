@@ -72,6 +72,30 @@ class TeamRunQueueEnqueueError(RuntimeError):
     """Raised when a matched team run cannot be inserted into message_queue."""
 
 
+def _emit_team_run_failed_event(
+    *,
+    tenant_id: str,
+    team_run_id: int,
+    team_id: int,
+    team_name: Optional[str],
+    error_json: dict[str, Any],
+) -> None:
+    try:
+        from services.watcher_activity_service import emit_team_run_async
+
+        emit_team_run_async(
+            tenant_id=tenant_id,
+            team_run_id=team_run_id,
+            team_id=team_id,
+            status=TeamRunStatus.FAILED.value,
+            event="failed",
+            team_name=team_name,
+            error_json=error_json,
+        )
+    except Exception:
+        logger.debug("Watcher team_run queue failure event emission skipped", exc_info=True)
+
+
 @dataclass(frozen=True)
 class TriggerDispatchInput:
     """Normalized trigger event ready for continuous-agent dispatch."""
@@ -669,6 +693,7 @@ class TriggerDispatchService:
         preserve_wake_for_other_work: bool,
     ) -> None:
         now = datetime.utcnow()
+        failed_events: list[dict[str, Any]] = []
         if team_run_ids:
             for team_run in (
                 self.db.query(AgentTeamRun)
@@ -682,6 +707,15 @@ class TriggerDispatchService:
                 team_run.completed_at = now
                 team_run.error_json = {"reason": reason}
                 self.db.add(team_run)
+                failed_events.append(
+                    {
+                        "tenant_id": team_run.tenant_id,
+                        "team_run_id": team_run.id,
+                        "team_id": team_run.team_id,
+                        "team_name": team_run.team.name if team_run.team is not None else None,
+                        "error_json": team_run.error_json,
+                    }
+                )
 
         wake_event = (
             self.db.query(WakeEvent)
@@ -702,6 +736,8 @@ class TriggerDispatchService:
             self.db.add(dedupe)
 
         self.db.commit()
+        for event in failed_events:
+            _emit_team_run_failed_event(**event)
 
     def _enqueue_continuous_tasks(
         self,

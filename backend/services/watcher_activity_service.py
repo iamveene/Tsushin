@@ -13,7 +13,7 @@ impacting message processing performance.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, Set
+from typing import Callable, Coroutine, Optional, Dict, Any, Set
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ class WatcherActivityService:
 
         # Tenant -> Set of WebSocket connections
         self.tenant_connections: Dict[str, Set[WebSocket]] = {}
+        self._connection_loops: Dict[WebSocket, asyncio.AbstractEventLoop] = {}
         self._initialized = True
         logger.info("WatcherActivityService initialized")
 
@@ -67,6 +68,7 @@ class WatcherActivityService:
         if tenant_id not in self.tenant_connections:
             self.tenant_connections[tenant_id] = set()
         self.tenant_connections[tenant_id].add(websocket)
+        self._connection_loops[websocket] = asyncio.get_running_loop()
         print(f"⚡ Graph View WS registered: tenant={tenant_id}, total={len(self.tenant_connections[tenant_id])}")
 
     def unregister_connection(self, tenant_id: str, websocket: WebSocket):
@@ -79,9 +81,18 @@ class WatcherActivityService:
         """
         if tenant_id in self.tenant_connections:
             self.tenant_connections[tenant_id].discard(websocket)
+            self._connection_loops.pop(websocket, None)
             if not self.tenant_connections[tenant_id]:
                 del self.tenant_connections[tenant_id]
             print(f"⚡ Graph View WS unregistered: tenant={tenant_id}, remaining={len(self.tenant_connections.get(tenant_id, set()))}")
+
+    def get_tenant_event_loop(self, tenant_id: str) -> Optional[asyncio.AbstractEventLoop]:
+        """Return the event loop that owns an active tenant Watcher connection."""
+        for websocket in self.tenant_connections.get(tenant_id, set()):
+            loop = self._connection_loops.get(websocket)
+            if loop and loop.is_running() and not loop.is_closed():
+                return loop
+        return None
 
     def get_connection_count(self, tenant_id: Optional[str] = None) -> int:
         """Get number of active connections, optionally filtered by tenant."""
@@ -115,6 +126,7 @@ class WatcherActivityService:
         # Clean up disconnected clients
         for ws in disconnected:
             self.tenant_connections[tenant_id].discard(ws)
+            self._connection_loops.pop(ws, None)
 
         if disconnected:
             logger.debug(f"Cleaned up {len(disconnected)} disconnected Graph View clients")
@@ -333,6 +345,81 @@ class WatcherActivityService:
             status,
         )
 
+    async def emit_team_run(
+        self,
+        tenant_id: str,
+        team_run_id: int,
+        team_id: int,
+        status: str,
+        event: str,
+        team_name: Optional[str] = None,
+        member_run_id: Optional[int] = None,
+        step_index: Optional[int] = None,
+        agent_id: Optional[int] = None,
+        agent_name: Optional[str] = None,
+        coordinator_command: Optional[dict[str, Any]] = None,
+        error_json: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Emit an Agent Team run event for Watcher Team Runs."""
+        if tenant_id not in self.tenant_connections:
+            return
+
+        message: Dict[str, Any] = {
+            "type": "team_run",
+            "team_run_id": team_run_id,
+            "team_id": team_id,
+            "status": status,
+            "event": event,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        if team_name:
+            message["team_name"] = team_name
+        if member_run_id is not None:
+            message["member_run_id"] = member_run_id
+        if step_index is not None:
+            message["step_index"] = step_index
+        if agent_id is not None:
+            message["agent_id"] = agent_id
+        if agent_name:
+            message["agent_name"] = agent_name
+        if coordinator_command is not None:
+            message["coordinator_command"] = coordinator_command
+        if error_json is not None:
+            message["error_json"] = error_json
+
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(
+            "Emitted team_run: run=%s team=%s event=%s status=%s",
+            team_run_id,
+            team_id,
+            event,
+            status,
+        )
+
+
+def _schedule_activity_event(
+    tenant_id: str,
+    make_coro: Callable[[WatcherActivityService], Coroutine[Any, Any, None]],
+) -> None:
+    """Schedule activity emission on the Watcher WebSocket loop when available."""
+    service = WatcherActivityService.get_instance()
+    target_loop = service.get_tenant_event_loop(tenant_id)
+
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if target_loop is not None:
+        if current_loop is target_loop:
+            target_loop.create_task(make_coro(service))
+        else:
+            asyncio.run_coroutine_threadsafe(make_coro(service), target_loop)
+        return
+
+    if current_loop is not None and current_loop.is_running() and not current_loop.is_closed():
+        current_loop.create_task(make_coro(service))
+
 
 # Convenience functions for fire-and-forget event emission
 def emit_agent_processing_async(
@@ -476,3 +563,37 @@ def emit_continuous_run_async(
         ))
     except RuntimeError:
         pass
+
+
+def emit_team_run_async(
+    tenant_id: str,
+    team_run_id: int,
+    team_id: int,
+    status: str,
+    event: str,
+    team_name: Optional[str] = None,
+    member_run_id: Optional[int] = None,
+    step_index: Optional[int] = None,
+    agent_id: Optional[int] = None,
+    agent_name: Optional[str] = None,
+    coordinator_command: Optional[dict[str, Any]] = None,
+    error_json: Optional[dict[str, Any]] = None,
+):
+    """Fire-and-forget wrapper for Agent Team run events."""
+    _schedule_activity_event(
+        tenant_id,
+        lambda service: service.emit_team_run(
+            tenant_id=tenant_id,
+            team_run_id=team_run_id,
+            team_id=team_id,
+            status=status,
+            event=event,
+            team_name=team_name,
+            member_run_id=member_run_id,
+            step_index=step_index,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            coordinator_command=coordinator_command,
+            error_json=error_json,
+        ),
+    )

@@ -130,6 +130,7 @@ from api.routes_tenant_settings import router as tenant_settings_router
 from api.routes_default_agents import router as default_agents_router
 from api.routes_team import router as team_router
 from api.routes_teams import router as agent_teams_router
+from api.routes_watcher_team_runs import router as watcher_team_runs_router
 # Plans Management
 from api.routes_plans import router as plans_router
 # SSO Configuration
@@ -1388,6 +1389,7 @@ app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service setti
 app.include_router(default_agents_router)
 app.include_router(team_router)  # Phase 7.9 - Team Management
 app.include_router(agent_teams_router)  # v0.7.0 Agent Teams CRUD API
+app.include_router(watcher_team_runs_router)  # v0.7.0 Agent Teams Watcher read API
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
 app.include_router(global_users_router)  # Global User Management

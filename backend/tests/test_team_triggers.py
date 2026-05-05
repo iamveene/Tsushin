@@ -189,3 +189,67 @@ def test_webhook_team_trigger_enqueues_and_dispatches_team_run(db_session, tmp_p
 
     assert dispatch_result["status"] == TeamRunStatus.COMPLETED.value
     assert db_session.get(WakeEvent, result.wake_event_id).status == "processed"
+
+
+def test_team_queue_enqueue_failure_emits_watcher_event(db_session, tmp_path, monkeypatch):
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    _seed_webhook(
+        db_session,
+        instance_id=401,
+        tenant_id="tenant-a",
+        created_by=1,
+        default_agent_id=None,
+    )
+    trigger = _seed_team_trigger(db_session, tenant_id="tenant-a")
+    db_session.commit()
+    events: list[dict] = []
+
+    def fail_enqueue(self, *args, **kwargs):
+        raise RuntimeError("queue unavailable")
+
+    import services.watcher_activity_service as watcher_activity_module
+
+    monkeypatch.setattr(MessageQueueService, "enqueue", fail_enqueue)
+    monkeypatch.setattr(
+        watcher_activity_module,
+        "emit_team_run_async",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    result = TriggerDispatchService(
+        db_session,
+        payload_dir=tmp_path / "backend" / "data" / "wake_events",
+    ).dispatch(
+        TriggerDispatchInput(
+            trigger_type="webhook",
+            instance_id=401,
+            event_type="message.created",
+            dedupe_key="team-trigger-enqueue-failure-1",
+            payload={"raw_event": {"action": "opened"}},
+        )
+    )
+
+    assert result.status == "enqueue_failed"
+    assert result.reason == "team_run_queue_enqueue_failed"
+    team_run = db_session.get(AgentTeamRun, result.team_run_ids[0])
+    wake_event = db_session.get(WakeEvent, result.wake_event_id)
+    assert team_run.status == TeamRunStatus.FAILED.value
+    assert team_run.error_json == {"reason": "team_run_queue_enqueue_failed"}
+    assert wake_event.status == "failed"
+    assert events == [
+        {
+            "tenant_id": "tenant-a",
+            "team_run_id": team_run.id,
+            "team_id": trigger.team_id,
+            "status": TeamRunStatus.FAILED.value,
+            "event": "failed",
+            "team_name": f"Team {trigger.team_id}",
+            "error_json": {"reason": "team_run_queue_enqueue_failed"},
+        }
+    ]
