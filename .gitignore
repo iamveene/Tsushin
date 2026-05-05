@@ -197,6 +197,7 @@ backend/dev_tests/*
 !backend/dev_tests/multi_index_external_vector_ui_regression.js
 !backend/dev_tests/run_team_line_smoke.py
 !backend/dev_tests/run_team_mesh_smoke.py
+!backend/dev_tests/run_team_trigger_smoke.py
 !backend/dev_tests/test_teams_api_e2e.py
 
 # Individual test files outside tests/ directory
@@ -268,6 +269,8 @@ backend/tests/*
 !backend/tests/test_cluster3_backend_regressions.py
 !backend/tests/test_routes_flow_trigger_bindings.py
 !backend/tests/test_routes_github_integrations.py
+!backend/tests/test_team_triggers.py
+!backend/tests/test_teams_api.py
 !backend/tests/test_agent_teams_models.py
 !backend/tests/test_team_orchestrator_line.py
 !backend/tests/test_team_orchestrator_mesh.py

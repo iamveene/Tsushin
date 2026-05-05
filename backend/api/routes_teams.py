@@ -15,6 +15,9 @@ from api.schemas.teams import (
     TeamRunDetail,
     TeamRunListResponse,
     TeamRunStartResponse,
+    TeamTriggerCreate,
+    TeamTriggerResponse,
+    TeamTriggerUpdate,
     TeamUpdate,
 )
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -140,6 +143,47 @@ async def reorder_members(
 ):
     try:
         return _service(ctx, current_user).reorder_members(team_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.post("/{team_id}/triggers", response_model=TeamTriggerResponse, status_code=status.HTTP_201_CREATED)
+async def create_team_trigger_binding(
+    team_id: int,
+    payload: TeamTriggerCreate,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("agents.write")),
+):
+    try:
+        return _service(ctx, current_user).create_trigger_binding(team_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.put("/{team_id}/triggers/{trigger_id}", response_model=TeamTriggerResponse)
+async def update_team_trigger_binding(
+    team_id: int,
+    trigger_id: int,
+    payload: TeamTriggerUpdate,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("agents.write")),
+):
+    try:
+        return _service(ctx, current_user).update_trigger_binding(team_id, trigger_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.delete("/{team_id}/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_team_trigger_binding(
+    team_id: int,
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("agents.write")),
+):
+    try:
+        _service(ctx, current_user).delete_trigger_binding(team_id, trigger_id)
+        return None
     except AgentTeamApiError as exc:
         _raise_api_error(exc)
 

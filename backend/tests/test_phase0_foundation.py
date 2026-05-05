@@ -15,6 +15,7 @@ from models import ChannelEventDedupe, SentinelConfig
 from services.container_runtime import PORT_RANGES, iter_port_range, validate_port_ranges
 from services.message_queue_service import MessageQueueService
 from services.queue_router import QueueRouter
+from services.queue_worker import QueueWorker
 from services.sentinel_detections import DETECTION_REGISTRY, get_detection_types
 from services.sentinel_effective_config import SentinelEffectiveConfig
 from services.sentinel_seeding import seed_sentinel_config
@@ -30,7 +31,9 @@ def _make_session():
                 channel VARCHAR(20) NOT NULL,
                 message_type VARCHAR(32) NOT NULL,
                 status VARCHAR(20) NOT NULL,
-                agent_id INTEGER NOT NULL,
+                agent_id INTEGER,
+                team_id INTEGER,
+                team_run_id INTEGER,
                 sender_key VARCHAR(255) NOT NULL,
                 payload JSON NOT NULL,
                 priority INTEGER,
@@ -148,6 +151,69 @@ def test_message_queue_accepts_phase0_discriminator_values(message_type):
         db.close()
 
 
+def test_message_queue_enqueues_team_run_without_agent():
+    db = _make_session()
+    try:
+        item = MessageQueueService(db).enqueue_team_run(
+            tenant_id="tenant-a",
+            team_id=10,
+            team_run_id=20,
+            wake_event_id=30,
+            priority=5,
+        )
+        assert item.message_type == "team_run"
+        assert item.agent_id is None
+        assert item.team_id == 10
+        assert item.team_run_id == 20
+        assert item.payload["wake_event_id"] == 30
+        assert item.sender_key == "team:10:run:20"
+    finally:
+        db.close()
+
+
+def test_message_queue_rejects_missing_agent_for_non_team_rows():
+    db = _make_session()
+    try:
+        with pytest.raises(ValueError, match="agent_id is required"):
+            MessageQueueService(db).enqueue(
+                channel="api",
+                tenant_id="tenant-a",
+                agent_id=None,
+                sender_key="api-client",
+                payload={"message": "hello"},
+            )
+    finally:
+        db.close()
+
+
+def test_message_queue_pending_team_and_agent_lanes_are_separate():
+    db = _make_session()
+    try:
+        service = MessageQueueService(db)
+        service.enqueue(
+            channel="api",
+            tenant_id="tenant-a",
+            agent_id=1,
+            sender_key="api-client",
+            payload={"message": "hello"},
+        )
+        service.enqueue_team_run(
+            tenant_id="tenant-a",
+            team_id=10,
+            team_run_id=20,
+        )
+
+        assert service.get_pending_agents() == [("tenant-a", 1)]
+        assert service.get_pending_teams() == [("tenant-a", 10)]
+
+        team_item = service.claim_next_team_run("tenant-a", 10)
+        assert team_item.message_type == "team_run"
+        assert team_item.agent_id is None
+        assert team_item.status == "processing"
+    finally:
+        db.close()
+
+
 def test_channel_event_dedupe_is_unique_per_tenant():
     db = _make_session()
     try:
@@ -234,6 +300,132 @@ def test_queue_router_routes_webhook_trigger_events_through_current_webhook_path
 
         assert result == {"channel": "webhook"}
         assert worker.calls == [("webhook", 42)]
+
+    asyncio.run(run())
+
+
+def test_queue_router_dispatches_team_run_and_marks_wake_event_terminal(monkeypatch):
+    async def run():
+        from models import AgentTeamRun, TeamRunStatus, WakeEvent
+        import services.team_orchestrator_service as orchestrator_module
+
+        team_run = SimpleNamespace(
+            id=20,
+            team_id=10,
+            tenant_id="tenant-a",
+            status=TeamRunStatus.PENDING.value,
+            trigger_event_id=None,
+        )
+        wake_event = SimpleNamespace(id=30, tenant_id="tenant-a", status="pending")
+
+        class FakeQuery:
+            def __init__(self, value):
+                self.value = value
+
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                return self.value
+
+        class FakeDb:
+            def __init__(self):
+                self.commits = 0
+
+            def query(self, model):
+                if model is AgentTeamRun:
+                    return FakeQuery(team_run)
+                if model is WakeEvent:
+                    return FakeQuery(wake_event)
+                return FakeQuery(None)
+
+            def add(self, obj):
+                return None
+
+            def commit(self):
+                self.commits += 1
+
+        class FakeOrchestrator:
+            def __init__(self, db, tenant_id, team_id, existing_run_id):
+                assert tenant_id == "tenant-a"
+                assert team_id == 10
+                assert existing_run_id == 20
+
+            async def run(self, trigger_event_id=None):
+                assert trigger_event_id == 30
+                team_run.status = TeamRunStatus.COMPLETED.value
+                return team_run
+
+        monkeypatch.setattr(orchestrator_module, "TeamRunOrchestrator", FakeOrchestrator)
+
+        item = SimpleNamespace(
+            id=1,
+            tenant_id="tenant-a",
+            channel="team",
+            message_type="team_run",
+            agent_id=None,
+            team_id=10,
+            team_run_id=20,
+            payload={"wake_event_id": 30},
+        )
+
+        result = await QueueRouter().dispatch(None, FakeDb(), item)
+
+        assert result == {
+            "status": TeamRunStatus.COMPLETED.value,
+            "team_id": 10,
+            "team_run_id": 20,
+            "wake_event_id": 30,
+        }
+        assert wake_event.status == "processed"
+
+    asyncio.run(run())
+
+
+def test_queue_worker_limits_team_run_dispatch_by_team_concurrency(monkeypatch):
+    async def run():
+        worker = QueueWorker.__new__(QueueWorker)
+        worker._active_tasks = {}
+        worker._active_team_tasks = {}
+        worker._team_task_seq = 0
+        worker._running = True
+        worker.SessionLocal = lambda: SimpleNamespace(close=lambda: None)
+        worker._should_defer_for_circuit_breaker = lambda *args: False
+        worker._get_team_max_concurrent_runs = lambda db, tenant_id, team_id: 2
+
+        class FakeService:
+            def __init__(self, db):
+                self.db = db
+
+            def reset_stale(self, threshold_seconds=300):
+                return 0
+
+            def get_pending_agents(self):
+                return []
+
+            def get_pending_teams(self):
+                return [("tenant-a", 10)]
+
+            def count_processing_team_runs(self, tenant_id, team_id):
+                return 1
+
+        created = []
+
+        def fake_create_task(coro):
+            coro.close()
+            task = SimpleNamespace(done=lambda: False)
+            created.append(task)
+            return task
+
+        import services.message_queue_service as queue_service_module
+
+        monkeypatch.setattr(queue_service_module, "MessageQueueService", FakeService)
+        monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+        await worker._poll_and_dispatch()
+
+        assert len(created) == 1
+        assert worker._active_team_task_count("tenant-a", 10) == 1
 
     asyncio.run(run())
 

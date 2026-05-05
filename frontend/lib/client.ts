@@ -968,11 +968,70 @@ export interface Agent {
   max_agentic_rounds?: number | null
   max_agentic_loop_bytes?: number | null
 
+  // v0.7.0 Agent Teams
+  is_team_member?: boolean
+  current_team_id?: number | null
+
   is_active: boolean
   is_default: boolean
   skills_count?: number  // Number of enabled skills
   created_at: string
   updated_at: string
+}
+
+export interface TeamToolPool {
+  sandboxed_tool_ids: number[]
+}
+
+export interface TeamMemberResponse {
+  id: number
+  team_id: number
+  agent_id: number
+  agent_name?: string | null
+  role: string
+  execution_order?: number | null
+  is_required: boolean
+  position_x?: number | null
+  position_y?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamTriggerResponse {
+  id: number
+  trigger_kind: string
+  trigger_instance_id: number
+  event_types: string[]
+  filters: Record<string, unknown>
+  config_json?: Record<string, unknown> | null
+  is_enabled: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamListItem {
+  id: number
+  name: string
+  description?: string | null
+  goal_text?: string | null
+  topology: string
+  status: string
+  coordinator_agent_id?: number | null
+  member_count: number
+  last_run_status?: string | null
+  max_steps: number
+  max_total_tokens?: number | null
+  max_concurrent_runs: number
+  tools: TeamToolPool
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface TeamListResponse {
+  items: TeamListItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
 // Phase 6 - Graph View: Batch endpoint types
@@ -4651,6 +4710,19 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete project pattern')
+  },
+
+  // Agent Teams
+  async getTeams(options: { page?: number; pageSize?: number; status?: string; includeArchived?: boolean } = {}): Promise<TeamListResponse> {
+    const params = new URLSearchParams()
+    params.set('page', String(options.page ?? 1))
+    params.set('page_size', String(options.pageSize ?? 20))
+    if (options.status) params.set('status', options.status)
+    if (options.includeArchived) params.set('include_archived', 'true')
+
+    const res = await authenticatedFetch(`${API_URL}/api/teams?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch teams')
+    return res.json()
   },
 
   // Agents

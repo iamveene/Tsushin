@@ -50,7 +50,9 @@ class TeamMemberOrderUpdate(BaseModel):
 
 class TeamTriggerCreate(BaseModel):
     trigger_kind: str
-    config_json: Optional[dict[str, Any]] = None
+    trigger_instance_id: int = Field(..., gt=0)
+    event_types: list[str] = Field(default_factory=list)
+    filters: dict[str, Any] = Field(default_factory=dict)
     is_enabled: bool = True
 
     @field_validator("trigger_kind")
@@ -59,6 +61,35 @@ class TeamTriggerCreate(BaseModel):
         normalized = value.strip().lower()
         if normalized not in _enum_values(TeamTriggerKind):
             raise ValueError("Unsupported team trigger kind")
+        return normalized
+
+    @field_validator("event_types")
+    @classmethod
+    def normalize_event_types(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            event_type = str(item).strip()
+            if event_type and event_type not in normalized:
+                normalized.append(event_type)
+        return normalized
+
+
+class TeamTriggerUpdate(BaseModel):
+    trigger_instance_id: Optional[int] = Field(None, gt=0)
+    event_types: Optional[list[str]] = None
+    filters: Optional[dict[str, Any]] = None
+    is_enabled: Optional[bool] = None
+
+    @field_validator("event_types")
+    @classmethod
+    def normalize_event_types(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return value
+        normalized: list[str] = []
+        for item in value:
+            event_type = str(item).strip()
+            if event_type and event_type not in normalized:
+                normalized.append(event_type)
         return normalized
 
 
@@ -158,6 +189,9 @@ class TeamMemberResponse(BaseModel):
 class TeamTriggerResponse(BaseModel):
     id: int
     trigger_kind: str
+    trigger_instance_id: int
+    event_types: list[str] = Field(default_factory=list)
+    filters: dict[str, Any] = Field(default_factory=dict)
     config_json: Optional[dict[str, Any]] = None
     is_enabled: bool
     created_at: Optional[datetime] = None

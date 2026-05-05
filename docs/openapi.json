@@ -23878,6 +23878,176 @@
         }
       }
     },
+    "/api/teams/{team_id}/triggers": {
+      "post": {
+        "tags": [
+          "agent-teams"
+        ],
+        "summary": "Create Team Trigger Binding",
+        "operationId": "create_team_trigger_binding_api_teams__team_id__triggers_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamTriggerCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTriggerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/teams/{team_id}/triggers/{trigger_id}": {
+      "put": {
+        "tags": [
+          "agent-teams"
+        ],
+        "summary": "Update Team Trigger Binding",
+        "operationId": "update_team_trigger_binding_api_teams__team_id__triggers__trigger_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamTriggerUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTriggerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agent-teams"
+        ],
+        "summary": "Delete Team Trigger Binding",
+        "operationId": "delete_team_trigger_binding_api_teams__team_id__triggers__trigger_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/teams/{team_id}/runs": {
       "post": {
         "tags": [
@@ -43036,6 +43206,270 @@
           },
           "422": {
             "description": "Validation error — invalid request body or query parameters"
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/triggers": {
+      "post": {
+        "tags": [
+          "Public API v1",
+          "Teams API"
+        ],
+        "summary": "Create Team Trigger Binding",
+        "operationId": "create_team_trigger_binding_api_v1_teams__team_id__triggers_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamTriggerCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTriggerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required — missing or invalid token/API key"
+          },
+          "403": {
+            "description": "Insufficient permissions for this operation"
+          },
+          "429": {
+            "description": "Rate limit exceeded — check X-RateLimit-Limit header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "422": {
+            "description": "Validation error — invalid request body or query parameters"
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/triggers/{trigger_id}": {
+      "put": {
+        "tags": [
+          "Public API v1",
+          "Teams API"
+        ],
+        "summary": "Update Team Trigger Binding",
+        "operationId": "update_team_trigger_binding_api_v1_teams__team_id__triggers__trigger_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamTriggerUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamTriggerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required — missing or invalid token/API key"
+          },
+          "403": {
+            "description": "Insufficient permissions for this operation"
+          },
+          "429": {
+            "description": "Rate limit exceeded — check X-RateLimit-Limit header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "422": {
+            "description": "Validation error — invalid request body or query parameters"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Public API v1",
+          "Teams API"
+        ],
+        "summary": "Delete Team Trigger Binding",
+        "operationId": "delete_team_trigger_binding_api_v1_teams__team_id__triggers__trigger_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required — missing or invalid token/API key"
+          },
+          "403": {
+            "description": "Insufficient permissions for this operation"
+          },
+          "429": {
+            "description": "Rate limit exceeded — check X-RateLimit-Limit header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -78873,6 +79307,42 @@
         "type": "object",
         "title": "TeamToolPool"
       },
+      "TeamTriggerCreate": {
+        "properties": {
+          "trigger_kind": {
+            "type": "string",
+            "title": "Trigger Kind"
+          },
+          "trigger_instance_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Trigger Instance Id"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Types"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "trigger_kind",
+          "trigger_instance_id"
+        ],
+        "title": "TeamTriggerCreate"
+      },
       "TeamTriggerResponse": {
         "properties": {
           "id": {
@@ -78882,6 +79352,22 @@
           "trigger_kind": {
             "type": "string",
             "title": "Trigger Kind"
+          },
+          "trigger_instance_id": {
+            "type": "integer",
+            "title": "Trigger Instance Id"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Types"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters"
           },
           "config_json": {
             "anyOf": [
@@ -78928,9 +79414,65 @@
         "required": [
           "id",
           "trigger_kind",
+          "trigger_instance_id",
           "is_enabled"
         ],
         "title": "TeamTriggerResponse"
+      },
+      "TeamTriggerUpdate": {
+        "properties": {
+          "trigger_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Instance Id"
+          },
+          "event_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Types"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filters"
+          },
+          "is_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Enabled"
+          }
+        },
+        "type": "object",
+        "title": "TeamTriggerUpdate"
       },
       "TeamUpdate": {
         "properties": {

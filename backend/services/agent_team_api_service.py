@@ -18,12 +18,17 @@ from models import (
     AgentTeamMember,
     AgentTeamMemberRun,
     AgentTeamRun,
+    AgentTeamTrigger,
     Contact,
+    GitHubChannelInstance,
+    JiraChannelInstance,
     SandboxedTool,
     TeamMemberRole,
     TeamRunStatus,
     TeamStatus,
     TeamTopology,
+    TeamTriggerKind,
+    WebhookIntegration,
 )
 from services.team_membership_service import TeamMembershipError, TeamMembershipService
 from services.team_orchestrator_service import TeamRunOrchestrator, TeamValidationError
@@ -32,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_RUN_STATUSES = {TeamRunStatus.PENDING.value, TeamRunStatus.RUNNING.value}
 CANCELLED_STATUS = "cancelled"
+SUPPORTED_TEAM_TRIGGER_KINDS = {
+    TeamTriggerKind.WEBHOOK.value,
+    TeamTriggerKind.GITHUB.value,
+    TeamTriggerKind.JIRA.value,
+}
 
 
 class AgentTeamApiError(ValueError):
@@ -86,6 +96,21 @@ def _agent_name_map(db: Session, agent_ids: list[int]) -> dict[int, str]:
         .all()
     )
     return {agent_id: friendly_name for agent_id, friendly_name in rows}
+
+
+def _canonical_trigger_config(
+    *,
+    trigger_instance_id: int,
+    event_types: Optional[list[str]] = None,
+    filters: Optional[dict[str, Any]] = None,
+    is_enabled: bool,
+) -> dict[str, Any]:
+    return {
+        "trigger_instance_id": int(trigger_instance_id),
+        "event_types": list(event_types or []),
+        "filters": dict(filters or {}),
+        "is_enabled": bool(is_enabled),
+    }
 
 
 class AgentTeamApiService:
@@ -253,7 +278,11 @@ class AgentTeamApiService:
             raise
 
     def remove_member(self, team_id: int, agent_id: int) -> None:
-        self._get_team_or_404(team_id)
+        team = self._get_team_or_404(team_id)
+        if team.status == TeamStatus.ACTIVE.value:
+            visible_members = self._visible_members(team_id)
+            if len(visible_members) <= 1 and any(member.agent_id == agent_id for member in visible_members):
+                raise AgentTeamApiError(409, "Cannot remove the last visible member from an active team")
         service = _membership_service(self.db, self.tenant_id)
         try:
             service.remove_agent_from_team(team_id=team_id, agent_id=agent_id)
@@ -281,6 +310,61 @@ class AgentTeamApiService:
         self.db.refresh(team)
         return self.serialize_team(team, detail=True)
 
+    def create_trigger_binding(self, team_id: int, payload: Any) -> dict[str, Any]:
+        team = self._get_team_or_404(team_id)
+        if team.status == TeamStatus.ARCHIVED.value:
+            raise AgentTeamApiError(409, "Cannot add trigger bindings to an archived team")
+        data = payload.model_dump() if hasattr(payload, "model_dump") else dict(payload)
+        trigger_kind = self._validate_team_trigger_instance(data["trigger_kind"], data["trigger_instance_id"])
+        config = _canonical_trigger_config(
+            trigger_instance_id=data["trigger_instance_id"],
+            event_types=data.get("event_types"),
+            filters=data.get("filters"),
+            is_enabled=data.get("is_enabled", True),
+        )
+        trigger = AgentTeamTrigger(
+            tenant_id=self.tenant_id,
+            team_id=team.id,
+            trigger_kind=trigger_kind,
+            config_json=config,
+            is_enabled=config["is_enabled"],
+        )
+        self.db.add(trigger)
+        self.db.commit()
+        self.db.refresh(trigger)
+        return self.serialize_trigger(trigger)
+
+    def update_trigger_binding(self, team_id: int, trigger_id: int, payload: Any) -> dict[str, Any]:
+        self._get_team_or_404(team_id)
+        trigger = self._get_trigger_or_404(team_id, trigger_id)
+        data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else dict(payload)
+        if not data:
+            return self.serialize_trigger(trigger)
+
+        current_config = self._normalized_trigger_config(trigger)
+        next_instance_id = data.get("trigger_instance_id", current_config["trigger_instance_id"])
+        self._validate_team_trigger_instance(trigger.trigger_kind, next_instance_id)
+        if "trigger_instance_id" in data:
+            current_config["trigger_instance_id"] = int(data["trigger_instance_id"])
+        if "event_types" in data:
+            current_config["event_types"] = list(data["event_types"] or [])
+        if "filters" in data:
+            current_config["filters"] = dict(data["filters"] or {})
+        if "is_enabled" in data:
+            current_config["is_enabled"] = bool(data["is_enabled"])
+            trigger.is_enabled = bool(data["is_enabled"])
+        trigger.config_json = _canonical_trigger_config(**current_config)
+        trigger.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(trigger)
+        return self.serialize_trigger(trigger)
+
+    def delete_trigger_binding(self, team_id: int, trigger_id: int) -> None:
+        self._get_team_or_404(team_id)
+        trigger = self._get_trigger_or_404(team_id, trigger_id)
+        self.db.delete(trigger)
+        self.db.commit()
+
     def precreate_manual_run(self, team_id: int) -> AgentTeamRun:
         team = self._get_team_or_404(team_id)
         if team.status != TeamStatus.ACTIVE.value:
@@ -290,17 +374,17 @@ class AgentTeamApiService:
             goal_text=team.goal_text,
             member_count=self._member_count(team.id),
         )
-        active_run = (
+        active_run_count = (
             self.db.query(AgentTeamRun.id)
             .filter(
                 AgentTeamRun.tenant_id == self.tenant_id,
                 AgentTeamRun.team_id == team_id,
                 AgentTeamRun.status.in_(ACTIVE_RUN_STATUSES),
             )
-            .first()
+            .count()
         )
-        if active_run and (team.max_concurrent_runs or 1) <= 1:
-            raise AgentTeamApiError(409, "Team already has an active run")
+        if active_run_count >= (team.max_concurrent_runs or 1):
+            raise AgentTeamApiError(409, "Team already reached max_concurrent_runs")
         run = AgentTeamRun(
             tenant_id=self.tenant_id,
             team_id=team.id,
@@ -369,14 +453,7 @@ class AgentTeamApiService:
         if detail:
             data["members"] = [self.serialize_member(member) for member in self._visible_members(team.id)]
             data["triggers"] = [
-                {
-                    "id": trigger.id,
-                    "trigger_kind": trigger.trigger_kind,
-                    "config_json": trigger.config_json,
-                    "is_enabled": trigger.is_enabled,
-                    "created_at": trigger.created_at,
-                    "updated_at": trigger.updated_at,
-                }
+                self.serialize_trigger(trigger)
                 for trigger in sorted(team.triggers, key=lambda item: item.id)
             ]
             data["last_run"] = self.serialize_run(last_run, detail=False) if last_run else None
@@ -396,6 +473,20 @@ class AgentTeamApiService:
             "position_y": member.position_y,
             "created_at": member.created_at,
             "updated_at": member.updated_at,
+        }
+
+    def serialize_trigger(self, trigger: AgentTeamTrigger) -> dict[str, Any]:
+        config = self._normalized_trigger_config(trigger)
+        return {
+            "id": trigger.id,
+            "trigger_kind": trigger.trigger_kind,
+            "trigger_instance_id": config["trigger_instance_id"],
+            "event_types": config["event_types"],
+            "filters": config["filters"],
+            "config_json": config,
+            "is_enabled": trigger.is_enabled,
+            "created_at": trigger.created_at,
+            "updated_at": trigger.updated_at,
         }
 
     def serialize_run(self, run: Optional[AgentTeamRun], *, detail: bool) -> Optional[dict[str, Any]]:
@@ -479,6 +570,20 @@ class AgentTeamApiService:
             raise AgentTeamApiError(404, "Team run not found")
         return run
 
+    def _get_trigger_or_404(self, team_id: int, trigger_id: int) -> AgentTeamTrigger:
+        trigger = (
+            self.db.query(AgentTeamTrigger)
+            .filter(
+                AgentTeamTrigger.id == trigger_id,
+                AgentTeamTrigger.team_id == team_id,
+                AgentTeamTrigger.tenant_id == self.tenant_id,
+            )
+            .first()
+        )
+        if not trigger:
+            raise AgentTeamApiError(404, "Team trigger binding not found")
+        return trigger
+
     def _get_member(self, team_id: int, agent_id: int) -> AgentTeamMember:
         member = (
             self.db.query(AgentTeamMember)
@@ -558,6 +663,43 @@ class AgentTeamApiService:
         if missing:
             raise AgentTeamApiError(404, f"Sandboxed tool not found or disabled: {missing[0]}")
         return unique_ids
+
+    def _validate_team_trigger_instance(self, trigger_kind: str, trigger_instance_id: int) -> str:
+        normalized = (trigger_kind or "").strip().lower()
+        if normalized == TeamTriggerKind.GMAIL.value:
+            raise AgentTeamApiError(422, "Gmail trigger bindings are not supported for Agent Teams")
+        if normalized not in SUPPORTED_TEAM_TRIGGER_KINDS:
+            raise AgentTeamApiError(422, "Unsupported team trigger kind")
+
+        model_by_kind = {
+            TeamTriggerKind.WEBHOOK.value: WebhookIntegration,
+            TeamTriggerKind.GITHUB.value: GitHubChannelInstance,
+            TeamTriggerKind.JIRA.value: JiraChannelInstance,
+        }
+        model = model_by_kind[normalized]
+        row = (
+            self.db.query(model)
+            .filter(
+                model.id == trigger_instance_id,
+                model.tenant_id == self.tenant_id,
+                model.is_active.is_(True),
+                model.status == "active",
+            )
+            .first()
+        )
+        if not row:
+            raise AgentTeamApiError(404, "Trigger instance not found or inactive")
+        return normalized
+
+    @staticmethod
+    def _normalized_trigger_config(trigger: AgentTeamTrigger) -> dict[str, Any]:
+        raw_config = trigger.config_json or {}
+        return _canonical_trigger_config(
+            trigger_instance_id=raw_config.get("trigger_instance_id") or 0,
+            event_types=raw_config.get("event_types") or [],
+            filters=raw_config.get("filters") or {},
+            is_enabled=trigger.is_enabled,
+        )
 
     def _validate_active_ready(self, *, status: str, goal_text: Optional[str], member_count: int) -> None:
         if status == TeamStatus.ACTIVE.value:

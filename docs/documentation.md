@@ -190,11 +190,35 @@ Phase 5 is scoped to the backend HTTP API layer for Agent Teams. The session-aut
 
 The Teams API reuses the existing `agents.*` permission model instead of adding a new permission family: list/detail/run reads require `agents.read`, create/update/member changes require `agents.write`, manual run and cancellation require `agents.execute`, and archive requires `agents.delete`. The `/api/v1/teams` mirror follows the same API-client auth path as `/api/v1/agents`, including OAuth2 Bearer tokens and direct `X-API-Key` usage for roles such as `api_owner`.
 
-Manual runs are an explicit API action: `POST /api/teams/{id}/runs` and `POST /api/v1/teams/{id}/runs` return a run id immediately and hand execution to a background task. This is not trigger dispatch yet; webhook, schedule, email, watcher, and other trigger bindings remain deferred to later phases.
+Manual runs are an explicit API action: `POST /api/teams/{id}/runs` and `POST /api/v1/teams/{id}/runs` return a run id immediately and hand execution to a background task. Manual runs use the team's stored goal snapshot; request bodies do not override the run input in v0.7.0.
 
 Team deletion is soft archive. The archive path must refuse active runs, mark the team archived, and restore member A2A state through the Phase 4 snapshot/restore service instead of physically deleting team rows. Frontend Team Builder, Team Wizard, Studio Teams pages, trigger bindings, and Watcher Team Runs UI remain out of scope for Phase 5.
 
 The live dev smoke skeleton is `backend/dev_tests/test_teams_api_e2e.py`. It requires caller-provided auth (`TSUSHIN_AUTH_COOKIE` for `/api/teams`, or `TSUSHIN_AUTH_TOKEN`/`TSUSHIN_API_KEY` for `/api/v1/teams`) and existing agent fixtures (`TSUSHIN_TEAM_AGENT_IDS`). It deliberately does not create agents; missing agent IDs fail with an operator-facing message. The script creates temporary teams under `/api/teams` and `/api/v1/teams` by default, exercises CRUD/member/run endpoints, and soft-archives only the teams it created during cleanup.
+
+### 2.4.6 v0.7.0 Agent Teams Phase 6 trigger integration
+
+Phase 6 is a backend-only trigger execution layer for Agent Teams. The session-authenticated Studio API and public v1 API now expose trigger binding CRUD at `/api/teams/{team_id}/triggers` and `/api/v1/teams/{team_id}/triggers`. These endpoints reuse `agents.write`.
+
+Each binding stores a canonical config in `agent_team_trigger.config_json`: `trigger_instance_id`, `event_types`, `filters`, and `is_enabled`. The API validates that the trigger instance is active, belongs to the same tenant, and is one of Webhook, GitHub, or Jira. Gmail team triggers remain out of scope for v0.7.0 and are rejected.
+
+`0084_agent_team_trigger_queue.py` extends `message_queue` for team-run work. Rows with `message_type='team_run'` are team-owned instead of agent-owned: `agent_id` is null, `team_id` and `team_run_id` are set, and tenant-composite FKs keep queued rows aligned with the team and run they execute. Existing agent queue rows remain unchanged.
+
+`TriggerDispatchService` now fans a deduped event out to matching Agent Teams in addition to existing ContinuousRun and Flow bindings. A matching team trigger creates an `AgentTeamRun(status='pending')`, links it to the `WakeEvent`, and enqueues a `team_run` queue row. Team-only dispatch can succeed without a default agent on the trigger instance.
+
+`QueueWorker` processes team-run rows on a `(tenant_id, team_id)` lane and honors `AgentTeam.max_concurrent_runs`; extra rows stay pending until capacity is available. `QueueRouter` executes the pre-created run through `TeamRunOrchestrator(existing_run_id=...)` and marks the associated `WakeEvent` as processed only when the team run completes successfully.
+
+There is still no Team Wizard, Team Builder, Studio Teams page, or Watcher Team Runs UI in this phase. Configure team triggers through the HTTP API until the frontend phases land.
+
+### 2.4.7 v0.7.0 Agent Teams Phase 7 frontend foundations
+
+Phase 7 adds the first Agent Teams frontend foundation while keeping team creation/editing flows deferred. Studio now exposes a canonical `/studio/teams` route and the Studio sub-navigation includes a Teams tab. `/agents/teams` redirects to `/studio/teams` so older Studio-adjacent links do not fragment the surface.
+
+The Teams page uses the existing session-authenticated `/api/teams` contract and renders loading, error, empty, and list states. `?new=1` is preserved as the future Team Wizard hook, but this phase does not create teams from the UI and does not link to a Team Builder detail page.
+
+The Agents page now uses a reusable split-button create affordance: the primary action still opens the existing Agent Wizard, while the Team option routes to `/studio/teams?new=1`. Agents marked by the backend as `is_team_member=true` show a Team badge.
+
+Agent detail and Agent Builder surfaces display a team-membership warning for team member agents. Direct conversations remain separate from team executions, but Studio settings edits can affect team behavior.
 
 ### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
 
@@ -1056,7 +1080,7 @@ Two skills drive inter-agent behavior:
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
 
-Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Later phases add Team Wizard/Builder, trigger dispatch, and Watcher Team Runs UI.
+Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Phase 6 adds backend Webhook/GitHub/Jira trigger bindings and `team_run` queue dispatch for external-event-driven team runs. Phase 7 adds the Studio Teams list foundation, split create affordance, Team badges, and team-member warnings. Later phases add Team Wizard/Builder and Watcher Team Runs UI.
 
 **Agent Switcher execution modes** (v0.6.0):
 

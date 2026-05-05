@@ -34,6 +34,9 @@ class QueueRouter:
         if message_type == "case_index":
             # v0.7.0 Trigger Case Memory MVP (default-off).
             return await self._dispatch_case_index(worker, db, item)
+        if message_type == "team_run":
+            # v0.7.0 Agent Teams trigger queue substrate.
+            return await self._dispatch_team_run(worker, db, item)
         raise ValueError(f"Unknown message_type: {message_type}")
 
     async def _dispatch_inbound_message(self, worker: Any, db: Any, item: Any) -> Any:
@@ -566,6 +569,144 @@ class QueueRouter:
         }
         MessageQueueService(db).mark_completed(item.id, result=result)
         return result
+
+    async def _dispatch_team_run(self, worker: Any, db: Any, item: Any) -> Any:
+        """v0.7.0 Agent Teams — consume a ``team_run`` queue row."""
+        from models import AgentTeamRun, TeamRunStatus, WakeEvent
+        from services.team_orchestrator_service import TeamRunOrchestrator
+
+        payload = item.payload or {}
+        team_id = getattr(item, "team_id", None) or payload.get("team_id")
+        team_run_id = getattr(item, "team_run_id", None) or payload.get("team_run_id")
+        wake_event_id = payload.get("wake_event_id")
+
+        if team_id is None:
+            raise ValueError("team_run queue item missing team_id")
+        if team_run_id is None:
+            raise ValueError("team_run queue item missing team_run_id")
+
+        team_run = (
+            db.query(AgentTeamRun)
+            .filter(
+                AgentTeamRun.id == int(team_run_id),
+                AgentTeamRun.team_id == int(team_id),
+                AgentTeamRun.tenant_id == item.tenant_id,
+            )
+            .first()
+        )
+        if team_run is None:
+            if wake_event_id is not None:
+                self._mark_wake_event_terminal(
+                    db,
+                    tenant_id=item.tenant_id,
+                    wake_event_id=int(wake_event_id),
+                    status="failed",
+                )
+            return {"status": "skipped", "reason": "team_run_not_found"}
+
+        if wake_event_id is None and team_run.trigger_event_id is not None:
+            wake_event_id = team_run.trigger_event_id
+
+        if wake_event_id is not None:
+            wake_event = (
+                db.query(WakeEvent)
+                .filter(
+                    WakeEvent.id == int(wake_event_id),
+                    WakeEvent.tenant_id == item.tenant_id,
+                )
+                .first()
+            )
+            if wake_event is not None:
+                wake_event.status = "claimed"
+                db.add(wake_event)
+                db.commit()
+
+        try:
+            orchestrator = TeamRunOrchestrator(
+                db,
+                tenant_id=item.tenant_id,
+                team_id=int(team_id),
+                existing_run_id=int(team_run_id),
+            )
+            run = await orchestrator.run(
+                trigger_event_id=int(wake_event_id) if wake_event_id is not None else None
+            )
+        except Exception:
+            logger.exception(
+                "team_run dispatch failed: tenant=%s team=%s run=%s wake_event=%s",
+                item.tenant_id,
+                team_id,
+                team_run_id,
+                wake_event_id,
+            )
+            failed_run = (
+                db.query(AgentTeamRun)
+                .filter(
+                    AgentTeamRun.id == int(team_run_id),
+                    AgentTeamRun.team_id == int(team_id),
+                    AgentTeamRun.tenant_id == item.tenant_id,
+                )
+                .first()
+            )
+            if failed_run is not None and failed_run.status in (
+                TeamRunStatus.PENDING.value,
+                TeamRunStatus.RUNNING.value,
+            ):
+                failed_run.status = TeamRunStatus.FAILED.value
+                failed_run.completed_at = datetime.utcnow()
+                failed_run.error_json = {
+                    "reason": "team_run_queue_dispatch_exception",
+                }
+                db.add(failed_run)
+                db.commit()
+            if wake_event_id is not None:
+                self._mark_wake_event_terminal(
+                    db,
+                    tenant_id=item.tenant_id,
+                    wake_event_id=int(wake_event_id),
+                    status="failed",
+                )
+            raise
+
+        terminal_success = run.status == TeamRunStatus.COMPLETED.value
+        if wake_event_id is not None:
+            self._mark_wake_event_terminal(
+                db,
+                tenant_id=item.tenant_id,
+                wake_event_id=int(wake_event_id),
+                status="processed" if terminal_success else "failed",
+            )
+
+        return {
+            "status": run.status,
+            "team_id": run.team_id,
+            "team_run_id": run.id,
+            "wake_event_id": wake_event_id,
+        }
+
+    def _mark_wake_event_terminal(
+        self,
+        db: Any,
+        *,
+        tenant_id: str,
+        wake_event_id: int,
+        status: str,
+    ) -> None:
+        from models import WakeEvent
+
+        wake_event = (
+            db.query(WakeEvent)
+            .filter(
+                WakeEvent.id == wake_event_id,
+                WakeEvent.tenant_id == tenant_id,
+            )
+            .first()
+        )
+        if wake_event is None:
+            return
+        wake_event.status = status
+        db.add(wake_event)
+        db.commit()
 
 
 def self_fail_run(db: Any, run: Any, reason: str) -> None:
