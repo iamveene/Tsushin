@@ -1,14 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useRequireAuth } from '@/contexts/AuthContext'
+import { useTeamWizard, useTeamWizardComplete } from '@/contexts/TeamWizardContext'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, type TeamListItem } from '@/lib/client'
 import {
   AlertCircleIcon,
   ClockIcon,
   PlayIcon,
+  PlusIcon,
   RefreshIcon,
   UsersIcon,
 } from '@/components/ui/icons'
@@ -37,8 +39,11 @@ function statusBadge(status: string) {
 
 export default function StudioTeamsPage() {
   useRequireAuth()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const newTeamRequested = searchParams.get('new') === '1'
+  const newRequestHandledRef = useRef(false)
+  const teamWizard = useTeamWizard()
   const [teams, setTeams] = useState<TeamListItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -63,6 +68,16 @@ export default function StudioTeamsPage() {
   }, [loadTeams])
 
   useEffect(() => {
+    if (!newTeamRequested || newRequestHandledRef.current) return
+    newRequestHandledRef.current = true
+    teamWizard.openWizard()
+  }, [newTeamRequested, teamWizard])
+
+  useTeamWizardComplete(() => {
+    loadTeams()
+  })
+
+  useEffect(() => {
     const handleRefresh = () => loadTeams()
     window.addEventListener('tsushin:refresh', handleRefresh)
     return () => window.removeEventListener('tsushin:refresh', handleRefresh)
@@ -76,14 +91,24 @@ export default function StudioTeamsPage() {
             <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Teams</h1>
             <p className="text-tsushin-slate">Coordinate multi-agent runs from one Studio surface.</p>
           </div>
-          <button
-            type="button"
-            onClick={loadTeams}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white"
-          >
-            <RefreshIcon size={16} />
-            Refresh
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => teamWizard.openWizard()}
+              className="btn-primary inline-flex items-center justify-center gap-2 text-sm"
+            >
+              <PlusIcon size={16} />
+              Create Team
+            </button>
+            <button
+              type="button"
+              onClick={loadTeams}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white"
+            >
+              <RefreshIcon size={16} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -95,13 +120,13 @@ export default function StudioTeamsPage() {
               <p className="mt-1 text-3xl font-display font-bold text-white">{total}</p>
             </div>
             <div className="stat-card stat-card-success">
-              <p className="text-sm font-medium text-tsushin-slate">Active</p>
+              <p className="text-sm font-medium text-tsushin-slate">Shown Active</p>
               <p className="mt-1 text-3xl font-display font-bold text-white">
                 {teams.filter((team) => team.status === 'active').length}
               </p>
             </div>
             <div className="stat-card stat-card-accent">
-              <p className="text-sm font-medium text-tsushin-slate">Members</p>
+              <p className="text-sm font-medium text-tsushin-slate">Shown Members</p>
               <p className="mt-1 text-3xl font-display font-bold text-white">
                 {teams.reduce((sum, team) => sum + team.member_count, 0)}
               </p>
@@ -127,6 +152,22 @@ export default function StudioTeamsPage() {
               <div className="flex items-center justify-center py-16">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-tsushin-indigo/30 border-t-tsushin-indigo"></div>
               </div>
+            ) : error ? (
+              <div className="px-6 py-16 text-center">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-tsushin-vermilion/10">
+                  <AlertCircleIcon size={32} className="text-tsushin-vermilion" />
+                </div>
+                <h3 className="mb-2 text-lg font-medium text-tsushin-pearl">Teams did not load</h3>
+                <p className="mx-auto max-w-md text-sm text-tsushin-slate">{error}</p>
+                <button
+                  type="button"
+                  onClick={loadTeams}
+                  className="btn-secondary mt-5 inline-flex items-center justify-center gap-2 text-sm"
+                >
+                  <RefreshIcon size={16} />
+                  Retry
+                </button>
+              </div>
             ) : teams.length === 0 ? (
               <div className="px-6 py-16 text-center">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-tsushin-surface">
@@ -142,7 +183,16 @@ export default function StudioTeamsPage() {
                 {teams.map((team) => (
                   <div
                     key={team.id}
-                    className="px-6 py-5 transition-colors hover:bg-tsushin-surface/30"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => router.push(`/studio/teams/${team.id}`)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        router.push(`/studio/teams/${team.id}`)
+                      }
+                    }}
+                    className="cursor-pointer px-6 py-5 transition-colors hover:bg-tsushin-surface/30"
                   >
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">

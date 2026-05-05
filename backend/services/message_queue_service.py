@@ -9,9 +9,21 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_, or_
 
-from models import MessageQueue
+from models import AgentTeamRun, MessageQueue, TeamRunStatus
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_STALE_RESET_SECONDS = 300
+TEAM_RUN_ORCHESTRATOR_WALL_CLOCK_SECONDS = 600
+TEAM_RUN_STALE_RESET_GRACE_SECONDS = 60
+DEFAULT_TEAM_RUN_STALE_RESET_SECONDS = (
+    TEAM_RUN_ORCHESTRATOR_WALL_CLOCK_SECONDS
+    + TEAM_RUN_STALE_RESET_GRACE_SECONDS
+)
+ACTIVE_TEAM_RUN_STATUSES = (
+    TeamRunStatus.PENDING.value,
+    TeamRunStatus.RUNNING.value,
+)
 
 
 class MessageQueueService:
@@ -31,6 +43,7 @@ class MessageQueueService:
         message_type: str = "inbound_message",
         team_id: Optional[int] = None,
         team_run_id: Optional[int] = None,
+        commit: bool = True,
     ) -> MessageQueue:
         """Queue a message for processing."""
         if message_type == "team_run":
@@ -53,7 +66,10 @@ class MessageQueueService:
             priority=priority,
         )
         self.db.add(item)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         self.db.refresh(item)
         logger.info(
             f"Enqueued message queue item {item.id} "
@@ -277,17 +293,56 @@ class MessageQueueService:
             or 0
         )
 
-    def reset_stale(self, threshold_seconds: int = 300) -> int:
+    def count_active_non_queued_team_runs(self, tenant_id: str, team_id: int) -> int:
+        """Count active AgentTeamRun rows that are not represented in the queue."""
+        queued_run_exists = (
+            self.db.query(MessageQueue.id)
+            .filter(
+                MessageQueue.tenant_id == AgentTeamRun.tenant_id,
+                MessageQueue.team_run_id == AgentTeamRun.id,
+                MessageQueue.message_type == "team_run",
+                MessageQueue.status.in_(["pending", "processing"]),
+            )
+            .exists()
+        )
+        return (
+            self.db.query(func.count(AgentTeamRun.id))
+            .filter(
+                AgentTeamRun.tenant_id == tenant_id,
+                AgentTeamRun.team_id == team_id,
+                AgentTeamRun.status.in_(ACTIVE_TEAM_RUN_STATUSES),
+                ~queued_run_exists,
+            )
+            .scalar()
+            or 0
+        )
+
+    def reset_stale(
+        self,
+        threshold_seconds: int = DEFAULT_STALE_RESET_SECONDS,
+        team_run_threshold_seconds: int = DEFAULT_TEAM_RUN_STALE_RESET_SECONDS,
+    ) -> int:
         """
         Reset processing items older than threshold back to pending.
         This recovers from worker crashes or stuck processing.
         """
-        cutoff = datetime.utcnow() - timedelta(seconds=threshold_seconds)
+        now = datetime.utcnow()
+        standard_cutoff = now - timedelta(seconds=threshold_seconds)
+        team_run_cutoff = now - timedelta(seconds=team_run_threshold_seconds)
         stale = (
             self.db.query(MessageQueue)
             .filter(
                 MessageQueue.status == "processing",
-                MessageQueue.processing_started_at < cutoff,
+                or_(
+                    and_(
+                        MessageQueue.message_type == "team_run",
+                        MessageQueue.processing_started_at < team_run_cutoff,
+                    ),
+                    and_(
+                        MessageQueue.message_type != "team_run",
+                        MessageQueue.processing_started_at < standard_cutoff,
+                    ),
+                ),
             )
             .all()
         )

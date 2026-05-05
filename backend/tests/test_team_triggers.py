@@ -3,16 +3,125 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 
-from models import AgentTeamRun, MessageQueue, TeamRunStatus, WakeEvent
-from services.queue_router import QueueRouter
-from services.trigger_dispatch_service import TriggerDispatchInput, TriggerDispatchService
+from models import AgentTeam, AgentTeamRun, MessageQueue, TeamRunStatus, WakeEvent
 from test_trigger_dispatch_service import (  # noqa: F401
     _seed_team_trigger,
     _seed_tenant_user_agent,
     _seed_webhook,
     db_session,
 )
+from services.message_queue_service import MessageQueueService
+from services.queue_worker import QueueWorker
+from services.queue_router import QueueRouter
+from services.trigger_dispatch_service import TriggerDispatchInput, TriggerDispatchService
+
+
+def test_team_run_stale_reset_uses_orchestrator_sized_threshold(db_session):
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    trigger = _seed_team_trigger(db_session, tenant_id="tenant-a")
+    team_run = AgentTeamRun(
+        tenant_id="tenant-a",
+        team_id=trigger.team_id,
+        status=TeamRunStatus.RUNNING.value,
+        goal_text_snapshot="Goal",
+        topology_snapshot="line",
+    )
+    db_session.add(team_run)
+    db_session.flush()
+    processing_started_at = datetime.utcnow() - timedelta(seconds=310)
+    team_queue = MessageQueue(
+        tenant_id="tenant-a",
+        channel="team",
+        message_type="team_run",
+        status="processing",
+        agent_id=None,
+        team_id=trigger.team_id,
+        team_run_id=team_run.id,
+        sender_key=f"team:{trigger.team_id}:run:{team_run.id}",
+        payload={"team_run_id": team_run.id, "team_id": trigger.team_id},
+        processing_started_at=processing_started_at,
+    )
+    agent_queue = MessageQueue(
+        tenant_id="tenant-a",
+        channel="api",
+        message_type="inbound_message",
+        status="processing",
+        agent_id=201,
+        sender_key="api-user",
+        payload={"message": "hello"},
+        processing_started_at=processing_started_at,
+    )
+    db_session.add_all([team_queue, agent_queue])
+    db_session.commit()
+
+    reset_count = MessageQueueService(db_session).reset_stale()
+
+    assert reset_count == 1
+    assert db_session.get(MessageQueue, team_queue.id).status == "processing"
+    assert db_session.get(MessageQueue, agent_queue.id).status == "pending"
+
+
+def test_worker_leaves_trigger_queue_pending_when_manual_run_uses_capacity(db_session, tmp_path):
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    _seed_webhook(
+        db_session,
+        instance_id=401,
+        tenant_id="tenant-a",
+        created_by=1,
+        default_agent_id=None,
+    )
+    trigger = _seed_team_trigger(db_session, tenant_id="tenant-a")
+    team = db_session.get(AgentTeam, trigger.team_id)
+    team.max_concurrent_runs = 1
+    manual_run = AgentTeamRun(
+        tenant_id="tenant-a",
+        team_id=trigger.team_id,
+        status=TeamRunStatus.PENDING.value,
+        goal_text_snapshot="Manual goal",
+        topology_snapshot="line",
+    )
+    db_session.add(manual_run)
+    db_session.commit()
+
+    result = TriggerDispatchService(
+        db_session,
+        payload_dir=tmp_path / "backend" / "data" / "wake_events",
+    ).dispatch(
+        TriggerDispatchInput(
+            trigger_type="webhook",
+            instance_id=401,
+            event_type="message.created",
+            dedupe_key="team-trigger-capacity-1",
+            payload={"raw_event": {"action": "opened"}},
+        )
+    )
+    queue_item = db_session.query(MessageQueue).filter(MessageQueue.message_type == "team_run").one()
+    assert result.status == "dispatched"
+    assert MessageQueueService(db_session).count_active_non_queued_team_runs("tenant-a", trigger.team_id) == 1
+
+    worker = QueueWorker(db_session.get_bind())
+    worker._running = True
+    asyncio.run(worker._poll_and_dispatch())
+
+    db_session.expire_all()
+    queue_item = db_session.get(MessageQueue, queue_item.id)
+    assert queue_item.status == "pending"
+    assert queue_item.processing_started_at is None
+    assert worker._active_team_tasks == {}
 
 
 def test_webhook_team_trigger_enqueues_and_dispatches_team_run(db_session, tmp_path, monkeypatch):

@@ -58,7 +58,7 @@ class QueueWorker:
             try:
                 from services.message_queue_service import MessageQueueService
                 service = MessageQueueService(db)
-                stale_count = service.reset_stale(threshold_seconds=300)
+                stale_count = service.reset_stale()
                 if stale_count > 0:
                     logger.info(f"QueueWorker reset {stale_count} stale processing items on startup")
             finally:
@@ -126,7 +126,7 @@ class QueueWorker:
             service = MessageQueueService(db)
 
             # Also periodically reset stale items
-            service.reset_stale(threshold_seconds=300)
+            service.reset_stale()
 
             # Get all (tenant_id, agent_id) pairs with pending items
             pending_agents = service.get_pending_agents()
@@ -160,7 +160,9 @@ class QueueWorker:
                 max_concurrent = self._get_team_max_concurrent_runs(db, tenant_id, team_id)
                 active_count = self._active_team_task_count(tenant_id, team_id)
                 processing_count = service.count_processing_team_runs(tenant_id, team_id)
-                available_slots = max_concurrent - max(active_count, processing_count)
+                manual_active_count = service.count_active_non_queued_team_runs(tenant_id, team_id)
+                occupied_slots = max(active_count, processing_count) + manual_active_count
+                available_slots = max_concurrent - occupied_slots
                 for _ in range(max(0, available_slots)):
                     self._team_task_seq += 1
                     task_key = (tenant_id, team_id, self._team_task_seq)

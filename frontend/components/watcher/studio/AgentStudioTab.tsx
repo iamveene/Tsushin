@@ -231,7 +231,7 @@ export default function AgentStudioTab() {
               </div>
             </div>
             <Link
-              href="/studio/teams"
+              href={studioData.agent.current_team_id ? `/studio/teams/${studioData.agent.current_team_id}` : '/studio/teams'}
               className="inline-flex items-center justify-center rounded-lg border border-tsushin-indigo/30 bg-tsushin-indigo/10 px-4 py-2 text-sm font-medium text-tsushin-indigo-glow transition-colors hover:bg-tsushin-indigo/20"
             >
               Open Teams

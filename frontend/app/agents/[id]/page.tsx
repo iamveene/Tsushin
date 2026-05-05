@@ -179,7 +179,7 @@ export default function AgentDetailPage() {
               </div>
               <button
                 type="button"
-                onClick={() => router.push('/studio/teams')}
+                onClick={() => router.push(agent.current_team_id ? `/studio/teams/${agent.current_team_id}` : '/studio/teams')}
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-indigo/30 bg-tsushin-indigo/10 px-4 py-2 text-sm font-medium text-tsushin-indigo-glow transition-colors hover:bg-tsushin-indigo/20"
               >
                 Open Teams

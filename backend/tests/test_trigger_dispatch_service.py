@@ -639,6 +639,97 @@ def test_dispatch_creates_team_run_without_default_agent(db_session, tmp_path):
     assert queue_item.payload["trigger_event_id"] == wake_event.id
 
 
+def test_dispatch_reports_enqueue_failed_when_team_run_queue_insert_fails(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=None)
+    _seed_team_trigger(db_session, tenant_id="tenant-a")
+    db_session.commit()
+
+    from services import message_queue_service
+
+    original_enqueue = message_queue_service.MessageQueueService.enqueue
+
+    def fail_team_enqueue(self, *args, **kwargs):  # noqa: ANN001
+        if kwargs.get("message_type") == "team_run":
+            raise RuntimeError("queue insert failed")
+        return original_enqueue(self, *args, **kwargs)
+
+    monkeypatch.setattr(message_queue_service.MessageQueueService, "enqueue", fail_team_enqueue)
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(payload={"raw_event": {"event_type": "approved"}})
+    )
+
+    assert result.status == TriggerDispatchStatus.ENQUEUE_FAILED.value
+    assert result.reason == "team_run_queue_enqueue_failed"
+    assert result.team_run_ids == [1]
+    assert db_session.query(MessageQueue).count() == 0
+    team_run = db_session.query(AgentTeamRun).one()
+    assert team_run.status == TeamRunStatus.FAILED.value
+    assert team_run.error_json == {"reason": "team_run_queue_enqueue_failed"}
+    assert db_session.query(WakeEvent).one().status == "failed"
+    assert db_session.query(ChannelEventDedupe).one().outcome == "team_run_queue_enqueue_failed"
+
+
+def test_dispatch_rolls_back_partial_team_run_queue_insert_failure(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    db_session.add(Contact(id=102, tenant_id="tenant-a", friendly_name="Agent 2", role="agent"))
+    db_session.add(
+        Agent(
+            id=202,
+            tenant_id="tenant-a",
+            contact_id=102,
+            system_prompt="prompt",
+            model_provider="gemini",
+            model_name="gemini-2.5-pro",
+            response_template="{response}",
+            is_active=True,
+        )
+    )
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=None)
+    _seed_team_trigger(db_session, tenant_id="tenant-a", team_id=801, trigger_id=901, agent_id=201)
+    _seed_team_trigger(db_session, tenant_id="tenant-a", team_id=802, trigger_id=902, agent_id=202)
+    db_session.commit()
+
+    from services import message_queue_service
+
+    original_enqueue = message_queue_service.MessageQueueService.enqueue
+    team_enqueue_calls = 0
+
+    def fail_second_team_enqueue(self, *args, **kwargs):  # noqa: ANN001
+        nonlocal team_enqueue_calls
+        if kwargs.get("message_type") == "team_run":
+            team_enqueue_calls += 1
+            if team_enqueue_calls == 2:
+                raise RuntimeError("queue insert failed")
+        return original_enqueue(self, *args, **kwargs)
+
+    monkeypatch.setattr(message_queue_service.MessageQueueService, "enqueue", fail_second_team_enqueue)
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(payload={"raw_event": {"event_type": "approved"}})
+    )
+
+    assert result.status == TriggerDispatchStatus.ENQUEUE_FAILED.value
+    assert result.reason == "team_run_queue_enqueue_failed"
+    assert team_enqueue_calls == 2
+    assert db_session.query(MessageQueue).count() == 0
+    assert sorted(result.team_run_ids) == [1, 2]
+    assert {
+        run.status for run in db_session.query(AgentTeamRun).order_by(AgentTeamRun.id)
+    } == {TeamRunStatus.FAILED.value}
+    assert db_session.query(WakeEvent).one().status == "failed"
+    assert db_session.query(ChannelEventDedupe).one().outcome == "team_run_queue_enqueue_failed"
+
+
 @pytest.mark.parametrize(
     ("trigger_type", "instance_id", "event_type", "seed_fn", "filters", "payload"),
     [
@@ -1066,4 +1157,5 @@ def test_trigger_dispatch_status_names_are_stable():
         "missing_default_agent",
         "cross_tenant_mismatch",
         "unsupported_trigger_type",
+        "enqueue_failed",
     ]
