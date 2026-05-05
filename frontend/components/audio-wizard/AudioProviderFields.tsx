@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
-import type { TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
+import type { ASRInstance, TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
@@ -430,6 +430,209 @@ export function AudioVoiceFields({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+export type ASRUsageMode = 'openai' | 'instance'
+
+export interface AudioTranscriptFieldsValue {
+  responseMode?: 'conversational' | 'transcript_only'
+  language: string
+  model: string
+  asrMode: ASRUsageMode
+  asrInstanceId: number | null
+}
+
+export interface AudioTranscriptFieldsProps {
+  value: AudioTranscriptFieldsValue
+  onChange: (patch: Partial<AudioTranscriptFieldsValue>) => void
+  showResponseMode?: boolean
+}
+
+export function AudioTranscriptFields({
+  value,
+  onChange,
+  showResponseMode = true,
+}: AudioTranscriptFieldsProps) {
+  const [instances, setInstances] = useState<ASRInstance[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    api.getASRInstances().catch(() => [] as ASRInstance[]).then(loadedInstances => {
+      if (cancelled) return
+      setInstances(loadedInstances)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const selectedInstance = useMemo(
+    () => instances.find(inst => inst.id === value.asrInstanceId) || null,
+    [instances, value.asrInstanceId],
+  )
+
+  const chooseMode = (mode: ASRUsageMode) => {
+    if (mode === 'instance') {
+      const nextId = value.asrInstanceId ?? instances[0]?.id ?? null
+      onChange({ asrMode: mode, asrInstanceId: nextId })
+      return
+    }
+    onChange({ asrMode: mode, asrInstanceId: null })
+  }
+
+  return (
+    <div className="space-y-4">
+      {showResponseMode && (
+        <div>
+          <label className="block text-sm font-medium mb-3">Response mode</label>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'conversational' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                (value.responseMode || 'conversational') === 'conversational'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Conversational</div>
+              <div className="text-xs text-gray-400 mt-1">Transcribe audio, then let the agent respond normally.</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'transcript_only' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                value.responseMode === 'transcript_only'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Transcript only</div>
+              <div className="text-xs text-gray-400 mt-1">Return the raw transcript without generating an AI reply.</div>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className="block text-sm font-medium mb-3">ASR backend</label>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => chooseMode('openai')}
+            className={`w-full text-left p-4 rounded-xl border transition-colors ${
+              value.asrMode === 'openai'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">OpenAI Whisper (cloud)</div>
+            <div className="text-xs text-gray-400 mt-1">Cloud transcription path. Requires OpenAI credentials in Hub.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => chooseMode('instance')}
+            disabled={instances.length === 0}
+            className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              value.asrMode === 'instance'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">Pin a local instance</div>
+            <div className="text-xs text-gray-400 mt-1">
+              {instances.length > 0
+                ? 'Pin this agent to one tenant-owned ASR container (Speaches or openai_whisper).'
+                : 'No local ASR instances available yet.'}
+            </div>
+          </button>
+          {instances.length === 0 && (
+            // Separate sibling: the disabled button above blocks click events
+            // on its children (HTML disabled-button semantics), so this CTA
+            // lives outside the button. Dispatching a custom DOM event keeps
+            // the wizard orchestration in hub/page.tsx — no context coupling.
+            <div className="mt-2 px-4 py-3 rounded-xl border border-teal-500/20 bg-teal-500/5 text-xs text-gray-300">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tsushin:open-provider-wizard', {
+                      detail: { modality: 'asr', hosting: 'local' }
+                    }))
+                  }
+                }}
+                className="text-teal-400 hover:text-teal-300 underline font-medium"
+              >
+                + Create an ASR instance now
+              </button>
+              <span className="text-gray-400">{' '}or go to Hub → Add Provider → Speech-to-Text → Local.</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {value.asrMode === 'instance' && instances.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium mb-2">Local instance</label>
+          <select
+            value={value.asrInstanceId ?? ''}
+            onChange={(e) => onChange({ asrInstanceId: e.target.value ? Number(e.target.value) : null })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            {instances.map(inst => (
+              <option key={inst.id} value={inst.id}>
+                {inst.instance_name} — {inst.vendor || 'unknown'} ({inst.container_status || 'none'})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-sm font-medium mb-2">Language detection</label>
+          <select
+            value={value.language || 'auto'}
+            onChange={(e) => onChange({ language: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="pt">Portuguese</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-2">OpenAI model</label>
+          <select
+            value={value.model || 'whisper-1'}
+            onChange={(e) => onChange({ model: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="whisper-1">whisper-1</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
+        {value.asrMode === 'openai' && (
+          <div>Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under Hub → AI Providers → OpenAI.</div>
+        )}
+        {value.asrMode === 'instance' && (
+          <div>
+            {selectedInstance
+              ? `Pins this agent to ${selectedInstance.instance_name} (${selectedInstance.vendor}). Voice notes never leave the tenant — they're transcribed locally inside the auto-provisioned container.`
+              : 'Select a local ASR instance to pin this agent.'}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

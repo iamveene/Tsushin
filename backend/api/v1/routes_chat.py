@@ -6,7 +6,7 @@ Supports sync and async modes, thread management, and queue polling.
 
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -130,6 +130,7 @@ class QueueStatusResponse(BaseModel):
     position: Optional[int] = None
     estimated_wait_seconds: Optional[int] = None
     result: Optional[dict] = None
+    agentic_scratchpad: Optional[List[dict]] = None
 
 
 class ThreadSummary(BaseModel):
@@ -145,6 +146,23 @@ class ThreadMessage(BaseModel):
     content: str
     timestamp: str
     message_id: Optional[str] = None
+
+
+def _get_visible_agent(
+    db: Session,
+    agent_id: int,
+    tenant_id: str,
+    *,
+    require_active: bool = False,
+) -> Optional[Agent]:
+    query = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_internal == False,
+    )
+    if require_active:
+        query = query.filter(Agent.is_active == True)
+    return query.first()
 
 
 # ============================================================================
@@ -186,11 +204,7 @@ async def send_chat_message(
     Requires `agents.execute` permission.
     """
     # Validate agent access
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-        Agent.is_active == True,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id, require_active=True)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found or not active")
 
@@ -393,10 +407,12 @@ async def _enqueue_message(agent, agent_name, request, caller, db):
 @router.get(
     "/api/v1/queue/{queue_id}",
     response_model=QueueStatusResponse,
+    response_model_exclude_none=True,
     responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
 )
 async def poll_queue_status(
     queue_id: int,
+    include_scratchpad: bool = Query(False, description="Include agentic scratchpad trace when available"),
     db: Session = Depends(get_db),
     caller: ApiCaller = Depends(require_api_permission("agents.execute")),
 ):
@@ -417,12 +433,28 @@ async def poll_queue_status(
     if not queue_item:
         raise HTTPException(status_code=404, detail="Queue item not found")
 
+    payload = queue_item.payload if isinstance(queue_item.payload, dict) else {}
+    if caller.is_api_client and caller.client_id:
+        if payload.get("api_client_id") != caller.client_id:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+
     if queue_item.status == "completed":
-        result = queue_item.payload.get("result") if isinstance(queue_item.payload, dict) else None
+        result = payload.get("result") if isinstance(payload, dict) else None
+        response_result = result
+        if isinstance(result, dict):
+            response_result = dict(result)
+            response_result.pop("agentic_scratchpad", None)
+        response_data: dict[str, Any] = {
+            "status": "completed",
+            "queue_id": queue_id,
+            "result": response_result,
+        }
+        if include_scratchpad:
+            scratchpad = _resolve_queue_scratchpad(db, result, caller)
+            if scratchpad is not None:
+                response_data["agentic_scratchpad"] = scratchpad
         return QueueStatusResponse(
-            status="completed",
-            queue_id=queue_id,
-            result=result,
+            **response_data,
         )
 
     if queue_item.status == "error":
@@ -447,6 +479,34 @@ async def poll_queue_status(
     )
 
 
+def _resolve_queue_scratchpad(db: Session, result: Optional[dict], caller: ApiCaller) -> Optional[List[dict]]:
+    """Resolve a completed queue result's scratchpad without widening queue access."""
+    if not isinstance(result, dict):
+        return None
+
+    scratchpad = result.get("agentic_scratchpad")
+    if isinstance(scratchpad, list):
+        return scratchpad
+
+    thread_id = result.get("thread_id")
+    if not isinstance(thread_id, int):
+        return None
+
+    thread_query = db.query(ConversationThread).filter(
+        ConversationThread.id == thread_id,
+        ConversationThread.tenant_id == caller.tenant_id,
+    )
+    if caller.is_api_client and caller.client_id:
+        thread_query = thread_query.filter(ConversationThread.api_client_id == caller.client_id)
+    elif caller.user_id:
+        thread_query = thread_query.filter(ConversationThread.user_id == caller.user_id)
+
+    thread = thread_query.first()
+    if isinstance(getattr(thread, "agentic_scratchpad", None), list):
+        return thread.agentic_scratchpad
+    return None
+
+
 @router.get(
     "/api/v1/agents/{agent_id}/threads",
     responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
@@ -463,10 +523,7 @@ async def list_threads(
 
     Returns threads ordered by most recently updated. Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -513,10 +570,7 @@ async def get_thread_messages(
     Returns messages with role, content, and timestamp. Supports ascending
     or descending sort order. Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -571,6 +625,10 @@ async def delete_thread(
     Permanently removes the thread and all associated messages.
     Requires `agents.write` permission.
     """
+    agent = _get_visible_agent(db, agent_id, caller.tenant_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     # BUG-367: Scope by API client
     thread_query = db.query(ConversationThread).filter(
         ConversationThread.id == thread_id,

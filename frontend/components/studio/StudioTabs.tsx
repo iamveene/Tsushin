@@ -50,6 +50,16 @@ const STUDIO_TABS: StudioTab[] = [
     ],
   },
   {
+    href: '/studio/teams',
+    label: 'Teams',
+    iconColor: 'text-indigo-400',
+    gradient: 'from-indigo-500 to-cyan-400',
+    paths: [
+      'M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m0-4a4 4 0 118 0 4 4 0 01-8 0zm-2 0a3 3 0 11-6 0 3 3 0 016 0zm14 0a3 3 0 11-6 0 3 3 0 016 0z',
+    ],
+    prefixMatch: true,
+  },
+  {
     href: '/agents/projects',
     label: 'Projects',
     iconColor: 'text-amber-400',
@@ -115,6 +125,7 @@ export default function StudioTabs() {
             <Link
               key={tab.href}
               href={tab.href}
+              data-tab={tab.label.toLowerCase().replace(/\s+/g, '-')}
               className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
                 isActive(tab)
                   ? 'text-white'

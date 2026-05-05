@@ -15,13 +15,13 @@ import logging
 import os
 from typing import ClassVar, Optional
 
-from channels.base import ChannelAdapter
+from channels.base import Channel
 from channels.types import SendResult, HealthResult
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
 
-class DiscordChannelAdapter(ChannelAdapter):
+class DiscordChannelAdapter(Channel):
     """Discord channel via Bot REST API."""
 
     channel_type: ClassVar[str] = "discord"

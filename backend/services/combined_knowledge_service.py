@@ -32,17 +32,13 @@ class CombinedKnowledgeService:
         self._chroma_client = None
 
     def _get_chroma_client(self):
-        """Lazy-load ChromaDB client."""
+        """Lazy-load ChromaDB client (cached process-wide via factory — BUG-695)."""
         if self._chroma_client is None:
             try:
-                import chromadb
-                from chromadb.config import Settings
+                from chroma_client_factory import get_chroma_client
 
                 chroma_dir = os.environ.get("TSN_CHROMA_DIR", "/app/data/chroma")
-                self._chroma_client = chromadb.PersistentClient(
-                    path=chroma_dir,
-                    settings=Settings(anonymized_telemetry=False)
-                )
+                self._chroma_client = get_chroma_client(chroma_dir)
             except Exception as e:
                 self.logger.error(f"Failed to initialize ChromaDB: {e}")
                 raise
@@ -253,10 +249,8 @@ class CombinedKnowledgeService:
 
             self.logger.info(f"[KB BADGE] Agent KB path: {knowledge_dir}")
 
-            knowledge_client = chromadb.PersistentClient(
-                path=knowledge_dir,
-                settings=Settings(anonymized_telemetry=False)
-            )
+            from chroma_client_factory import get_chroma_client
+            knowledge_client = get_chroma_client(knowledge_dir)
 
             # Agent KB uses knowledge_agent_{agent_id} format (from knowledge_service.py)
             collection_name = f"knowledge_agent_{agent_id}"
@@ -315,75 +309,25 @@ class CombinedKnowledgeService:
                 return []
 
             self.logger.info(f"[KB BADGE] Project found: {project.name}, embedding_model={project.kb_embedding_model}")
+            from services.project_service import ProjectService
 
-            client = self._get_chroma_client()
-            # BUGFIX: Collection name is project_{id}, not project_{id}_kb
-            collection_name = f"project_{project_id}"
-
-            try:
-                collection = client.get_collection(name=collection_name)
-                self.logger.info(f"[KB BADGE] Found project collection: {collection_name} with {collection.count()} items")
-            except Exception as e1:
-                # Try alternate patterns
-                self.logger.warning(f"[KB BADGE] Collection '{collection_name}' not found: {e1}")
-                collection_name = f"project_{project_id}_kb"
-                try:
-                    collection = client.get_collection(name=collection_name)
-                    self.logger.info(f"[KB BADGE] Found project collection with _kb suffix: {collection_name}")
-                except Exception as e2:
-                    collection_name = f"project_{project.tenant_id}_{project_id}"
-                    try:
-                        collection = client.get_collection(name=collection_name)
-                        self.logger.info(f"[KB BADGE] Found project collection with tenant_id: {collection_name}")
-                    except Exception as e3:
-                        self.logger.error(f"[KB BADGE] No project collection found for project {project_id}")
-                        return self._fallback_search_project_chunks(
-                            project_id=project_id,
-                            project_name=project.name,
-                            query=query,
-                            max_results=max_results,
-                        )
-
-            # Use project-specific embedding model
-            model_name = project.kb_embedding_model or "all-MiniLM-L6-v2"
-            self.logger.info(f"[KB BADGE] Loading embedding model: {model_name}")
-            from agent.memory.embedding_service import get_shared_embedding_service
-            embedding_service = get_shared_embedding_service(model_name)
-            query_embedding = await embedding_service.embed_text_async(query)
-            self.logger.info(f"[KB BADGE] Query embedding generated, dimension: {len(query_embedding)}")
-
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=max_results
+            formatted_results = await ProjectService(self.db)._search_project_knowledge(
+                project,
+                query=query,
+                max_results=max_results,
             )
-
-            self.logger.info(f"[KB BADGE] ChromaDB query returned: docs={len(results.get('documents', [[]])[0])}, metas={len(results.get('metadatas', [[]])[0])}")
-
-            if not results or not results.get('documents') or not results['documents'][0]:
-                self.logger.warning(f"[KB BADGE] No documents returned from ChromaDB query!")
+            if not formatted_results:
+                self.logger.warning("[KB BADGE] No documents returned from Project KB service")
                 return self._fallback_search_project_chunks(
                     project_id=project_id,
                     project_name=project.name,
                     query=query,
                     max_results=max_results,
                 )
-
-            documents = results.get('documents', [[]])[0]
-            metadatas = results.get('metadatas', [[]])[0]
-            distances = results.get('distances', [[]])[0]
-
-            formatted_results = []
-            for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
-                similarity = 1 / (1 + dist)
-                self.logger.info(f"[KB BADGE]   Raw result {i+1}: doc={meta.get('document_name')}, dist={dist:.4f}, similarity={similarity:.4f}")
-                formatted_results.append({
-                    "content": doc,
-                    "metadata": meta,
-                    "similarity": similarity,
-                    "document_name": meta.get("document_name", meta.get("filename", "Project KB")),
-                    "chunk_index": meta.get("chunk_index", 0),
-                    "project_name": project.name
-                })
+            for result in formatted_results:
+                result.setdefault("document_name", result.get("metadata", {}).get("document_name", "Project KB"))
+                result.setdefault("chunk_index", result.get("metadata", {}).get("chunk_index", 0))
+                result.setdefault("project_name", project.name)
 
             return formatted_results
         except Exception as e:

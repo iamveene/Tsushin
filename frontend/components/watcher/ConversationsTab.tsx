@@ -10,28 +10,60 @@
  * - Memory context indicators
  */
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type Message, type AgentRun } from '@/lib/client'
 import { formatTime } from '@/lib/dateUtils'
 import {
   InboxIcon, BotIcon, BrainIcon, WrenchIcon, GamepadIcon,
   SearchIcon, PlaneIcon, MessageIcon, ClipboardIcon,
-  RefreshIcon, MicrophoneIcon, LightningIcon, SendIcon, GlobeIcon,
+  RefreshIcon, MicrophoneIcon, LightningIcon, SendIcon,
   ChartBarIcon, AlertTriangleIcon, CheckIcon, XIcon,
   ChevronDownIcon, ChevronRightIcon
 } from '@/components/ui/icons'
 
+function runTypeLabel(value: string): string {
+  return value.split('_').join(' ').replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function runTypeBadgeClass(value: string): string {
+  switch (value) {
+    case 'manual':
+      return 'bg-purple-500/10 text-purple-200 border-purple-500/30'
+    case 'auto':
+    case 'contact_trigger':
+      return 'bg-cyan-500/10 text-cyan-200 border-cyan-500/30'
+    case 'group':
+    case 'number':
+      return 'bg-teal-500/10 text-teal-200 border-teal-500/30'
+    default:
+      return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+  }
+}
+
+function statusBadgeClass(status: string): string {
+  const normalized = status.toLowerCase()
+  if (normalized === 'success') return 'bg-green-500/10 text-green-400 border-green-500/20'
+  if (normalized === 'error' || normalized === 'failed') return 'bg-red-500/10 text-red-400 border-red-500/20'
+  return 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20'
+}
+
+interface MemoryStats {
+  semantic_search_enabled?: boolean
+  ring_buffer_size?: number
+}
+
 export default function ConversationsTab() {
   const [messages, setMessages] = useState<Message[]>([])
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([])
-  const [memoryStats, setMemoryStats] = useState<any>(null)
+  const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedRun, setExpandedRun] = useState<number | null>(null)
   const [activeView, setActiveView] = useState<'messages' | 'agent-runs'>('agent-runs')
   const [messagesLimit, setMessagesLimit] = useState(10)
   const [agentRunsLimit, setAgentRunsLimit] = useState(10)
   const [channelFilter, setChannelFilter] = useState<string>('all')  // Phase 10.1.1: Channel filter
+  const [runTypeFilter, setRunTypeFilter] = useState<string>('all')
 
   useEffect(() => {
     loadData()
@@ -77,6 +109,16 @@ export default function ConversationsTab() {
     ? messages
     : messages.filter(m => m.channel === channelFilter)
 
+  const runTypes = useMemo(() => {
+    const values = Array.from(new Set(agentRuns.map(run => run.triggered_by || 'auto'))).sort()
+    return ['all', ...values]
+  }, [agentRuns])
+
+  const filteredAgentRuns = useMemo(
+    () => runTypeFilter === 'all' ? agentRuns : agentRuns.filter(run => (run.triggered_by || 'auto') === runTypeFilter),
+    [agentRuns, runTypeFilter],
+  )
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -113,7 +155,7 @@ export default function ConversationsTab() {
         </div>
 
         <div className="text-sm text-tsushin-slate">
-          {activeView === 'messages' ? `${messages.length} messages` : `${agentRuns.length} runs`}
+          {activeView === 'messages' ? `${messages.length} messages` : `${filteredAgentRuns.length} runs`}
         </div>
       </div>
 
@@ -210,21 +252,40 @@ export default function ConversationsTab() {
       {/* Agent Runs */}
       {activeView === 'agent-runs' && (
         <section className="bg-gray-900/50 border border-gray-800 rounded-lg shadow">
-          <div className="flex justify-between items-center px-6 py-4 border-b border-gray-800">
+          <div className="flex flex-col gap-3 px-6 py-4 border-b border-gray-800 lg:flex-row lg:items-center lg:justify-between">
             <h2 className="text-lg font-semibold text-white"><span className="inline-flex items-center gap-1"><BotIcon size={16} /> Agent Executions</span></h2>
-            <div className="flex gap-2 items-center">
-              <label className="text-sm text-tsushin-slate">Show:</label>
-              <select
-                value={agentRunsLimit}
-                onChange={(e) => setAgentRunsLimit(Number(e.target.value))}
-                className="px-3 py-1.5 border border-gray-700 rounded-md text-sm text-white bg-gray-800 focus:ring-2 focus:ring-tsushin-indigo focus:border-transparent"
-              >
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={agentRuns.length}>All ({agentRuns.length})</option>
-              </select>
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-sm text-tsushin-slate">Run type:</span>
+                {runTypes.map(type => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => setRunTypeFilter(type)}
+                    className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      runTypeFilter === type
+                        ? 'border-teal-500/50 bg-teal-500/10 text-teal-200'
+                        : 'border-gray-700 text-tsushin-slate hover:text-white'
+                    }`}
+                  >
+                    {type === 'all' ? 'All' : runTypeLabel(type)}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2 items-center">
+                <label className="text-sm text-tsushin-slate">Show:</label>
+                <select
+                  value={agentRunsLimit}
+                  onChange={(e) => setAgentRunsLimit(Number(e.target.value))}
+                  className="px-3 py-1.5 border border-gray-700 rounded-md text-sm text-white bg-gray-800 focus:ring-2 focus:ring-tsushin-indigo focus:border-transparent"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={filteredAgentRuns.length}>All ({filteredAgentRuns.length})</option>
+                </select>
+              </div>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -242,15 +303,16 @@ export default function ConversationsTab() {
                 </tr>
               </thead>
               <tbody className="bg-transparent divide-y divide-gray-800">
-                {agentRuns.length === 0 ? (
+                {filteredAgentRuns.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-tsushin-slate">No agent runs yet</td>
+                    <td colSpan={8} className="px-4 py-8 text-center text-tsushin-slate">
+                      {agentRuns.length === 0 ? 'No agent runs yet' : 'No runs match the selected run type'}
+                    </td>
                   </tr>
                 ) : (
-                  agentRuns.slice(0, agentRunsLimit).map((run) => (
-                    <>
+                  filteredAgentRuns.slice(0, agentRunsLimit).map((run) => (
+                    <Fragment key={run.id}>
                       <tr
-                        key={run.id}
                         className="hover:bg-gray-800/50 cursor-pointer transition-colors"
                         onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
                       >
@@ -258,7 +320,12 @@ export default function ConversationsTab() {
                           <span className="text-tsushin-slate text-sm">{expandedRun === run.id ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}</span>
                         </td>
                         <td className="px-4 py-3 text-sm font-medium text-white whitespace-nowrap">
-                          {run.agent_name || 'Unknown'}
+                          <div className="flex flex-col gap-1">
+                            <span>{run.agent_name || 'Unknown'}</span>
+                            <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${runTypeBadgeClass(run.triggered_by || 'auto')}`}>
+                              {runTypeLabel(run.triggered_by || 'auto')}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-white max-w-xs truncate">{run.input_preview}</td>
                         <td className="px-4 py-3 text-sm text-tsushin-slate max-w-md truncate">{run.output_preview}</td>
@@ -291,18 +358,17 @@ export default function ConversationsTab() {
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-xs text-tsushin-slate font-mono">{run.model_used}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
-                          {run.status === 'success' ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20"><CheckIcon size={14} /></span>
-                          ) : (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20"><XIcon size={14} /></span>
-                          )}
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border ${statusBadgeClass(run.status)}`}>
+                            {run.status === 'success' ? <CheckIcon size={14} /> : <XIcon size={14} />}
+                            {run.status}
+                          </span>
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-xs text-tsushin-slate">
                           {formatTime(run.created_at)}
                         </td>
                       </tr>
                       {expandedRun === run.id && (
-                        <tr key={`${run.id}-detail`} className="bg-gray-800/30">
+                        <tr className="bg-gray-800/30">
                           <td colSpan={8} className="px-6 py-5">
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                               {/* Left Column */}
@@ -318,7 +384,13 @@ export default function ConversationsTab() {
                                 </div>
 
                                 {/* Metrics Grid */}
-                                <div className="grid grid-cols-3 gap-2">
+                                <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+                                  <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 shadow-sm">
+                                    <p className="text-xs text-tsushin-slate mb-1">Run type</p>
+                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${runTypeBadgeClass(run.triggered_by || 'auto')}`}>
+                                      {runTypeLabel(run.triggered_by || 'auto')}
+                                    </span>
+                                  </div>
                                   <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 shadow-sm">
                                     <p className="text-xs text-tsushin-slate mb-1">Model</p>
                                     <p className="text-xs font-mono text-white truncate">{run.model_used}</p>
@@ -329,7 +401,7 @@ export default function ConversationsTab() {
                                   </div>
                                   <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 shadow-sm">
                                     <p className="text-xs text-tsushin-slate mb-1">Status</p>
-                                    <p className={`text-sm font-semibold ${run.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                                    <p className={`text-sm font-semibold ${run.status === 'success' ? 'text-green-400' : run.status === 'error' || run.status === 'failed' ? 'text-red-400' : 'text-yellow-300'}`}>
                                       {run.status}
                                     </p>
                                   </div>
@@ -398,7 +470,7 @@ export default function ConversationsTab() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))
                 )}
               </tbody>

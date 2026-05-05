@@ -133,7 +133,13 @@ class SentinelService:
             SentinelAgentConfig.agent_id == agent_id
         ).first()
 
-    def get_effective_config(self, agent_id: Optional[int] = None, skill_type: Optional[str] = None) -> SentinelEffectiveConfig:
+    def get_effective_config(
+        self,
+        agent_id: Optional[int] = None,
+        skill_type: Optional[str] = None,
+        profile_id: Optional[int] = None,
+        profile_source: str = "explicit",
+    ) -> SentinelEffectiveConfig:
         """
         Get the effective security configuration for analysis.
 
@@ -151,9 +157,22 @@ class SentinelService:
         Returns:
             SentinelEffectiveConfig with resolved settings
         """
+        from .sentinel_profiles_service import SentinelProfilesService
+
+        profiles_service = SentinelProfilesService(self.db, self.tenant_id)
+        if profile_id is not None:
+            try:
+                profile = profiles_service.get_profile(profile_id)
+                if not profile:
+                    raise ValueError("sentinel_profile_not_found")
+                return profiles_service._resolve_profile(profile, profile_source)
+            except ValueError:
+                raise
+            except Exception as e:
+                self.logger.warning(f"Explicit profile resolution failed: {e}")
+                raise
+
         try:
-            from .sentinel_profiles_service import SentinelProfilesService
-            profiles_service = SentinelProfilesService(self.db, self.tenant_id)
             result = profiles_service.get_effective_config(agent_id, skill_type)
             if result:
                 return result
@@ -202,7 +221,10 @@ class SentinelService:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_memory_poisoning=True,
             detect_browser_ssrf=True,
+            detect_vector_store_poisoning=True,
+            detect_continuous_agent_action_approval=True,
             aggressiveness_level=1,
             llm_provider="gemini",
             llm_model="gemini-2.5-flash-lite",
@@ -238,7 +260,10 @@ class SentinelService:
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=getattr(system_config, 'detect_memory_poisoning', True),
             detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
+            detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
+            detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -268,7 +293,10 @@ class SentinelService:
             merged.detect_agent_takeover = tenant_config.detect_agent_takeover
             merged.detect_poisoning = tenant_config.detect_poisoning
             merged.detect_shell_malicious_intent = tenant_config.detect_shell_malicious_intent
+            merged.detect_memory_poisoning = getattr(tenant_config, 'detect_memory_poisoning', True)
             merged.detect_browser_ssrf = getattr(tenant_config, 'detect_browser_ssrf', True)
+            merged.detect_vector_store_poisoning = getattr(tenant_config, 'detect_vector_store_poisoning', True)
+            merged.detect_continuous_agent_action_approval = getattr(tenant_config, 'detect_continuous_agent_action_approval', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
@@ -294,6 +322,10 @@ class SentinelService:
                 merged.memory_poisoning_prompt = tenant_config.memory_poisoning_prompt
             if getattr(tenant_config, 'browser_ssrf_prompt', None):
                 merged.browser_ssrf_prompt = tenant_config.browser_ssrf_prompt
+            if getattr(tenant_config, 'vector_store_poisoning_prompt', None):
+                merged.vector_store_poisoning_prompt = tenant_config.vector_store_poisoning_prompt
+            if getattr(tenant_config, 'continuous_agent_action_approval_prompt', None):
+                merged.continuous_agent_action_approval_prompt = tenant_config.continuous_agent_action_approval_prompt
 
         # Override with agent config if present (only non-None values)
         if agent_override:
@@ -307,6 +339,8 @@ class SentinelService:
                 merged.enable_shell_analysis = agent_override.enable_shell_analysis
             if agent_override.aggressiveness_level is not None:
                 merged.aggressiveness_level = agent_override.aggressiveness_level
+            if getattr(agent_override, 'detect_continuous_agent_action_approval', None) is not None:
+                merged.detect_continuous_agent_action_approval = agent_override.detect_continuous_agent_action_approval
 
         return merged
 
@@ -395,6 +429,86 @@ class SentinelService:
             scan_mode="skill_scan",
         )
 
+    async def analyze_team_run_start(
+        self,
+        *,
+        team_id: int,
+        topology: str,
+        goal_text: Optional[str],
+        trigger_event_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+        sentinel_profile_id: Optional[int] = None,
+    ) -> SentinelAnalysisResult:
+        """Analyze a team run goal before any member receives work."""
+        context = {
+            "source": "agent_team",
+            "stage": "team_run_start",
+            "team_id": team_id,
+            "topology": topology,
+            "trigger_event_id": trigger_event_id,
+        }
+        prompt = (
+            "Agent Team run start security review.\n\n"
+            f"Team context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
+            "Team goal or run objective:\n"
+            f"{goal_text or '[No explicit team goal]'}"
+        )
+        return await self.analyze_prompt(
+            prompt=prompt,
+            sender_key=sender_key or f"team:{team_id}:run_start",
+            context=context,
+            source="team_run_start",
+            profile_id=sentinel_profile_id,
+            profile_source="team",
+        )
+
+    async def analyze_team_handoff(
+        self,
+        *,
+        team_id: int,
+        team_run_id: int,
+        topology: str,
+        step_index: int,
+        source_member_id: Optional[int],
+        source_agent_id: Optional[int],
+        summary: Optional[str],
+        content: Optional[str],
+        target_member_id: Optional[int] = None,
+        target_agent_id: Optional[int] = None,
+        sender_key: Optional[str] = None,
+        sentinel_profile_id: Optional[int] = None,
+    ) -> SentinelAnalysisResult:
+        """Analyze content before it is handed to another team member."""
+        context = {
+            "source": "agent_team",
+            "stage": "team_handoff",
+            "team_id": team_id,
+            "team_run_id": team_run_id,
+            "topology": topology,
+            "step_index": step_index,
+            "source_member_id": source_member_id,
+            "source_agent_id": source_agent_id,
+            "target_member_id": target_member_id,
+            "target_agent_id": target_agent_id,
+        }
+        prompt = (
+            "Agent Team handoff security review.\n\n"
+            f"Handoff context JSON:\n{json.dumps(context, sort_keys=True)}\n\n"
+            "Handoff summary:\n"
+            f"{summary or '[No summary]'}\n\n"
+            "Handoff content:\n"
+            f"{content or '[No content]'}"
+        )
+        return await self.analyze_prompt(
+            prompt=prompt,
+            agent_id=target_agent_id or source_agent_id,
+            sender_key=sender_key or f"team:{team_id}:run:{team_run_id}:handoff",
+            context=context,
+            source="team_handoff",
+            profile_id=sentinel_profile_id,
+            profile_source="team",
+        )
+
     async def analyze_prompt(
         self,
         prompt: str,
@@ -405,6 +519,8 @@ class SentinelService:
         message_id: Optional[str] = None,
         skill_context: Optional[str] = None,
         skill_type: Optional[str] = None,
+        profile_id: Optional[int] = None,
+        profile_source: str = "explicit",
     ) -> SentinelAnalysisResult:
         """
         Analyze user prompt for security threats.
@@ -441,7 +557,12 @@ class SentinelService:
             )
 
         # Get effective configuration (skill_type enables skill-level profile resolution)
-        config = self.get_effective_config(agent_id, skill_type=skill_type)
+        config = self.get_effective_config(
+            agent_id,
+            skill_type=skill_type,
+            profile_id=profile_id,
+            profile_source=profile_source,
+        )
 
         # Auto-exempt detection types for enabled skills (skill enablement = authorization)
         if agent_id:
@@ -975,8 +1096,11 @@ class SentinelService:
                 response_time_ms=int((time.time() - start_time) * 1000),
             )
 
-            # Log with exception info (if logging enabled)
-            if self._should_log_analysis(blocked_result, config):
+            # Log with exception info (if logging enabled).
+            # BUG-694 fix: previously referenced `blocked_result` which is
+            # only defined later in the function — use the local `result`
+            # built in the exception-matched branch above.
+            if self._should_log_analysis(result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,
@@ -1172,7 +1296,11 @@ class SentinelService:
         """
         Call LLM for security analysis.
 
-        Uses AIClient from agent module.
+        Uses AIClient from agent module. BUG-689 fix: AIClient.__init__ resolves
+        the provider key/instance synchronously; after construction, drop the
+        DB reference so the SQLAlchemy connection is not held during the slow
+        LLM await. Under high concurrency (e.g. the Sentinel benchmark) this
+        previously exhausted the QueuePool and stalled /api/health.
         """
         from agent.ai_client import AIClient
 
@@ -1185,6 +1313,10 @@ class SentinelService:
             tenant_id=self.tenant_id,
             token_tracker=self.token_tracker,
         )
+        # Release the session reference before the external HTTP round-trip.
+        # AIClient.generate() does not re-read self.db (token tracking writes
+        # go through token_tracker which manages its own short-lived session).
+        client.db = None
 
         result = await client.generate(
             system_prompt=system_prompt,

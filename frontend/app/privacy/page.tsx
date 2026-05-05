@@ -18,7 +18,7 @@ export default function PrivacyPage() {
         <ul className="list-disc list-inside mt-3 space-y-1 text-gray-300">
           <li><strong className="text-white">Email address</strong> — to identify your connected account.</li>
           <li><strong className="text-white">Google Calendar events</strong> — to read and manage calendar events on your behalf (Calendar integration).</li>
-          <li><strong className="text-white">Gmail messages</strong> — read-only access to retrieve email content (Gmail integration).</li>
+          <li><strong className="text-white">Gmail messages</strong> — access to retrieve email content and, when you enable outbound Gmail features, create drafts and send messages on your behalf.</li>
         </ul>
       </section>
 

@@ -9,7 +9,10 @@ import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, Project, PlaygroundAgentInfo } from '@/lib/client'
+import EmbeddingContractControls, { getVectorStoreIndexes } from '@/components/EmbeddingContractControls'
+import type { EmbeddingContractValue } from '@/components/EmbeddingContractControls'
+import { api } from '@/lib/client'
+import type { EmbeddingOptionsResponse, PlaygroundAgentInfo, Project, VectorStoreInstance } from '@/lib/client'
 import {
   PROJECT_ICON_MAP,
   FolderOpenIcon,
@@ -30,12 +33,6 @@ const PROJECT_COLORS = [
 
 // PROJECT_ICONS replaced by PROJECT_ICON_MAP from shared icon library
 
-const EMBEDDING_MODELS = [
-  { value: 'all-MiniLM-L6-v2', label: 'MiniLM L6 v2 (Fast, Good)' },
-  { value: 'all-mpnet-base-v2', label: 'MPNet Base v2 (Better Quality)' },
-  { value: 'paraphrase-multilingual-MiniLM-L12-v2', label: 'Multilingual (PT/EN/ES)' },
-]
-
 export default function StudioProjectsPage() {
   useRequireAuth()
   const router = useRouter()
@@ -43,6 +40,8 @@ export default function StudioProjectsPage() {
 
   const [projects, setProjects] = useState<Project[]>([])
   const [agents, setAgents] = useState<PlaygroundAgentInfo[]>([])
+  const [embeddingOptions, setEmbeddingOptions] = useState<EmbeddingOptionsResponse | null>(null)
+  const [vectorStores, setVectorStores] = useState<VectorStoreInstance[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -58,7 +57,15 @@ export default function StudioProjectsPage() {
     // KB Configuration
     kb_chunk_size: 500,
     kb_chunk_overlap: 50,
+    kb_embedding_provider_instance_id: null as number | null,
+    kb_embedding_provider: 'local',
     kb_embedding_model: 'all-MiniLM-L6-v2',
+    kb_embedding_dims: 384,
+    kb_embedding_metric: 'cosine',
+    kb_vector_store_instance_id: null as number | null,
+    kb_vector_store_index_id: null as number | null,
+    kb_vector_collection_name: null as string | null,
+    kb_vector_namespace: null as string | null,
     // Memory Configuration
     enable_semantic_memory: true,
     semantic_memory_results: 10,
@@ -87,20 +94,69 @@ export default function StudioProjectsPage() {
     }
   }, [])
 
+  const loadContractOptions = useCallback(async () => {
+    try {
+      const [options, stores] = await Promise.all([
+        api.getEmbeddingProviderOptions(),
+        api.getVectorStoreInstances().catch(() => []),
+      ])
+      const storesWithIndexes = await Promise.all(stores.map(async (store) => {
+        try {
+          return { ...store, indexes: await api.getVectorStoreIndexes(store.id) }
+        } catch {
+          return { ...store, indexes: getVectorStoreIndexes(store) }
+        }
+      }))
+      setEmbeddingOptions(options)
+      setVectorStores(storesWithIndexes)
+    } catch (err) {
+      console.error('Failed to load embedding contract options:', err)
+    }
+  }, [])
+
   useEffect(() => {
     loadProjects()
     loadAgents()
-  }, [loadProjects, loadAgents])
+    loadContractOptions()
+  }, [loadProjects, loadAgents, loadContractOptions])
 
   // Listen for global refresh events
   useEffect(() => {
     const handleRefresh = () => {
       loadProjects()
       loadAgents()
+      loadContractOptions()
     }
     window.addEventListener('tsushin:refresh', handleRefresh)
     return () => window.removeEventListener('tsushin:refresh', handleRefresh)
-  }, [loadProjects, loadAgents])
+  }, [loadProjects, loadAgents, loadContractOptions])
+
+  const newProjectContractValue: EmbeddingContractValue = {
+    embedding_provider_instance_id: newProject.kb_embedding_provider_instance_id,
+    embedding_provider: newProject.kb_embedding_provider,
+    embedding_model: newProject.kb_embedding_model,
+    embedding_dims: newProject.kb_embedding_dims,
+    embedding_metric: newProject.kb_embedding_metric,
+    vector_store_instance_id: newProject.kb_vector_store_instance_id,
+    vector_store_index_id: newProject.kb_vector_store_index_id,
+    vector_collection_name: newProject.kb_vector_collection_name,
+    vector_namespace: newProject.kb_vector_namespace,
+  }
+
+  const updateNewProjectContract = (patch: Partial<EmbeddingContractValue>) => {
+    setNewProject((prev) => ({
+      ...prev,
+      ...(patch.embedding_provider_instance_id !== undefined && { kb_embedding_provider_instance_id: patch.embedding_provider_instance_id }),
+      ...(patch.embedding_provider !== undefined && { kb_embedding_provider: patch.embedding_provider || 'local' }),
+      ...(patch.embedding_model !== undefined && { kb_embedding_model: patch.embedding_model || 'all-MiniLM-L6-v2' }),
+      ...(patch.embedding_dims !== undefined && { kb_embedding_dims: patch.embedding_dims ?? 384 }),
+      ...(patch.embedding_metric !== undefined && { kb_embedding_metric: patch.embedding_metric || 'cosine' }),
+      ...(patch.vector_store_instance_id !== undefined && { kb_vector_store_instance_id: patch.vector_store_instance_id }),
+      ...(patch.vector_store_index_id !== undefined && { kb_vector_store_index_id: patch.vector_store_index_id }),
+      ...(patch.vector_collection_name !== undefined && { kb_vector_collection_name: patch.vector_collection_name }),
+      ...(patch.vector_namespace !== undefined && { kb_vector_namespace: patch.vector_namespace }),
+    }))
+  }
 
   const handleCreateProject = async () => {
     if (!newProject.name.trim()) {
@@ -120,7 +176,15 @@ export default function StudioProjectsPage() {
         agent_id: newProject.agent_id,
         kb_chunk_size: newProject.kb_chunk_size,
         kb_chunk_overlap: newProject.kb_chunk_overlap,
+        kb_embedding_provider_instance_id: newProject.kb_embedding_provider_instance_id,
+        kb_embedding_provider: newProject.kb_embedding_provider,
         kb_embedding_model: newProject.kb_embedding_model,
+        kb_embedding_dims: newProject.kb_embedding_dims,
+        kb_embedding_metric: newProject.kb_embedding_metric,
+        kb_vector_store_instance_id: newProject.kb_vector_store_instance_id,
+        kb_vector_store_index_id: newProject.kb_vector_store_index_id,
+        kb_vector_collection_name: newProject.kb_vector_collection_name,
+        kb_vector_namespace: newProject.kb_vector_namespace,
         enable_semantic_memory: newProject.enable_semantic_memory,
         semantic_memory_results: newProject.semantic_memory_results,
         semantic_similarity_threshold: newProject.semantic_similarity_threshold,
@@ -147,7 +211,15 @@ export default function StudioProjectsPage() {
       agent_id: undefined,
       kb_chunk_size: 500,
       kb_chunk_overlap: 50,
+      kb_embedding_provider_instance_id: null,
+      kb_embedding_provider: 'local',
       kb_embedding_model: 'all-MiniLM-L6-v2',
+      kb_embedding_dims: 384,
+      kb_embedding_metric: 'cosine',
+      kb_vector_store_instance_id: null,
+      kb_vector_store_index_id: null,
+      kb_vector_collection_name: null,
+      kb_vector_namespace: null,
       enable_semantic_memory: true,
       semantic_memory_results: 10,
       semantic_similarity_threshold: 0.5,
@@ -183,7 +255,7 @@ export default function StudioProjectsPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <Link href="/studio" className="text-tsushin-slate hover:text-tsushin-pearl transition-colors">
+              <Link href="/agents/projects" className="text-tsushin-slate hover:text-tsushin-pearl transition-colors">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
@@ -468,18 +540,18 @@ export default function StudioProjectsPage() {
                   Knowledge Base Configuration
                 </h3>
                 <div className="space-y-4 p-4 bg-white/5 rounded-xl">
-                  <div>
-                    <label className="block text-sm text-white/70 mb-1.5">Embedding Model</label>
-                    <select
-                      value={newProject.kb_embedding_model}
-                      onChange={(e) => setNewProject({ ...newProject, kb_embedding_model: e.target.value })}
-                      className="input w-full"
-                    >
-                      {EMBEDDING_MODELS.map((model) => (
-                        <option key={model.value} value={model.value}>{model.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <EmbeddingContractControls
+                    value={newProjectContractValue}
+                    onChange={updateNewProjectContract}
+                    embeddingOptions={embeddingOptions}
+                    vectorStores={vectorStores}
+                    includeVectorStore
+                    includeMetric
+                    gridClassName="grid grid-cols-1 sm:grid-cols-2 gap-4"
+                    labelClassName="block text-sm text-white/70 mb-1.5"
+                    fieldClassName="input w-full"
+                    helperClassName="text-xs text-white/50 mt-1"
+                  />
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm text-white/70 mb-1.5">Chunk Size (chars)</label>

@@ -136,6 +136,10 @@ class SentinelEffectiveConfig:
                 "enabled": getattr(config, "detect_vector_store_poisoning", True),
                 "custom_prompt": getattr(config, "vector_store_poisoning_prompt", None),
             },
+            "continuous_agent_action_approval": {
+                "enabled": getattr(config, "detect_continuous_agent_action_approval", True),
+                "custom_prompt": getattr(config, "continuous_agent_action_approval_prompt", None),
+            },
         }
 
         return cls(

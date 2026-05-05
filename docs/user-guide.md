@@ -12,6 +12,7 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 4. [Personas and Tone Presets](#4-personas-and-tone-presets)
 5. [Skills](#5-skills)
 6. [Setting Up Communication Channels](#6-setting-up-communication-channels)
+6a. [Setting Up Event Triggers (v0.7.0)](#6a-setting-up-event-triggers-v070)
 7. [Managing Contacts](#7-managing-contacts)
 8. [Using the Playground](#8-using-the-playground)
 9. [Flows (Workflow Automation)](#9-flows-workflow-automation)
@@ -211,8 +212,15 @@ After creating the agent, open it to access six tabs: **Configuration**, **Chann
 ### Channel Configuration
 
 On the **Channels** tab:
-1. **Enable channels** -- toggle which channels the agent is available on: Playground, WhatsApp, Telegram, Slack, Discord, Webhook.
+1. **Enable channels** -- toggle which conversational channels the agent is available on: Playground, WhatsApp, Telegram, Slack, and Discord. Webhooks are configured separately as event triggers.
 2. **Assign integrations** -- for each enabled channel, select the specific integration instance.
+
+### Conversational vs Continuous Agents
+
+Create agents from **Studio > Agents**. The New Agent flow lets you choose the wake mode:
+
+- **Conversational** agents respond when a person messages through a channel.
+- **Continuous** agents are configured with a purpose and action kind after the base agent is created, then wake from trigger subscriptions. Watcher shows their runs and wake-event evidence; Studio remains the creation entry point.
 
 ### Memory Configuration
 
@@ -462,6 +470,48 @@ The built-in web chat interface. No setup required -- always available in the si
 
 ---
 
+## 6a. Setting Up Event Triggers (v0.7.0)
+
+Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, or a GitHub PR is opened) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
+
+All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor.
+
+### The 4 trigger kinds
+
+- **Email** -- a Gmail saved-query polled every minute. Filter by subject, sender, label, body. Operators paste a saved Gmail search query (e.g., `is:unread label:support has:attachment`); the trigger fires once per matching message and dedupes on the message id.
+- **Webhook** -- inbound HMAC-signed POST from any external system. The wizard generates a slug (auto or custom), an HMAC signing secret, and an inbound URL like `https://<your-host>/api/webhooks/<slug>/inbound` that you paste into the external system.
+- **Jira** -- live JQL polling against a Jira Cloud project. Connect your Jira account once via Hub > Tool APIs > Jira (with an API token); the wizard then asks for a JQL query and a poll interval. One notification per deduped issue.
+- **GitHub** -- pull-request events on a connected repo. Connect your GitHub account once via Hub > Tool APIs > GitHub; the wizard then asks for the events to listen to (`opened`, `reopened`, `closed`, etc.) and per-PR filters (branch, paths changed, author, draft state, title/body matchers).
+
+### What happens after you click "Create Trigger"
+
+1. The trigger row is persisted (e.g., trigger #9).
+2. An **auto-generated flow** is minted (e.g., flow #99) with four steps: **Source -> Gate -> Conversation -> Notification**. The flow is system-managed: you can edit its content but you can't delete it directly -- delete the trigger to remove the flow.
+3. The wizard's Confirmation step shows a "Wired Flow" card with the auto-flow ID and an **Open Flow Editor** button.
+4. Clicking the button takes you to `/flows?edit=<auto_flow_id>` where you can edit the Notification step's message template -- this is where you reference data from the inbound event using template variables like `{{source.payload.issue.key}}`, `{{source.payload.issue.fields.summary}}`, or `{{source.payload.pull_request.title}}`.
+
+### Per-kind trigger-generated flow badges
+
+Auto-generated flows are visually distinct in the flows list and the Edit Flow modal header: each trigger kind has its own coloured "Trigger" pill (Jira blue, Email emerald, GitHub violet, Webhook cyan). The Delete button on auto-generated flows is disabled with a tooltip "Auto-generated from <kind> trigger -- delete the trigger to remove this flow."
+
+### Editing template variables in the auto-flow
+
+Open the auto-flow's Notification step. The **Variable Reference panel** on the right shows previous-step outputs as draggable chips. The Source step's chips are per-kind: for a Jira auto-flow you'll see `payload.issue.key`, `payload.issue.fields.summary`, `payload.issue.fields.status.name`, `payload.issue.fields.priority.name`, `payload.issue.fields.assignee.displayName`, and ~10 more. Click a chip to insert it at the cursor, or drag it into the textarea -- the editor accepts `{{source.payload.X}}` and `{{step_1.payload.X}}` interchangeably.
+
+Example notification template for a Jira trigger:
+
+```
+Jira issue {{source.payload.issue.key}}: {{source.payload.issue.fields.summary}} (status: {{source.payload.issue.fields.status.name}})
+```
+
+When the trigger fires on issue `JSM-12345` with summary `Customer can't log in` and status `In Progress`, the rendered WhatsApp message is:
+
+```
+Jira issue JSM-12345: Customer can't log in (status: In Progress)
+```
+
+---
+
 ## 7. Managing Contacts
 
 Contacts represent the people who interact with your agents across any channel.
@@ -572,8 +622,10 @@ Flows let you build multi-step automated workflows.
 
 1. Navigate to **Studio > Flows** and click **Create Flow**.
 2. Name your flow and select the type.
-3. Choose an **execution mode**: Immediate, Scheduled (one-time), or Recurring (cron-based).
-4. **Add steps** in sequence.
+3. Choose an **execution mode**: Immediate, Scheduled (one-time), Recurring (cron-based), Keyword, or Triggered.
+4. For **Triggered**, select an existing Hub trigger (Email/Gmail, Jira, GitHub, or Webhook). Tsushin creates a locked Source step and the `flow_trigger_binding` automatically.
+5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving.
+6. **Add steps** in sequence.
 
 ### Step Types
 
@@ -587,6 +639,8 @@ Flows let you build multi-step automated workflows.
 | **Skill** | Runs an agent skill (built-in or custom). |
 | **Summarization** | AI summarization of previous step outputs. |
 | **Browser Automation** | Navigate, click, fill forms, extract content, screenshot. |
+
+The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually.
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 

@@ -1,7 +1,7 @@
 # Tsushin Toolbox Container
 # Per-tenant container for executing custom tools (security scanning, network analysis, etc.)
 #
-# Build: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base .
+# Build: docker build -f backend/containers/Dockerfile.toolbox -t "${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}" .
 # Usage: Managed by ToolboxContainerService - one container per tenant
 #
 # Pre-installed tools:

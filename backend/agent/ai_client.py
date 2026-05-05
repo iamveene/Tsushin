@@ -44,6 +44,8 @@ class AIClient:
         self.provider = provider.lower()
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)
+        self.model_name = self._coerce_generation_model(self.provider, self.model_name)
+        model_name = self.model_name
         self.db = db
         self.token_tracker = token_tracker
         self.tenant_id = tenant_id
@@ -81,6 +83,8 @@ class AIClient:
             instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
             if instance and instance.is_active:
                 self.provider = instance.vendor
+                self.model_name = self._coerce_generation_model(self.provider, self.model_name)
+                model_name = self.model_name
                 api_key = ProviderInstanceService.resolve_api_key(instance, db)
                 base_url = instance.base_url or get_vendor_default_base_url(instance.vendor)
 
@@ -226,44 +230,19 @@ class AIClient:
             # Using legacy SDK - will use asyncio.to_thread() for async
             self.client = genai.GenerativeModel(model_name)
         elif self.provider == "ollama":
-            # Phase 5.2: Ollama HTTP client (API key optional for remote/secured instances)
-            # Load from Config table if available, otherwise from env var
-            # BUG-663: resolve host.docker.internal with a Linux-safe fallback
-            # to the Docker default-bridge gateway (172.17.0.1).
-            from services.provider_instance_service import _resolve_ollama_host
-            ollama_default_url = f"http://{_resolve_ollama_host()}:11434"
-            ollama_base_url = os.getenv("OLLAMA_BASE_URL", ollama_default_url)
-            ollama_api_key = None
-
-            if db:
-                from models import Config
-                config = db.query(Config).first()
-                if config and config.ollama_base_url:
-                    ollama_base_url = config.ollama_base_url
-                if config and config.ollama_api_key:
-                    ollama_api_key = config.ollama_api_key
-
-            self.ollama_base_url = ollama_base_url
-            self.ollama_api_key = ollama_api_key
-
-            if self.ollama_base_url:
-                from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
-                try:
-                    self.ollama_base_url = validate_ollama_url(self.ollama_base_url)
-                except SSRFValidationError as e:
-                    self.logger.error(f"SSRF blocked: Ollama base URL '{self.ollama_base_url}' rejected: {e}. Falling back to default.")
-                    self.ollama_base_url = ollama_default_url
-
-            # Extended timeout for CPU inference (first load can be slow)
-            headers = {}
-            if ollama_api_key:
-                headers["Authorization"] = f"Bearer {ollama_api_key}"
-
-            self.client = httpx.AsyncClient(
-                timeout=600.0,  # 600s (10 min) timeout for reasoning models on CPU (deepseek-r1 can be very slow)
-                headers=headers if headers else None
+            # v0.7.0: legacy host-mode fallback removed. The boot-time
+            # ProviderInstanceService.bootstrap_orphan_vendor_agents() materialises
+            # an Ollama instance for every tenant with Ollama agents and the wizard
+            # now requires provider_instance_id, so reaching this branch means the
+            # agent was created mid-session in a tenant that has no active default
+            # Ollama instance. Refuse loudly and point operator at Hub instead of
+            # silently spinning up an unconfigured client.
+            raise ValueError(
+                f"Ollama agent has no provider_instance_id and no active default "
+                f"Ollama instance for tenant={tenant_id}. Configure via Hub → "
+                f"LLM Providers → Add Ollama instance, or restart the backend "
+                f"to trigger the boot-time orphan migration."
             )
-            self.logger.info(f"Initialized Ollama client: {self.ollama_base_url}")
         elif self.provider == "openrouter":
             # OpenRouter: Unified API gateway for 100+ models
             # Uses OpenAI-compatible API with custom base URL
@@ -371,6 +350,36 @@ class AIClient:
             self.logger.info(f"Initialized Vertex AI client: project={vertex_project_id}, region={vertex_region}, publisher={self.vertex_publisher}, model={model_name}")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
+
+    def _coerce_generation_model(self, provider: str, model_name: str) -> str:
+        """
+        Keep text-generation clients away from audio-only model ids.
+
+        Gemini TTS preview models are valid for the TTS provider, but the generic
+        AIClient only performs text generation. If an audio agent's main model is
+        accidentally set to a TTS preview model, normal WhatsApp text messages
+        fail before a response can be generated.
+        """
+        normalized_provider = (provider or "").lower()
+        normalized_model = (model_name or "").strip()
+        if normalized_provider != "gemini" or not normalized_model:
+            return model_name
+
+        fallback_by_model = {
+            "gemini-2.5-flash-tts-preview": "gemini-2.5-flash",
+            "gemini-2.5-pro-tts-preview": "gemini-2.5-pro",
+            "gemini-3.1-flash-tts-preview": "gemini-2.5-flash",
+        }
+        fallback_model = fallback_by_model.get(normalized_model.lower())
+        if fallback_model:
+            self.logger.warning(
+                "AIClient: replacing Gemini TTS-only model %s with text model %s",
+                normalized_model,
+                fallback_model,
+            )
+            return fallback_model
+
+        return model_name
 
     async def generate(
         self,

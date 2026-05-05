@@ -1,12 +1,30 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { api, AgentKnowledge, KnowledgeChunk } from '@/lib/client'
+import {
+  api,
+  AgentKnowledge,
+  AgentKnowledgeConfig,
+  EmbeddingOptionsResponse,
+  KnowledgeChunk,
+  KnowledgeSearchResult,
+  VectorStoreInstance,
+} from '@/lib/client'
 import { formatDate } from '@/lib/dateUtils'
 import { UploadIcon, SearchIcon, BookOpenIcon } from '@/components/ui/icons'
 
 interface Props {
   agentId: number
+}
+
+const MAX_DOCUMENT_TAGS = 12
+const MAX_DOCUMENT_TAG_LENGTH = 48
+
+function parseKnowledgeTags(input: string): string[] {
+  return input
+    .split(/[,\n]/)
+    .map((tag) => tag.trim().toLowerCase().replace(/\s+/g, ' '))
+    .filter(Boolean)
 }
 
 export default function AgentKnowledgeManager({ agentId }: Props) {
@@ -17,8 +35,30 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<KnowledgeChunk[]>([])
+  const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([])
   const [searching, setSearching] = useState(false)
+  const [editingDoc, setEditingDoc] = useState<AgentKnowledge | null>(null)
+  const [editDocumentName, setEditDocumentName] = useState('')
+  const [editTagsText, setEditTagsText] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [config, setConfig] = useState<AgentKnowledgeConfig | null>(null)
+  const [draftConfig, setDraftConfig] = useState<AgentKnowledgeConfig | null>(null)
+  const [embeddingOptions, setEmbeddingOptions] = useState<EmbeddingOptionsResponse | null>(null)
+  const [vectorStores, setVectorStores] = useState<VectorStoreInstance[]>([])
+  const [savingConfig, setSavingConfig] = useState(false)
+  const [testingEmbedding, setTestingEmbedding] = useState(false)
+  const [embeddingTestMessage, setEmbeddingTestMessage] = useState<string | null>(null)
+  const [reprocessingIds, setReprocessingIds] = useState<Set<number>>(new Set())
+
+  const normalizedEditTags = parseKnowledgeTags(editTagsText)
+  const uniqueEditTags = Array.from(new Set(normalizedEditTags))
+  const overlongTag = uniqueEditTags.find((tag) => tag.length > MAX_DOCUMENT_TAG_LENGTH)
+  const tagValidationError =
+    uniqueEditTags.length > MAX_DOCUMENT_TAGS
+      ? `Use up to ${MAX_DOCUMENT_TAGS} tags per document.`
+      : overlongTag
+        ? `Each tag must be ${MAX_DOCUMENT_TAG_LENGTH} characters or fewer.`
+        : null
 
   useEffect(() => {
     loadDocuments()
@@ -27,8 +67,17 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
   const loadDocuments = async () => {
     setLoading(true)
     try {
-      const docs = await api.getAgentKnowledge(agentId)
+      const [docs, kbConfig, options, stores] = await Promise.all([
+        api.getAgentKnowledge(agentId),
+        api.getAgentKnowledgeConfig(agentId),
+        api.getAgentKnowledgeEmbeddingOptions(agentId),
+        api.getVectorStoreInstances(),
+      ])
       setDocuments(docs)
+      setConfig(kbConfig)
+      setDraftConfig(kbConfig)
+      setEmbeddingOptions(options)
+      setVectorStores(stores)
     } catch (err) {
       console.error('Failed to load documents:', err)
       // Set empty array if API not yet implemented
@@ -62,9 +111,9 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       return
     }
 
-    // Validate file size (10 MB max)
-    if (file.size > 10 * 1024 * 1024) {
-      alert('File too large. Maximum size is 10 MB.')
+    // Validate file size (50 MB max, matching backend)
+    if (file.size > 50 * 1024 * 1024) {
+      alert('File too large. Maximum size is 50 MB.')
       return
     }
 
@@ -107,6 +156,51 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
       console.error('Failed to load chunks:', err)
       alert('Failed to load document chunks (backend not yet implemented)')
       setChunks([])
+    }
+  }
+
+  const startEditDocument = (doc: AgentKnowledge) => {
+    setEditingDoc(doc)
+    setEditDocumentName(doc.document_name)
+    setEditTagsText((doc.tags || []).join(', '))
+  }
+
+  const closeEditDocument = () => {
+    setEditingDoc(null)
+    setEditDocumentName('')
+    setEditTagsText('')
+    setSavingEdit(false)
+  }
+
+  const saveDocumentMetadata = async () => {
+    if (!editingDoc) return
+
+    const documentName = editDocumentName.trim()
+    if (!documentName) {
+      alert('Document name is required.')
+      return
+    }
+
+    if (tagValidationError) {
+      alert(tagValidationError)
+      return
+    }
+
+    const tags = uniqueEditTags
+
+    setSavingEdit(true)
+    try {
+      const updated = await api.updateKnowledgeDocument(agentId, editingDoc.id, {
+        document_name: documentName,
+        tags,
+      })
+      setDocuments((prev) => prev.map((doc) => (doc.id === updated.id ? updated : doc)))
+      setSelectedDoc((prev) => (prev && prev.id === updated.id ? updated : prev))
+      closeEditDocument()
+    } catch (err) {
+      console.error('Failed to update document metadata:', err)
+      alert(err instanceof Error ? err.message : 'Failed to update document details')
+      setSavingEdit(false)
     }
   }
 
@@ -165,12 +259,324 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
     )
   }
 
+  const renderTags = (tags?: string[]) => {
+    if (!tags || tags.length === 0) {
+      return <span className="text-xs text-tsushin-muted">No tags</span>
+    }
+
+    return (
+      <div className="flex flex-wrap gap-1">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-500/10 text-teal-300 border border-teal-500/20"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  const selectedProviderOption = embeddingOptions?.providers.find((option) => (
+    option.provider === draftConfig?.embedding_provider
+    && (option.provider_instance_id ?? null) === (draftConfig?.embedding_provider_instance_id ?? null)
+  )) || embeddingOptions?.providers.find((option) => option.provider === draftConfig?.embedding_provider)
+
+  const selectedModelOption = selectedProviderOption?.models.find(
+    (model) => model.model === draftConfig?.embedding_model,
+  ) || selectedProviderOption?.models[0]
+
+  const updateDraftConfig = (patch: Partial<AgentKnowledgeConfig>) => {
+    setDraftConfig((prev) => (prev ? { ...prev, ...patch } : prev))
+    setEmbeddingTestMessage(null)
+  }
+
+  const handleProviderSelection = (value: string) => {
+    if (!draftConfig || !embeddingOptions) return
+    const option = embeddingOptions.providers.find((candidate) => `${candidate.provider}:${candidate.provider_instance_id ?? 'local'}` === value)
+    if (!option) return
+    const model = option.models[0]
+    const detectedDimsRequired = option.provider === 'ollama' && !model?.default_dimensions && !option.default_dimensions
+    updateDraftConfig({
+      embedding_provider: option.provider,
+      embedding_provider_instance_id: option.provider_instance_id,
+      embedding_model: model?.model || option.default_model || '',
+      embedding_dims: detectedDimsRequired ? 0 : Number(model?.default_dimensions || option.default_dimensions || draftConfig.embedding_dims),
+    })
+  }
+
+  const handleModelSelection = (modelName: string) => {
+    if (!draftConfig || !selectedProviderOption) return
+    const model = selectedProviderOption.models.find((candidate) => candidate.model === modelName)
+    const detectedDimsRequired = selectedProviderOption.provider === 'ollama' && !model?.default_dimensions
+    updateDraftConfig({
+      embedding_model: modelName,
+      embedding_dims: detectedDimsRequired ? 0 : Number(model?.default_dimensions || draftConfig.embedding_dims),
+    })
+  }
+
+  const saveKnowledgeConfig = async () => {
+    if (!draftConfig) return
+    setSavingConfig(true)
+    try {
+      const saved = await api.updateAgentKnowledgeConfig(agentId, {
+        embedding_provider_instance_id: draftConfig.embedding_provider_instance_id,
+        embedding_provider: draftConfig.embedding_provider,
+        embedding_model: draftConfig.embedding_model,
+        embedding_dims: draftConfig.embedding_dims,
+        embedding_metric: draftConfig.embedding_metric,
+        vector_store_instance_id: draftConfig.vector_store_instance_id,
+        chunk_strategy: draftConfig.chunk_strategy,
+        chunk_size: draftConfig.chunk_size,
+        chunk_overlap: draftConfig.chunk_overlap,
+        parser: draftConfig.parser,
+        search_top_k: draftConfig.search_top_k,
+        similarity_threshold: draftConfig.similarity_threshold,
+      })
+      setConfig(saved)
+      setDraftConfig(saved)
+      setEmbeddingTestMessage('Saved KB indexing settings.')
+      await loadDocuments()
+    } catch (err) {
+      console.error('Failed to save KB config:', err)
+      alert(err instanceof Error ? err.message : 'Failed to save KB settings')
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
+  const testEmbeddingConfig = async () => {
+    if (!draftConfig) return
+    setTestingEmbedding(true)
+    setEmbeddingTestMessage(null)
+    try {
+      const result = await api.testEmbeddingProvider({
+        provider: draftConfig.embedding_provider,
+        provider_instance_id: draftConfig.embedding_provider_instance_id,
+        model: draftConfig.embedding_model,
+        dimensions: draftConfig.embedding_dims > 0 ? draftConfig.embedding_dims : null,
+        text: 'Knowledge base embedding smoke test',
+      })
+      if (result.success) {
+        const dims = result.actual_dimensions || result.requested_dimensions
+        setEmbeddingTestMessage(`Embedding test passed: ${dims} dimensions, batch ${result.batch_count}, ${result.latency_ms} ms.`)
+        if (dims && dims !== draftConfig.embedding_dims) {
+          updateDraftConfig({ embedding_dims: dims })
+        }
+      } else {
+        setEmbeddingTestMessage(result.error || 'Embedding test failed.')
+      }
+    } catch (err) {
+      console.error('Failed to test embedding config:', err)
+      setEmbeddingTestMessage(err instanceof Error ? err.message : 'Embedding test failed.')
+    } finally {
+      setTestingEmbedding(false)
+    }
+  }
+
+  const reprocessDocument = async (doc: AgentKnowledge) => {
+    if (!confirm(`Reprocess ${doc.document_name} with the current KB settings?`)) {
+      return
+    }
+    setReprocessingIds((prev) => new Set(prev).add(doc.id))
+    try {
+      await api.reprocessKnowledgeDocument(agentId, doc.id)
+      await loadDocuments()
+    } catch (err) {
+      console.error('Failed to reprocess document:', err)
+      alert(err instanceof Error ? err.message : 'Failed to reprocess document')
+    } finally {
+      setReprocessingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(doc.id)
+        return next
+      })
+    }
+  }
+
+  const documentContract = (doc: AgentKnowledge) => {
+    const vectorStore = doc.vector_store_instance_id
+      ? vectorStores.find((store) => store.id === doc.vector_store_instance_id)?.instance_name || `Store ${doc.vector_store_instance_id}`
+      : 'Built-in Chroma'
+    return `${doc.embedding_provider || 'local'} / ${doc.embedding_model || 'all-MiniLM-L6-v2'} / ${doc.embedding_dims || 384}d / ${vectorStore}`
+  }
+
   if (loading) {
     return <div className="p-8 text-center">Loading knowledge base...</div>
   }
 
   return (
     <div className="space-y-6">
+      {draftConfig && embeddingOptions && (
+        <div className="border border-tsushin-border rounded-lg p-4 bg-tsushin-surface">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold">Index Settings</h3>
+              <p className="text-sm text-tsushin-slate">
+                Current contract: {draftConfig.embedding_provider} / {draftConfig.embedding_model} / {draftConfig.embedding_dims}d
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={testEmbeddingConfig}
+                disabled={testingEmbedding || !draftConfig.embedding_model}
+                className="px-4 py-2 rounded-md bg-tsushin-elevated hover:bg-tsushin-border text-white disabled:opacity-50"
+              >
+                {testingEmbedding ? 'Testing...' : 'Test Embedding'}
+              </button>
+              <button
+                type="button"
+                onClick={saveKnowledgeConfig}
+                disabled={savingConfig || draftConfig.embedding_dims <= 0}
+                className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
+              >
+                {savingConfig ? 'Saving...' : 'Save Settings'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Embedding Provider</label>
+              <select
+                value={`${draftConfig.embedding_provider}:${draftConfig.embedding_provider_instance_id ?? 'local'}`}
+                onChange={(event) => handleProviderSelection(event.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              >
+                {embeddingOptions.providers.map((option) => (
+                  <option
+                    key={`${option.provider}:${option.provider_instance_id ?? 'local'}`}
+                    value={`${option.provider}:${option.provider_instance_id ?? 'local'}`}
+                  >
+                    {option.instance_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Embedding Model</label>
+              <select
+                value={draftConfig.embedding_model}
+                onChange={(event) => handleModelSelection(event.target.value)}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              >
+                {(selectedProviderOption?.models || []).map((model) => (
+                  <option key={model.model} value={model.model}>
+                    {model.label || model.model}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Dimensions</label>
+              {selectedModelOption?.supported_dimensions?.length ? (
+                <select
+                  value={draftConfig.embedding_dims}
+                  onChange={(event) => updateDraftConfig({ embedding_dims: Number(event.target.value) })}
+                  className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+                >
+                  {selectedModelOption.supported_dimensions.map((dims) => (
+                    <option key={dims} value={dims}>{dims}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  min={1}
+                  value={draftConfig.embedding_dims || ''}
+                  onChange={(event) => updateDraftConfig({ embedding_dims: Number(event.target.value) })}
+                  className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Vector Storage</label>
+              <select
+                value={draftConfig.vector_store_instance_id ?? ''}
+                onChange={(event) => updateDraftConfig({
+                  vector_store_instance_id: event.target.value ? Number(event.target.value) : null,
+                })}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              >
+                <option value="">Built-in Chroma</option>
+                {vectorStores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.instance_name} ({store.vendor})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Chunking</label>
+              <select
+                value={draftConfig.chunk_strategy}
+                onChange={(event) => updateDraftConfig({ chunk_strategy: event.target.value })}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              >
+                <option value="fixed_text">Fixed text</option>
+                <option value="json_structure">JSON structure</option>
+                <option value="csv_rows">CSV rows</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Chunk Size</label>
+              <input
+                type="number"
+                min={200}
+                max={8000}
+                value={draftConfig.chunk_size}
+                onChange={(event) => updateDraftConfig({ chunk_size: Number(event.target.value) })}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Overlap</label>
+              <input
+                type="number"
+                min={0}
+                max={Math.max(0, draftConfig.chunk_size - 1)}
+                value={draftConfig.chunk_overlap}
+                onChange={(event) => updateDraftConfig({ chunk_overlap: Number(event.target.value) })}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Parser</label>
+              <select
+                value={draftConfig.parser}
+                onChange={(event) => updateDraftConfig({ parser: event.target.value })}
+                className="w-full px-3 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+              >
+                <option value="auto">Auto</option>
+                <option value="txt">TXT</option>
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">DOCX</option>
+              </select>
+            </div>
+          </div>
+
+          {embeddingTestMessage && (
+            <p className="text-sm text-tsushin-slate mt-4">{embeddingTestMessage}</p>
+          )}
+          {config && (
+            <p className="text-xs text-tsushin-muted mt-3">
+              Saved contract: {config.embedding_provider} / {config.embedding_model} / {config.embedding_dims}d. Existing documents keep their own snapshots until reprocessed.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Upload Section */}
       <div
         className={`border-2 border-dashed rounded-lg p-8 text-center ${
@@ -201,7 +607,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
           {uploading ? 'Uploading...' : 'Browse Files'}
         </label>
         <p className="text-xs text-tsushin-muted mt-3">
-          Supported: TXT, CSV, JSON, PDF, DOCX | Max size: 10 MB per file
+          Supported: TXT, CSV, JSON, PDF, DOCX | Max size: 50 MB per file
         </p>
       </div>
 
@@ -233,9 +639,9 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
               <div key={i} className="bg-tsushin-surface border border-tsushin-border rounded p-3">
                 <div className="text-sm mb-1">
                   <span className="font-medium text-purple-600">Chunk {result.chunk_id}</span>
-                  {result.metadata.source && (
-                    <span className="text-tsushin-muted ml-2">from {result.metadata.source}</span>
-                  )}
+                  <span className="text-tsushin-muted ml-2">
+                    from {result.document_name} · {(result.similarity * 100).toFixed(1)}%
+                  </span>
                 </div>
                 <p className="text-sm text-tsushin-fog">{result.content}</p>
               </div>
@@ -259,9 +665,11 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Document Name</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Type</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Tags</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Size</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Chunks</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Status</th>
+                <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Embedding</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-tsushin-slate">Uploaded</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-tsushin-slate">Actions</th>
               </tr>
@@ -269,7 +677,7 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
             <tbody>
               {documents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-tsushin-muted">
+                  <td colSpan={9} className="px-4 py-8 text-center text-tsushin-muted">
                     No documents uploaded yet. Upload documents to build agent's knowledge base.
                   </td>
                 </tr>
@@ -282,9 +690,15 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                         {doc.document_type.toUpperCase()}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-sm">
+                      {renderTags(doc.tags)}
+                    </td>
                     <td className="px-4 py-3 text-sm">{formatBytes(doc.file_size_bytes)}</td>
                     <td className="px-4 py-3 text-sm">{doc.num_chunks || '-'}</td>
                     <td className="px-4 py-3">{getStatusBadge(doc.status)}</td>
+                    <td className="px-4 py-3 text-xs text-tsushin-slate max-w-xs">
+                      {documentContract(doc)}
+                    </td>
                     <td className="px-4 py-3 text-sm text-tsushin-slate">
                       {formatDate(doc.upload_date)}
                     </td>
@@ -297,6 +711,19 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                           View
                         </button>
                       )}
+                      <button
+                        onClick={() => startEditDocument(doc)}
+                        className="px-3 py-1 text-sm rounded bg-tsushin-elevated hover:bg-tsushin-border text-white"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => reprocessDocument(doc)}
+                        disabled={reprocessingIds.has(doc.id)}
+                        className="px-3 py-1 text-sm rounded bg-tsushin-elevated hover:bg-tsushin-border text-white disabled:opacity-50"
+                      >
+                        {reprocessingIds.has(doc.id) ? 'Queued' : 'Reprocess'}
+                      </button>
                       <button
                         onClick={() => deleteDocument(doc.id)}
                         className="btn-danger px-3 py-1 text-sm rounded"
@@ -322,6 +749,12 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                 <p className="text-sm text-tsushin-slate">
                   {formatBytes(selectedDoc.file_size_bytes)} • {selectedDoc.num_chunks} chunks
                 </p>
+                <p className="text-xs text-tsushin-muted mt-1">
+                  {documentContract(selectedDoc)}
+                </p>
+                <div className="mt-2">
+                  {renderTags(selectedDoc.tags)}
+                </div>
               </div>
               <button
                 onClick={() => setSelectedDoc(null)}
@@ -353,6 +786,76 @@ export default function AgentKnowledgeManager({ agentId }: Props) {
                 className="px-4 py-2 bg-tsushin-elevated text-white rounded-md hover:bg-tsushin-surface"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingDoc && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-tsushin-surface rounded-lg max-w-xl w-full overflow-hidden">
+            <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-semibold">Edit Document</h3>
+                <p className="text-sm text-tsushin-slate">{editingDoc.document_name}</p>
+              </div>
+              <button
+                onClick={closeEditDocument}
+                className="text-tsushin-slate hover:text-white"
+                disabled={savingEdit}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Document Name</label>
+                <input
+                  type="text"
+                  value={editDocumentName}
+                  onChange={(e) => setEditDocumentName(e.target.value)}
+                  maxLength={255}
+                  className="w-full px-4 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Tags</label>
+                <textarea
+                  value={editTagsText}
+                  onChange={(e) => setEditTagsText(e.target.value)}
+                  rows={3}
+                  placeholder="billing, faq, onboarding"
+                  className="w-full px-4 py-2 border border-tsushin-border rounded-md bg-tsushin-ink text-white"
+                />
+                <p className="text-xs text-tsushin-muted mt-2">
+                  Separate tags with commas or line breaks. Up to {MAX_DOCUMENT_TAGS} tags, {MAX_DOCUMENT_TAG_LENGTH} characters each. Tags are normalized to lowercase and deduplicated before save.
+                </p>
+                <p className="text-xs text-tsushin-muted mt-1">
+                  {uniqueEditTags.length}/{MAX_DOCUMENT_TAGS} tags
+                </p>
+                {tagValidationError && (
+                  <p className="text-xs text-red-400 mt-2">{tagValidationError}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-tsushin-elevated px-6 py-4 border-t flex justify-end gap-3">
+              <button
+                onClick={closeEditDocument}
+                className="px-4 py-2 bg-tsushin-ink text-white rounded-md hover:bg-tsushin-surface"
+                disabled={savingEdit}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveDocumentMetadata}
+                className="btn-primary px-4 py-2 rounded-md disabled:opacity-50"
+                disabled={savingEdit || !!tagValidationError}
+              >
+                {savingEdit ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>

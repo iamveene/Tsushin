@@ -1,19 +1,19 @@
 """
 Phase 5.0 Week 3: Audio Transcription Skill
-Transcribes audio messages using OpenAI Whisper API.
+Transcribes audio messages using a tenant ASR instance when configured,
+falling back to OpenAI Whisper.
 Phase 7.2: Added token tracking for Whisper API usage
 """
 
 import os
 import logging
-import httpx
 from typing import Dict, Any, Optional, TYPE_CHECKING
-from pathlib import Path
 from datetime import datetime
-from openai import OpenAI
 
 from agent.skills.base import BaseSkill, InboundMessage, SkillResult
 from services.api_key_service import get_api_key
+from hub.providers.asr_provider import ASRRequest
+from hub.providers.asr_registry import ASRProviderRegistry
 
 if TYPE_CHECKING:
     from analytics.token_tracker import TokenTracker
@@ -65,7 +65,6 @@ class AudioTranscriptSkill(BaseSkill):
 
     def __init__(self, token_tracker: Optional["TokenTracker"] = None):
         super().__init__()
-        self.client: Optional[OpenAI] = None
         self.token_tracker = token_tracker  # Phase 7.2
 
     async def can_handle(self, message: InboundMessage) -> bool:
@@ -123,35 +122,6 @@ class AudioTranscriptSkill(BaseSkill):
                 db = SessionLocal()
                 own_session = True
 
-            try:
-                # Validate configuration - check database first, then config
-                tenant_id = config.get("tenant_id")
-                api_key = None
-
-                provider_instance_id = config.get("provider_instance_id")
-                if provider_instance_id and tenant_id:
-                    from services.provider_instance_service import ProviderInstanceService
-                    instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
-                    if instance and instance.vendor == "openai" and instance.is_active:
-                        api_key = ProviderInstanceService.resolve_api_key(instance, db)
-
-                if not api_key:
-                    api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
-
-                if not api_key:
-                    return SkillResult(
-                        success=False,
-                        output="❌ OpenAI API key not configured",
-                        metadata={"error": "missing_api_key"}
-                    )
-            finally:
-                if own_session:
-                    db.close()
-
-            # Initialize OpenAI client
-            if not self.client:
-                self.client = OpenAI(api_key=api_key)
-
             # Get audio file path
             audio_path = message.media_path
             if not audio_path or not os.path.exists(audio_path):
@@ -166,23 +136,150 @@ class AudioTranscriptSkill(BaseSkill):
             # Prepare transcription parameters
             language = config.get("language", "auto")
             model = config.get("model", "whisper-1")
+            tenant_id = config.get("tenant_id")
+            transcript = ""
+            provider_name = "openai"
+            provider_model = model
 
-            # Open and transcribe audio file
-            with open(audio_path, "rb") as audio_file:
-                # Call Whisper API
-                transcription_params = {
-                    "model": model,
-                    "file": audio_file,
-                }
+            # ASR resolution (per-agent, no tenant-level default):
+            # 1. ``asr_mode='instance'`` + ``asr_instance_id`` → pinned local instance
+            #    (speaches or openai_whisper).
+            # 2. ``asr_mode='openai'`` (or no instance pinned) → OpenAI Whisper API.
+            # The legacy ``tenant_default`` mode was retired with the
+            # ``Tenant.default_asr_instance_id`` column; existing rows still
+            # carrying that value are treated as ``openai`` (no silent
+            # tenant-wide fan-out — instances are assigned per-agent).
+            asr_mode = config.get("asr_mode")
+            asr_instance_id = config.get("asr_instance_id")
+            resolved_asr_instance_id = asr_instance_id
+            resolved_asr_instance = None
+            instance_error: Optional[str] = None
+            if tenant_id and db and asr_mode == "instance" and asr_instance_id:
+                try:
+                    from services.whisper_instance_service import WhisperInstanceService
 
-                # Add language if not auto-detect
-                if language and language != "auto":
-                    transcription_params["language"] = language
+                    resolved_asr_instance = WhisperInstanceService.get_instance(
+                        asr_instance_id,
+                        tenant_id,
+                        db,
+                    )
 
-                response = self.client.audio.transcriptions.create(**transcription_params)
+                    if (
+                        resolved_asr_instance
+                        and resolved_asr_instance.is_active
+                        and resolved_asr_instance.vendor in ("speaches", "openai_whisper")
+                    ):
+                        provider = ASRProviderRegistry.get_instance_provider(
+                            resolved_asr_instance,
+                            db=db,
+                            token_tracker=self.token_tracker,
+                            tenant_id=tenant_id,
+                        )
+                        provider_model = (
+                            resolved_asr_instance.default_model
+                            if model == "whisper-1"
+                            else model
+                        )
+                        response = await provider.transcribe(
+                            ASRRequest(
+                                audio_path=audio_path,
+                                model=provider_model,
+                                language=language,
+                                tenant_id=tenant_id,
+                                agent_id=getattr(message, "agent_id", None),
+                                sender_key=getattr(message, "sender", None),
+                                message_id=getattr(message, "message_id", None),
+                            )
+                        )
+                        if response.success:
+                            transcript = response.text.strip()
+                            provider_name = response.provider
+                        else:
+                            instance_error = response.error
+                            logger.warning(
+                                "ASR instance %s transcription failed, falling back to OpenAI: %s",
+                                resolved_asr_instance_id,
+                                response.error,
+                            )
+                    else:
+                        instance_error = (
+                            f"instance_unavailable (id={asr_instance_id}, "
+                            f"is_active={getattr(resolved_asr_instance, 'is_active', None)}, "
+                            f"vendor={getattr(resolved_asr_instance, 'vendor', None)})"
+                        )
+                        logger.warning(
+                            "ASR instance %s unavailable, falling back to OpenAI: %s",
+                            resolved_asr_instance_id,
+                            instance_error,
+                        )
+                except Exception as asr_err:
+                    instance_error = str(asr_err)
+                    logger.warning(
+                        "ASR instance %s path failed, falling back to OpenAI: %s",
+                        resolved_asr_instance_id,
+                        asr_err,
+                    )
 
-            # Extract transcription text
-            transcript = response.text.strip()
+            if not transcript:
+                api_key = None
+                provider_instance_id = config.get("provider_instance_id")
+                if provider_instance_id and tenant_id:
+                    from services.provider_instance_service import ProviderInstanceService
+
+                    instance = ProviderInstanceService.get_instance(provider_instance_id, tenant_id, db)
+                    if instance and instance.vendor == "openai" and instance.is_active:
+                        api_key = ProviderInstanceService.resolve_api_key(instance, db)
+
+                if not api_key:
+                    api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
+
+                if not api_key:
+                    return SkillResult(
+                        success=False,
+                        output="❌ OpenAI API key not configured",
+                        metadata={"error": "missing_api_key"},
+                    )
+
+                provider = ASRProviderRegistry.get_openai_provider(
+                    db=db,
+                    token_tracker=self.token_tracker,
+                    tenant_id=tenant_id,
+                    api_key=api_key,
+                )
+                response = await provider.transcribe(
+                    ASRRequest(
+                        audio_path=audio_path,
+                        model=model,
+                        language=language,
+                        tenant_id=tenant_id,
+                        agent_id=getattr(message, "agent_id", None),
+                        sender_key=getattr(message, "sender", None),
+                        message_id=getattr(message, "message_id", None),
+                    )
+                )
+                if not response.success:
+                    openai_err = response.error or "unknown error"
+                    if instance_error:
+                        combined = (
+                            f"❌ Transcription failed.\n"
+                            f"• Local ASR instance ({resolved_asr_instance_id}): {instance_error}\n"
+                            f"• OpenAI fallback: {openai_err}"
+                        )
+                    else:
+                        combined = f"❌ Transcription failed: {openai_err}"
+                    return SkillResult(
+                        success=False,
+                        output=combined,
+                        metadata={
+                            "error": openai_err,
+                            "instance_error": instance_error,
+                            "audio_path": audio_path,
+                            "provider": "openai",
+                        },
+                    )
+                transcript = response.text.strip()
+                provider_name = response.provider
+                provider_model = model
 
             if not transcript:
                 return SkillResult(
@@ -223,8 +320,8 @@ class AudioTranscriptSkill(BaseSkill):
 
                     self.token_tracker.track_usage(
                         operation_type="audio_transcript",
-                        model_provider="openai",
-                        model_name=model,
+                        model_provider=provider_name,
+                        model_name=provider_model,
                         prompt_tokens=estimated_tokens,  # Audio duration in seconds
                         completion_tokens=0,  # No output tokens for transcription
                         agent_id=message.agent_id if hasattr(message, 'agent_id') else None,
@@ -250,7 +347,8 @@ class AudioTranscriptSkill(BaseSkill):
                         "transcript_length": len(transcript),
                         "audio_path": audio_path,
                         "language": language,
-                        "model": model,
+                        "model": provider_model,
+                        "provider": provider_name,
                         "response_mode": response_mode,
                         "skip_ai": True  # Signal to skip AI processing
                     },
@@ -265,7 +363,8 @@ class AudioTranscriptSkill(BaseSkill):
                         "transcript_length": len(transcript),
                         "audio_path": audio_path,
                         "language": language,
-                        "model": model,
+                        "model": provider_model,
+                        "provider": provider_name,
                         "response_mode": response_mode
                     },
                     processed_content=transcript  # Pass to AI for processing
@@ -281,6 +380,9 @@ class AudioTranscriptSkill(BaseSkill):
                     "audio_path": message.media_path
                 }
             )
+        finally:
+            if own_session:
+                db.close()
 
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
@@ -292,6 +394,8 @@ class AudioTranscriptSkill(BaseSkill):
         """
         return {
             "api_key": None,  # Uses OPENAI_API_KEY from env if not provided
+            "asr_mode": "openai",  # openai | instance (per-agent assignment; no tenant default)
+            "asr_instance_id": None,  # Pin a specific local Whisper/Speaches/openai_whisper instance when set
             "language": "auto",  # Auto-detect language
             "model": "whisper-1",  # OpenAI Whisper model
             "response_mode": "conversational"  # "conversational" or "transcript_only"
@@ -312,6 +416,17 @@ class AudioTranscriptSkill(BaseSkill):
                     "type": "string",
                     "description": "OpenAI API key (uses OPENAI_API_KEY env var if not provided)",
                     "format": "password"
+                },
+                "asr_mode": {
+                    "type": "string",
+                    "description": "ASR routing mode: cloud OpenAI Whisper API, or a specific tenant-owned local instance assigned to this agent.",
+                    "default": "openai",
+                    "enum": ["openai", "instance"]
+                },
+                "asr_instance_id": {
+                    "type": ["integer", "null"],
+                    "description": "Tenant ASR instance ID (Speaches or openai_whisper). Required when asr_mode='instance'.",
+                    "default": None
                 },
                 "language": {
                     "type": "string",

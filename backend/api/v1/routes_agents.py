@@ -39,6 +39,11 @@ class AgentSkillInfo(BaseModel):
     skill_type: str
     is_enabled: bool
     config: Optional[dict] = None
+    auto_inject_results: Optional[bool] = None
+    skip_ai_on_data_fetch: Optional[bool] = None
+    max_result_bytes: Optional[int] = None
+    max_results_retained: Optional[int] = None
+    max_turns_lookback: Optional[int] = None
 
 
 class PublicAgentPersona(BaseModel):
@@ -58,6 +63,8 @@ class PublicAgentSummary(BaseModel):
     enabled_channels: Optional[List[str]] = None
     persona: Optional[PublicAgentPersona] = None
     skills: List[str] = []
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -83,6 +90,8 @@ class PublicAgentDetailResponse(PublicAgentSummary):
     semantic_search_results: Optional[int] = None
     semantic_similarity_threshold: Optional[float] = None
     response_template: Optional[str] = None
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
     contact_id: int
     tenant_id: str
     sandboxed_tool_ids: List[int] = []
@@ -108,6 +117,8 @@ class AgentCreateRequest(BaseModel):
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: bool = True
@@ -171,6 +182,8 @@ class AgentUpdateRequest(BaseModel):
     avatar: Optional[str] = None
     memory_size: Optional[int] = Field(None, ge=1, le=5000)
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: Optional[bool] = None
@@ -242,6 +255,29 @@ class SecurityProfileAssignRequest(BaseModel):
 # Helpers
 # ============================================================================
 
+def _get_tenant_agent(
+    db: Session,
+    agent_id: int,
+    tenant_id: str,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if agent.is_internal:
+        detail = (
+            "Agent not found"
+            if internal_status_code == 404
+            else "Internal coordinator agents cannot be managed through public API v1"
+        )
+        raise HTTPException(status_code=internal_status_code, detail=detail)
+    return agent
+
+
 def _enrich_agent(agent: Agent, db: Session) -> dict:
     """Build a rich agent summary from database records."""
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -286,6 +322,8 @@ def _enrich_agent(agent: Agent, db: Session) -> dict:
         "enabled_channels": channels,
         "persona": persona_info,
         "skills": skill_types,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -310,6 +348,8 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
         "semantic_search_results": agent.semantic_search_results,
         "semantic_similarity_threshold": agent.semantic_similarity_threshold,
         "response_template": agent.response_template,
+        "max_agentic_rounds": agent.max_agentic_rounds,
+        "max_agentic_loop_bytes": agent.max_agentic_loop_bytes,
         "contact_id": agent.contact_id,
         "tenant_id": agent.tenant_id,
     })
@@ -325,7 +365,16 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
     # Add skill details
     skills = db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).all()
     base["skills_detail"] = [
-        {"skill_type": s.skill_type, "is_enabled": s.is_enabled, "config": s.config}
+        {
+            "skill_type": s.skill_type,
+            "is_enabled": s.is_enabled,
+            "config": s.config,
+            "auto_inject_results": s.auto_inject_results,
+            "skip_ai_on_data_fetch": s.skip_ai_on_data_fetch,
+            "max_result_bytes": s.max_result_bytes,
+            "max_results_retained": s.max_results_retained,
+            "max_turns_lookback": s.max_turns_lookback,
+        }
         for s in skills
     ]
 
@@ -359,7 +408,10 @@ async def list_agents(
     """
     from sqlalchemy import func
 
-    query = db.query(Agent).filter(Agent.tenant_id == caller.tenant_id)
+    query = db.query(Agent).filter(
+        Agent.tenant_id == caller.tenant_id,
+        Agent.is_internal == False,
+    )
 
     if is_active is not None:
         query = query.filter(Agent.is_active == is_active)
@@ -408,12 +460,7 @@ async def get_agent(
     sandboxed tools, memory settings, and channel configuration.
     Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id)
     return _get_agent_detail(agent, db)
 
 
@@ -440,6 +487,7 @@ async def create_agent(
         current_agent_count = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.is_active == True,
+            Agent.is_internal == False,
         ).count()
         if current_agent_count >= tenant.max_agents:
             raise HTTPException(
@@ -471,6 +519,7 @@ async def create_agent(
         db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.is_default == True,
+            Agent.is_internal == False,
         ).update({"is_default": False})
         db.commit()
 
@@ -486,6 +535,8 @@ async def create_agent(
         avatar=request.avatar,
         memory_size=request.memory_size,
         memory_isolation_mode=request.memory_isolation_mode or "isolated",
+        max_agentic_rounds=request.max_agentic_rounds if request.max_agentic_rounds is not None else 1,
+        max_agentic_loop_bytes=request.max_agentic_loop_bytes if request.max_agentic_loop_bytes is not None else 8192,
         trigger_dm_enabled=request.trigger_dm_enabled,
         enable_semantic_search=request.enable_semantic_search if request.enable_semantic_search is not None else True,
         is_active=request.is_active,
@@ -556,12 +607,7 @@ async def update_agent(
     Only provided fields are updated; omitted fields remain unchanged.
     Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     # Validate persona_id if provided (tenant isolation)
     if request.persona_id is not None:
@@ -606,17 +652,13 @@ async def delete_agent(
     Cannot delete the last remaining agent for a tenant. If the deleted agent
     is the default, another agent is automatically promoted. Requires `agents.delete` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     # Cannot delete default agent if it's the only one for this tenant
     if agent.is_default:
         total_agents = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
+            Agent.is_internal == False,
         ).count()
         if total_agents == 1:
             raise HTTPException(status_code=400, detail="Cannot delete the only agent")
@@ -625,6 +667,7 @@ async def delete_agent(
         next_agent = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.id != agent_id,
+            Agent.is_internal == False,
         ).first()
         if next_agent:
             next_agent.is_default = True
@@ -650,12 +693,7 @@ async def assign_skills(
     Adds the specified skill types to the agent. Use `replace: true` to replace
     all existing skills. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     if request.replace:
         db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).delete()
@@ -695,12 +733,7 @@ async def remove_skill(
     Deletes the specified skill type assignment. Returns 404 if the skill is not
     assigned to this agent. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     deleted = db.query(AgentSkill).filter(
         AgentSkill.agent_id == agent.id,
@@ -729,12 +762,7 @@ async def assign_persona(
     Set `persona_id` to assign a persona, or `null` to clear.
     Validates tenant ownership of the persona. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     if request.persona_id is not None:
         persona = db.query(Persona).filter(

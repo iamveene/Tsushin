@@ -320,7 +320,8 @@ class MultiAgentMemoryManager:
         telegram_id: Optional[str] = None,
         telegram_username: Optional[str] = None,  # Phase 10.1.1: Username fallback
         use_contact_mapping: bool = True,
-        project_id: Optional[int] = None
+        project_id: Optional[int] = None,
+        team_run_id: Optional[int] = None,
     ) -> None:
         """
         Add a message to agent-specific memory with isolation mode and contact mapping support.
@@ -341,11 +342,14 @@ class MultiAgentMemoryManager:
             telegram_username: Optional Telegram username for contact resolution (Phase 10.1.1)
             use_contact_mapping: If True, use contact-based keys; if False, use sender-based keys
             project_id: Optional project ID for project-scoped memory (Phase 15)
+            team_run_id: Optional Agent Team run scope for run-isolated memory
         """
         # Add agent_id to metadata
         if metadata is None:
             metadata = {}
         metadata['agent_id'] = agent_id
+        if team_run_id is not None:
+            metadata['team_run_id'] = team_run_id
 
         # Get agent memory
         memory = self.get_agent_memory(agent_id)
@@ -396,10 +400,13 @@ class MultiAgentMemoryManager:
             role=role,
             content=content,
             message_id=message_id,
-            metadata=metadata
+            metadata=metadata,
+            team_run_id=team_run_id,
         )
 
         mode_desc = f"project {project_id}" if project_id else self._get_agent_isolation_mode(agent_id)
+        if team_run_id is not None:
+            mode_desc = f"{mode_desc}, team_run {team_run_id}"
         self.logger.debug(f"Added message to agent {agent_id} memory: {user_id} (mode: {mode_desc})")
 
     async def get_context(
@@ -416,7 +423,8 @@ class MultiAgentMemoryManager:
         telegram_id: Optional[str] = None,  # Phase 10.1.1
         telegram_username: Optional[str] = None,  # Phase 10.1.1
         use_contact_mapping: bool = True,
-        project_id: Optional[int] = None
+        project_id: Optional[int] = None,
+        team_run_id: Optional[int] = None,
     ) -> Dict:
         """
         Get comprehensive context for agent-specific conversation with isolation mode and contact mapping support.
@@ -442,6 +450,7 @@ class MultiAgentMemoryManager:
             whatsapp_id: Optional WhatsApp ID for contact resolution
             use_contact_mapping: If True, use contact-based keys; if False, use sender-based keys
             project_id: Optional project ID for project-scoped memory (Phase 15)
+            team_run_id: Optional Agent Team run scope for run-isolated memory
 
         Returns:
             Dictionary with all context layers
@@ -490,7 +499,8 @@ class MultiAgentMemoryManager:
             user_id=user_id,
             current_message=current_message,
             include_knowledge=include_knowledge,
-            include_shared=include_shared  # Phase 4.8 Week 4 complete
+            include_shared=include_shared,  # Phase 4.8 Week 4 complete
+            team_run_id=team_run_id,
         )
 
         return context

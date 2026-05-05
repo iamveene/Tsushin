@@ -21,7 +21,9 @@ import requests
 from sqlalchemy.orm import Session
 
 from services.container_runtime import (
+    PORT_RANGES,
     get_container_runtime,
+    iter_port_range,
     ContainerRuntime,
     ContainerNotFoundError,
     ContainerRuntimeError,
@@ -46,8 +48,7 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-PORT_RANGE_START = 6600
-PORT_RANGE_END = 6699
+PORT_RANGE_START, PORT_RANGE_END = PORT_RANGES["kokoro"]
 HEALTH_CHECK_TIMEOUT = 90
 HEALTH_CHECK_INTERVAL = 5
 
@@ -80,7 +81,7 @@ class KokoroContainerManager:
     def _allocate_port(self, db: Session) -> int:
         import socket
         used = self._get_used_ports(db)
-        for port in range(PORT_RANGE_START, PORT_RANGE_END):
+        for port in iter_port_range("kokoro"):
             if port in used:
                 continue
             try:

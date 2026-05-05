@@ -24,6 +24,10 @@ from models import (
 )
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from api.agent_visibility import (
+    communication_permission_has_internal_agent,
+    get_public_tenant_agent_or_404,
+)
 from services.agent_communication_service import AgentCommunicationService
 
 logger = logging.getLogger(__name__)
@@ -371,7 +375,11 @@ async def list_permissions(
 ):
     """List all agent communication permission rules for the tenant."""
     svc = AgentCommunicationService(db, ctx.tenant_id)
-    perms = svc.list_permissions()
+    perms = [
+        perm
+        for perm in svc.list_permissions()
+        if not communication_permission_has_internal_agent(db, perm, ctx.tenant_id)
+    ]
 
     # Batch-resolve agent names
     agent_ids = set()
@@ -409,14 +417,12 @@ async def create_permission(
     """Create a new agent communication permission rule."""
     # Validate both agents exist and belong to the tenant
     for aid, label in [(body.source_agent_id, "Source"), (body.target_agent_id, "Target")]:
-        agent = (
-            db.query(Agent)
-            .join(Contact, Contact.id == Agent.contact_id)
-            .filter(Agent.id == aid, Agent.tenant_id == ctx.tenant_id)
-            .first()
+        get_public_tenant_agent_or_404(
+            db,
+            aid,
+            ctx.tenant_id,
+            detail=f"{label} agent {aid} not found in this tenant",
         )
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"{label} agent {aid} not found in this tenant")
 
     if body.source_agent_id == body.target_agent_id:
         raise HTTPException(status_code=400, detail="Source and target agents must be different")
@@ -474,6 +480,17 @@ async def update_permission(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    existing = (
+        db.query(AgentCommunicationPermission)
+        .filter(
+            AgentCommunicationPermission.id == permission_id,
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+        )
+        .first()
+    )
+    if not existing or communication_permission_has_internal_agent(db, existing, ctx.tenant_id):
+        raise HTTPException(status_code=404, detail="Permission rule not found")
+
     perm = svc.update_permission(permission_id, **update_data)
     if not perm:
         raise HTTPException(status_code=404, detail="Permission rule not found")
@@ -503,6 +520,17 @@ async def delete_permission(
     db: Session = Depends(get_db),
 ):
     """Delete an agent communication permission rule."""
+    existing = (
+        db.query(AgentCommunicationPermission)
+        .filter(
+            AgentCommunicationPermission.id == permission_id,
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+        )
+        .first()
+    )
+    if not existing or communication_permission_has_internal_agent(db, existing, ctx.tenant_id):
+        raise HTTPException(status_code=404, detail="Permission rule not found")
+
     svc = AgentCommunicationService(db, ctx.tenant_id)
     deleted = svc.delete_permission(permission_id)
     if not deleted:

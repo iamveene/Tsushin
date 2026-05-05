@@ -8,7 +8,7 @@ These types are separate from agent.skills.base.InboundMessage (skill triggering
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 @dataclass
@@ -57,3 +57,18 @@ class HealthResult:
     status: str              # "connected", "disconnected", "error", "unknown"
     latency_ms: Optional[float] = None
     detail: Optional[str] = None
+
+
+@dataclass
+class TriggerEvent:
+    """Normalized event emitted by a Trigger entry point."""
+
+    trigger_type: str
+    event_type: str
+    instance_id: int
+    tenant_id: str
+    dedupe_key: str
+    occurred_at: datetime
+    payload: dict
+    importance: Literal["low", "normal", "high"] = "normal"
+    matched_agent_id: Optional[int] = None

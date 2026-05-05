@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class MCPContainerManager:
     """Manages Docker containers for WhatsApp MCP instances"""
 
-    IMAGE_NAME = "tsushin/whatsapp-mcp:latest"
+    IMAGE_NAME = os.getenv("TSN_WHATSAPP_MCP_IMAGE", "tsushin/whatsapp-mcp:latest")
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     HEALTH_CHECK_INTERVAL = 5  # seconds
     DNS_FALLBACK_ENV = "WHATSAPP_MCP_DNS_SERVERS"

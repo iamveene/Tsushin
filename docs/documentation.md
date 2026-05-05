@@ -4,7 +4,7 @@
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
-> **Version:** v0.6.0 (`README.md`, `backend/settings.py`).
+> **Version:** v0.7.0 (`README.md`, `backend/settings.py`).
 > **License:** MIT. **Author:** Marcos Vinicios Penha ([@iamveene](https://github.com/iamveene)).
 
 ---
@@ -80,9 +80,9 @@ Tsushin ships as a Docker Compose stack defined in `docker-compose.yml`. The cor
 
 **Network:** All services attach to the **external** bridge network `tsushin-network`. The network is declared `external: true`, so `docker compose down` does not remove it. That matters because MCP WhatsApp bot containers (spawned dynamically by `ToolboxContainerService` / `MCPContainerManager`) also join this network. Create the network once with `docker network create tsushin-network`; `install.py` handles this automatically. Source: `docker-compose.yml:229-237`.
 
-**Multi-stack note:** When SSL/Caddy is enabled, proxy upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack.
+**Multi-stack note:** Proxy and frontend upstreams must target stack-scoped container names (for example `tsushin-frontend:3030`, `tsushin-backend:8081`) rather than generic Docker aliases like `frontend` / `backend`. On the shared `tsushin-network`, generic aliases can resolve to another running Tsushin stack. BUG-723 closed the remaining HTTP-mode gap by making `BACKEND_INTERNAL_URL`, `INTERNAL_API_URL`, the frontend build args used by Next fallback rewrites, and `proxy/Caddyfile` all default to `${TSN_STACK_NAME}-backend` / `${TSN_STACK_NAME}-frontend`.
 
-**Browser → backend request path (v0.6.1):** the Next.js frontend proxies `/api/*` and `/ws/*` to the backend via `rewrites()` declared at `frontend/next.config.mjs`. The destination is read at request time from the `BACKEND_INTERNAL_URL` env var (defaults to `http://backend:8081`, the compose service DNS). This keeps every browser request same-origin with the frontend, so the httpOnly `tsushin_session` cookie (domain-scoped to the frontend) rides along automatically — including the Watcher activity WebSocket at `/ws/watcher/activity`. Replaces the v0.6.0 pattern of baking an absolute `NEXT_PUBLIC_API_URL` into the build, which dropped the cookie on cross-origin access.
+**Browser → backend request path (v0.6.1, updated for BUG-723):** the Next.js frontend proxies general `/api/*` and `/ws/*` traffic to the backend via fallback `rewrites()` declared at `frontend/next.config.mjs`, after first-party route handlers have had a chance to run. Standalone rewrites are evaluated during the frontend image build, so compose passes `BACKEND_INTERNAL_URL` as a build arg and as a runtime env var; it defaults to `http://${TSN_STACK_NAME:-tsushin}-backend:8081`, the stack-scoped compose service name. Auth endpoints are the deliberate exception: `/api/auth/*` is handled by `frontend/app/api/auth/[...path]/route.ts`, which forwards the request to the same stack-scoped backend origin at runtime and explicitly preserves `Set-Cookie` response headers. This keeps browser requests same-origin with the frontend, while ensuring the httpOnly `tsushin_session` cookie is actually stored after login/signup/setup/SSO/logout in both HTTP and TLS installs. The auth proxy normalizes `x-forwarded-proto` from `TSN_SSL_MODE`, so HTTP installs ask the backend for non-`Secure` cookies and HTTPS installs keep `Secure` cookies. Replaces the v0.6.0 pattern of baking an absolute `NEXT_PUBLIC_API_URL` into the build, which dropped the cookie on cross-origin access.
 
 **Persistent data:**
 
@@ -129,7 +129,358 @@ Tsushin spawns per-tenant containers outside the compose stack, all joining `tsu
 * **Tester surface** — QA bridge status exposed through `/api/mcp/instances/tester/*`; the backend prefers a legacy/compose tester container when present and otherwise falls back to the tenant's active runtime tester instance.
 * **Toolbox containers** — per-tenant sandboxes for "Sandboxed Tools" (nmap, dig, nuclei, etc.), managed by `services/toolbox_container_service.py` with base image built from `backend/containers/Dockerfile.toolbox`.
 
+Non-default local stacks use stack-scoped helper images so disposable fresh-install audits do not overwrite the host's shared helper tags. The installer writes `TSN_WHATSAPP_MCP_IMAGE` and `TSN_TOOLBOX_BASE_IMAGE` into `.env`, and the runtime managers use those tags when provisioning WhatsApp MCP and toolbox containers.
+
 Source: `docker-compose.yml:12-14`, `backend/services/toolbox_container_service.py:114`, `backend/services/mcp_container_manager.py:234`.
+
+### 2.4 v0.7.0 Phase 0 foundation
+
+v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent, Whisper/Speaches, and policy tracks build on.
+
+* **Migration slots** — `docs/internal/v0.7.0-migration-slots.md` reserves `0045-0058` so parallel release tracks do not collide; Track D's tenant-default ASR follow-up uses `0059` after the readiness audit found Track F already owns `0049`.
+* **Queue durability** — `message_queue.message_type` distinguishes `inbound_message`, `trigger_event`, and `continuous_task`; Phase 0 keeps `agent_id` and `sender_key` non-null.
+* **Trigger-event dedupe** — `channel_event_dedupe` stores tenant-scoped idempotency outcomes with audit-style retention.
+* **Container ports** — `backend/services/container_runtime.py` owns inclusive `PORT_RANGES` for dynamically managed services, including Whisper/Speaches on `6400-6499` and SearXNG on `6500-6599`.
+* **Track D ASR completion** — `backend/models.py` now includes `ASRInstance`, `backend/models_rbac.py` adds `Tenant.default_asr_instance_id` (migration `0059`, intentionally after Track A `0051` because Track F owns `0049`), and `backend/services/whisper_instance_service.py`, `backend/services/whisper_container_manager.py`, and `backend/api/routes_asr_instances.py` provide the tenant-scoped Whisper/Speaches lifecycle plus `/api/settings/asr/default`. `audio_transcript.py` now resolves `audio_transcript.config.asr_mode` (`openai` / `tenant_default` / `instance`) so agents can stay on OpenAI Whisper, follow the tenant default, or pin a specific local ASR instance. Frontend delivery includes `/settings/asr`, the Audio Agents Wizard, the regular Agent Wizard audio step, and Agent Skills Manager.
+* **Sentinel detection defaults** — `continuous_agent_action_approval` is registered as a first-class detection type and exposed through `/api/sentinel/detection-types`. Alembic `0055` widens Sentinel detection-type log/cache columns to 64 characters so this long detection id can be cached and audited without truncation.
+* **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
+* **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable. Phase 3.1 draft validation later adds the stricter `gmail.compose` requirement because Gmail drafts are not covered by `gmail.send` alone.
+
+### 2.4.1 v0.7.0 Agent Teams Phase 1 DB foundation
+
+Agent Teams begins as a schema-only foundation in `0083_agent_teams_init.py`, chained from the live `0082` migration head. This phase adds first-class storage for `agent_team`, `agent_team_member`, `agent_team_trigger`, `agent_team_run`, `agent_team_member_run`, `team_run_scratch`, and `agent_team_member_a2a_snapshot`.
+
+The existing `agent` table gains `is_team_member`, `current_team_id`, and `is_internal` flags for later Team Builder and hidden coordinator behavior. `agent_communication_session`, `memory`, and `case_memory` gain nullable `team_run_id` references so later phases can correlate in-team A2A traffic and isolate per-run memory without invalidating current direct-agent usage.
+
+No operator-facing Teams UI, public API route, queue dispatch path, orchestrator execution, Sentinel team hook, or memory-read behavior changes in this phase. All new fields are inert until the later Agent Teams phases wire them into services and frontend surfaces.
+
+### 2.4.2 v0.7.0 Agent Teams Phase 2 line orchestrator MVP
+
+Phase 2 adds the first runtime behavior behind an internal backend service only. `TeamRunOrchestrator.run_line()` loads a tenant-owned line team, creates an `agent_team_run`, executes active members in `execution_order`, stores one `agent_team_member_run` audit row per member, passes prior summaries into later member prompts, and records the final output summary on the run.
+
+This phase also hardens the uncommitted Phase 1 schema with tenant-aware composite ownership constraints for team members, triggers, runs, member-run audit rows, scratch rows, and A2A snapshots. Direct physical deletion of a team with members is restricted so later membership services can perform A2A snapshot restore deliberately instead of losing state through a cascade.
+
+`AgentService` now accepts an optional `team_run_id` context argument, but Phase 2 does not alter memory read/write behavior. Team-run memory scoping, Sentinel team hooks, A2A membership snapshot/restore services, queue dispatch, HTTP CRUD routes, and all frontend Teams surfaces remain deferred to later Agent Teams phases.
+
+### 2.4.3 v0.7.0 Agent Teams Phase 3 mesh coordinator runtime
+
+Phase 3 adds the backend-only mesh topology runtime. `team_coordinator_service.py` provisions or reuses one hidden coordinator agent per mesh team with the same tenant, `is_internal=true`, `is_team_member=true`, `current_team_id=team.id`, the system AI default model configuration, and no retained skills, tools, skill integrations, or knowledge-base attachments. The coordinator prompt lives at `backend/agent/prompts/team_coordinator.md`.
+
+`TeamRunOrchestrator.run_mesh()` creates an `agent_team_run`, asks the coordinator for a final JSON command, and handles `dispatch`, `finish`, and `escalate`. Dispatch commands create audited `agent_team_member_run` rows for the selected members; coordinator turns are also retained as hidden member-run audit rows. The runtime aggregates token counts and enforces active-team gating, `max_steps`, `max_total_tokens`, wall-clock timeout, tenant ownership, and repeated-dispatch loop detection.
+
+The public agent surfaces enforce the coordinator boundary: `/api/agents` and the Agent Builder global agent palette filter out `is_internal=true` agents, direct public detail/builder reads resolve as not found, and public mutation or attachment paths reject hidden coordinators. This covers agent update/delete, skill mutation/test, skill-integration mutation, custom-tool assignment/toggle/removal, semantic-knowledge mutation, and knowledge-base upload/config/update/delete/reprocess paths.
+
+Container smoke scripts for Agent Teams should be invoked from the mounted dev-test path, for example `docker exec tsushin-backend python /app/dev_tests/run_team_line_smoke.py` or `docker exec tsushin-backend python /app/dev_tests/run_team_mesh_smoke.py`.
+
+### 2.4.4 v0.7.0 Agent Teams Phase 4 safety layer
+
+Phase 4 closes the remaining hidden-coordinator public API gaps before expanding the team runtime. API v1 Studio builder get/save/clone, mounted `/api/v2/agents` list/detail/graph/communication/skill-integration/expand-data paths, and A2A permission list/create/update/delete routes now hide or reject `is_internal=true` coordinator agents before reads or mutations.
+
+Team-run memory is now explicitly scoped. Direct memory writes and reads keep `memory.team_run_id IS NULL`; team-run memory writes store `memory.team_run_id` and use a run-scoped effective sender key so direct chats with the same agent cannot load a completed team's ring-buffer or vector memory.
+
+`team_run_scratch_service.py` provides tenant/team/run-validated `set`, `get`, and `list_keys` operations over `team_run_scratch`. `AgentService` exposes internal `team_scratch_set`, `team_scratch_get`, and `team_scratch_list` tools only while a team run context is present; normal direct chats do not see or execute those tools.
+
+Sentinel now has team-specific wrappers for run starts and handoffs. A blocked run-start analysis marks the run `sentinel_blocked` before any member-run rows are created. A blocked handoff stores the Sentinel decision on the relevant member-run evidence, replaces the outbound content with `[Sentinel: handoff content withheld]`, and lets the team continue with the sanitized summary.
+
+`team_membership_service.py` owns backend-only A2A membership choreography. Adding an agent snapshots and disables external A2A permissions, sets `is_team_member` and `current_team_id`, and grants directed in-team permissions idempotently among non-coordinator members. Removing the agent restores snapshot payloads byte-equivalently, clears team flags, and deletes only grants created by the service.
+
+### 2.4.5 v0.7.0 Agent Teams Phase 5 CRUD API layer
+
+Phase 5 is scoped to the backend HTTP API layer for Agent Teams. The session-authenticated Studio surface is `/api/teams`; the public API client mirror is `/api/v1/teams`. Both surfaces expose tenant-scoped team CRUD, member management, run listing/detail, run cancellation, and manual-run request shapes so the frontend can be added later without inventing a second contract.
+
+The Teams API reuses the existing `agents.*` permission model instead of adding a new permission family: list/detail/run reads require `agents.read`, create/update/member changes require `agents.write`, manual run and cancellation require `agents.execute`, and archive requires `agents.delete`. The `/api/v1/teams` mirror follows the same API-client auth path as `/api/v1/agents`, including OAuth2 Bearer tokens and direct `X-API-Key` usage for roles such as `api_owner`.
+
+Manual runs are an explicit API action: `POST /api/teams/{id}/runs` and `POST /api/v1/teams/{id}/runs` return a run id immediately and hand execution to a background task. Manual runs use the team's stored goal snapshot; request bodies do not override the run input in v0.7.0.
+
+Team deletion is soft archive. The archive path must refuse active runs, mark the team archived, and restore member A2A state through the Phase 4 snapshot/restore service instead of physically deleting team rows. Frontend Team Builder, Team Wizard, Studio Teams pages, trigger bindings, and Watcher Team Runs UI remain out of scope for Phase 5.
+
+The live dev smoke skeleton is `backend/dev_tests/test_teams_api_e2e.py`. It requires caller-provided auth (`TSUSHIN_AUTH_COOKIE` for `/api/teams`, or `TSUSHIN_AUTH_TOKEN`/`TSUSHIN_API_KEY` for `/api/v1/teams`) and existing agent fixtures (`TSUSHIN_TEAM_AGENT_IDS`). It deliberately does not create agents; missing agent IDs fail with an operator-facing message. The script creates temporary teams under `/api/teams` and `/api/v1/teams` by default, exercises CRUD/member/run endpoints, and soft-archives only the teams it created during cleanup.
+
+### 2.4.6 v0.7.0 Agent Teams Phase 6 trigger integration
+
+Phase 6 is a backend-only trigger execution layer for Agent Teams. The session-authenticated Studio API and public v1 API now expose trigger binding CRUD at `/api/teams/{team_id}/triggers` and `/api/v1/teams/{team_id}/triggers`. These endpoints reuse `agents.write`.
+
+Each binding stores a canonical config in `agent_team_trigger.config_json`: `trigger_instance_id`, `event_types`, `filters`, and `is_enabled`. The API validates that the trigger instance is active, belongs to the same tenant, and is one of Webhook, GitHub, or Jira. Gmail team triggers remain out of scope for v0.7.0 and are rejected.
+
+`0084_agent_team_trigger_queue.py` extends `message_queue` for team-run work. Rows with `message_type='team_run'` are team-owned instead of agent-owned: `agent_id` is null, `team_id` and `team_run_id` are set, and tenant-composite FKs keep queued rows aligned with the team and run they execute. Existing agent queue rows remain unchanged.
+
+`TriggerDispatchService` now fans a deduped event out to matching Agent Teams in addition to existing ContinuousRun and Flow bindings. A matching team trigger creates an `AgentTeamRun(status='pending')`, links it to the `WakeEvent`, and enqueues a `team_run` queue row. Team-only dispatch can succeed without a default agent on the trigger instance.
+
+`QueueWorker` processes team-run rows on a `(tenant_id, team_id)` lane and honors `AgentTeam.max_concurrent_runs`; extra rows stay pending until capacity is available. `QueueRouter` executes the pre-created run through `TeamRunOrchestrator(existing_run_id=...)` and marks the associated `WakeEvent` as processed only when the team run completes successfully.
+
+There is still no Team Wizard, Team Builder, Studio Teams page, or Watcher Team Runs UI in this phase. Configure team triggers through the HTTP API until the frontend phases land.
+
+### 2.4.7 v0.7.0 Agent Teams Phase 7 frontend foundations
+
+Phase 7 adds the first Agent Teams frontend foundation while keeping team creation/editing flows deferred. Studio now exposes a canonical `/studio/teams` route and the Studio sub-navigation includes a Teams tab. `/agents/teams` redirects to `/studio/teams` so older Studio-adjacent links do not fragment the surface.
+
+The Teams page uses the existing session-authenticated `/api/teams` contract and renders loading, error, empty, and list states. `?new=1` is preserved as the future Team Wizard hook, but this phase does not create teams from the UI and does not link to a Team Builder detail page.
+
+The Agents page now uses a reusable split-button create affordance: the primary action still opens the existing Agent Wizard, while the Team option routes to `/studio/teams?new=1`. Agents marked by the backend as `is_team_member=true` show a Team badge.
+
+Agent detail and Agent Builder surfaces display a team-membership warning for team member agents. Direct conversations remain separate from team executions, but Studio settings edits can affect team behavior.
+
+### 2.4.8 v0.7.0 Agent Teams Phase 8 Team Wizard
+
+Phase 8 turns the `/studio/teams?new=1` hook into a full creation workflow. A global Team Wizard provider owns the draft, persists meaningful in-progress fields in local storage under `tsushin.team_wizard.draft`, and opens from both `/studio/teams?new=1` and the preserved `/agents/teams?new=1` redirect path.
+
+The wizard includes Custom/Template, Basics, Topology, Members, Tools, Triggers, Review, and Create steps. Templates are local presets only: they prefill the draft but do not create persistent seeded template records or clone from a template endpoint. Members are selected from active agents that are not already assigned to another team; line-topology ordering can be adjusted before creation. The tool pool binds enabled sandboxed tools through `tools.sandboxed_tool_ids`.
+
+Trigger bindings in the wizard attach existing active Webhook, GitHub, or Jira trigger instances through `/api/teams/{team_id}/triggers`. Each binding sends `trigger_kind`, `trigger_instance_id`, optional `event_types`, JSON object filters, and `is_enabled`. Gmail remains unavailable for Agent Teams in v0.7.0.
+
+Creation posts to `/api/teams`, then posts any trigger bindings, clears the persisted draft, and redirects to `/studio/teams/{id}`. Phase 8 includes a minimal team detail landing for created teams with goal, member, tool, trigger, and last-run summaries; visual builder/canvas editing stays deferred to Phase 9.
+
+The Phase 8 backend hardening keeps the Phase 6 runtime safe for UI-created teams: team-run queue rows use a stale-reset threshold aligned to the 600-second orchestrator budget plus grace, manual and other unqueued active team runs count against `max_concurrent_runs`, and trigger dispatch reports `enqueue_failed` instead of `dispatched` when queue insertion fails. Multi-team enqueue failures roll back uncommitted queue rows so already failed `AgentTeamRun` rows cannot be claimed later.
+
+### 2.4.9 v0.7.0 Agent Teams Phase 9 Team Builder
+
+Phase 9 replaces the minimal `/studio/teams/{id}` landing with the operational Team Builder. The detail page is URL-tabbed with `topology`, `triggers`, `sentinel`, `runs`, and `settings`, so operators can deep-link directly to the builder surface they need while keeping the canonical Studio Teams route.
+
+The Topology tab renders a React Flow `TeamCanvas`. Line teams show ordered member nodes with sequential handoff edges; mesh teams show the hidden coordinator plus member spokes. Active non-team-member agents can be dragged from the sidebar onto the canvas to add them to the team, line teams can be reordered through `/members/order`, and member node drag-stop persists `position_x`/`position_y` through `PATCH /api/teams/{team_id}/members/{agent_id}`. The same member PATCH contract also updates `is_required` and optional order metadata, and the public v1 API mirrors the route.
+
+Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, and Jira trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
+
+The Sentinel tab adds a nullable `agent_team.sentinel_profile_id` override via migration `0085_agent_team_sentinel_profile.py`. When set, team-run start and handoff Sentinel checks resolve that team profile before member or tenant defaults. Clearing the field returns the team to the existing inherited Sentinel profile hierarchy.
+
+The Runs tab exposes the missing run client contract for manual run start, list, detail, and cancel. Operators can start a run, poll run history, drill into member-run timelines, inspect output summaries, token/cost metadata, errors, and `sentinel_decision_json`, and cancel active runs from the same page.
+
+### 2.4.10 v0.7.0 Agent Teams Phase 10 Watcher Team Runs
+
+Phase 10 is the Watcher observability slice for Agent Teams. The implementation contract is a tenant-scoped run history outside Team Builder: operators can list team runs across all visible teams, filter by team/status/date range, and open read-only details without changing team configuration.
+
+The Watcher API is a tenant-wide list/detail surface backed by `agent_team_run` plus `agent_team_member_run`. This complements the single-team run endpoints from Phase 5/9 rather than replacing them. Both routes require `watcher.read`; non-global users are scoped to their tenant, while global admins may pass `tenant_id` to inspect a specific tenant.
+
+`GET /api/watcher/team-runs` returns `{items,total,limit,offset}`. Query parameters are `limit` (1-100, default 50), `offset` (default 0), `team_id`, `status`, `created_after`, `created_before`, and optional global-admin `tenant_id`. List items include run id, tenant id, team id/name/status, visible member count, run status, trigger event id when present, goal/topology snapshots, step counters, final output summary, `error_json`, token/cost totals, mesh `coordinator_commands`, and timing fields.
+
+`GET /api/watcher/team-runs/{run_id}` returns the same run envelope plus ordered `member_runs`. Each member run includes member/agent ids, agent name when available, step index, status, output summary/text, `sentinel_decision_json`, `error_json`, token counts, duration, and timestamps. The route is read-only and exposes no start, cancel, retry, edit, or archive controls.
+
+The `/ws/watcher/activity` channel emits `team_run` events shaped as `type`, `team_run_id`, `team_id`, `status`, `event`, and `timestamp`, with optional `team_name`, `member_run_id`, `step_index`, `agent_id`, `agent_name`, `coordinator_command`, and `error_json`. Known lifecycle event values include `start`, `step_completed`, `coordinator_decision`, `goal_achieved`, `goal_not_achieved`, `failed`, `sentinel_blocked`, and `cancelled`. The Watcher UI uses these events to append or replace rows live so an operator can see a run move from `pending`/`running` to a terminal state without refreshing.
+
+The Watcher `Team Runs` tab is read-only. It exposes filters for team, status, and date range, and shows a clear empty state when no runs match. The detail view shows ordered member-run cards, mesh coordinator dispatch decisions, Sentinel decision JSON, final output, error JSON, and token/cost summary. Hidden coordinator agents remain internal: Watcher may show coordinator decisions as run evidence, but public agent list/detail/mutation surfaces must keep the Phase 3/4 coordinator visibility boundary.
+
+Final integrated browser evidence for this phase is stored under `.private/qa/v0.7.0/p10/`. The run used a real authenticated Watcher session, a temporary webhook-backed Agent Team, live `team_run` WebSocket frames, mesh coordinator evidence, a Sentinel-blocked run, filter checks, existing Watcher tab regression, and cleanup verification for the temporary team/webhook.
+
+### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
+
+The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
+
+* **Entry-point split** — `backend/channels/base.py` now defines `EntryPoint` / `Channel`, `backend/channels/trigger.py` adds `Trigger`, and `backend/channels/registry.py` plus `backend/channels/dispatch.py` distinguish conversational send paths from trigger callbacks.
+* **Webhook is now cataloged as a trigger** — `backend/channels/catalog.py` exposes separate `CHANNEL_CATALOG` and `TRIGGER_CATALOG`; `GET /api/channels` no longer lists webhook while `GET /api/triggers` does, and canonical webhook CRUD lives under `/api/triggers/webhook/*`.
+* **Default-agent v2 foundation** — Alembic `0046` adds per-instance `default_agent_id` columns plus `user_channel_default_agent`, and `backend/services/default_agent_service.py` centralizes channel-vs-trigger resolution while preserving legacy reverse-FK bindings as fallback during the migration window.
+* **Hub channels/triggers split** — Hub renders dedicated **Channels** and **Triggers** configuration surfaces. Channels cover conversational setup, while Webhook is created from Hub > Triggers and excluded from the guided channel launcher.
+* **Phase 6 prep-only hardening** — `backend/agent/agent_service.py` now routes tool-call parsing through one boundary, and `backend/agent/skills/skill_manager.py` audits reserved config keys ahead of scratchpad / queue metadata work. No agentic-loop schema/API changes have landed yet.
+
+### 2.6 v0.7.0 Wave 1 checkpoint (Track G Gmail send foundation)
+
+The first Gmail-send slice is also merged on `release/0.7.0`, but it is still a checkpoint rather than the full Phase 3 email-trigger flow.
+
+* **Outbound Gmail operations** — `backend/hub/google/gmail_service.py`, `backend/services/email_command_service.py`, and `backend/agent/skills/gmail_skill.py` now support send, reply, and draft actions in addition to read/search/list operations.
+* **Fail-closed outbound scopes** — send/reply now require a Gmail send-compatible scope (`gmail.send`, `gmail.compose`, `gmail.modify`, or `mail.google.com/`), while draft creation requires a draft-compatible scope (`gmail.compose`, `gmail.modify`, or `mail.google.com/`). Older read-only OAuth tokens stay readable but cannot send until the tenant reauthorizes.
+* **Hub/API reauth contract** — Gmail reauthorization surfaces request `include_send_scope=true`, which now adds both `gmail.send` and `gmail.compose`, so the upgrade path for full outbound send + draft support is explicit in both API and UI flows.
+* **User-facing capability copy** — the Gmail setup wizard and `/email info` output now distinguish between "send/reply only" and full "send + draft" readiness instead of assuming `gmail.send` covers every outbound action.
+* **Regression coverage** — `backend/tests/test_gmail_send_phase3_checkpoint.py` covers send, reply, draft, and scope-gating behavior. `backend/tests/test_gmail_send_phase3_live_gate.py` is an opt-in root-only live proof that stays skipped unless `TSN_RUN_GMAIL_PHASE3_LIVE_GATE=1` is set; once enabled, it fails if the fixture lacks a draft-compatible Gmail scope. The fixture was reauthorized with `gmail.compose` for `mv@archsec.io` during the Phase 3 exit gate, and the live proof now covers direct send, direct reply, `GmailSkill` send, and draft creation. The optional agent-chat/API proof still requires `TSN_RUN_GMAIL_AGENT_CHAT_LIVE_GATE=1` plus API endpoint/token/agent env vars.
+
+### 2.7 v0.7.0 Wave 1 checkpoint (Track A Phase 1 control plane)
+
+Track A Phase 1 now has the routing-control surfaces needed before continuous-agent work can stack on top.
+
+* **Persisted email trigger rows** — Alembic `0051` adds `EmailChannelInstance`, and Alembic `0061` adds `trigger_criteria` so Gmail-backed trigger rows persist the same criteria/query/definition envelope used by Jira and the other trigger types. `backend/api/routes_email_triggers.py` exposes CRUD, test-query, poll-now, triage, and flow-wired output endpoints for rows with a trigger name, Gmail integration, per-trigger `default_agent_id`, optional Gmail search query, poll interval, and active/paused status.
+* **Default-agent control plane** — `backend/api/routes_default_agents.py` plus `/settings/default-agents` expose tenant defaults, per-instance channel defaults, per-instance trigger defaults, and per-user channel overrides while keeping resolution centralized in `backend/services/default_agent_service.py`.
+* **Hub trigger launcher** — `frontend/components/ui/Wizard.tsx` and `frontend/components/triggers/TriggerCreationWizard.tsx` add a real Trigger setup path under Hub > Triggers. Email is trigger-only; Gmail account resources continue to live under Hub > Productivity.
+* **Agent Studio cleanup** — `/agents` no longer edits the tenant default inline. It shows the current default agent as a read-only indicator and links to `/settings/default-agents`.
+* **Drift protection** — `backend/tests/test_wizard_drift.py` now cross-checks the Trigger wizard fallback against `TRIGGER_CATALOG`, in addition to the existing channel/productivity/provider guards.
+
+### 2.8 v0.7.0 Track A2 Continuous-Agent Control Plane
+
+Track A2 is a backend-first contract checkpoint. It adds the schema and read surfaces that later Email/Jira/GitHub/Webhook trigger tracks and Track C UI consume.
+
+* **Migrations** — Alembic `0047_add_continuous_agent_models.py` intentionally revises current release head `0059`, and `0050_add_channel_event_rule.py` revises `0047`, keeping one linear chain while preserving Track A2's allocated revision IDs.
+* **Models** — `delivery_policy`, `budget_policy`, `continuous_agent`, `continuous_subscription`, `wake_event`, `continuous_run`, and `channel_event_rule` are tenant-scoped. `continuous_run.wake_event_ids` and `continuous_run.agentic_scratchpad` are JSONB in `0047`; Track F later adds scratchpad only to `conversation_thread`.
+* **Read-only APIs** — this checkpoint exposes `GET /api/continuous-agents`, `GET /api/continuous-agents/{id}`, `GET /api/continuous-runs`, `GET /api/continuous-runs/{id}`, `GET /api/wake-events`, and `GET /api/wake-events/{id}`. Write endpoints for continuous agents/runs/wake events are intentionally deferred. Pagination shape is `items`, `total`, `limit`, `offset`.
+* **Auth and permissions** — continuous-agent list/detail uses session cookie, UI Bearer JWT, OAuth2 API-client Bearer JWT, or `X-API-Key` via the shared auth stack. `/api/continuous-agents*` requires `agents.read`; `/api/continuous-runs*` and `/api/wake-events*` require `watcher.read`. The standard `api_readonly`, `api_member`, `api_admin`, and `api_owner` client roles include `watcher.read` for these read surfaces. Missing tenant context fails closed with `403`; cross-tenant detail access returns `403`.
+* **Payload contract** — `wake_event` stores no inline payload in A2. Trigger adapters must redact/store payloads separately and set `payload_ref` to an opaque local path under `backend/data/wake_events/` or a future blob key. There is no payload fetch endpoint in A2.
+* **Status enums** — `continuous_agent.status`: `active`, `paused`, `disabled`, `error`; `continuous_subscription.status`: `active`, `paused`, `disabled`, `error`; `wake_event.status`: `pending`, `claimed`, `processed`, `filtered`, `failed`; `continuous_run.status`: `queued`, `running`, `succeeded`, `failed`, `cancelled`, `skipped`; `delivery_policy.importance_threshold`: `low`, `normal`, `high`; `budget_policy.on_exhaustion`: `pause`, `degrade_to_hybrid`, `notify_only`; `continuous_agent.execution_mode`: `autonomous`, `hybrid`, `notify_only`.
+* **Routing rules** — channel routing rules use the generic route shape `/api/channels/{channel_type}/{instance_id}/routing-rules` with list/create/get/update/delete for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). The plan's Slack example maps directly to `POST /api/channels/slack/{id}/routing-rules`. The API validates both channel instance ownership and target-agent ownership before writes. Trigger details remain per-type APIs such as `/api/triggers/email` and `/api/triggers/webhook` in A2.
+* **Budget/Sentinel/Watcher hooks** — `ContinuousBudgetLimiter` extends the shared sliding-window limiter with a `budget_kind` dimension and returns `pause`, `degrade_to_hybrid`, or `notify_only` decisions. Gmail send/reply/draft checks Sentinel's `continuous_agent_action_approval` detection only when an explicit continuous-agent context is present. `WatcherActivityService` now emits `type=continuous_run`, `run_type=continuous` events for later UI badging.
+
+### 2.9 v0.7.0 Wave 3A Track C/F checkpoint
+
+Wave 3A connects the stable A2 read contracts to UI surfaces and lands the first real Track F agentic-loop core without enabling broad write-side continuous-agent workflows yet.
+
+* **Track F migrations** — Alembic `0049` adds `conversation_thread.agentic_scratchpad` and the five `agent_skill` tool-result toggles: `auto_inject_results`, `skip_ai_on_data_fetch`, `max_result_bytes`, `max_results_retained`, and `max_turns_lookback`. Alembic `0057` adds `Config.platform_min_agentic_rounds` / `platform_max_agentic_rounds`; Alembic `0058` adds `Agent.max_agentic_rounds` and `max_agentic_loop_bytes`. The default `max_agentic_rounds` is `1` to preserve single-shot behavior unless a caller opts into additional rounds.
+* **Structured DATA reuse** — tool results can be retained in thread scratchpad form, bounded by per-skill byte/count/lookback controls, and injected into follow-up prompts as structured DATA. The follow-up detector recognizes common English and Portuguese references while fresh-fetch phrases still force a new tool call.
+* **API v1 scratchpad contract** — async queue polling returns a top-level `agentic_scratchpad` only when `GET /api/v1/queue/{queue_id}?include_scratchpad=true` is used. Nested `result.agentic_scratchpad` is redacted regardless of the flag so older clients do not accidentally receive internal loop traces.
+* **Movl follow-up behavior** — the Gmail follow-up path now answers from the prior structured DATA block when the user asks a referential question such as which prior email is most important. The second turn records no fresh Gmail tool call and preserves the prior scratchpad.
+* **Multilingual follow-up coverage (BUG-706)** — `FOLLOWUP_PATTERNS` covers English interrogatives (`what`, `which`, `who`, `whom`, `whose`, `where`, `when`, `why`, `how`), pronoun phrasings (`that one`, `the first/last/previous one`, `the one (that|which|with)`), Portuguese/Spanish interrogatives (`o que`, `quem`, `onde`, `quando`, `por que`, `como`, `qual`), and PT demonstratives (`esse`, `essa`, `aquele`, etc.). Fresh-fetch phrases (`latest`, `recent`, `novos`, `buscar de novo`) still win and force a new tool call.
+* **Scratchpad preservation on no-tool turns (BUG-707)** — `process_message()` emits `tool_was_called` alongside `agentic_scratchpad`. Both `agent/router.py` (WhatsApp) and `services/playground_service.py` only persist the scratchpad to `conversation_thread.agentic_scratchpad` when a tool actually fired this turn (`tool_was_called or tool_used`). A follow-up answered purely from prior DATA no longer wipes the trace, so the next follow-up still has the original tool result available without re-fetching.
+* **Per-agent agentic-loop API surface (BUG-710)** — `AgentCreate` and `AgentUpdate` Pydantic models declare `max_agentic_rounds` (1-8) and `max_agentic_loop_bytes` (512-131072). `PUT /api/agents/{id}` round-trips both fields, the explicit `UPDATABLE_AGENT_FIELDS` allowlist accepts them, and `AgentResponse` exposes them so the Studio Advanced tab can read current values via `GET /api/agents/{id}`.
+* **Studio Advanced tab + Platform AI bounds UI (BUG-716)** — `frontend/components/AgentAdvancedManager.tsx` adds an "Advanced" tab to `/agents/[id]` with a `max_agentic_rounds` slider+number input clamped to `platform_min_agentic_rounds`/`platform_max_agentic_rounds` and a `max_agentic_loop_bytes` number input. `frontend/app/settings/ai-configuration/page.tsx` (System Admin → Platform AI redirect target) adds a "Platform AI — Agentic Loop Bounds" card with min/max number inputs that save through `PUT /api/config`.
+* **Track C read-only pages** — `/continuous-agents`, `/continuous-agents/{id}`, `/wake-events`, `/hub/triggers/email/{id}`, and `/hub/triggers/webhook/{id}` read from existing A2/trigger APIs. Wake-event UI displays payload references and does not expose inline payload JSON.
+* **Hub routing rules** — Hub > Channels exposes routing-rule management only for conversational channels (`whatsapp`, `telegram`, `slack`, `discord`). Email and webhook remain trigger-detail surfaces, not channel routing-rule surfaces.
+* **Watcher and onboarding** — Watcher activity accepts `type=continuous_run`, and the onboarding tour points monitoring to Watcher while trigger configuration lives under Hub > Triggers.
+
+### 2.10 v0.7.0 Track B Trigger Dispatch Foundation
+
+Track B starts with a no-migration dispatch foundation before Jira and GitHub adapter tables are introduced.
+
+* **Shared dispatch contract** — trigger adapters normalize events into a common dispatch input with `trigger_type`, `instance_id`, `event_type`, `dedupe_key`, `occurred_at`, payload, importance, and optional sender/source metadata. `TriggerEvent.event_type` is explicit while `trigger_type` remains available for existing trigger contracts.
+* **Tenant authority** — dispatch always resolves the tenant from persisted trigger instance rows such as `webhook_integration` or `email_channel_instance`. External payloads never provide tenant authority, and cross-tenant instance or agent references fail closed.
+* **Dedupe ledger** — dispatch records accepted outcomes in `channel_event_dedupe`. A duplicate unique key returns deterministic duplicate behavior without creating a second wake event.
+* **Wake evidence** — matching active `continuous_subscription` rows produce `wake_event` rows and queued `continuous_run` rows. Wake payload content stays out of row; dispatch stores a redacted JSON payload under `backend/data/wake_events/` and exposes only `payload_ref`.
+* **Webhook compatibility** — signed webhook inbound requests keep returning `202` with `{status, queue_id, poll_url}` for the existing direct queue-to-agent path. The dispatch foundation can dual-write wake/run evidence for continuous-agent subscribers without replacing the direct queue behavior.
+* **Breadth handoff** — the dispatch foundation is now consumed by Jira, GitHub, and Webhook criteria in Track B breadth. `continuous_task` queue dispatch remains reserved until intentionally implemented.
+
+### 2.11 v0.7.0 Track B Trigger Breadth
+
+Track B breadth turns the dispatch foundation into user-facing trigger adapter rows and Hub UI. It establishes the Jira/GitHub/Webhook CRUD contracts, criteria surfaces, and normalization tests; live Jira polling plus Flow-owned notification output are finalized in the release sign-off slice described below.
+
+* **Migrations** — `0052_add_jira_trigger_and_webhook_criteria.py` revises `0058`, and `0054_add_github_trigger_instance.py` introduces GitHub trigger rows. The later 070fix sweep removes trigger-owned scheduling tables.
+* **Trigger rows** — `JiraChannelInstance` and `GitHubChannelInstance` store tenant-scoped source config, linked Hub integration references, encrypted secrets where applicable, default-agent references, health snapshots, cursors, and active/paused state.
+* **Webhook criteria** — Webhook trigger rows now carry optional `trigger_criteria`. JSONPath matchers are evaluated before subscription matching; failed criteria write `filtered_out` dedupe evidence and do not create wake/run rows.
+* **Runtime adapters** — Jira has the persisted trigger row, JQL test-query, linked-integration credential handling, and issue normalization contract; GitHub validates `X-Hub-Signature-256` deliveries before dispatching through `TriggerDispatchService`; Webhook criteria can filter signed inbound payloads.
+* **Hub UI** — Hub > Triggers supports Email, Webhook, Jira, and GitHub trigger setup. Trigger detail pages live at `/hub/triggers/{type}/{id}` with criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
+
+### 2.11.1 v0.7.0 Jira Trigger Finalization
+
+The final Jira release contract completes the gap left by Track B breadth: Jira triggers are not just saved and tested in the UI; active rows are polled against Jira Cloud JQL on their configured interval, matching issues are dispatched through `TriggerDispatchService`, and duplicates are suppressed so the same issue creates at most one wake/run.
+
+* **Placement** — Jira credentials are configured under Hub > Tool APIs as tenant-owned Jira connections; Jira trigger rows remain under Hub > Triggers because Jira is an event trigger, not a conversational channel. WhatsApp can still be used by Flow Notification steps.
+* **Credentials** — Jira site URL, auth email, and API token are captured through the Hub → Tool APIs Jira connection flow. Tokens are stored encrypted and API reads return only a masked preview. Documentation, QA artifacts, browser traces, and logs must not include plaintext Jira tokens.
+* **Polling and dedupe** — the poll loop fetches matching JQL results, normalizes issue payloads, dispatches wake evidence, updates cursor/activity state, and records a deterministic dedupe key per issue so repeated polls and later ticket updates do not double-fire.
+* **Flow-owned notification output** — Jira issue events can notify through a system-managed Flow Notification node. The trigger detail surface links to the wired Flow instead of carrying a legacy notification card.
+* **Validation evidence** — release QA includes targeted backend coverage for live Jira polling and once-per-issue dedupe, tenant/credential safety checks, notifier success and failure paths, browser coverage for Hub Jira setup/detail plus wake-event evidence, and a live poll-now duplicate-suppression smoke.
+
+### 2.12 v0.7.0 Phase 3 Email Trigger/Triage Checkpoint
+
+Phase 3 now has a runtime checkpoint plus live exit-gate evidence on the release branch. Live Gmail evidence is scoped to the allowed fixture accounts `mv@archsec.io` and `movl2007@gmail.com`; the current committed fixture uses `mv@archsec.io`.
+
+* **Gmail outbound** — `GmailService`, `EmailCommandService`, and `gmail_skill` support send/reply/draft operations with fail-closed scope checks. Send/reply accept Gmail send-compatible scopes; draft creation requires `gmail.compose`, `gmail.modify`, or `mail.google.com/`.
+* **Email trigger control plane** — `EmailChannelInstance` and `/api/triggers/email` CRUD persist Gmail-backed trigger rows with search query, shared trigger criteria, poll interval, active/paused state, and default-agent routing.
+* **Runtime polling** — `backend/channels/email/trigger.py` polls active Gmail-backed Email triggers, fetches message deltas through Gmail list/search APIs, normalizes payloads, advances a stable cursor, rejects missing/foreign/inactive Gmail integrations, and dispatches wake events through `TriggerDispatchService`.
+* **Triage and Flow output actions** — `POST /api/triggers/email/{id}/triage-subscription` creates/reuses a system-owned continuous agent/subscription for draft-based triage. Notification output is configured through the generated or wired Flow's Notification node, not through an Email-trigger-local card. Both actions consume the same `email.message.received` wake evidence.
+* **MemGuard hook** — trigger dispatch now runs a Sentinel-config-gated heuristic pre-check over redacted payload text. Matches record the dedupe outcome as `blocked_by_security` and emit no wake event or continuous run.
+* **Hub UI** — the Email trigger setup/detail flow includes source matching, persisted criteria JSON, saved query tests with sample messages, manual poll-now, recent wake events, Flow output links, and managed triage setup. The unified trigger creation wizard is intentionally self-contained across Email, Webhook, Jira, and GitHub: selecting a trigger type reveals prerequisites, criteria options, required setup rows, optional dependencies, and after-save actions before the user saves. The triage card also explains that triage creates reviewable Gmail drafts instead of sending, shows a readiness checklist for default-agent routing, Gmail account verification, `gmail.compose` draft permission, and `hub.write` access, and links operators directly to the missing setup action.
+* **Evidence** — see `docs/qa/v0.7.0/phase-3-email-trigger-triage-summary.md` for the exit evidence and remaining risks. The opt-in live proof is `backend/tests/test_email_trigger_phase3_live_gate.py`; it remains skipped by default and, when enabled, proves live poll/dedupe, one wake/run, managed draft creation, and Sentinel/MemGuard block behavior.
+
+### 2.13.1 v0.7.0 RC sweep — Continuous-Agent CRUD, Analytics, Gmail compose
+
+* **Continuous-agent write surface (WS-1)** — `POST /api/continuous-agents`, `PATCH /api/continuous-agents/{id}`, `DELETE /api/continuous-agents/{id}` (with `?force=true` to filter pending wake events), plus nested `GET/POST/PATCH/DELETE /api/continuous-agents/{id}/subscriptions[/{sub_id}]`. New permission scope `agents.write`. System-owned rows reject delete and `status="disabled"` on PATCH. Creation refuses cross-tenant `agent_id`/policy IDs; subscription creation validates `(channel_type, channel_instance_id)` against the appropriate channel-instance table and enforces `(continuous_agent_id, channel_type, channel_instance_id, event_type)` uniqueness. Deletion explicitly removes child subscriptions before deleting the parent (belt-and-suspenders for the SQLAlchemy ORM cascade).
+* **Continuous-agent UI (WS-1)** — `/continuous-agents` lists agents with create/edit/delete affordances. Single-step setup modal mirrors `TriggerSetupModal`. Detail page renders `SubscriptionEditor` (add/pause/resume/delete) plus header edit/delete actions. The previous read-only banner is removed.
+* **Analytics dashboard (WS-2)** — `/settings/analytics` (permission `analytics.read`) renders summary KPIs (tokens, estimated cost, requests), a daily trend area chart, per-operation/per-model breakdown bar charts, a per-agent table with inline drill-down to skill/model breakdowns, and a recent-transactions table. Date range picker translates preset choices into the backend's `days` query parameter (1–365). Uses `recharts` (already a frontend dependency).
+* **Gmail compose scope (WS-3)** — `gmail.compose` now ships in `DEFAULT_SCOPES["gmail"]` so new connections grant draft creation immediately. Existing connections lazy-upgrade: a draft action raises a typed `InsufficientScopesError` carrying `missing_scopes`. The Gmail integration card in the Hub shows an amber pill "Drafts require gmail.compose" plus a "Reconnect for drafts" button when `can_draft === false`. The hub `IntegrationResponse` exposes new optional `can_send` / `can_draft` flags computed from the granted OAuth scope string.
+
+### 2.13 v0.7.0 Phase 8 UI polish and control-plane UX
+
+Phase 8 finishes the v0.7.0 trigger/control-plane UX pass and keeps user guidance aligned with the channel-vs-trigger split.
+
+* **Trigger criteria registry** — Email, Webhook, Jira, and GitHub trigger setup/detail surfaces use trigger-aware helper controls while preserving raw JSON editing. Webhook keeps the JSONPath payload tester on the detail page.
+* **Wake-event API/UI** — `GET /api/wake-events` accepts `occurred_after` and `occurred_before` alongside existing `status`, `channel_type`, and `channel_instance_id` filters. `GET /api/wake-events/{id}/payload` returns only the already-redacted payload behind `payload_ref`, with tenant ownership and safe-path validation. Watcher > Wake Events adds date filters, selectable rows, and a payload/cause drawer.
+* **Routing-rule reorder** — `POST /api/channels/{channel_type}/{instance_id}/routing-rules/reorder` accepts `{ "rule_ids": [...] }`, validates every rule belongs to the current tenant/channel/instance, and returns the refreshed rule page. Hub > Channels exposes modal create/edit/delete plus reorder controls for conversational channels only.
+* **Watcher wake polish** — continuous-agent detail/read-only watcher views show wake-event causes, subscription badges, and failure colors for trigger-origin runs.
+* **Wizard retrofit** — Slack, Discord, WhatsApp, and MCP setup flows now share the common `<Wizard>` shell without changing their backend create/test contracts.
+* **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` remains at `TOTAL_STEPS = 16`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and routes trigger configuration to Hub > Triggers while routing monitoring to Watcher.
+* **Webhook deprecation** — v0.7.0 intentionally has no Webhook deprecation banner/header path; Webhook moved directly to the Trigger catalog and Hub Triggers UI.
+* **Kokoro successor path** — legacy `/api/services/kokoro/{start,stop,status}` callers receive HTTP 410 and a `Link: </api/tts-instances>; rel="successor-version"` successor header. Hub copy points users to per-tenant Kokoro instances rather than the removed stack-level compose service.
+* **Phase 3 docs reconciliation** — Phase 3.1 docs now distinguish the completed Gmail send/reply/draft and Email poll/triage/MemGuard live gates from the remaining optional API-agent proof and Ubuntu fresh-install sudo handoff.
+* **Evidence** — see `docs/qa/v0.7.0/phase-8-ui-polish-summary.md`. Fresh-install Ubuntu VM validation remains a Phase 9 blocker until sudo access is available.
+
+### 2.19 v0.7.0-fix sweep (post-tag UX + structural cleanup, 2026-04-28)
+
+After v0.7.0 shipped, an audit on the running instance surfaced structural UX issues — monitoring pages leaking into Hub, hidden Continuous Agents, per-trigger credentials still in the schema, and trigger-owned scheduling that duplicated `FlowDefinition.execution_method='scheduled'`. The user's complaint document is `.private/070fix.md`; the executor's working plan is `.private/070fix_plan.md`. Fourteen commits on `release/0.7.0` deliver the fix.
+
+* **Hub/Watcher restructure** ([`8dc1880`](https://github.com/iamveene/Tsushin/commit/8dc1880)) — Wake Events moved under Watcher at `/wake-events`; the old Hub route remains only as a compatibility redirect. Watcher landing now keeps Wake Events + Continuous Agents in the same in-page tab strip, while the standalone URLs remain available for deep links. Hub is split into **Channels** (WhatsApp/Telegram/Slack/Discord/Playground) and **Triggers** (Email/Webhook/Jira/GitHub); legacy communication-tab URLs coerce to Channels.
+* **Trigger-owned scheduling removed entirely** ([`b587755`](https://github.com/iamveene/Tsushin/commit/b587755)) — alembic 0071 drops the old scheduling table. Routes, runtime channel module, frontend pages, visual picker, tests — all deleted. Cron utilities preserved as `backend/services/cron_preview_service.py` for Flow scheduled-kind reuse. `TriggerKind` reduced to `email | webhook | jira | github`.
+* **GitHub trigger linkage forced** ([`49ee2f3`](https://github.com/iamveene/Tsushin/commit/49ee2f3)) — alembic 0072 adds `github_channel_instance.github_integration_id` (NOT NULL, ON DELETE RESTRICT) and drops `auth_method`/`installation_id`/`pat_token_encrypted`/`pat_token_preview`. The `/test-connection` endpoints (unsaved + saved) are deleted; connectivity is verified at integration creation. The wizard requires a Hub GitHub integration before the user can proceed.
+* **Jira tightened + legacy notification card retired** ([`0b8f92c`](https://github.com/iamveene/Tsushin/commit/0b8f92c)) — `JiraTriggerCreate.jira_integration_id` is required; `auth_email`/`api_token`/`site_url` no longer accepted on the API (Site URL is read from the linked integration). Legacy notification fields are stripped from `JiraTriggerRead` and `EmailTriggerRead`; output config now lives on the auto-flow's Notification node.
+* **Continuous Agents revamp** ([`c7a04a3`](https://github.com/iamveene/Tsushin/commit/c7a04a3)) — alembic 0073 adds `ContinuousAgent.purpose` (Text) and `ContinuousAgent.action_kind` (`tool_run | send_message | conditional_branch | react_only`). API requires both on create (`purpose ≥ 30 chars`). Frontend `ApiError` class enriched with `status` + structured `detail` + `code` so callers branch on `error.code === 'agent_has_pending_wake_events'` instead of regex-matching the human-readable message — closes the user's "Conflict: This resource already exists or cannot be modified" complaint with a "N pending events. Force-delete?" prompt that uses `?force=true`. The Setup modal exposes Purpose textarea + Action kind grid with one-line explainers.
+* **Agent vs Flow explainer** ([`e28e87c`](https://github.com/iamveene/Tsushin/commit/e28e87c)) — `frontend/lib/copy/agent-vs-flow-explainer.tsx` remains on the Continuous Agent setup surface, but is no longer rendered inside Flow creation. Flow creation offers immediate / scheduled / recurring / keyword / triggered methods. Triggered creation selects an existing Hub trigger (Email/Gmail, Jira, GitHub, or Webhook), then wires the locked Source step and `flow_trigger_binding` row together.
+* **UI consistency pass — 11 items** ([`47696ff`](https://github.com/iamveene/Tsushin/commit/47696ff)) — addresses the user's "UI needs consistency" feedback. (1) `bg-tsushin-bg` ghost token swapped to `bg-tsushin-ink` (8 white-input dark-mode glitches gone). (2) Per-section "+ Create X Trigger" buttons retired; single top-of-tab `+ Add Trigger` is the only entry. (3) Meta "Triggers inside Triggers" sub-section dropped. (4) Trigger render order unified to Email→Webhook→Jira→GitHub on both Hub tab and `/hub/triggers` registry. (5) Productivity `+ Add Gmail Account` swapped from red (Disconnect color) to teal. (6) Watcher's two boxed nav strips folded into one 10-tab strip. (7) `/hub/triggers` registry gained `+ Add Trigger`. (8) Hub > Developer Tools gained centralized `+ Add GitHub Integration` (it was the only Hub tab missing one). (9) Hub stat strip dropped (it ignored 5 of 8 tabs and the "Webhooks" count was misleading on Triggers). (10) Continuous Agents row buttons unified — `View detail`/`Edit`/`Delete` all bordered. (11) Wake Events filter rows gained `Status:` / `Kind:` labels.
+* **Wizard manifest API** ([`3538225`](https://github.com/iamveene/Tsushin/commit/3538225)) — `GET /api/wizards/manifests` returns the 5-entry wizard registry (productivity / channels / triggers / tool-apis / provider) with `id` + `label` + `component_path` + `catalog_endpoint` + `catalog_module` + `dispatches_to` + optional `integration_required`. Lifts the existing `frontend/lib/wizard-registry.ts` server-side so external SDKs can discover wizards over HTTP.
+* **Studio kind selector** ([`3343071`](https://github.com/iamveene/Tsushin/commit/3343071)) — Studio Create New Agent modal gains a Wake mode 2-card picker (Conversational vs Continuous) with one-line explainers. Picking Continuous + Save handoffs to `/continuous-agents?new=1&agent_id=N` which auto-opens the Continuous Agent setup modal so the user lands directly on the purpose / action_kind step.
+* **Notification service deprecation** ([`4a8761e`](https://github.com/iamveene/Tsushin/commit/4a8761e)) — `services/{jira,email}_notification_service.py` carry `DeprecationWarning` + module docstrings documenting the retirement plan. Product guidance now points operators to Flow Notification nodes; final deletion remains gated on E2E WhatsApp regression coverage for migrated tenants.
+* **GitHub integration-linkage test re-enable + latent bug fix** ([pending commit]) — `backend/tests/test_routes_github_triggers.py` was rewritten against the new `github_integration_id` FK shape after Phase 3 removed trigger-local credential columns and trigger-level connection-check endpoints. A Hub `GitHubIntegration` is seeded first, the trigger is created with `github_integration_id`, and the suite gains a cross-tenant integration rejection test plus a re-link-integration update test (8 tests, all green). Fixed a latent attribute bug discovered during the rewrite: `routes_github_triggers._integration_name` was querying `GitHubIntegration.integration_name`, but `GitHubIntegration` inherits `name`/`display_name` from `HubIntegration` and has no `integration_name` column. The query would `AttributeError` on the first GET against any persisted GitHub trigger row. Replaced with `display_name or name` to match the Jira pattern at `routes_jira_triggers.py:332`.
+
+### 2.18 v0.7.0 Triggers↔Flows Unification — Wave 5 (backfill migration + webhook payload capture + final polish)
+
+Fifth and final merge wave of the cross-cutting Triggers↔Flows Unification. Lands the data backfill migration, webhook payload capture write-through, ops scripts, and the SourceStepConfig autocomplete completion.
+
+* **Alembic 0069 backfill migration** (`backend/alembic/versions/0069_backfill_managed_notifications.py`) — historical migration that converted old system-owned notification subscriptions into equivalent system-managed `FlowDefinition` rows (Source / Gate / Conversation / Notification) plus `flow_trigger_binding`. v0.7.0-fix cleanup disables the retired subscription path; notification delivery now belongs to the Flow Notification node.
+* **Webhook payload capture write-through** — `backend/api/routes_webhook_inbound.py` now inserts a `WebhookPayloadCapture` row right before dispatching to the trigger service. Payload truncated to ~64KB, headers redacted (auth/cookie/X-Tsushin-Signature stripped) and capped at ~8KB. After insert, the table is pruned to keep only the 5 most recent rows per `(tenant, webhook_id)`. Best-effort — failure NEVER aborts dispatch.
+* **`GET /api/webhook-integrations/{id}/payload-captures`** — permission-gated on `integrations.webhook.read`. Returns the last 5 captures sorted desc by `captured_at`. Consumed by the Flow editor's SourceStepConfig autocomplete.
+* **Reconcile script** (`backend/scripts/reconcile_system_flows.py`) — sweeper that walks every existing Email/Webhook/Jira/GitHub trigger and ensures each has a matching system-managed binding via `ensure_system_managed_flow_for_trigger` (idempotent). Run it after a deploy where Wave 4's auto-gen gate was off when triggers were created, or to rebuild bindings after a manual deletion.
+* **Rollback script** (`backend/scripts/rollback_managed_flow_backfill.py`) — surgical undo for the 0069 backfill. Deletes only flows whose `initiator_metadata.reason='wave5_backfill'` and their CASCADEd nodes + bindings. The original ContinuousAgent + ContinuousSubscription rows are NEVER touched (the backfill migration runs in parallel mode by default and never deletes them). Re-running is a no-op.
+* **SourceStepConfig autocomplete completion** — webhook branch in `frontend/components/flows/SourceStepConfig.tsx` finished. With captures present: auto-expands the most-recent capture, renders a chip panel of inferred JSON paths via recursive descent (max depth 4, max 50 paths, array indices collapsed so `items[0].name` becomes `items.name`), each chip click copies `{{source.payload.<path>}}` to the clipboard with a toast; below the chips: the full list of 5 captures, each row showing `#id · relative-time · dedupe_key`, expandable to a pretty-printed JSON pre block. Without captures: keeps the existing "Send a test event" copy plus a "How to test" toggle that shows the inbound URL + secret preview + a copy-pasteable curl example. Non-webhook kinds unchanged (still uses `getWakeEvents` + `getWakeEventPayload`).
+
+This wraps the 5-wave Triggers↔Flows Unification. The entire B+C+A scope ships on 0.7.0 as the user originally directed; three env-var gates (`TSN_FLOWS_TRIGGER_BINDING_ENABLED`, `TSN_FLOWS_AUTO_GENERATION_ENABLED`, `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY`) all default-off so the release ships byte-identical to 0.6.x; operators flip them per tenant in staging then production. The deployment ladder lives in the release runbook (still to be authored as `.private/0.7.0_RELEASE_RUNBOOK.md`).
+
+### 2.17 v0.7.0 Triggers↔Flows Unification — Wave 4 (auto-Flow generation + Wired Flows + deep-link prefill)
+
+Fourth merge wave. Phase A's auto-Flow generation lands: every new trigger gets a system-managed FlowDefinition (Source → Gate → Conversation → Notification chain) plus a `flow_trigger_binding` row in the same transaction. Output configuration writes through to the auto-flow's Notification node. All gated by `TSN_FLOWS_AUTO_GENERATION_ENABLED` (default OFF).
+
+* **`ensure_system_managed_flow_for_trigger`** — `backend/services/flow_binding_service.py`. Idempotent. Builds a 4-step flow: Source(position 1, `{trigger_kind, trigger_instance_id}` config), Gate(programmatic, empty rules — pass-all because trigger criteria is canonical), Conversation(bound to the trigger's `default_agent_id`, with a kind-specific objective string), Notification(disabled until configured). Flow flags: `is_system_owned=True`, `editable_by_tenant=True`, `deletable_by_tenant=False` (the auto-flow lives and dies with the trigger).
+* **`update_auto_flow_notification`** — write-through helper. Locates the system-managed auto-flow, finds its Notification node, flips `enabled=true`, and writes the recipient on the Flow node. The legacy ContinuousAgent + ContinuousSubscription path is deprecated and kept only as parallel-run safety until suppress-default bindings take over.
+* **`/api/flow-trigger-bindings` CRUD** — full REST surface in `backend/api/routes_flow_trigger_bindings.py`. List filters: `trigger_kind`, `trigger_id`, `flow_id`, `is_active`. Create returns 409 on duplicate (flow + kind + instance). Patch toggles `is_active` and `suppress_default_agent`. Delete returns 403 on system-managed bindings (those are cleaned up by `flow_binding_service.delete_bindings_for_trigger` when the underlying trigger is deleted). Read responses join flow name + last run status + last run timestamp for the WiredFlowsCard UX.
+* **`list_flows` filter** — `bound_trigger_kind` + `bound_trigger_id` query params on `GET /api/flows` join through `flow_trigger_binding` so the trigger detail page's WiredFlowsCard can ask "which flows are wired to *this* trigger?" with one round-trip.
+* **Pydantic schema gaps closed** — three additions to `backend/schemas.py` that were each surfaced by Wave 4 QA as silent 422s on `POST /api/flows/create`: `ExecutionMethod.TRIGGERED`, `StepType.SOURCE`, and `FlowStepConfig.{trigger_kind, trigger_instance_id}`. Wave 2 had added `triggered` to the legacy `VALID_EXECUTION_METHODS` set used by the BUG-342 path but the Pydantic enum used by the V2 endpoint was missed.
+* **`WiredFlowsCard`** — `frontend/components/triggers/sections/WiredFlowsCard.tsx`. Header + helper text + "+ Create flow from this trigger" CTA that deep-links to `/flows?source_trigger_kind={kind}&source_trigger_id={id}`; per-row flow link, last-run pill, system-managed badge, "Suppress default agent" toggle (calls `PATCH /api/flow-trigger-bindings/{id}`), Unbind action with `confirm()`. System-managed bindings cannot be unbound from the UI (matches the 403 protection). Permission-gated on `flows.read` / `flows.write`. Empty state with the CTA. Lives in `OutputsSection` for trigger kinds so GitHub and Webhook have a usable affordance for wiring custom flows.
+* **`SourceStepConfig`** — `frontend/components/flows/SourceStepConfig.tsx`. Replaces the Wave 2 placeholder. Read-only summary of the bound trigger (kind icon + integration name + "Edit trigger" deep-link to `/hub/triggers/{kind}/{id}`), expandable "Last sample payload" pane fetching the most recent WakeEvent for the trigger via `getWakeEvents` + `getWakeEventPayload` (webhook falls back to "Send a test event to populate samples" until Wave 5 ships `getWebhookPayloadCaptures`), variable hint section with the 5 documented `{{source.*}}` references. Wired into both `StepConfigForm` and `EditableStepConfigForm`.
+* **Suppress-default banner** — JiraManagedNotificationCard and EmailManagedNotificationCard accept a `suppressedByBinding` prop. When at least one active binding for the trigger has `suppress_default_agent=true`, the card renders an amber banner "Disabled — output is handled by Flow #N ({flow_name})" with a Link to the bound flow, and the Enable button + phone input become disabled with the tooltip "Bound flow has taken over routing for this trigger."
+* **Deep-link prefill** — `frontend/app/flows/page.tsx` reads `?source_trigger_kind={kind}&source_trigger_id={id}` via `useSearchParams`, fetches the trigger name, auto-opens the Create modal with `execution_method='triggered'`, name pre-filled as `"Kind: <integration_name>"`, and a Source step at position 1 with `config={trigger_kind, trigger_instance_id}`. On successful flow create, atomically calls `POST /api/flow-trigger-bindings` to wire the binding (binding failure surfaces a toast but doesn't fail the modal). Both `?source_trigger_*` and `?edit={flow_id}` query params strip themselves after consumption so back/forward + refresh don't replay them.
+* **`STEP_OUTPUT_FIELDS.source`** — `frontend/lib/stepOutputVariables.ts`. Adds the `source` namespace with 7 variables (`payload`, `trigger_kind`, `instance_id`, `event_type`, `dedupe_key`, `occurred_at`, `wake_event_id`) so downstream steps' Insert Variable dropdown shows `{{source.*}}` when the flow has a Source step.
+
+### 2.16 v0.7.0 Triggers↔Flows Unification — Wave 3 (dispatch fork + email/webhook fork retirement)
+
+Third merge wave. Lands the additive dispatch fork in `TriggerDispatchService` and the full retirement of the email + webhook standalone trigger detail pages into the shared shell.
+
+* **Dispatch fork** — `backend/services/trigger_dispatch_service.py` now reads `flow_trigger_binding` rows for the (kind, instance_id) of every wake event and enqueues one `flow_run_triggered` MessageQueue item per active binding alongside the existing ContinuousRun enqueue. The wake payload is nested under `trigger_context["source"]` so the Wave 2 `SourceStepHandler` exposes `{{source.payload.*}}` / `{{source.trigger_kind}}` / `{{source.event_type}}` / `{{source.dedupe_key}}` / `{{source.occurred_at}}` / `{{source.wake_event_id}}` to every downstream step. The fan-out happens after the existing ContinuousRun enqueue, never aborts dispatch on errors, and uses a single payload read (`_read_payload_ref`) shared across all bindings to keep webhook reply latency below 100ms p99 even with 10 bindings.
+* **Suppress-default-agent semantics** — when ANY active binding for the (kind, instance) has `suppress_default_agent=True`, the dispatcher drops the matching subscriptions list before creating any ContinuousRun. The bound flow takes over fully — no legacy notify_only WhatsApp send, no duplicate. Gated by `TSN_FLOWS_TRIGGER_BINDING_ENABLED` env var (default OFF).
+* **`flow_binding_service.py`** (new) — five helpers used by the dispatcher and by Wave 4's auto-Flow generation: `list_active_bindings_for_trigger`, `has_active_suppress_default_binding`, `list_bindings_for_flow`, `delete_bindings_for_trigger` (the latter called by per-kind trigger DELETE handlers in Wave 4 because `trigger_instance_id` is a semantic FK that can't CASCADE; also tears down system-managed FlowDefinitions whose only binding pointed at the deleted trigger), `find_source_node_id` (used when a binding write doesn't supply `source_node_id` — the helper finds the one Source node in the bound flow).
+* **`QueueRouter._dispatch_flow_run_triggered`** — new handler in `backend/services/queue_router.py`. Reads `flow_definition_id` + `binding_id` + `trigger_event_id` + `trigger_context` + `tenant_id` from the queue payload and calls `FlowEngine.run_flow(...)` with the Wave 2 `trigger_event_id` + `binding_id` correlation params. Returns the FlowRun status + ID. Failures are logged with a dedicated `flow_run_triggered dispatch failed` line but never bubble — the legacy ContinuousRun path is the source of truth for backward compatibility.
+* **TriggerDetailShell expanded across current trigger kinds** — `frontend/components/triggers/TriggerDetailShell.tsx` (738 → 1162 lines): `BreadthTriggerKind` and `BreadthTrigger` unions now include `email` and `webhook`; all kind-conditional branches (`updateActive`, `saveCriteria`, `deleteTrigger`, `sourceFromTrigger`, `KIND_CONFIG`) cover Email/Webhook/Jira/GitHub; email + webhook state and handlers (Gmail integration list, public ingress info, copy URL feedback, secret rotation, notification phone input, triage flag, poll loading, query testing) are lifted into the shell so the email and webhook detail pages can be 16-line wrappers around `<TriggerDetailShell kind="email|webhook" />`.
+* **New section subcomponents** — `frontend/components/triggers/sections/EmailSourceCard.tsx` (Inbox Binding card + Cadence and Health card — the previously-hidden saved Gmail search query is now visible on the overview tab), `EmailManagedNotificationCard.tsx` (4-cell DetailRow grid layout normalized to match Jira — closes the visual smell where Email and Jira used different layouts for the same concept), `EmailManagedTriageCard.tsx` (lifted with same disable conditions: no default agent, missing `gmail.compose`), `EmailManualPollCard.tsx` (parallel to Jira's because `EmailPollNowResponse` shape differs), `WebhookSourceCard.tsx` (full-width Inbound Endpoint with Copy + new Rotate Secret button + Security with secret preview / IP allowlist / max payload / rate limit + Callback URL).
+* **Email fork retired** — `frontend/app/hub/triggers/email/[id]/page.tsx`: 747 → 16 lines. Every functional capability of the standalone fork is preserved through the shared shell: enable notification (with phone validation + recipient clear after success), enable triage (gated by `default_agent` + `can_draft`), poll now (with full count summary), test query (Gmail sample messages with subject/sender/preview/Open link), save criteria (rebuilds `search_query` from source draft), pause/resume, delete. Gmail-scope red banner preserved between KPI strip and accent strip when `kind === 'email'`. Default agent inline edit (KPI Routing slot + Routing section) preserved.
+* **Webhook fork retired** — `frontend/app/hub/triggers/webhook/[id]/page.tsx`: 370 → 16 lines. Copy inbound URL (with 2s "Copied" toast) preserved. Public ingress warning text preserved. Webhook criteria test via `api.testWebhookCriteria` preserved. Save criteria preserved. Pause/resume + delete preserved. Circuit-breaker + rate-limit sub-pill row preserved between KPI strip and accent strip when `kind === 'webhook'`. IP allowlist pills, max payload, callback URL, last health check timestamp preserved.
+* **In-scope defects fixed during the refactor** (per the user's directive that pre-existing problems uncovered by current work must be fixed in the current wave, not punted):
+  - **Webhook secret rotation now reachable from the UI.** `api.rotateWebhookSecret` was implemented in `frontend/lib/client.ts` but had no UI affordance. The Security card on the unified webhook source view now exposes a Rotate Secret button with a confirm() prompt and a 12-second toast that displays the plaintext secret once.
+  - **Webhook status pill turns red when `circuit_breaker_state === 'open'`.** The shared shell's `statusClass` previously did not handle webhook (the standalone fork did). Now wired so an open circuit breaker produces a visual red status pill.
+  - **`EditFlowModal canWriteFlows is not defined`** — the variable was declared inside `FlowsPage` scope only, but `EditFlowModal` (separate component) referenced it at lines 4690-4696. The modal now derives `canWriteFlows` locally via its own `useAuth()` call. (Wave 1 fixed the registry-level bug; Wave 3 catches the remaining scope-level reference.)
+
+### 2.15 v0.7.0 Triggers↔Flows Unification — Wave 2 (Source step + flow protection + 3-section UI)
+
+Second merge wave. Lands the canonical `source` step type, the `triggered` execution method, the flow-protection enforcement, and the three-section refactor of the trigger detail Overview tab.
+
+* **`source` step type** (`backend/flows/flow_engine.py`) — new `SourceStepHandler` class registered alongside `TriggerNodeHandler`. Runtime behavior is a no-op: dispatch (Wave 3) injects the wake event payload + metadata under `trigger_context["source"]`, `_build_step_context` re-merges that at the context root, and downstream Conversation / Gate / Notification steps reference variables like `{{source.payload.issue.key}}` / `{{source.trigger_kind}}` / `{{source.event_type}}` / `{{source.dedupe_key}}` / `{{source.occurred_at}}` / `{{source.wake_event_id}}` directly. The handler also echoes the lightweight identifiers as its own `output_json` so authors who prefer the `{{step_1.trigger_kind}}` style work too.
+* **Position invariants enforced server-side** — `validate_flow_structure` rejects: (a) more than one Source step in a flow, (b) Source step at position ≠ 1, (c) flows with `execution_method='triggered'` that don't declare a Source step.
+* **`'triggered'` execution method** — added to `VALID_EXECUTION_METHODS` in `backend/api/routes_flows.py:874`. The Flow create UI exposes it as an execution method that first selects an existing Email/Gmail, Jira, GitHub, or Webhook Hub trigger, then writes both the Source-step config and `flow_trigger_binding`.
+* **Flow protection enforcement** — `editable_by_tenant` and `deletable_by_tenant` columns existed on `FlowDefinition` but were not honored by any API handler. Wave 2 adds `_ensure_flow_editable` / `_ensure_flow_deletable` helpers and wires them into all 5 mutation sites (`update_flow`, `patch_flow`, `delete_flow`, `update_step`, `delete_step`). System-owned flows that ship with `editable_by_tenant=False` (or `deletable_by_tenant=False`) now reject mutations with `403 System-owned flow is not editable/deletable by tenant`. This is what makes Phase A's auto-Flow protection real — without it any tenant admin could rip out the Notification node of an auto-flow and silently break the binding.
+* **Source-step delete protection** — `delete_step` blocks removal of any node with `type ∈ {'source', 'Source'}` with `400 Cannot delete the Source step. Delete the trigger binding or the entire flow instead.` `update_step` blocks changing a Source's type or moving it off position 1.
+* **`run_flow` correlation** — signature gains optional `trigger_event_id` (FK to `wake_event` for cross-system correlation) and `binding_id` (audit-only) params. When supplied, `trigger_event_id` is persisted on the new FlowRun row.
+* **Three-section Overview tab** (`frontend/components/triggers/TriggerDetailShell.tsx`) — replaces the old kind-mixed `renderSourceSummary` with `renderOverview` that emits exactly three sections in fixed order: **Source** (per-kind input grid), **Routing** (a single card with prose "Events go to {DefaultAgentChip} when no Flow is wired below."), **Outputs** (per-kind cards or empty state). Section headers + dividers between them. Routing card carries `id="routing-card"` for future scroll-targeting. The KPI Routing slot stays as-is for Wave 2 (the inline Routing card duplicates it; the optional KPI-mirror-scrolls-to-card polish is reserved for Wave 4).
+* **New components** — `SectionHeader`, `Divider`, `sections/SourceSection`, `sections/RoutingSection`, `sections/OutputsSection`, `sections/JiraManagedNotificationCard`, `sections/JiraManualPollCard`. Email and webhook detail pages remain on their standalone forks until Wave 3.
+* **Wording normalization** — section headers exactly "Source"/"Routing"/"Outputs"; the redundant "Agent" DetailRow inside the Notification card is removed (Routing is the canonical home for the default agent); empty-state copy templates standardized for "no managed outputs" and "notification not configured" cases.
+* **Source step in the Flow editor** (`frontend/app/flows/page.tsx`) — Source is a trigger-owned step. Trigger-prefilled drafts insert it at position 1 with `trigger_kind` / `trigger_instance_id`, pin it with a "Locked at top" pill, hide Move-up / Move-down / Delete controls, and keep downstream steps from moving above it. Manual create/edit palettes no longer offer Source, avoiding unwired source steps that cannot fire.
+* **Out of scope for Wave 2:** Email and webhook fork retirement (Wave 3), dispatch-side wiring of `flow_trigger_binding` lookups (Wave 3), auto-Flow generation on trigger create (Wave 4), backfill of existing system-owned ContinuousAgents into FlowDefinitions (Wave 5).
+* **API-side validation parity** — there are two `validate_flow_structure` implementations: a method on `FlowEngine` (`backend/flows/flow_engine.py`) and a free helper in `backend/api/routes_flows.py:251`. The Wave 2 source/triggered rules originally landed only on the FlowEngine method, but `POST /api/flows/{id}/execute` calls the free helper synchronously *before* the FlowRun reaches the engine. Wave 2 now mirrors the same source / triggered rules into the helper, so a flow with `execution_method='triggered'` and no source step rejects with `400 Invalid flow structure: Flow with execution_method='triggered' must declare a Source step at position 1` instead of 202-accepting and stalling in `pending`.
+
+### 2.14 v0.7.0 Triggers↔Flows Unification — Wave 1 (foundations)
+
+First merge wave of the cross-cutting Triggers↔Flows Unification (the brainstorm + ground-truth artifacts live at `.private/triggers-flows-unification-brainstorm-2026-04-26.md` and `.private/trigger-pages-visual-evidence-2026-04-26.md`). Wave 1 lands the schema + permissions + inline-edit Routing chip; behavior is byte-identical to 0.6.x until later waves flip the env-var gates.
+
+* **New schema (dormant in 0.7.0 Wave 1, active in Waves 3-5):**
+  * `flow_trigger_binding` (table, migration `0066`) — join between a Flow and one or more triggers (fan-in), the future home for the multi-source / suppress-default-agent UX. Tenant-scoped, with a SQLite `BEFORE INSERT/UPDATE` trigger that rejects cross-tenant rows. Cleanup on trigger delete is application-side because `trigger_instance_id` is a *semantic* FK across per-kind tables (jira/email/github/webhook).
+  * `flow_run.trigger_event_id` (column, migration `0067`) — FK to `wake_event` (ON DELETE SET NULL), so any FlowRun woken by a trigger can be traced back to the originating wake event. Partial unique index `uq_flow_run_per_event_per_flow` prevents retry-driven duplicate FlowRuns when the QueueRouter redelivers a `flow_run_triggered` MessageQueue item.
+  * `webhook_payload_capture` (table, migration `0068`) — last-N (default 5) inbound payloads per webhook integration. Wave 5 wires this into the Flow editor's `{{source.payload.*}}` autocomplete so flow authors get JSON-path suggestions inferred from real recent payloads.
+* **Three default-OFF env-var gates** (`backend/config/feature_flags.py`):
+  * `TSN_FLOWS_TRIGGER_BINDING_ENABLED` — Wave 3 dispatch fork: `TriggerDispatchService.dispatch` queries `flow_trigger_binding` and enqueues FlowRuns alongside ContinuousRuns.
+  * `TSN_FLOWS_AUTO_GENERATION_ENABLED` — Wave 4 auto-Flow per trigger and notification-toggle write-through onto the auto-flow's Notification node.
+  * `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY` — Wave 5 cutover: backfilled bindings flip `suppress_default_agent=true`, cutting the legacy ContinuousAgent path off so the bound Flow becomes the sole producer of WhatsApp notifications.
+  * Accepts `1`/`true`/`yes`/`on` (case-insensitive). All three default to `False` so dormant code can land progressively in `release/0.7.0` without changing behavior.
+* **Permission registry fix** — `frontend/lib/rbac/permissions.ts` now declares `HUB_*`, `FLOWS_*`, `TRIGGERS_*` keys and assigns them to the four seeded roles (`owner`/`admin`/`member`/`readonly`). Closes the `canWriteFlows is not defined` console crash on `/flows`. Backend `flows.*` permissions already existed in `db.py:146-149` — the bug was purely a frontend registry gap.
+* **Inline-edit Routing chip** — `frontend/components/triggers/DefaultAgentChip.tsx` (~250 lines). Click opens a search-filterable popover loaded via `api.getAgents(true)`, click selects, optimistic update + refetch-on-error, toast on success. Read-only badge with tooltip when the user lacks `hub.write`. Wired into the KPI strip 3rd slot of `TriggerDetailShell.tsx` and the email/webhook trigger pages.
+* **KPI strip standardization** — every trigger detail page shows `Status / Health / Routing / Last activity` in identical positions. Email's "Gmail Scope" relocates as a sub-pill in the existing red Gmail-send-access banner. Webhook's "Circuit breaker" + "Rate limit" become two small sub-pills directly under the KPI strip. Full 3-section Source/Routing/Outputs refactor + retirement of the email and webhook fork pages comes in Waves 2-3.
+* **`/hub/triggers` index page** — new `frontend/app/hub/triggers/page.tsx` closes the 404 + redirect-loop bug. Fans out parallel fetches to all 5 trigger list endpoints, renders a unified table with Kind / Name / Status / Default agent / Last activity columns plus kind/status/search filters. Permission-gated on `hub.read`.
+* **Out of scope for Wave 1:** the speculative `triggers.*` permission set + a separate `0070_seed_trigger_permissions` migration. Existing `hub.write` / `integrations.webhook.write` already gate trigger PATCH endpoints; adding parallel `triggers.*` permissions creates dual-gating ambiguity. Frontend chip uses `hub.write` as a coarse gate while APIs remain the source of truth for tenant and permission validation.
+* **Evidence (2026-04-26):** alembic `head=0068`, all 4 indexes present, feature flags load with default-False values, backend `/api/health` 200. QA report: 5/5 Playwright tests pass after a single `useEffect` deps-array fix on `DefaultAgentChip` (initial release had `loadingAgents` in both deps and the early-return guard, creating a feedback loop that left the popover stuck on "Loading agents..." — guard now uses `agents.length > 0` only). Round-trip PATCH `/api/triggers/jira/5` verified end-to-end with toast, chip update, and reload-persistence.
 
 ---
 
@@ -183,7 +534,7 @@ The installer supports four SSL modes, all served through Caddy. Let's Encrypt i
 | `letsencrypt` | Public-facing deployment with a real domain pointing at this server. Requires ports 80 and 443 reachable from the internet. | Caddy-managed in the `caddy-data` volume |
 | `manual` | You already have a cert issued by your own CA or a public CA. Supports an optional chain/intermediate bundle. | `caddy/<stack>/certs/{cert,key}.pem` |
 
-**Self-signed on IP-address hosts.** When the domain passed to the installer is an IPv4/IPv6 literal, the generated certificate's `subjectAltName` now uses the `IP:` entry type (`IP:10.211.55.5`). Emitting `DNS:10.211.55.5` is invalid per RFC 5280 and causes browsers to show `NET::ERR_CERT_COMMON_NAME_INVALID`. The Caddyfile's `default_sni` also falls back to `localhost` for IP installs because Caddy rejects IP literals as SNI values.
+**Self-signed on IP-address hosts.** When the domain passed to the installer is an IPv4/IPv6 literal, the generated certificate's `subjectAltName` now uses the `IP:` entry type (`IP:10.211.55.5`). Emitting `DNS:10.211.55.5` is invalid per RFC 5280 and causes browsers to show `NET::ERR_CERT_COMMON_NAME_INVALID`. The generated Caddyfile serves the installer-created `selfsigned.crt` / `selfsigned.key` directly when present, including on `:443` IP-literal sites, so bare-IP clients are not dependent on SNI-based internal certificate issuance.
 
 **Let's Encrypt pre-flight.** Before writing the Caddyfile, the installer (a) resolves the domain via DNS, (b) optionally fetches the server's public IP via `api.ipify.org` and compares it against the resolved IPs, and (c) performs a plain HTTP HEAD on port 80 (the ACME HTTP-01 challenge path). Mismatches and unreachable hosts surface as warnings — valid configurations behind Cloudflare proxy / CDN / NAT can still proceed.
 
@@ -224,7 +575,7 @@ The installer automatically:
 2. Creates the `tsushin-network` Docker bridge if absent.
 3. Generates `.env` with random `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `TSN_MASTER_KEY`.
 4. Sets `HOST_BACKEND_DATA_PATH` to the absolute host path of `backend/data` (required for Docker-in-Docker volume mounts).
-5. Builds backend + frontend images and starts the stack.
+5. Builds backend + frontend images and stack-scoped helper images, then starts the stack.
 6. (If SSL) Generates `caddy/<stack-name>/Caddyfile` with stack-scoped upstreams plus matching self-signed cert or Let's Encrypt configuration.
 
 Source: `install.py:49-53`, `docker-compose.yml:131-134` (HOST_BACKEND_DATA_PATH is required in `.env`).
@@ -237,8 +588,8 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (12 steps) auto-opens. Steps 1 and 6–12 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground → You're All Set). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) the new Slack / Discord / Webhook channels, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
-6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, Discord, or a generic Webhook) via the Hub to enable agent messaging.
+5. On first login an **onboarding tour** (16 steps) auto-opens. Steps 1 and 6–11 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) Slack / Discord channels plus Webhook Triggers, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Steps 12–15 cover optional voice setup, Playground Mini, Sentinel block mode, and v0.7.0 Triggers & Continuous Agents. Step 16 is the "You're All Set" finale. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
+6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, or Discord) via Hub > Channels to enable agent messaging. Signed HTTP events use the separate Webhook Trigger path in Hub > Triggers.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
 **LLM provider keys are configured per-tenant through the Hub UI — not in environment variables.** This enables multi-tenant isolation. Source: `README.md:398`.
@@ -246,6 +597,26 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 The fresh-install regression checklist used on the Ubuntu VM is maintained as an internal deployment playbook. The current checklist covers 13 first-run cases: infrastructure health, tenant/global-admin login, Watcher, Studio, Playground basic chat, Memory Inspector, Flows, Hub, all 15 Settings routes, the 4 System admin routes, conditional Browser Automation, and final log review.
 
 For remote Ubuntu VM installs that use a host-level Ollama daemon, start with `http://host.docker.internal:11434` inside Tsushin. If the Docker engine on that host does not resolve `host.docker.internal`, use the container bridge gateway instead (for example `http://172.18.0.1:11434`) and re-test the provider instance from the Hub.
+
+#### 3.4.1 Optional dev-only second-tenant seeder (v0.7.0)
+
+For local cross-tenant runtime testing, run `backend/scripts/seed_dev_tenants.py` from inside the backend container:
+
+```bash
+docker exec -e TSN_SEED_ALLOW=true tsushin-backend python scripts/seed_dev_tenants.py
+```
+
+The script is **opt-in** (refuses to run unless `TSN_SEED_ALLOW=true` is set) and **gated** by a 5-tenant ceiling. It is fully **idempotent** — re-running it exits 0 with `"Tenant 'acme2-dev' already exists — nothing to do."` once seeded. Pass `--dry-run` to preview without writing.
+
+Default seed contents:
+* Tenant `acme2-dev` ("Acme #2 Dev")
+* Owner user `test-acme2@example.com` (password `test1234`)
+* Member user `member-acme2@example.com` (password `test1234`)
+* Three default agents (via `services.agent_seeding.seed_default_agents`)
+* One paused `EmailChannelInstance` ("Acme2 Email Watch") with no Gmail integration linked
+* Scheduled-flow fixtures are seeded through Flows; no standalone schedule-trigger row is expected.
+
+After seeding, log in as `test-acme2@example.com` and verify only `acme2-dev` resources are visible. Log back in as `test@example.com` to confirm the original tenant sees zero `acme2-dev` rows. Continuous-agent fixtures are gated behind `--with-continuous` (placeholder until WS-1 CRUD ships).
 
 For repetitive QA runs, auth throttling can be raised or temporarily disabled without code changes by setting `TSN_AUTH_RATE_LIMIT` or `TSN_DISABLE_AUTH_RATE_LIMIT=true` in `.env` before recreating the backend container. This is intended for test automation and should not be left enabled on public production installs.
 
@@ -639,7 +1010,7 @@ Step graph (text agents skip step 4):
 | 4 | Voice *(audio/hybrid only)* | Capability (voice/transcript/hybrid), TTS provider (Kokoro/OpenAI/ElevenLabs), voice/language/speed/format, Kokoro container auto-provision |
 | 5 | Skills | Built-in + custom skills; `audio_*` auto-selected and locked for audio/hybrid |
 | 6 | Memory | Built-in ring buffer / built-in + semantic / external vector store; memory size slider |
-| 7 | Channels | playground / whatsapp / telegram / slack / discord / webhook — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. |
+| 7 | Channels | playground / whatsapp / telegram / slack / discord — catalog fetched from `GET /api/channels` (source: `backend/channels/catalog.py`), with a static fallback in `StepChannels.tsx` for offline mode. Channels needing per-tenant setup render a "Needs setup" badge when the tenant has no matching instance row. Webhook is created from Hub > Triggers instead of the guided channel picker. |
 | 8 | Review | Per-section summary with Edit buttons that jump back |
 | 9 | Progress | Chained provisioning spinner; on success navigates to `/playground?agentId=<id>` |
 
@@ -679,8 +1050,8 @@ Edit-time fields beyond the modal (surfaced in `AgentConfigurationManager` / Age
 - `avatar` slug — e.g. samurai, robot, ninja (`models.py:376`)
 - `provider_instance_id` — binds to a configured `ProviderInstance` so API keys/base URLs come from the tenant's provider configuration. (`models.py:369`, `models.py:437-458`)
 - `vector_store_instance_id` + `vector_store_mode` (`override|complement|shadow`) — Vector store binding. (`models.py:372-373`)
-- `enabled_channels` JSON — any of `playground, whatsapp, telegram, slack, discord, webhook`. (`models.py:363`)
-- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — per-channel FKs. (`models.py:364-368`)
+- `enabled_channels` JSON — conversational entry points such as `playground, whatsapp, telegram, slack, discord`. The guided wizard no longer offers webhook here because webhook is now modeled as a trigger; some legacy agent-management surfaces still carry the older webhook binding fields during the v0.7.0 transition. (`models.py:363`)
+- `whatsapp_integration_id`, `telegram_integration_id`, `slack_integration_id`, `discord_integration_id`, `webhook_integration_id` — legacy per-instance bindings on `Agent`. v0.7.0 additionally introduces `*.default_agent_id` on instance rows plus `user_channel_default_agent`, with `default_agent_service.py` preferring the new resolution chain and falling back to these older FKs only when needed. (`models.py:364-368`, `backend/services/default_agent_service.py`)
 
 The agent detail page (`frontend/app/agents/[id]/page.tsx:18-20`) provides six tabs: Configuration, Channels, Memory Management, Skills, Knowledge Base, Shared Knowledge.
 
@@ -748,6 +1119,8 @@ Two skills drive inter-agent behavior:
 
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
+
+Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Phase 6 adds backend Webhook/GitHub/Jira trigger bindings and `team_run` queue dispatch for external-event-driven team runs. Phase 7 adds the Studio Teams list foundation, split create affordance, Team badges, and team-member warnings. Phase 8 adds the Studio Team Wizard for UI team creation, local template presets, existing trigger binding, draft persistence, and a minimal team detail landing. Phase 9 adds Team Builder/canvas editing, Team-level Sentinel overrides, and run drill-down inside Studio. Phase 10 adds Watcher Team Runs observability: a tenant-wide read-only run list/detail surface with live WebSocket updates, Sentinel visibility, and mesh coordinator evidence.
 
 **Agent Switcher execution modes** (v0.6.0):
 
@@ -834,6 +1207,8 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `okg_term_memory` | OKG Term Memory | hybrid | Store/recall structured term memory with MemGuard validation | `okg_term_memory_skill.py:158-164` |
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
+| `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
+| `code_repository` | Code Repository | tool | Search/read/act on a connected source-control system. v0.7.0 ships GitHub (programmatic). 12 actions; read on by default (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`); write off by default (`create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`) — same capability-gating contract as `ticket_management` and the v0.7.0 granular Gmail send/reply/draft | `code_repository_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
@@ -858,9 +1233,26 @@ Source: `backend/agent/skills/base.py:204-227`. Individual skills override to ad
 
 Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag, a per-agent `execution_mode` override, and a JSON `config` blob validated against the skill's `get_config_schema()`.
 
-The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`.
+The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`. The visible skill cards use curated, user-facing summaries instead of dumping raw JSON defaults, so implementation-only fields such as fallback classifier models, empty keyword arrays, and nested settings do not appear as misleading operational configuration.
 
 `image_analysis` is media-triggered rather than tool-triggered. It activates on inbound image attachments, uses Gemini multimodal models to analyze the image, and returns a direct response with `skip_ai=true`. If the image caption looks like an edit request ("remove background", "change this", etc.), the skill intentionally defers so the existing `image` editing skill can handle the request instead.
+
+#### 9.2.1 Capability-Gated Skills (v0.7.0)
+
+Three v0.7.0 skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
+
+1. **Single-tool, multi-action.** Each skill exposes ONE MCP/LLM tool (`ticket_operation`, `repository_operation`, `gmail_operation`) whose first argument is an `action` enum. Read actions are on by default; write actions ship implemented but disabled by default per agent.
+2. **Tool-spec gating, not runtime gating.** Disabled actions are filtered out of the per-agent OpenAI / Anthropic tool schema sent to the LLM. The LLM literally cannot propose a disabled action — it doesn't appear in its tool list. A defense-in-depth check inside `execute_tool` remains as a fallback for direct API callers.
+3. **WRITE badge in the UI.** `frontend/components/AgentSkillsManager.tsx` renders WRITE badges on destructive actions and displays the safety copy "Disabled actions are removed from the agent's tool spec — the LLM never even sees them."
+4. **Runtime config threading.** `SkillManager.get_skill_tool_definitions` sets `skill_instance._config = agent_skill_row.config` and `skill_instance._agent_id = agent.id` BEFORE evaluating the tool spec. Without this, the skill instance falls back to `get_default_config()` and silently ignores saved capability changes — a v0.7.0-discovered bug that masked itself whenever saved configs happened to match defaults. Fixed in commit `aaabde8`.
+
+| skill_type | Read capabilities (default ON) | Write capabilities (default OFF) | Source |
+|---|---|---|---|
+| `ticket_management` (Jira) | `search`, `read`, `read_comments` | `update`, `add_comment`, `transition` | `jira_skill.py` |
+| `code_repository` (GitHub) | `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue` | `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue` | `code_repository_skill.py` |
+| `gmail` | `search`, `read_message` | `send`, `reply`, `draft` (`draft` additionally requires the Gmail token's OAuth scope to include `gmail.compose`, `gmail.modify`, or `mail.google.com/`) | `gmail_skill.py` |
+
+Operators toggle capabilities in the per-skill modal on the agent's Skills tab. Disabling a capability that the agent currently has access to takes effect on the next tool-spec rebuild (every chat turn) — there's no cache to bust.
 
 ### 9.3 Custom Skills (Instruction / Script / MCP Server)
 
@@ -1126,15 +1518,52 @@ Uploads are handled by `POST /api/agents/{agent_id}/knowledge-base/upload` (Sour
 - Processing is asynchronous (FastAPI BackgroundTasks).
 - Required permission: `knowledge.write` (`:164`).
 
-Chunking/embedding configuration is set on the Project (see 17.2) — per-agent uploads use system defaults from `backend/agent/knowledge/document_processor.py`.
+Per-agent KB indexing defaults are stored in `agent_knowledge_config`. Every uploaded or reprocessed document snapshots its active embedding provider, model, dimensions, vector store, collection/index/namespace, chunking strategy, parser, and index version on the `agent_knowledge` row. This is intentional: changing the agent KB settings affects future uploads and reprocesses, while older documents remain searchable under their original vector profile.
+
+Embedding providers:
+
+| Provider | Models | Dimensions |
+|---|---|---|
+| Built-in local | `all-MiniLM-L6-v2` | fixed `384` |
+| OpenAI provider instance | `text-embedding-3-small`, `text-embedding-3-large` | `256`, `512`, `1024`, model default max (`1536` small, `3072` large) |
+| Gemini provider instance | `gemini-embedding-2`, `gemini-embedding-001` | `768`, `1536`, `3072` (default `1536`) |
+| Ollama provider instance | Any configured/pulled embedding model via `/api/embed` | detected by `POST /api/embedding-providers/test`; custom dimensions must match the returned vector length before saving |
+
+Vector-store coexistence with long-term memory:
+
+- `VectorStoreInstance` is the container/cluster/connection. `VectorStoreIndex` is the immutable physical collection/index/namespace for a purpose + owner + embedding contract.
+- Built-in Chroma, Qdrant, MongoDB, and Pinecone can share a single configured vector-store connection across many KB and long-term-memory indexes. Changing provider/model/dimensions resolves a new index inside the same connection instead of provisioning another Docker container.
+- Index names include a contract hash derived from provider, model, dimensions, and metric, so Gemini 1536d and OpenAI 1536d never collide even when they share the same vector-store instance.
+- Every KB vector stores metadata with `purpose="knowledge_base"`, tenant id, agent id, document id, chunk id, embedding model, and embedding dimensions. Long-term memory vectors keep their own sender/collection conventions, so both features can share the same vector service without read/write collisions.
+
+Chunking and parsing:
+
+| Strategy | Behavior |
+|---|---|
+| `fixed_text` | Default sentence/word-aware chunks with configurable size and overlap. |
+| `json_structure` | Chunks JSON by object/path and falls back to fixed text for oversized values. |
+| `csv_rows` | Preserves headers and groups bounded row batches. |
+
+Parsers remain lightweight for v0.7.0: TXT, CSV, JSON, PDF, and DOCX via existing libraries. Docling and `llm_suggested` chunking are deliberately deferred until cost controls and deterministic fallbacks are designed.
 
 Additional endpoints (`routes_knowledge_base.py`):
 - `GET /agents/{id}/knowledge-base` — list documents
 - `GET /agents/{id}/knowledge-base/stats` — stats
+- `GET /agents/{id}/knowledge-base/config` — read per-agent KB indexing defaults
+- `PUT /agents/{id}/knowledge-base/config` — update embedding/vector/chunking defaults for future uploads/reprocesses
+- `GET /agents/{id}/knowledge-base/embedding-options` — list tenant-scoped embedding provider options for this agent
 - `GET /agents/{id}/knowledge-base/{knowledge_id}` — detail
+- `PATCH /agents/{id}/knowledge-base/{knowledge_id}` — rename document and update lightweight tags (stored without a DB migration)
 - `GET /agents/{id}/knowledge-base/{knowledge_id}/chunks` — chunks
 - `POST /agents/{id}/knowledge-base/search` — semantic search over KB
 - `POST /agents/{id}/knowledge-base/{knowledge_id}/reprocess` — reprocess
+
+Shared embedding-provider endpoints:
+
+- `GET /api/embedding-providers/options` — all embedding-capable configured provider instances plus built-in local, supported models/dimensions, defaults, and health/test status.
+- `POST /api/embedding-providers/test` — validates provider instance, model, dimensions, and batch behavior before saving KB config.
+
+Knowledge-document tags are normalized to lowercase, deduplicated, and stored as sidecar metadata beside the uploaded file so existing databases do not need a schema change just to support document organization.
 
 ### 10.3 OKG (Ontology Knowledge Graph)
 
@@ -1183,11 +1612,62 @@ Source: `backend/agent/memory/temporal_decay.py:14-60`.
 
 Decay factor: `e^(-lambda * days_since_access)`. MMR (Maximum Marginal Relevance) reranking balances relevance against diversity so recall doesn't return near-duplicates. Config is loaded from the Agent row via `DecayConfig.from_agent()` (`temporal_decay.py:27-35`).
 
+### 10.6 Trigger Case Memory (MVP, experimental)
+
+Experimental primitive shipped in v0.7.0 that lets trigger-driven agents (incident response on Jira, support email, GitHub issues, generic webhooks) recall what was done last time for similar trigger payloads. Spec: `.private/TRIGGER_MEMORY_RESEARCH.md`. Changelog entry: see *"Release 0.7.0 — Trigger Case Memory MVP"* in `docs/changelog.md`.
+
+**Scope.** A *case* is one terminal trigger-driven execution: `WakeEvent + (ContinuousRun | trigger-origin FlowRun) + compact problem/action/outcome text`. Cases are not chat memory or KB content — they are a tenant/agent-scoped execution record indexed for similarity recall.
+
+**Tenant feature gates.** v0.7.0 now uses tenant-scoped DB flags instead of environment-variable rollout gates. `Tenant.case_memory_enabled` controls indexing, retrieval skill registration, and `/api/case-memory/*` availability for that tenant. `Tenant.case_memory_recap_enabled` independently gates trigger recap injection while leaving indexing available. Tenant owners can edit both from Core > Organization > Case Memory, and `/api/feature-flags` returns the effective `{case_memory_enabled, case_memory_recap_enabled, trigger_binding_enabled, auto_generation_enabled}` values used by the trigger wizard and detail pages.
+
+**Data model.** Table `case_memory` (alembic `0075_case_memory_mvp`):
+- Tenant/agent isolation: `tenant_id` (RESTRICT), `agent_id` (CASCADE), partial-unique on `continuous_run_id` and `flow_run_id` (Postgres only; SQLite test fixtures fall back to non-unique helpers and rely on the indexer's idempotency guard).
+- Correlation: `wake_event_id` (SET NULL), `continuous_run_id` (SET NULL), `flow_run_id` (SET NULL).
+- Content: `origin_kind` (`continuous_run | flow_run`), `trigger_kind` (`email | webhook | jira | github`), `subject_digest`, `problem_summary`, `action_summary`, `outcome_summary`, `outcome_label` (`resolved | failed | skipped | escalated | unknown`).
+- Embedding contract pinned at write time: `vector_store_instance_id` (SET NULL), `vector_store_index_id` (SET NULL), `embedding_provider_instance_id`, `embedding_provider`, `embedding_model`, `embedding_dims`, `embedding_metric`, optional `embedding_task` (for hosted-provider task formatting). Stamped on every vector's metadata too, so a tenant that later switches their default `VectorStoreInstance` does not retroactively invalidate older cases.
+- Bookkeeping: `vector_refs_json` (`[{kind, vector_id}]`), `index_status` (`pending | indexed | partial | failed | skipped`), `summary_status` (`generated | fallback | unavailable`), `occurred_at`, `indexed_at`, `last_recalled_at`, `created_at`, `updated_at`.
+
+The migration also extends `ck_message_queue_message_type` to permit `'case_index'`.
+
+**Write path.** The queue router (`backend/services/queue_router.py`) enqueues a `case_index` message after:
+- A `_dispatch_continuous_task` finally-block when `run.status in {"succeeded","failed"}`.
+- A `_dispatch_flow_run_triggered` after `FlowEngine.run_flow()` returns a terminal status (`completed | completed_with_errors | failed`) and `flow_run.trigger_event_id IS NOT NULL`. Manual / scheduled FlowRuns are intentionally skipped per MVP scope.
+
+The `case_index` handler calls `case_memory_service.index_case`, which is idempotent on `(continuous_run_id|flow_run_id)`: it loads the wake event + agent + run tenant-scoped, reads the redacted `payload_ref` written by `TriggerDispatchService._write_payload_ref`, builds problem/action/outcome text, resolves the embedding contract via `case_embedding_resolver.resolve_for_agent`, validates each generated vector against `embedding_dims`, and writes up to three vectors via the existing `ProviderBridgeStore` with deterministic ids `case_{origin_kind}_{run_id}_{kind}` and rich metadata. The original trigger run is never modified, even when indexing fails.
+
+**Failure semantics.**
+- Embedding-dimension mismatch → case marked `failed`, queue item marked failed with `retry_count = max_retries` (no retry).
+- Vector-store outage → `partial` (problem vector landed) or `failed` (problem vector did not).
+- Broken `payload_ref` / missing run / cross-tenant attempt → caller returns without writing; original run is untouched.
+- Summary builder failure (no `outcome_state.answer`, parsing error, etc.) → `summary_status='fallback'`, problem vector still indexed.
+
+**Retrieval skill.** `find_similar_past_cases` (`backend/agent/skills/find_similar_past_cases.py`), tool-mode, registered only when the flag is on. Single tool with inputs `query` (required), `scope` (`agent | trigger_kind | tenant`, default chosen by invocation context), `k` (1–50), `min_similarity` (0–1), `trigger_kind`, `include_failed`. Returns ranked cases with `case_id`, `similarity`, problem/action/outcome summaries, `outcome_label`, origin/run pointers. Default scope: `trigger_kind` when invoked under a trigger context, `agent` for chat.
+
+**API.** All endpoints require `agents.read`, enforce strict tenant isolation via `TenantContext`, and fail closed for tenants with `case_memory_enabled=false`:
+- `GET  /api/case-memory` — filters: `agent_id`, `trigger_kind`, `origin_kind`, `limit` (≤200), `offset`.
+- `GET  /api/case-memory/{case_id}`.
+- `POST /api/case-memory/search` — body: `query`, `scope`, `k`, `min_similarity`, `vector` (`problem | action | outcome | any`), `trigger_kind`, `include_failed`, optional `agent_id`.
+
+**Per-trigger Memory Recap.** Each Email, Jira, GitHub, and Webhook trigger can carry a `trigger_recap_config` row exposed at `/api/triggers/{kind}/{id}/recap-config`, with a matching `/test-recap` preview endpoint. The trigger wizard includes a Memory Recap step whenever `case_memory_enabled=true`; trigger detail pages render a Memory Recap section for editing, disabling, and previewing saved configs. Dispatch injects recap output into both the default-agent continuous-task path and bound Flow `trigger_context.source.memory_recap`.
+
+**Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the selected/default `VectorStoreInstance` carries `extra_config.embedding_*`, those values are treated as the default for future case-memory writes. Each write resolves a `VectorStoreIndex`; changing the default contract later creates/uses a new index inside the same vector-store connection while old cases remain searchable through their snapshotted index/contract.
+
+**Limitations / out-of-scope for 0.7.0** (see §3 of `.private/TRIGGER_MEMORY_RESEARCH.md`):
+- No deletion / retention / compliance workflow.
+- No billing or vendor-cost accounting.
+- No four-vendor metadata-delete parity.
+- No frontend case explorer; the API is operator/debug only.
+- No automatic prompt injection of cases into agent context — invocation is via the explicit skill tool only.
+- No OKG bridge or `continuous_run.memory_refs` closure.
+- No case clustering, procedural extraction, or analytics.
+
+These are deliberately deferred to a post-0.7.0 hardening pass.
+
 ---
 
 ## 11. Vector Stores
 
-Multi-vendor vector DB support. Each tenant can register one or more `VectorStoreInstance` rows and designate a default; agents can override per-agent via `agent.vector_store_instance_id`.
+Multi-vendor vector DB support. Each tenant can register one or more `VectorStoreInstance` rows and designate a default; agents can override per-agent via `agent.vector_store_instance_id`. A `VectorStoreInstance` is the reusable connection/container. A `VectorStoreIndex` is the physical collection/index/namespace used by Agent KB, Project KB, or case memory for one immutable embedding contract.
 
 Model: `backend/models.py:3521-3576` (VectorStoreInstance).
 Adapters: `backend/agent/memory/providers/` — `chroma_adapter.py`, `mongodb_adapter.py`, `pinecone_adapter.py`, `qdrant_adapter.py`. All implement `VectorStoreProvider` (`backend/agent/memory/providers/base.py:41-122`).
@@ -1201,7 +1681,14 @@ Common fields on `VectorStoreInstance`:
 - `is_auto_provisioned`, container fields (`container_name`, `container_port`, `container_status`, `container_image`, `volume_name`, `mem_limit`, `cpu_quota`)
 - `security_config` (JSON): MemGuard thresholds, rate limits, batch limits
 
-Namespace isolation per agent uses pattern `tsushin_{tenant_id}_{agent_id}` (`providers/base.py:49`).
+Common fields on `VectorStoreIndex`:
+- `purpose`: `agent_kb`, `project_kb`, or `case_memory`
+- `owner_type`, `owner_id`: agent, project, or tenant/default ownership
+- embedding provider/model/dimensions/metric/task hints
+- `physical_collection_name`, `physical_index_name`, `physical_namespace`
+- `contract_hash`: stable hash of provider + model + dimensions + metric
+
+Namespace isolation per agent uses pattern `tsushin_{tenant_id}_{agent_id}` for legacy memory paths; new KB/case-memory writes use `VectorStoreIndex` physical names.
 
 ### 11.1 Chroma (local, default)
 Built-in. No external credentials required. Uses `chroma_db_path` per agent or a tenant default.
@@ -1222,6 +1709,8 @@ Adapter: `backend/agent/memory/providers/mongodb_adapter.py`.
 ### UI
 
 Settings → Vector Stores (`frontend/app/settings/vector-stores/page.tsx:21-125`) lets admins pick the default instance (`api.updateDefaultVectorStore`) and run connection tests (`api.testVectorStoreConnection`). The page renders vendor labels for `mongodb`, `pinecone`, `qdrant` (`:8-12`). Health dots reflect `health_status` (`:14-19`).
+
+The Vector Stores UI now also shows the indexes/collections inside the selected instance and exposes the default long-term-memory embedding contract. Updating provider/model/dimensions changes the default for future case-memory indexes; it does not require a new Docker container and does not rewrite old vectors.
 
 Per-agent override uses `agent.vector_store_mode`:
 - `override` — agent uses its configured instance only.
@@ -1359,8 +1848,10 @@ Initiator types (`models.py:1554`): `programmatic` (UI-created) | `agentic` (AI-
 - `immediate` — runs on creation/trigger.
 - `scheduled` — runs at `scheduled_at` (DateTime).
 - `recurring` — driven by `recurrence_rule` JSON: `{frequency, interval, days_of_week, timezone}` (Source: `models.py:1548`).
+- `keyword` — runs when configured `trigger_keywords` match.
+- `triggered` — runs when a selected Hub trigger fires. Triggered flows use an auto-generated locked Source step at position 1 and a `flow_trigger_binding` row.
 
-Scheduled execution is driven by `backend/flows/scheduled_flow_executor.py`. The engine tracks `last_executed_at`, `next_execution_at`, and `execution_count` on the definition (`models.py:1572-1574`).
+Scheduled execution is driven by `backend/flows/scheduled_flow_executor.py`. The engine tracks `last_executed_at`, `next_execution_at`, and `execution_count` on the definition (`models.py:1572-1574`). The create/edit UI validates the required schedule, recurrence, and keyword fields for scheduled, recurring, and keyword flows before save.
 
 ### 13.3 Step Types
 
@@ -1377,6 +1868,7 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22). |
 | `summarization` | `SummarizationStepHandler` | AI summarization. Supports `thread_id`, `source_step`, or inline `text`/`content` in `config_json`. |
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
+| `source` | `SourceStepHandler` | Trigger-owned entry step for triggered flows. It is auto-generated from the selected Hub trigger, locked at position 1, and not manually addable. |
 | `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat. |
 | `AgentNode` | `ConversationStepHandler` alias | Alias accepted for compatibility (same config as `conversation`). |
 
@@ -1414,6 +1906,30 @@ Variable references inside step configs/messages:
 | `{{default step_1.error "No error"}}` | Default fallback. |
 
 Built-in helpers (Source: `template_parser.py:69-82`): `truncate`, `upper`, `lower`, `default`, `json`, `length`, `first`, `last`, `join`, `replace`, `trim`.
+
+#### Variable Reference panel (UI helper)
+
+The flow editor surfaces a collapsible **Variable Reference** panel under every templatable step-config field. It auto-populates with the output variables of every preceding step in the flow, plus per-trigger-kind deep payload paths when the source is a Jira/Email/GitHub/Webhook trigger.
+
+- **Click any chip** to insert `{{step_N.<field>}}` at the cursor.
+- **Drag any chip** onto the textarea/input to insert at the drop point.
+- The panel filters to *previous* steps only (`s.position < currentStepPosition`), so a Step 3 editor sees Step 1 + Step 2 outputs.
+- The panel also lists helper functions, conditional examples, and flow-context variables — each is also drag-and-drop.
+
+The panel is wired into every templatable free-text field: notification text, message template, conversation objective + initial prompt, skill prompt, summarization custom prompt, slash-command body, agentic gate prompt, and the gate-fail notification recipient + message. Sources: `frontend/components/flows/StepVariablePanel.tsx`, `frontend/components/flows/TemplateTextarea.tsx`, `frontend/components/flows/TemplateInput.tsx`, `frontend/lib/stepOutputVariables.ts`.
+
+#### Trigger-generated flow badge
+
+Flows minted by `ensure_system_managed_flow_for_trigger()` (4-node Source/Gate/Conversation/Notification chain, `is_system_owned=true`) display a per-kind pill in the flows list and editor header — "Jira Trigger" (blue), "Email Trigger" (emerald), "GitHub Trigger" (violet), and "Webhook Trigger" (cyan). The badge tooltip explains: *"Auto-generated from <kind> trigger — editable, but not deletable. Delete the trigger to remove this flow."* The Delete button on the row is disabled to match. User-authored flows show no badge.
+
+The `FlowDefinitionResponse` (`backend/api/routes_flows.py:111+`) exposes the underlying flags so the UI can render correctly:
+
+| Field | Meaning |
+|---|---|
+| `is_system_owned` | True if the flow was minted by a trigger wizard. |
+| `editable_by_tenant` | True if step config can be edited by the tenant (auto-flows ship with True so the casual-user "Enable Notification" toggle works). |
+| `deletable_by_tenant` | False on auto-flows — they live and die with the trigger. |
+| `system_trigger_kind` | The trigger kind that minted the flow (`jira` / `email` / `github` / `webhook`), or `null` for user-authored flows. |
 
 ### 13.5 Flow Execution Status Lifecycle
 
@@ -1477,6 +1993,53 @@ Implementations:
 Event status values (`scheduler/base.py:27-32`): `scheduled`, `in_progress`, `completed`, `cancelled`, `failed`.
 
 Provider selection is factory-driven: `backend/agent/skills/scheduler/factory.py` (reads `AgentSkillIntegration` rows, `factory.py:196`).
+
+### 14.3 Trigger Creation Wizard (v0.7.0)
+
+**Source:** `frontend/components/triggers/TriggerCreationWizard.tsx` (~3,300 lines), `frontend/components/triggers/TriggerBreadthCards.tsx`, `frontend/app/flows/page.tsx`.
+
+A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It replaces the legacy trigger setup entry-points so operators see the same flow regardless of which trigger they're creating. The wizard is reachable from:
+
+- Hub > Triggers > "+ Add Trigger" (kind picker shown).
+- `/hub/triggers` index "+ New Trigger" button (kind picker shown).
+
+**Steps:**
+
+| # | Step | Universal? | What it does |
+|---|---|---|---|
+| 1 | **Kind** | yes | 4-tile `role="radiogroup"` (Email / Webhook / Jira / GitHub) with `role="radio"` + `aria-checked`. Skipped when an entry-point passes `initialKind`. |
+| 2 | **Source** | per-kind | Per-kind input grid: Jira (linked Hub Tool API connection + project key + JQL + poll interval + default agent + name), GitHub (linked Hub Tool API integration + owner + repo + events checklist + default agent + name), Email (Gmail account + saved query / label / from-address filters + default agent + name), Webhook (name + slug mode + callback URL + IP allowlist + rate limit). All inputs have `htmlFor`/`id` associations. Continue is gated on per-kind required fields. |
+| 3 | **Criteria** | per-kind | Jira: read-only JQL preview + "Test Query" button. GitHub: full event/action/filters builder via `CriteriaBuilder` with raw envelope JSON preview + "Test against sample payload" dry-run. Email: saved-query test against the connected mailbox. Webhook: JSONPath payload criteria tester. |
+| 4 | **Memory Recap** | conditional | Rendered only when `/api/feature-flags.case_memory_enabled=true`. Configures recap enablement, query template, scope, k, similarity floor, vector kind, failed-case inclusion, injection position, and max recap length. Skipped entirely when case memory is disabled for the tenant. |
+| 5 | **Confirmation** | yes | Pre-save: summary cards (Kind / Default Agent / Status on Save / Trigger Name / per-kind specifics). Post-save: "Trigger created" panel + saved trigger card + **Wired Flow card** (auto-flow ID + status + "Open Flow Editor" CTA) when an auto-flow was minted. The CTA links to `/flows?edit=<auto_flow_id>`. |
+
+**Auto-flow handoff (steps 4 -> 5):**
+
+When `TSN_FLOWS_AUTO_GENERATION_ENABLED=true`, the trigger CREATE endpoints call `flow_binding_service.ensure_system_managed_flow_for_trigger(...)` in the same transaction as the trigger row, minting a 4-node Source -> Gate -> Conversation -> Notification auto-flow with `is_system_owned=true, editable_by_tenant=true, deletable_by_tenant=false`. Output configuration writes through to that flow's Notification node via `flow_binding_service.update_auto_flow_notification(...)`, setting the engine-correct `recipient` field (older code wrote `recipient_phone`, which the engine ignored; see §13.4).
+
+The auto-flow ID is surfaced on every trigger Read schema (`JiraTriggerRead.auto_flow_id`, `EmailTriggerRead.auto_flow_id`, `GitHubTriggerRead.auto_flow_id`, `WebhookTriggerRead.auto_flow_id`). The Confirmation step reads it and renders the Wired Flow card; if no auto-flow was generated (older trigger, or feature flag off), the card falls back to a "Wire a custom Flow" CTA that deep-links to `/flows?source_trigger_kind=<kind>&source_trigger_id=<id>` (the Wave 4 deep-link prefill path).
+
+Trigger default-agent edits keep the generated system-managed Flow aligned: the trigger `default_agent_id`, the FlowDefinition default agent, and the generated Conversation node's `agent_id` are synchronized for Email and Jira updates.
+
+**Retired components:**
+
+- `TriggerSetupModal.tsx` — was used for Jira / GitHub creation before the unified trigger wizard.
+- `TriggerWizard.tsx` — was the productivity-style picker shell that dispatched to per-kind sub-wizards.
+- `EmailTriggerWizard.tsx` — was the standalone email-only create/edit wizard. Email trigger editing now happens on `/hub/triggers/email/{id}` through the shared `TriggerDetailShell`, matching Webhook, Jira, and GitHub.
+
+**A11y:** wizard inputs use `htmlFor`/`id` associations. Kind-picker tiles in step 1 are a `role="radiogroup"`. GitHub event/action chips are in `role="group"` + `aria-pressed`.
+
+**Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted at the top of the list, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround: user clicks the highlighted flow row's Edit button.
+
+### 14.4 Triggered Flow Creation from Flows
+
+`/flows` > Create New Flow supports Triggered as a first-class execution method. The Triggered path asks the operator to select an existing Hub trigger: Email/Gmail, Jira, GitHub, or Webhook. Schedule is not a Hub trigger kind, and Continuous Agents are not selectable as a Flow builder source.
+
+After a trigger is selected, the Flow builder creates the Source step automatically at position 1 with `trigger_kind` and `trigger_instance_id`, locks it in place, and creates the `flow_trigger_binding` row when the flow is saved. Source is not shown in the manual step palette because an unwired Source step cannot fire.
+
+### 14.5 Flow Scheduling
+
+Scheduled and recurring automation is owned by Flows. Operators create a Flow with `execution_method='scheduled'` or `execution_method='recurring'`, configure the schedule in the Flow editor, and keep all output steps in the same graph. This removes trigger-owned scheduling and avoids maintaining two scheduling concepts.
 
 ---
 
@@ -1542,7 +2105,7 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 
 **E2E setup — WhatsApp channel (8-step guided wizard):**
 
-The **WhatsApp Setup Wizard** (Hub → Communication → Setup Wizard) walks through the full configuration in 8 steps:
+The **WhatsApp Setup Wizard** (Hub > Channels > WhatsApp) walks through the full configuration in 8 steps:
 
 1. **Welcome** — overview of the setup process.
 2. **Connect Phone** — enter an optional Instance Name (display label) and phone number, then scan the QR code. A bot contact is auto-created with the instance name.
@@ -1553,11 +2116,11 @@ The **WhatsApp Setup Wizard** (Hub → Communication → Setup Wizard) walks thr
 7. **Bind Agent** — select which AI agent handles this WhatsApp number. Auto-creates ContactAgentMapping for user and bot contacts.
 8. **All Done** — summary of all configured items with green/amber indicators.
 
-The wizard can also be launched manually from the Hub Communication tab or auto-launches after the onboarding tour if no WhatsApp instances exist.
+The wizard can also be launched manually from Hub > Channels or from the onboarding tour's Communication Channels action. It no longer auto-launches after the main onboarding tour completes.
 
 **Manual setup (alternative):**
 
-1. Navigate to **Hub → Communication → WhatsApp** in the UI.
+1. Navigate to **Hub > Channels > WhatsApp** in the UI.
 2. Click **Manual Setup** — provide a name and the WhatsApp phone number.
 3. The system spawns a Docker container (`mcp-agent-tenant_{timestamp}_{id}`) on `tsushin-network`.
 4. **Scan the QR code** — visible in the UI or via `docker logs <container_name> --tail=20`. The QR expires after ~60 seconds; refresh if needed.
@@ -1586,8 +2149,8 @@ WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new identifier format
 1. **Contact auto-linking** — when an inbound message arrives with a new LID, the adapter looks up the existing `Contact` row by phone number (if the phone number is still exposed) and attaches the LID as an alternate identifier on the contact's `ContactChannelMapping`. No manual merge required.
    Source: `backend/channels/whatsapp/adapter.py` + `backend/services/contact_service.py`.
 
-2. **UserAgentSession fallback via phone number** — `UserAgentSession` lookups (used for per-contact default agent resolution) now try LID-keyed rows first, then fall back to phone-number-keyed rows. Sessions created before the migration keep working until they're rewritten on next contact, at which point they get upgraded to LID keys.
-   Source: `backend/services/user_agent_session_service.py`.
+2. **UserAgentSession phone/LID aliasing** — `UserAgentSession` lookups (used for per-contact agent preference resolution) now resolve the tenant-scoped contact first, compare all known phone and WhatsApp LID aliases, and choose the newest saved preference. When a switch happens through `/invoke`, the selected agent is synced back to every known alias so text and audio messages route consistently even when WhatsApp alternates between phone IDs and LIDs.
+   Source: `backend/agent/router.py`.
 
 3. **ContactAgentMapping dual-key lookup** — `ContactAgentMapping` resolution accepts either a LID or a phone-number key and returns the first match. This keeps slash-command permissions, default-agent assignments, and DM trigger rules pointing at the right contact even as WhatsApp phases in LIDs for groups.
    Source: `backend/services/contact_agent_mapping_service.py`.
@@ -1640,7 +2203,7 @@ GET /api/tenant/me/public-ingress
 
 **Precedence (first match wins):**
 
-1. **`override`** — `tenant.public_base_url` (the Ingress Override card in Hub → Communication). Set and format-valid ⇒ this wins. Set but invalid ⇒ `source=override`, `url=null`, `warning` explains the problem (so the UI can surface the stored-but-broken state instead of silently falling through).
+1. **`override`** — `tenant.public_base_url` (the Ingress Override card in Hub > Channels). Set and format-valid ⇒ this wins. Set but invalid ⇒ `source=override`, `url=null`, `warning` explains the problem (so the UI can surface the stored-but-broken state instead of silently falling through).
 2. **`tunnel`** — the global Remote Access tunnel (`/system/remote-access`) is running and has a `public_url`. **Intentionally decoupled from the `remote_access_enabled` login gate**: a tenant can receive webhooks via the shared tunnel path even when tunnel-based login is disabled for their users.
 3. **`dev`** — `TSN_DEV_PUBLIC_BASE_URL` environment variable on the backend. Dev escape hatch only; must not be set in production.
 4. **`none`** — no ingress; the UI shows a call-to-action banner.
@@ -1652,7 +2215,7 @@ GET /api/tenant/me/public-ingress
 - DNS pre-resolution (async, 2 s timeout) — typos are caught at save time.
 - Every write logged via `log_tenant_event(..., TenantAuditActions.SETTINGS_UPDATE, ...)` with userinfo scrubbed from logged old/new values.
 
-**Consumers.** `SlackSetupWizard`, `DiscordSetupWizard`, `WebhookSetupModal`, and the inline "Inbound:" copy button on the Webhook card in Hub all call `api.getMyPublicIngress()` and render a source badge ("via platform tunnel", "tenant override", "dev environment"). The **PublicBaseUrlCard** (renamed "Ingress Override (Advanced)") always displays the currently-resolved URL and its source, with a collapsible override input that auto-expands when `source === 'none'`.
+**Consumers.** `SlackSetupWizard`, `DiscordSetupWizard`, `TriggerCreationWizard` for Webhook setup, and `TriggerDetailShell` / `WebhookSourceCard` for Webhook detail all call `api.getMyPublicIngress()` and render a source badge ("via platform tunnel", "tenant override", "dev environment"). The **PublicBaseUrlCard** (renamed "Ingress Override (Advanced)") always displays the currently-resolved URL and its source, with a collapsible override input that auto-expands when `source === 'none'`.
 
 **Operator guidance:**
 - **SaaS deployments:** enable Remote Access globally and toggle `remote_access_enabled` per tenant for login; Slack/Discord webhooks work for every tenant without additional setup. Override is for exceptions (branded domains, corporate proxies).
@@ -1698,7 +2261,7 @@ Capability flags (`adapter.py:20-26`):
    - For **Socket Mode** (recommended): enable Socket Mode under Settings, then generate an **App-Level Token** with the `connections:write` scope (you'll get an `xapp-...` token).
    - For **HTTP Events API**: the Tsushin UI will show you the exact Request URL after you save the integration — paste that into Event Subscriptions → Request URL. Also copy the Signing Secret and App ID from Basic Information.
 2. **Install the app** to your workspace — copy the `xoxb-` bot token from OAuth & Permissions.
-3. (HTTP mode only) Ensure a **Public Ingress** is available for this tenant — either the global Remote Access tunnel (enabled via `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a for how the resolver picks between them. Socket Mode does not need a public ingress.
+3. (HTTP mode only) Ensure a **Public Ingress** is available for this tenant — either the global Remote Access tunnel (enabled via `/system/remote-access`) or an **Ingress Override** set in Hub > Channels. See §15.2a for how the resolver picks between them. Socket Mode does not need a public ingress.
 4. Navigate to **Hub → Channels → Slack** in the UI.
 5. Click **Connect Workspace** — paste the bot token plus the App-Level Token (Socket Mode) or the App ID + Signing Secret (HTTP mode). The modal will preview the exact webhook URL for HTTP mode.
 6. Set `dm_policy` — `open` to accept all DMs, `allowlist` to restrict to specific channels, or `disabled`.
@@ -1740,7 +2303,7 @@ Capability flags (`adapter.py:27-33`):
 
 **E2E setup — Discord channel:**
 
-1. Ensure this tenant has a **Public Ingress** — either the platform-managed Remote Access tunnel (global admin enables it in `/system/remote-access`) or an **Ingress Override** set in Hub → Communication. See §15.2a. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev without a tunnel, set `TSN_DEV_PUBLIC_BASE_URL` in the backend environment and restart the container.
+1. Ensure this tenant has a **Public Ingress** — either the platform-managed Remote Access tunnel (global admin enables it in `/system/remote-access`) or an **Ingress Override** set in Hub > Channels. See §15.2a. Discord requires a publicly-reachable HTTPS URL for the Interactions endpoint — there is no Socket Mode equivalent. For local dev without a tunnel, set `TSN_DEV_PUBLIC_BASE_URL` in the backend environment and restart the container.
 2. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications).
 3. On **General Information**: copy the **Application ID** and the **Public Key** (64-character hex Ed25519). Both are required by Tsushin.
 4. Under **Bot**: reset and copy the bot token; enable **Message Content Intent** under Privileged Gateway Intents.
@@ -1754,52 +2317,56 @@ Capability flags (`adapter.py:27-33`):
 
 **Why HTTP Interactions, not Gateway:** Tsushin uses Discord's HTTP Interactions endpoint (Ed25519-signed) rather than the Gateway WebSocket because it's stateless, scales horizontally, and doesn't require per-process bot session tracking. Inbound interactions arrive at `/api/channels/discord/{integration_id}/interactions`; the route ACKs Discord with a Type 5 (deferred response) within the 3-second window, then enqueues the interaction into `message_queue` (channel='discord'). `QueueWorker._process_discord_message` routes the message through `AgentRouter` and the agent's reply is sent via `DiscordChannelAdapter` (REST API).
 
-### 15.5 Webhook
+### 15.5 Webhook Trigger
 
-**Source:** `backend/channels/webhook/adapter.py`
+**Source:** `backend/channels/webhook/trigger.py`, `backend/api/routes_webhook_instances.py`, `backend/api/routes_webhook_inbound.py`
 
-Bidirectional HTTP channel. Inbound: external systems POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound: the adapter POSTs agent responses back to the customer's `callback_url`.
+Webhook is now a first-class **Trigger**, not a conversational channel. Inbound external systems still POST HMAC-signed events to `/api/webhooks/{slug}/inbound` (handled by `routes_webhook_inbound.py`, enqueued into `MessageQueue`, routed through `AgentRouter` by `QueueWorker._handle_webhook`). Outbound responses use `WebhookTrigger.notify_external_system(...)` to POST back to the configured `callback_url`.
 
 **URI slug modes (v0.7.1):** each integration has a human-readable `slug` used in the inbound path.
 - **Auto** (default on create) — server generates `wh-{6-hex}`.
 - **Custom** — user-supplied. Validated against `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (3–64 chars, lowercase, must start with a letter, no leading/trailing/consecutive hyphens), checked against the reserved set (`inbound, rotate-secret, health, status, test, callback, docs, openapi, api, webhooks, admin, v1`), and required to be globally unique.
 - Global uniqueness is enforced because the inbound route is authenticated by HMAC *after* the row lookup — the slug is the only identifier used to resolve the tenant.
 - **Backward compatibility:** the inbound route still accepts a numeric integration id via a `slug.isdigit()` fallback, so any legacy `/api/webhooks/{id}/inbound` URL keeps working.
-- **Live availability check:** `GET /api/webhook-integrations/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
+- **Live availability check:** `GET /api/triggers/webhook/slug-available?slug=…[&exclude_id=…]` → `{ available, reason }` backs the UI's green-check / red-X indicator. `exclude_id` lets the edit flow check "is this slug free for me to keep or rename to?" without colliding with itself.
 
-**Lifecycle: edit / pause / delete.** Each card exposes three actions in addition to Rotate Secret:
-- **Edit** — opens `WebhookEditModal` to change the name, slug, callback URL, rate limit, and IP allowlist. Secret rotation is intentionally separate (Rotate button) to avoid mixing destructive secret operations with non-destructive config edits.
-- **Pause / Enable toggle** — flips `is_active` via `PATCH /api/webhook-integrations/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
-- **Delete** — removes the integration row; agent bindings are nulled via `ON DELETE SET NULL`.
+**Lifecycle: details / pause / delete.** Hub cards expose the same two-action model used by Email, Jira, and GitHub: **Details** plus **Pause / Resume**.
+- **Details** — opens `/hub/triggers/webhook/{id}`, where operators edit the name, slug, callback URL, rate limit, IP allowlist, criteria, routing, outputs, Memory Recap, Wired Flows, and secret rotation.
+- **Pause / Resume** — flips `is_active` via `PATCH /api/triggers/webhook/{id}`. When paused, inbound `POST /api/webhooks/{slug}/inbound` returns `403` and the slug is still reserved globally; nothing else will be able to create a new integration with the same slug. **Only `DELETE` frees the slug for reuse.**
+- **Delete** — removes the integration row from the detail page; agent bindings are nulled via `ON DELETE SET NULL`.
 
-Capability flags (`adapter.py:39-46`):
+Capability flags (`trigger.py:19-27`):
 - `delivery_mode=push`, text-only in v1 (`supports_media=false`), `text_chunk_limit=16000`.
 
-**Outbound callback POST** (`adapter.py:88-202`):
-- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the adapter reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
+**Outbound callback POST** (`trigger.py:74-171`):
+- Optional — governed by `integration.callback_enabled` + `integration.callback_url`. If disabled, the trigger reports success with `message_id="webhook_inbound_only"` (result pollable via `/api/v1/queue/{id}`).
 - SSRF-validated via `utils/ssrf_validator.validate_url()` before the POST.
-- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `adapter.py:33`).
-- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `adapter.py:32`).
+- Timeout: `10.0` seconds (`_CALLBACK_TIMEOUT_SECONDS`, `trigger.py:17`).
+- Response body capped at `65536` bytes (`_MAX_RESPONSE_BYTES`, `trigger.py:16`).
 - `follow_redirects=False`.
 
-**HMAC signing** (`adapter.py:134-157`):
+**HMAC signing** (`trigger.py:108-121`):
 - Canonical payload JSON (sorted keys, compact separators) includes: `event`, `webhook_id`, `timestamp`, `text`, `agent_id`, `sender_key`, `source_id`.
 - Signature: `HMAC-SHA256(secret, f"{timestamp}.".bytes + body_bytes)` — replay-protected.
 - Headers emitted: `X-Tsushin-Signature: sha256={hex}`, `X-Tsushin-Timestamp`, `X-Tsushin-Event`, `X-Tsushin-Webhook-Id`, `User-Agent: Tsushin-Webhook/1.0`.
 
-**Secret encryption:** `api_secret_encrypted` decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`adapter.py:71-86`, `services/encryption_key_service.get_webhook_encryption_key`).
+**Secret encryption:** `api_secret_encrypted` is decrypted via `TokenEncryption` keyed by the webhook encryption master key + per-tenant derivation (`trigger.py:52-68`, `services/encryption_key_service.get_webhook_encryption_key`).
 
-**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`adapter.py:204-222`).
+**Health:** Uses stored snapshot from the `WebhookIntegration` row (`is_active`, `status`, `circuit_breaker_state`, `health_status`, `circuit_breaker_failure_count`) — no live probe to avoid amplification (`trigger.py:173-190`).
 
 **Model:** `WebhookIntegration` (`backend/models.py:2918`).
 
-**E2E setup — Webhook channel:**
+**Criteria filtering:** `WebhookIntegration.trigger_criteria` stores the shared trigger-criteria envelope. Supported payload matchers live in `filters.jsonpath_matchers` with `path`, `operator`, and optional `value`. Supported operators are `exists`, `not_exists`, `equals`, `not_equals`, `contains`, `in`, and `regex`. Criteria are evaluated before wake dispatch; a mismatch returns `204 No Content` from inbound processing and records `filtered_out` in `channel_event_dedupe`.
 
-1. Navigate to **Hub → Communication → Webhook Integrations** in the UI.
-2. Click **+ New Webhook** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
+**Canonical management surface:** `GET /api/triggers` lists trigger catalog entries, and `/api/triggers/webhook/*` is the canonical CRUD namespace. Legacy `Agent.webhook_integration_id` bindings still exist during the migration window, but the long-term routing model is instance-level `default_agent_id` plus trigger-aware default resolution.
+
+**E2E setup — Webhook trigger:**
+
+1. Navigate to **Hub > Triggers > Webhook** in the UI.
+2. Click **+ New Webhook Trigger** — provide a name, choose **Auto** or **Custom** URI mode (Custom gets a live-validated slug input), and optionally a callback URL for outbound responses.
 3. The system generates an HMAC signing secret. A reveal modal shows the full plaintext once with a copy button (auto-copied to clipboard) **plus a ready-to-paste `openssl`+`curl` snippet pre-filled with your secret and inbound URL** — copy the block, paste it into any shell with `openssl` + `curl`, and a successful reply (`{"status":"queued",…}`) confirms the integration end-to-end without leaving the browser. **Save the secret now** — the same modal will appear again only if you rotate the secret.
 4. Configure optional defenses: IP allowlist (CIDR ranges), rate limit (RPM), max payload size.
-5. **Assign to an agent** — on the agent's Channels tab, enable Webhook and select the integration (sets `webhook_integration_id`).
+5. **Choose the receiving agent** — during the Wave 1 checkpoint, routing can still fall back to the legacy `Agent.webhook_integration_id` binding where present; the v0.7.0 target model is the trigger's own `default_agent_id` plus `/settings/default-agents`.
 6. **Test inbound** — send a signed event to your webhook (the absolute URL appears in the card, e.g. `https://localhost/api/webhooks/my-crm/inbound`):
 
 ```bash
@@ -1818,6 +2385,92 @@ curl -X POST https://localhost/api/webhooks/<slug>/inbound \
 
 7. If `callback_url` is configured, the agent's response will be POSTed there with HMAC-signed headers.
 8. **Rotate Secret** — the button on each card invalidates the previous secret and opens the same reveal modal showing the fresh plaintext. Update your external system before the next request, or it will start failing with `403`.
+
+#### Email triggers (Gmail-backed control plane)
+
+**Source:** `backend/api/routes_email_triggers.py`, `backend/models.py`, `frontend/components/triggers/TriggerCreationWizard.tsx`, `frontend/components/triggers/TriggerDetailShell.tsx`
+
+Email triggers are modeled as trigger rows, not communication channels. The Gmail account remains a reusable integration resource, and the trigger stores the control-plane configuration that will later drive inbox polling and wake-event emission.
+
+**Model:** `EmailChannelInstance` stores:
+- trigger display name (`integration_name`)
+- `gmail_integration_id`
+- `default_agent_id`
+- optional Gmail search query (`search_query`)
+- optional shared trigger criteria envelope (`trigger_criteria`) with Gmail query helpers and JSONPath matchers for payload fields such as `$.message.body_text`
+- poll interval (`30-3600` seconds)
+- `is_active`, `status`, and health snapshot fields
+
+**API surface:**
+- `GET /api/triggers/email` — list the tenant's persisted email trigger rows
+- `POST /api/triggers/email` — create a trigger row bound to an existing Gmail integration
+- `POST /api/triggers/email/test-query` — test a Gmail integration and query before saving
+- `GET /api/triggers/email/{id}` — fetch one trigger
+- `PATCH /api/triggers/email/{id}` — rename, rebind the Gmail integration, change the default agent, search query, poll interval, or active state
+- `POST /api/triggers/email/{id}/test-query` — test the saved trigger query and return sample message previews
+- `POST /api/triggers/email/{id}/poll-now` — force one immediate Gmail poll for validation or operator checks
+- `POST /api/triggers/email/{id}/triage-subscription` — enable/reuse managed Gmail draft triage
+- `DELETE /api/triggers/email/{id}` — delete one trigger row
+
+**Hub flow:** Hub > Triggers > **+ New Trigger** > **Email**
+- Confirms Google OAuth app credentials
+- Reuses or creates a Gmail account through the existing OAuth popup contract
+- Captures the trigger name, Gmail search query, poll interval, default agent, and active/paused state
+- Saves a persisted trigger row without treating Gmail as a conversational channel
+
+**Runtime notes:**
+- Gmail-backed Email triggers are polled by the scheduler worker through `EmailTrigger.poll_active()`. The poller supports Gmail search queries, persisted criteria evaluation through `TriggerDispatchService`, cursor/dedupe advancement, wake-event dispatch, and system-owned triage or Flow-owned notification output.
+- A keyword flow such as Gmail search query `XYZ` can be saved in `search_query` and mirrored into `trigger_criteria.filters.email.search_query`; optional JSONPath matchers can further require body text such as `$.message.body_text contains "XYZ"` before a wake/run is emitted.
+- Email dedupe remains once per Gmail message id (`gmail:{message_id}`) plus cursor advancement, so polling the same matching message again does not create duplicate output or a second run.
+- Managed triage creates Gmail drafts only when the linked Gmail integration has a draft-compatible scope. Without `gmail.compose`, `gmail.modify`, or `mail.google.com/`, triage runs fail closed with a missing-scope result rather than sending mail.
+- Flow Notification output requires an active tenant-owned outbound channel. Notification messages can include subject, sender, Gmail account, optional date, Gmail message id, and a short plain-text preview; email body text is treated as untrusted context.
+- Trigger routing uses the trigger-aware default-agent chain in `default_agent_service.py`: explicit agent -> trigger instance default -> legacy bound agent -> tenant default.
+- If no active agent resolves for a trigger, the runtime is expected to fail closed rather than silently enqueue work.
+
+#### Jira triggers
+
+**Source:** `backend/api/routes_jira_triggers.py`, `backend/channels/jira/trigger.py`, `frontend/components/triggers/TriggerCreationWizard.tsx`, `frontend/components/triggers/TriggerDetailShell.tsx`
+
+Jira triggers watch Jira Cloud REST JQL queries and normalize matching issue payloads into `TriggerDispatchInput`. Track B introduced the persisted trigger row, JQL test-query, linked Hub Tool API credentials, detail UI, and issue-normalization contract; v0.7.0 finalization adds the live poll loop and Flow-owned notification output proof.
+
+**API surface:**
+- `GET/POST /api/hub/jira-integrations`
+- `PATCH/DELETE /api/hub/jira-integrations/{id}`
+- `POST /api/hub/jira-integrations/test-query`
+- `POST /api/hub/jira-integrations/{id}/test-query`
+- `GET/POST /api/triggers/jira`
+- `GET/PATCH/DELETE /api/triggers/jira/{id}`
+- `POST /api/triggers/jira/test-query`
+- `POST /api/triggers/jira/{id}/test-query`
+- `POST /api/triggers/jira/{id}/poll-now`
+
+**Stored config:** Jira Tool API rows store site URL, optional project key, auth email, encrypted API token, token preview, active flag, health metadata, and (since v0.7.0) `provider_mode` (`'programmatic' | 'agentic'`, default `'programmatic'` — see §20.5 below). Jira trigger rows store the selected `jira_integration_id`, JQL, optional project override, poll interval, trigger criteria, default agent, active/status/health fields, and cursor/activity timestamps. Trigger-local credentials are not part of the product model.
+
+**Runtime and notifier contract:**
+- Active Jira triggers poll on their configured interval using Jira Cloud's enhanced JQL search endpoint (`/rest/api/3/search/jql`), dispatch matching issues through the shared trigger dispatch path, and persist dedupe evidence so the same issue is processed once.
+- Jira credentials are UI-managed from Hub → Tool APIs and encrypted at rest; API responses expose only `api_token_preview`.
+- Notifications for Jira trigger results are Flow outputs, not Jira trigger fields. They require a tenant-owned outbound channel in the Flow Notification node and should produce one notification per deduped Jira issue when enabled.
+- Jira base URLs are normalized by stripping a trailing `/jira`; issue links and REST calls use the canonical site root.
+- Browser QA covers setup/edit/test-query, detail state, wake-event evidence, and the poll-now manual proof action. Backend QA covers successful polling, duplicate suppression, missing/paused channel failures, and cross-tenant ownership rejection.
+
+#### Flow scheduled execution
+
+Scheduling is a Flow concern. Use Flow scheduled or recurring execution when an operator needs a clock-driven task, digest, message, or workflow. Trigger APIs intentionally do not expose a schedule kind.
+
+#### GitHub triggers
+
+**Source:** `backend/api/routes_github_triggers.py`, `backend/api/routes_github_inbound.py`, `backend/channels/github/trigger.py`
+
+GitHub triggers receive signed repository webhook deliveries and dispatch matching events to continuous-agent wakeups. They select a tenant-owned Hub GitHub integration; trigger-local credentials are not accepted.
+
+**API surface:**
+- `GET/POST /api/triggers/github`
+- `GET/PATCH/DELETE /api/triggers/github/{id}`
+- `POST /api/triggers/github/{id}/inbound`
+
+**Stored config:** linked `github_integration_id`, repository owner/name, encrypted webhook-secret preview, event filters, branch/path/author filters, trigger criteria, default agent, and delivery/activity cursors. Credential tests happen on the Hub integration surface.
+
+**Inbound contract:** GitHub sends `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. The route validates HMAC using the stored webhook secret, applies repo/event/branch/path/author filters, dedupes on delivery id, and dispatches via `TriggerDispatchService`.
 
 ### 15.6 Playground
 
@@ -1990,15 +2643,25 @@ Source: `frontend/app/agents/projects/page.tsx:92-108`.
 
 ### 17.2 Knowledge Base Config (per project)
 
-Source: `backend/models.py:1062-1065`, UI at `page.tsx:99-101, 65-77`.
+Source: `ProjectKnowledgeConfig`, `ProjectKnowledge` snapshots, and UI project create/detail KB panels.
 
 | Field | Default | Options |
 |---|---|---|
 | `kb_chunk_size` | 500 (chars) | integer |
 | `kb_chunk_overlap` | 50 (chars) | integer |
-| `kb_embedding_model` | `"all-MiniLM-L6-v2"` | `all-MiniLM-L6-v2`, `all-mpnet-base-v2`, `paraphrase-multilingual-MiniLM-L12-v2`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`, `text-embedding-004`, `embedding-001` |
+| `kb_embedding_provider_instance_id` | null | tenant-scoped embedding-capable provider instance |
+| `kb_embedding_provider` | `local` | `local`, `openai`, `gemini`, `ollama` |
+| `kb_embedding_model` | `"all-MiniLM-L6-v2"` | provider catalog models such as `gemini-embedding-2` or `text-embedding-3-small` |
+| `kb_embedding_dims` | 384 | model-supported dimensions |
+| `kb_vector_store_instance_id` | null | built-in Chroma or any active tenant vector-store instance |
 
-Embedding model list: `frontend/app/agents/projects/page.tsx:65-77`.
+Project KB documents snapshot provider/model/dimensions/vector index on upload/reprocess. Project search groups documents by snapshot profile, so old 1536d documents remain searchable after the active project config changes to 768d.
+
+Project KB config endpoints:
+- `GET /api/projects/{project_id}/knowledge/config`
+- `PUT /api/projects/{project_id}/knowledge/config`
+- `GET /api/projects/{project_id}/knowledge/embedding-options`
+- `POST /api/projects/{project_id}/knowledge/search` for deterministic KB search/regression checks without invoking an LLM conversation.
 
 ### 17.3 Memory Config (per project)
 
@@ -2043,7 +2706,7 @@ The page uses `MediaRecorder` to capture voice directly in the browser (`page.ts
 - Preferred MIME types (in order): `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg;codecs=opus`, `audio/mp4` (`:502-510`).
 - Audio capabilities are loaded per selected agent (`:484-490`) — determined by the agent's configured `audio_transcript` skill.
 
-Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using OpenAI Whisper or configured provider. Skill is `execution_mode="special"` (media-triggered).
+Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using one of three routes: explicit OpenAI Whisper, the tenant default ASR instance, or a specific pinned local Speaches/Whisper instance. When the selected local path is unavailable, the skill falls back to OpenAI Whisper. Skill is `execution_mode="special"` (media-triggered).
 
 ### 18.3 Document Uploads
 
@@ -2129,7 +2792,7 @@ A compact companion to the full Playground, mounted globally in `frontend/app/la
 
 ### 18.6.1 Live Regression Harness
 
-For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py`.
+For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py` from the repo, or `/app/dev_tests/run_playground_regression_live.py` inside the backend container when the dev-test directory is mounted there.
 
 **Purpose.** This runner validates the existing Playground / Playground Mini / Watcher Graph contracts on the currently running local HTTPS stack without introducing any new test-only product endpoints. It is intended for "the stack is already up, tell me whether full Playground, Mini, watcher activity, KB glow, provider glow, and A2A still work right now" passes.
 
@@ -2290,15 +2953,23 @@ Google's Gemini 3.x preview line is first-class across every picker and pricing 
 | `gemini-3.1-flash-tts-preview` | TTS (preview, default) | 8,192 / 16,384 | Default Gemini TTS — Balanced tier. See §20.6. |
 | `gemini-2.5-flash-tts-preview` | TTS (preview) | 8,192 / 16,384 | Fast tier. See §20.6. |
 | `gemini-2.5-pro-tts-preview` | TTS (preview) | 8,192 / 16,384 | Quality tier. See §20.6. |
-| `gemini-2.5-flash-image` | Image generation (default) | — | "Nano Banana (Fast)". Default in `ImageSkill.SUPPORTED_MODELS`. |
-| `gemini-3.1-flash-image-preview` | Image generation | — | Available in `ImageSkill.SUPPORTED_MODELS` (`backend/agent/skills/image_skill.py`). |
-| `gemini-3-pro-image-preview` | Image generation (premium) | — | "Nano Banana Pro" — quality tier. |
+| `gemini-2.5-flash-image` | Image generation/editing | — | "Nano Banana (Fast)"; uses Gemini `generate_content` image output. |
+| `gemini-3.1-flash-image-preview` | Image generation/editing | — | Available in `ImageSkill.SUPPORTED_MODELS` (`backend/agent/skills/image_skill.py`); uses Gemini `generate_content` image output. |
+| `gemini-3-pro-image-preview` | Image generation/editing (premium) | — | "Nano Banana Pro" — quality tier; uses Gemini `generate_content` image output. |
+| `imagen-4.0-fast-generate-001` | Image generation only | — | Gemini API Imagen 4 Fast; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `imagen-4.0-generate-001` | Image generation only (default) | — | Gemini API Imagen 4 Standard; default in `ImageSkill.SUPPORTED_MODELS`; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `imagen-4.0-ultra-generate-001` | Image generation only | — | Gemini API Imagen 4 Ultra; uses `client.models.generate_images(...)`, not Vertex AI. |
+| `gpt-image-2` | Image generation/editing | — | OpenAI GPT Image 2; uses the OpenAI Images API (`client.images.generate(...)` / `client.images.edit(...)`). |
 
 **Backend auto-lift of output tokens.** `backend/agent/ai_client.py` `_call_gemini` raises the default `generation_config.max_output_tokens` to **65,536** when the model name starts with `gemini-3-` or `gemini-3.1-` (the 2.x default of 8,192 truncates long 3.x outputs). The lift applies only when the caller hasn't explicitly set a lower value.
 
-**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes.
+**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing?hl=en) lists Imagen 4 image prices as Fast `$0.02`, Standard `$0.04`, and Ultra `$0.06` per generated image, which Tsushin records using the existing per-image operation convention. [OpenAI API pricing](https://openai.com/api/pricing/) lists GPT-image-2 at text input `$5/1M` tokens, image input `$8/1M` tokens, and image output `$30/1M` tokens; Tsushin records the two-field approximation as prompt `$5/1M` and completion `$30/1M`.
 
-**Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint.
+**Gemini API Imagen 4 behavior.** Imagen 4 support is direct Gemini API support only, documented in the [Gemini API Imagen guide](https://ai.google.dev/gemini-api/docs/imagen). The backend dispatches Imagen model IDs to `google.genai.Client(api_key=...).models.generate_images(...)`; it does not use Vertex AI credentials or project/region configuration. Imagen 4 is generation-only in the Gemini API path, so Image Skill edit requests with an Imagen model return a clear unsupported-edit error instead of falling back to another model.
+
+**OpenAI GPT Image behavior.** OpenAI image support uses the [OpenAI Images API](https://platform.openai.com/docs/api-reference/images/generate) directly with the tenant's OpenAI API key, not an OpenAI-compatible chat completion path. `gpt-image-2` generation calls `client.images.generate(...)`; edit mode calls `client.images.edit(...)` with the inbound image file.
+
+**Wizards covered.** Setup Wizard, Playground ConfigPanel, Agent Wizard → Step Audio, and Audio Agents Wizard all include the 3.x models. The Agent Wizard → Step Basics picker is API-fed from `ProviderInstance.available_models`, so 3.x preview models appear there automatically once model discovery hits Google's `/models` endpoint. Provider Wizard Image Generation setup uses image-only predefined buckets (`gemini_image`, `openai_image`) so Gemini image models, Imagen 4, and OpenAI GPT Image 2 appear there without adding image-only IDs to normal LLM suggestions. Live Gemini/OpenAI LLM discovery filters those image-only IDs out of the generic model lists.
 
 ### 19.8 ProviderWizard — guided multi-step setup (v0.7.x)
 
@@ -2324,7 +2995,7 @@ The guided wizard replaces the flat `ProviderSetupWizard` category picker (delet
 | Credentials | `hosting='cloud'` | `StepCredentials` — api_key, base_url, Vertex AI fields |
 | Container | `hosting='local'` | `StepContainerProvision` — instance_name, mem_limit, GPU |
 | Pull models | `vendor='ollama' && hosting='local'` | `StepOllamaPullModels` — curated starter models, skippable |
-| Test & models | Always | `StepTestAndModels` — Test Connection, Auto-detect models, default toggle |
+| Test & models | Always | `StepTestAndModels` — Test Connection, model suggestions, Auto-detect for LLM providers, default toggle |
 | Review | Always | `StepReview` — summary with jump-to-edit rows |
 | Progress | Always (terminal) | `StepProgress` — fires the actual create call |
 
@@ -2336,11 +3007,11 @@ The guided wizard replaces the flat `ProviderSetupWizard` category picker (delet
 | LLM | Local | ollama |
 | TTS | Cloud | elevenlabs |
 | TTS | Local | kokoro |
-| Image | Cloud | gemini (pre-tagged "Uses Nano Banana / Nano Banana Pro") |
+| Image | Cloud | openai (pre-tagged "GPT Image 2"), gemini (pre-tagged "Gemini API Imagen 4") |
 
 **Backend endpoints used (no new endpoints introduced):**
 
-- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (Gemini).
+- `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (OpenAI/Gemini).
 - `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container).
 - `POST /api/api-keys` — TTS ElevenLabs (legacy api_keys surface).
 - `POST /api/settings/ollama/provision` — Ollama container lifecycle after `ProviderInstance` create.
@@ -2393,6 +3064,34 @@ The **Hub → AI Providers** tab no longer renders the legacy Service API Keys b
 - Stays collapsed by default so the Hub is clean for tenants who only use instances.
 
 The inline "Fallback — instance key takes priority" amber label has been removed — with the new filtering, the fallback card and the instance card can never appear on the same page simultaneously.
+
+### 19.11 LLM Providers Catalog endpoint (v0.7.0)
+
+`GET /api/llm-providers/catalog` is the single source of truth consumed by the agent creation wizard, the Studio agent edit modal, the Playground config panel and the Hub LLM Providers tab. Returns one entry per supported vendor with `vendor`, `display_name`, `default_base_url`, `supports_discovery`, `creatable`, and an embedded `instances` array (each with `id`, `instance_name`, `is_default`, `health_status`, `health_status_reason`, `base_url`, `available_models`, `is_auto_provisioned`, `container_status`). Active-only — soft-deleted instances never appear. Replaced three independent fetch paths that previously diverged into "ghost vendor" inconsistencies. (`backend/api/routes_provider_instances.py:get_llm_providers_catalog`, `backend/services/provider_instance_service.py:get_catalog`).
+
+The shared `<ProviderInstancePicker />` component (`frontend/components/providers/ProviderInstancePicker.tsx`) consumes this endpoint — wizard `StepBasics` and Studio `AgentConfigurationManager` both render it so they cannot drift. Selecting a vendor with zero active instances surfaces an inline `+ Create … instance` CTA that opens `<ProviderInstanceModal />` and auto-selects the newly created instance after save.
+
+### 19.12 Cascade-aware delete contract (v0.7.0)
+
+`DELETE /api/provider-instances/{id}` requires explicit cascade resolution when there are dependent agents. The body schema is `{reassign_to_instance_id?: int, unassign?: bool}`:
+
+- **No dependents:** body optional; succeeds immediately.
+- **Has dependents + `reassign_to_instance_id`:** target must be active and same-tenant; agents are reassigned and snapped to the target's first available model.
+- **Has dependents + `unassign=true`:** agents lose the binding (`provider_instance_id=null`); their `model_provider` and `model_name` are preserved.
+- **Has dependents + neither flag:** returns **HTTP 409** with `detail.usage` payload (dependent agent list) embedded so the UI can prompt for the decision.
+
+`GET /api/provider-instances/{id}/usage` is the dry-run endpoint that backs the pre-delete confirmation modal (`frontend/components/providers/ProviderInstanceDeleteModal.tsx`). Returns `{instance_id, vendor, instance_name, agents:[{id, name, model_provider, model_name, is_active}], dependent_count}`. Tenant-scoped — never leaks cross-tenant agent data even when the row is referenced. (`backend/services/provider_instance_service.py:get_instance_usage`, `delete_instance_with_reassign`).
+
+### 19.13 Boot-time orphan migration + legacy fallback removal (v0.7.0)
+
+`ProviderInstanceService.bootstrap_orphan_vendor_agents()` runs once during backend startup (`backend/app.py` lifespan hook). Enumerates `(tenant_id, vendor)` pairs where active agents have `provider_instance_id IS NULL` and no active instance exists for that vendor:
+
+- **Ollama:** auto-creates the canonical `Ollama (Local)` instance via `ensure_ollama_instance()` and relinks every orphan agent to it. Idempotent — a second call creates 0 instances, relinks 0 agents.
+- **Other vendors (Gemini, OpenAI, Anthropic, …):** logs one WARNING per pair (`bootstrap_orphan_vendor_agents: tenant=… has active agent(s) for vendor=… with no provider_instance_id …`). The operator must configure the instance via Hub — we don't have credentials to invent one.
+
+The AIClient legacy host-Ollama fallback (env var `OLLAMA_BASE_URL` → `host.docker.internal:11434` → Linux gateway) was **removed** in this pass (`backend/agent/ai_client.py:232`). Mid-session orphan Ollama agents created in tenants without a default instance now raise a clear ValueError pointing operator at Hub instead of silently spinning up an unconfigured client. The `_get_ollama_models()` helper in `routes_sentinel.py` and the `/api/ollama/health` endpoint still read from `Config.ollama_base_url` directly — they are tenant-agnostic platform helpers and are unaffected.
+
+Coverage: `backend/tests/test_provider_instance_catalog.py` (13 cases — catalog, usage tenant-scoping, cascade delete decision-required → 409, reassign-target validation, unassign branch, self-reassign rejection, no-dependents shortcut, bootstrap relink, non-Ollama warning, AIClient orphan ValueError, bootstrap idempotency).
 
 ---
 
@@ -2486,6 +3185,81 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 | Ollama | 6700–6799 | `services/ollama_container_manager.py` |
 | SearXNG | 6500–6599 | `services/searxng_container_manager.py` |
 
+### 20.4.1 Atlassian Jira (programmatic + ticket_management skill)
+
+**Sources:** `backend/hub/jira/jira_ticket_service.py`, `backend/services/jira_integration_service.py`, `backend/api/routes_jira_integrations.py`, `frontend/app/hub/page.tsx` (JiraIntegrationModal), `backend/agent/skills/jira_skill.py`.
+
+A Jira integration row (`jira_integration` — subclass of `hub_integration`) stores the site URL, optional default project key, auth email, encrypted API token, and (since v0.7.0) a `provider_mode` discriminator:
+
+| `provider_mode` | Status | Path |
+|---|---|---|
+| `programmatic` | ✅ shipped | Direct REST API + token (HTTP Basic auth). Used by both Jira triggers and the `ticket_management` skill. |
+| `agentic` | ⏳ Coming soon | OAuth 2.1 to `https://mcp.atlassian.com/v1/mcp` (Atlassian Remote MCP). UI exposes the option as a disabled radio with a "Coming soon" tooltip; backend rejects `provider_mode='agentic'` with `400 agentic_mode_not_yet_supported`. |
+
+**Hub modal flow** (`frontend/app/hub/page.tsx` JiraIntegrationModal): name, site URL, auth email, API token, Connection-mode radio, active checkbox. Editing keeps the existing token unless replaced.
+
+**Ticket Management skill** (§9 row `ticket_management`): the same `JiraIntegration` row is reused on demand by agents. The agent's Skills tab auto-selects a Jira integration when exactly one exists for the tenant. Capability matrix:
+
+| Capability | Default | Endpoint |
+|---|---|---|
+| `search_tickets` | ✅ on | POST `/rest/api/3/search/jql` |
+| `read_ticket` | ✅ on | GET `/rest/api/3/issue/{key}` |
+| `read_comments` | ✅ on | GET `/rest/api/3/issue/{key}/comment` |
+| `update_ticket` | ❌ off | PUT `/rest/api/3/issue/{key}` |
+| `add_comment` | ❌ off | POST `/rest/api/3/issue/{key}/comment` |
+| `transition_ticket` | ❌ off | POST `/rest/api/3/issue/{key}/transitions` |
+
+Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool schema (the LLM never sees actions it cannot run). `JiraSkill.get_mcp_tool_definition` (classmethod) returns the *full* spec so `SkillManager._find_skill_by_tool_name('ticket_operation')` can map the tool name to the class for dispatch; per-agent filtering happens in instance-level `to_openai_tool` / `to_anthropic_tool` helpers that read `AgentSkill.config["capabilities"]`.
+
+**DELETE protection:** `DELETE /api/hub/jira-integrations/{id}` returns `409` if the integration is still referenced by any `JiraChannelInstance` (trigger) or `AgentSkillIntegration` row. The user must detach those references first; the modal's Remove button surfaces the reason.
+
+### 20.4.2 GitHub (programmatic + code_repository skill)
+
+**Sources:** `backend/services/github_integration_service.py`, `backend/api/routes_github_integrations.py`, `backend/agent/skills/code_repository_skill.py`, `backend/channels/github/criteria.py`, `frontend/app/hub/page.tsx` (GitHubIntegrationModal).
+
+GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongside the `code_repository` skill (§9.1) and the GitHub trigger criteria envelope (§14.3 wizard step 3). One integration row provides credentials for both the agent-facing skill and the trigger pipeline.
+
+**Hub UI:** Hub → Tool APIs → Developer Tools → GitHub. The modal asks for:
+
+| Field | Required | Notes |
+|---|---|---|
+| Personal Access Token (PAT) | yes | Stored encrypted with the API-key encryption key (NOT the webhook key). Preview shown as `<first 4>...<last 4>`. |
+| Default owner | optional | Used when an action call omits `owner`. |
+| Default repo | optional | Used when an action call omits `repo`. |
+| Enabled | yes | Pauses or enables use of this shared connection. |
+
+**Routes:**
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/hub/github-integrations` | Create. Rejects `provider_mode='agentic'` with 400. |
+| `GET /api/hub/github-integrations` | List for the tenant; PAT preview masked. |
+| `PATCH /api/hub/github-integrations/{id}` | Update name / token / default owner / default repo / active state. |
+| `DELETE /api/hub/github-integrations/{id}` | Returns `409` when referenced by any `AgentSkillIntegration(skill_type='code_repository')` or FK-linked `GitHubChannelInstance`. |
+| `POST /api/hub/github-integrations/test-connection` | Raw-creds dry-run. Hits GitHub `/repos/{owner}/{repo}` and returns `{success, status_code, repo_full_name}`. |
+| `POST /api/hub/github-integrations/{id}/test-connection` | Saved-creds dry-run for already-stored integrations. |
+
+**Code Repository skill** (§9 row `code_repository`): the same `GitHubIntegration` row is reused on demand by agents. The agent's Skills tab auto-selects the GitHub integration when exactly one exists. Capability matrix:
+
+| Action | Default | Notes |
+|---|---|---|
+| `search_repos` | ON | Read |
+| `list_pull_requests` | ON | Read |
+| `read_pull_request` | ON | Read |
+| `list_issues` | ON | Read |
+| `read_issue` | ON | Read |
+| `create_issue` | OFF | Write |
+| `add_pr_comment` | OFF | Write |
+| `approve_pull_request` | OFF | Write |
+| `request_changes` | OFF | Write |
+| `merge_pull_request` | OFF | Write |
+| `close_pull_request` | OFF | Write |
+| `close_issue` | OFF | Write |
+
+Same tool-spec gating contract as `ticket_management` and the v0.7.0 granular Gmail capabilities — see §9.2.1 for the four design properties.
+
+**Trigger criteria envelope** (used by the GitHub trigger wizard, §14.3): `{criteria_version: 1, event: 'pull_request', actions: ['opened', 'reopened', ...], filters: {branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering: 'oldest_first'}`. The evaluator at `backend/channels/github/criteria.py` returns `(matched, reason)` for every rejection path so the dry-run "Test against sample payload" surface in the wizard's Criteria step (and on the existing trigger detail Criteria tab) can show why a sample PR was filtered out.
+
 ### 20.5 Browser Automation (Playwright, CDP)
 
 **Sources:** `backend/hub/providers/browser_automation_provider.py`, `backend/hub/providers/playwright_provider.py`, `backend/hub/providers/cdp_provider.py`, `backend/hub/providers/browser_session_manager.py`, `backend/hub/providers/browser_automation_registry.py`
@@ -2520,7 +3294,7 @@ The CDP provider validates the CDP URL through `utils/cdp_url_validator.validate
   | `gemini-2.5-flash-tts-preview` | Fast | Shorter latency; identical SDK shape; same WAV output. |
   | `gemini-2.5-pro-tts-preview` | Quality | Highest quality tier; pricing typically 5–10× Flash (currently `$0.00` until Google publishes pricing — see TODO in `get_pricing_info()`). |
 
-  Tenants pick the model per agent via the Audio Agents Wizard or the regular Agent Wizard's audio step. The selection is persisted into `AgentSkill.config.model` (no migration — JSON field) and is delivered into the SDK via `client.models.generate_content(model=…)`. Unknown model ids fall back to `DEFAULT_MODEL` with a `warning` log line (rather than silently routing to a wrong model). Discover the catalog programmatically via `GET /api/tts-providers/gemini/models` (returns `[{model_id, label, is_default}]`).
+  Tenants pick the model per agent via the Audio Agents Wizard or the regular Agent Wizard's audio step. The selection is persisted into `AgentSkill.config.model` (no migration — JSON field) and is delivered into the SDK via `client.models.generate_content(model=…)`. Unknown model ids fall back to `DEFAULT_MODEL` with a `warning` log line (rather than silently routing to a wrong model). These `*-tts-preview` ids are audio-only; if one is accidentally saved as an agent's primary Gemini chat model, `AIClient` falls back to a stable Gemini text model for normal text replies while the TTS skill still uses its configured preview model. Discover the catalog programmatically via `GET /api/tts-providers/gemini/models` (returns `[{model_id, label, is_default}]`).
 
 - **Endpoint shape:** standard `generateContent` with `response_modalities=["AUDIO"]` and a `SpeechConfig(voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name=…)))` block.
 - **30 prebuilt voices:** Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat. Case-sensitive proper nouns. (Documented for the 3.1 model; the 2.5 Flash/Pro models are assumed to share the same catalog — verify per Google docs before announcing.)
@@ -2560,17 +3334,47 @@ This wizard replaced the built-in Kokoro / Kira / Transcript seed agents (remove
 
 Five configuration steps + one progress step:
 
-1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*. Transcription-only skips provider choice (Whisper via OpenAI is the only option).
+1. **Intent** — three cards: *Voice responses (TTS)*, *Audio transcription only*, *Hybrid — both*.
 2. **Provider** — four cards: Kokoro (free/local), OpenAI TTS (paid), ElevenLabs (premium), Google Gemini TTS (preview, reuses tenant Gemini key). Each card shows a **Detected** badge when the tenant already has that provider configured (`api.getTTSInstances()` for Kokoro, `api.getProviderInstances()` for OpenAI / ElevenLabs / Gemini keys), or a **Needs API key** badge linking back to Hub → AI Providers otherwise.
-3. **Voice & credentials** — language first (filters Kokoro voices by language), then (for Gemini only) a **Model** dropdown sourced live from `GET /api/tts-providers/gemini/models` (3 preview models — Balanced default, Fast, Quality), then voice, speed, format. Kokoro adds a memory-limit dropdown and a "Set as tenant-default TTS" checkbox. Gemini hides the speed slider and locks format to WAV (model constraints).
+3. **Voice & transcription settings** — language first (shared between TTS + STT), then:
+   for TTS, the existing provider-specific voice / speed / format controls (plus Kokoro memory-limit + "Set as tenant-default TTS");
+   for transcription, an **ASR backend** selector with *OpenAI Whisper*, *Use tenant default*, and *Pin a specific local instance*. The local-instance options are sourced from `GET /api/asr-instances`, while the tenant-default card reflects `GET /api/settings/asr/default`.
 4. **Agent target** — radio: *Create a new Voice Assistant* (system prompt defaults mirror the old Kira/Kokoro prompts, preserved as client-side templates in `defaults.ts`) or *Attach audio to an existing agent* (preserves other skills on the target). Existing-agent radio is disabled if the tenant has no agents yet.
 5. **Review & Create** — summary cards + skill diff (`audio_tts`, `audio_transcript`, or both) + "Create & Provision" CTA.
 
-On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
+On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instances/{id}/container/status` every 3 s until `running` (~30–90 s) and then calls `POST /api/tts-instances/{id}/assign-to-agent`; the OpenAI/ElevenLabs/Gemini path skips the TTSInstance and directly calls `PUT /api/agents/{id}/skills/audio_tts` with `{provider, voice, language, speed, response_format, model?}`. If intent is hybrid or transcript, `PUT /api/agents/{id}/skills/audio_transcript` is also called with `{response_mode, language, model, asr_mode, asr_instance_id?}`. New-agent mode creates a Contact (`POST /api/contacts`), an Agent (`POST /api/agents`), then an update call (`PUT /api/agents/{id}`) to apply `memory_size` / `response_template` / `enabled_channels` defaults. All orchestration is client-side — no new backend endpoint was introduced.
 
 **Events.** The provider emits `window.dispatchEvent(new CustomEvent('tsushin:audio-wizard-closed'))` on close so the onboarding tour's step 12 callback can auto-advance to step 13 (mirrors the WhatsApp wizard pattern).
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
+
+### 25.8 ASR — Hub > Add Provider > Speech-to-Text wizard + Hub Local Services card
+
+ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** via the Provider Wizard, **management** via the Local Services card, and **per-agent assignment** via the Audio Agents Wizard / Studio Skills tab. There is **no global "Settings → ASR" page** and **no tenant-level default ASR**. Each agent either uses cloud OpenAI Whisper or pins a specific tenant-owned local instance.
+
+**Management (Hub > AI Providers tab > Local Services > ASR / Speech-to-Text card).** Once any ASR instance exists, the card lists every instance for the tenant with:
+- Vendor badge (`openai_whisper` or `speaches`) + `Auto` badge for auto-provisioned containers.
+- Live container status: `Provisioning` / `Running` / `Stopped` / `Error`.
+- Lifecycle controls (Start / Stop / Restart / Delete) via the shared `ManagedContainerPanel` component, identical to the Kokoro and Ollama cards.
+- Inline log viewer (last 100 log lines, refreshable).
+- `+ Setup with Wizard` button that opens the Hub Provider Wizard preset to ASR/local.
+- Delete confirmation modal that previews the cascade (*"Audio agents pinned to this instance will be reassigned to X"* or *"DISABLED"* if no successor) and an optional `Also remove container volume` checkbox for permanent model-cache deletion.
+- Post-deletion cyan banner showing the actual reassigned/disabled counts from the backend's cascade summary, e.g. *"ASR instance deleted — 3 audio agents reassigned to OpenAI Whisper QA-2"*.
+
+**Two registered local engines** (both share `WhisperInstance` + `WhisperContainerManager` + the per-vendor dispatch table in `VENDOR_CONFIGS`):
+
+| Engine | Image | Endpoint | Auth | Default model | HF cache mount | Notes |
+|---|---|---|---|---|---|---|
+| `speaches` | `ghcr.io/speaches-ai/speaches` | `POST /v1/audio/transcriptions` | Bearer (encrypted Fernet token per instance) | `Systran/faster-distil-whisper-small.en` | `/home/ubuntu/.cache/huggingface` (image runs as `ubuntu` uid 1000) | OpenAI-compatible. Multilingual default. ~2 GB RAM. `PRELOAD_MODELS` only loads from disk; first-run model download is triggered by `POST {base_url}/v1/models/{model_id}` after provisioning. |
+| `openai_whisper` | `onerahmet/openai-whisper-asr-webservice` | `POST /asr` (multipart `audio_file`) | None — relies on `tsushin-network` isolation + 127.0.0.1 host bind | `base` (configurable: tiny / base / small / medium / large-v3 / turbo) | `/root/.cache` (image runs as `root`) | Wraps the official `openai/whisper` Python package. `ASR_ENGINE=openai_whisper`. Model is pinned at boot via `ASR_MODEL` env. ~3 GB RAM for `base`. |
+
+**Hub Provider Wizard ASR modality.** `frontend/components/provider-wizard/steps/StepModality.tsx` exposes "Speech-to-Text (Audio in)" as a 4th modality. Picking ASR → Cloud surfaces only `openai` (Whisper API; reuses the saved OpenAI key) and skips credentials/test steps because there is no separate provider row to create. Picking ASR → Local surfaces both `openai_whisper` (new) and `speaches`, then routes through the standard container provision step before calling `POST /api/asr-instances` with `auto_provision=true`.
+
+**Per-agent assignment.** The `audio_transcript` skill exposes only two modes: `openai` (cloud Whisper API) and `instance` (pin a specific tenant-owned ASR instance via `asr_instance_id`). The Audio Agents Wizard and Agent Skills Manager surface this choice; both list every active tenant ASR instance so the user can pick which one this agent uses.
+
+**Deletion cascade.** When an ASR instance is deleted, every `audio_transcript` skill row pinned to it is reconciled in the same transaction: if the tenant still has another active ASR instance (lowest id wins), the pinned skills are repointed; otherwise those skills are disabled (`is_enabled=false`) so the agent stops trying to transcribe via a now-deleted endpoint. The cascade summary (`reassigned`, `disabled`, `successor_instance_id`) is returned in the DELETE response so the UI can surface a banner like *"3 agents reassigned to OpenAI Whisper QA"*.
+
+**Removed surfaces (v0.7.0 RC cleanup).** `/settings/asr`, `Tenant.default_asr_instance_id`, the legacy `tenant_default` value of `asr_mode`, and the GET/PUT `/api/settings/asr/default` routes were retired in this release. Existing skill rows still carrying `asr_mode='tenant_default'` collapse to `'openai'` at read time — no silent fan-out to a phantom tenant default.
 
 #### 20.6.2 Ollama Setup Wizard
 
@@ -2669,7 +3473,7 @@ Lists system and tenant-defined roles with display names and permission badges. 
 
 "Coming Soon" section (`:277`) lists planned integrations. Removing Google credentials warns that it will disconnect all Google integrations (Gmail, Calendar) and disable Google SSO (`:79`).
 
-**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** and **"+ Add Channel"** launchers dispatch to. The Hub wizards (`frontend/components/integrations/ProductivityWizard.tsx`, `ChannelsWizard.tsx`) run a category/service (or channel) picker step and then hand off to the per-service sub-wizard — this is the same pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
+**Guided wizards — shared with Hub.** The "Set up Gmail →" and "Set up Google Calendar →" buttons on this page open the same 6-step wizards (`GmailSetupWizard`, `GoogleCalendarSetupWizard`) that the Hub **"+ Add Productivity Integration"** launcher dispatches to. Gmail is no longer offered from the channel picker; inbound email automation starts from Hub > Triggers > Email Trigger while Gmail accounts remain reusable Productivity integrations. Hub uses `frontend/components/integrations/ProductivityWizard.tsx` for productivity setup and `frontend/components/triggers/TriggerCreationWizard.tsx` for Email/Webhook/Jira/GitHub trigger setup — the same picker-to-specialized-config pattern the AI-Provider `ProviderWizard` uses. Both Google sub-wizards live under a global `GoogleWizardProvider` (`frontend/contexts/GoogleWizardContext.tsx`) mounted in `app/layout.tsx`. The wizard:
 1. Confirms Google OAuth app credentials are configured.
 2. Opens a popup to `/api/hub/google/{gmail|calendar}/oauth/authorize` and polls `/api/hub/google/{gmail|calendar}/integrations` for the new row.
 3. Lets the user pick one or more agents and, on completion, calls `PUT /api/agents/{id}/skills/{gmail|scheduler}` + `PUT /api/agents/{id}/skill-integrations/{gmail|scheduler}` to enable the skill and bind the new `integration_id`.
@@ -2681,6 +3485,24 @@ Either caller page can subscribe to completion via `useGoogleWizardComplete(kind
 **OAuth popup handoff.** "Connect new account" opens the Google consent screen in a popup. After approval, Google redirects the popup to the backend OAuth callback, which in turn redirects to `/hub?integration=<kind>&status=success&id=<n>`. The Hub page detects it's loaded inside a popup (via `window.opener`) and, instead of rendering, posts a `{ source: 'tsushin-google-oauth', integration, integration_id, status }` message to the opener (same-origin) and calls `window.close()`. The wizard listens for that message in a `useEffect` gated on `isOpen`, stops its 3-second poll, re-fetches the integration list, and selects the new row. Popup-blocked fallback still works: a direct visit to `/hub?…` has no `window.opener`, so the page renders normally.
 
 **Integration type is carried through the callback.** `backend/hub/google/oauth_handler.py::handle_callback` receives `integration_type` as an explicit argument; the outer `backend/api/routes_google.py::oauth_callback` reads it from the `OAuthState.integration_type` prefix (`google_gmail` → `gmail`, `google_calendar` → `calendar`) and passes it in. The legacy fallback that parsed the type from the `redirect_url` query string is still there for the direct-redirect flow, but if neither source yields a valid type the handler raises `ValueError` rather than defaulting to calendar — the popup-driven wizard flow never sets a `redirect_url`, and silently defaulting used to cause gmail OAuth to upsert into the calendar integration tables.
+
+### 21.4.1 Default Agents (`frontend/app/settings/default-agents/page.tsx`)
+
+**Purpose:** central routing control for tenant-wide fallback agent resolution. This page replaces the old inline "set default" affordance in Agent Studio.
+
+**Sections:**
+- **Tenant Default** — last-resort fallback when no more specific match exists
+- **Channel Defaults** — per-instance defaults for conversational channels such as WhatsApp, Telegram, Slack, and Discord
+- **Trigger Defaults** — per-instance defaults for trigger rows such as webhook and email
+- **User Defaults** — per-channel sender identifier overrides for known raw channel IDs before a contact-level mapping exists
+
+**Runtime resolution order** (`backend/services/default_agent_service.py`):
+- Channels: explicit agent -> `ContactAgentMapping` -> `UserChannelDefaultAgent` -> instance `default_agent_id` -> legacy bound agent FK -> tenant default
+- Triggers: explicit agent -> trigger instance `default_agent_id` -> legacy bound agent FK -> tenant default
+
+**Fail-closed trigger behavior:** if no active agent resolves for a trigger, runtime execution is expected to stop with an explicit error/health signal instead of silently queueing work.
+
+**Related UI changes:** `frontend/app/agents/page.tsx` still shows the current tenant default as a read-only stat card, but all edits now route to `/settings/default-agents`.
 
 ### 21.5 Security & SSO (`frontend/app/settings/security/page.tsx`)
 
@@ -2714,10 +3536,12 @@ Each key field has a show/hide eye toggle and placeholder `"Enter Fernet encrypt
 
 | Filter | Options |
 |---|---|
-| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, API Clients, Custom Skills, MCP Servers, Team |
+| Action | All Actions, Authentication, Agents, Flows, Contacts, Settings, Security, Shell, API Clients, Custom Skills, MCP Servers, Team |
 | Severity | All Severities, Info, Warning, Critical |
 | Channel | All Channels, Web, API, WhatsApp, Telegram, System |
 | From / To | Date range |
+
+Date-only filters now expand to full-day bounds on the backend, so selecting `To = 2026-04-23` includes events through `2026-04-23 23:59:59.999999` instead of stopping at midnight.
 
 **Syslog Forwarding Panel** (`audit-logs/page.tsx:416-521`):
 
@@ -2943,9 +3767,9 @@ Remote Access exposes the whole Tsushin instance through a single Cloudflare Tun
                                               ▼
                                  ┌────────────────────────────┐
                                  │ Caddy (tsushin-proxy)      │
-                                 │ /api/*  → backend:8081     │
-                                 │ /ws/*   → backend:8081     │
-                                 │ else    → frontend:3030    │
+                                 │ /api/*  → tsushin-backend  │
+                                 │ /ws/*   → tsushin-backend  │
+                                 │ else    → tsushin-frontend │
                                  └────────────────────────────┘
 ```
 
@@ -3115,7 +3939,7 @@ To restore it later, just click Start — the encrypted token and hostname are p
 
 The audit-logs UI exposes the same three (plus "All Severities") — see §21.7.
 
-**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, api_client, skill, mcp, team.
+**Action categories** (from the UI filter catalog, `audit-logs/page.tsx:40-66`): auth, agent, flow, contact, settings, security, shell, api_client, skill, mcp, team.
 
 **Channels**: web, api, whatsapp, telegram, system.
 
@@ -3141,7 +3965,7 @@ Source files: `backend/services/syslog_service.py`, `backend/services/syslog_for
 
 ### 24.1 Watcher dashboard tabs
 
-Watcher is the frontend observability surface. Tabs per `README.md:178-188`:
+Watcher is the frontend observability surface. The table below covers the existing documented tabs plus the Phase 10 Team Runs observability surface:
 
 | Tab | Purpose |
 |---|---|
@@ -3151,6 +3975,7 @@ Watcher is the frontend observability surface. Tabs per `README.md:178-188`:
 | **Billing** | Token usage and cost analytics per agent/model. |
 | **Security** | Sentinel threat events with severity filtering. |
 | **Graph View** | Interactive system topology (agents, users, projects) with Dagre auto-layout, node expand/collapse, fullscreen mode. |
+| **Team Runs** | Phase 10 read-only Agent Teams observability surface: tenant-wide run filters/detail via `GET /api/watcher/team-runs`, live `team_run` WebSocket updates, Sentinel decisions, and mesh coordinator evidence. No Team Builder controls are exposed here. Browser evidence is stored under `.private/qa/v0.7.0/p10/`. |
 
 Access requires the `watcher.read` permission (`backend/migrations/add_rbac_tables.py:387-388`).
 
@@ -3165,6 +3990,7 @@ app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_sche
 * Enabled by default; disable with `TSN_METRICS_ENABLED=false` (`backend/settings.py:139`).
 * Optional bearer token for scraping: `TSN_METRICS_SCRAPE_TOKEN` (`backend/services/metrics_service.py:109`). When set, scrapers must present `Authorization: Bearer <token>`.
 * Implemented by `backend/services/metrics_service.py`.
+* **Public ingress (BUG-712, BUG-723):** Caddy now has an explicit `handle /metrics { reverse_proxy <stack>-backend:8081 }` block in both `proxy/Caddyfile` and the `tsushin_routes` snippet generated by `install.py`, so the Next.js auth middleware no longer 307s `/metrics` to `/auth/login` when the proxy is in front. Pre-fix, scrapes against the public hostname silently failed; post-fix, `https://<host>/metrics` proxies straight to the stack-scoped backend (which then enforces the bearer token if `TSN_METRICS_SCRAPE_TOKEN` is set).
 
 ### 24.3 Health & readiness probes
 
@@ -3254,7 +4080,7 @@ Per-client `rate_limit_rpm` is stored on the `ApiClient` record (default 60 RPM;
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v1/agents/{agent_id}/chat` | Send a message. Sync by default; append `?async=true` for queued delivery. SSE streaming supported. |
-| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. |
+| GET | `/api/v1/queue/{queue_id}` | Poll status of an async chat request. Append `?include_scratchpad=true` to include the top-level agentic scratchpad for authorized clients; nested result scratchpads are always redacted. |
 | GET | `/api/v1/agents/{agent_id}/threads` | List threads for an agent. |
 | GET | `/api/v1/agents/{agent_id}/threads/{thread_id}/messages` | Fetch messages in a thread. |
 | DELETE | `/api/v1/agents/{agent_id}/threads/{thread_id}` | Delete a thread. |
@@ -3392,19 +4218,19 @@ A few illustrative endpoints (grepped verbatim from `backend/api/routes_*.py`):
 
 Source: `backend/app.py:1270-1309`.
 
-### 25.6 Webhooks (bidirectional, HMAC-signed)
+### 25.6 Webhooks (trigger-based, HMAC-signed)
 
-The webhook channel (`backend/channels/webhook/adapter.py`) is bidirectional:
+The webhook integration is now modeled as a trigger (`backend/channels/webhook/trigger.py`) even though the public inbound endpoint remains `POST /api/webhooks/{slug}/inbound` (numeric ids still work as a legacy fallback).
 
-**Inbound** — external systems POST signed events to `POST /api/webhooks/{webhook_id}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
+**Inbound** — external systems POST signed events to `POST /api/webhooks/{slug}/inbound` (`backend/api/routes_webhook_inbound.py`). Events are enqueued into `MessageQueue`; `QueueWorker._handle_webhook` routes them to the target agent.
 
-**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/adapter.py:148`). Outbound requests carry custom headers:
+**Outbound** — agent responses are HMAC-signed and POSTed to the webhook's `callback_url` via `Trigger.notify_external_system(...)`. Signing uses `hmac.new(secret, signed_input, sha256)` (`channels/webhook/trigger.py`). Outbound requests carry custom headers:
 
 * `X-Tsushin-Webhook-Id: <int>`
 * `X-Tsushin-Signature: <hex sha256 HMAC>`
-* (plus timestamp fields — see `channels/webhook/adapter.py:131-155`)
+* (plus timestamp fields — see `channels/webhook/trigger.py:114-121`)
 
-Callback URLs are subject to SSRF policy enforcement (`channels/webhook/adapter.py:125`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/adapter.py:72-85`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty.
+Callback URLs are subject to SSRF policy enforcement (`channels/webhook/trigger.py`). The `api_secret_encrypted` column on `WebhookIntegration` is Fernet-encrypted using a per-tenant-derived webhook key (`get_webhook_encryption_key`, `channels/webhook/trigger.py`). Webhooks can be configured as inbound-only (outbound disabled) by leaving `callback_url` empty, and their canonical management surface is `/api/triggers/webhook/*` plus `GET /api/triggers`.
 
 ---
 
@@ -3519,6 +4345,8 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 /shell @all:uptime               — Execute on all registered beacons
 ```
 
+Shell command requests are rate-limited per beacon/integration (60 commands/minute by default in the shared shell security service), and the HTTP beacon endpoints apply additional throttles. Registration and version checks are capped at 12 requests/minute per beacon, beacon-package downloads are capped at 6 requests/minute per beacon or signed-in user, check-ins get 3x burst headroom over the configured poll cadence (clamped to 30-360 RPM), and command-result posts get 8x headroom (clamped to 60-480 RPM).
+
 #### Thread commands
 ```
 /thread status                   — Show current thread objective, progress, time
@@ -3584,8 +4412,8 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 
 The Tester MCP is a containerized Go WhatsApp bridge dedicated to QA. It is configured with its own phone number and runs alongside production MCP containers on `tsushin-network`.
 
-> **Fresh-install note (BUG-537):** The tester MCP container is **not bundled** in the default compose stack (`docker-compose.yml`). On a fresh install, `GET /api/mcp/instances/tester/status` returns `container_state: "not_found"` and Hub → Communication → WhatsApp is empty. To provision a tester instance manually:
-> 1. Navigate to **Hub → Communication → WhatsApp**.
+> **Fresh-install note (BUG-537):** The tester MCP container is **not bundled** in the default compose stack (`docker-compose.yml`). On a fresh install, `GET /api/mcp/instances/tester/status` returns `container_state: "not_found"` and Hub > Channels > WhatsApp is empty. To provision a tester instance manually:
+> 1. Navigate to **Hub > Channels > WhatsApp**.
 > 2. Click **+ New Instance** and create a new runtime WhatsApp instance.
 > 3. Assign it a dedicated QA phone number (must differ from all tenant agent numbers).
 > 4. Scan the QR code to authenticate.
@@ -3736,6 +4564,8 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_FRONTEND_URL` | `http://localhost:3030` | Absolute frontend URL. | `FRONTEND_URL` | `settings.py:67` |
 | `TSN_STACK_NAME` | `tsushin` | Naming prefix for compose services, volumes, and runtime-created MCP/toolbox/vector-store containers. | — | `install.py:204-205`, `docker-compose.yml:24,49,92,197,269-283`, `services/mcp_container_manager.py:979-980`, `services/toolbox_container_service.py:59-61`, `services/vector_store_container_manager.py:47-49` |
 | `FRONTEND_PORT` | `3030` | Host port mapped to frontend. | — | `docker-compose.yml:181` |
+| `BACKEND_INTERNAL_URL` | `http://${TSN_STACK_NAME:-tsushin}-backend:8081` | Backend origin used by the frontend proxy layer inside Docker: baked into Next fallback rewrites at image build time and read by the auth proxy at runtime. Keep stack-scoped on the shared `tsushin-network`. | — | `docker-compose.yml:271`, `frontend/Dockerfile:43-53`, `frontend/next.config.mjs:24`, `frontend/app/api/auth/[...path]/route.ts:21` |
+| `INTERNAL_API_URL` | `http://${TSN_STACK_NAME:-tsushin}-backend:8081` | Server-side frontend fallback for auth/status requests. | — | `docker-compose.yml:272`, `frontend/app/auth/login/page.tsx:18`, `frontend/app/api/auth/[...path]/route.ts:22` |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8081` | Frontend build-time API URL. | — | `docker-compose.yml:178` |
 
 ### A.2 Database & storage paths
@@ -3750,6 +4580,8 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_CHROMA_DIR` | `./data/chroma` | ChromaDB persistence. | `settings.py:92` |
 | `TSN_BACKUPS_DIR` | `./data/backups` | Backup output. | `settings.py:93` |
 | `HOST_BACKEND_DATA_PATH` | (required in compose) | **Absolute host path to `backend/data`**, used by MCP containers for Docker-in-Docker bind mounts. | `docker-compose.yml:134`, `services/toolbox_container_service.py:114`, `services/mcp_container_manager.py:234` |
+| `TSN_WHATSAPP_MCP_IMAGE` | `tsushin/whatsapp-mcp:latest` | WhatsApp MCP helper image tag used by runtime-managed WhatsApp containers. Non-default installer stacks use a stack-scoped tag. | `docker-compose.yml`, `services/mcp_container_manager.py`, `backend/whatsapp-mcp/build.sh` |
+| `TSN_TOOLBOX_BASE_IMAGE` | `tsushin-toolbox:base` | Toolbox helper image tag used by runtime-managed sandbox containers. Non-default installer stacks use a stack-scoped tag. | `docker-compose.yml`, `services/toolbox_container_service.py` |
 
 ### A.3 Logging
 
@@ -3874,8 +4706,10 @@ Shell-Beacon agent (separate binary installed on endpoints, not the server):
 | `TSUSHIN_SERVER_URL` | Beacon → server URL. | `shell_beacon/config.py:173` |
 | `TSUSHIN_API_KEY` | Beacon auth key. | `shell_beacon/config.py:175` |
 | `TSUSHIN_POLL_INTERVAL` / `TSUSHIN_SHELL` / `TSUSHIN_TIMEOUT` / `TSUSHIN_WORKING_DIR` / `TSUSHIN_LOG_LEVEL` / `TSUSHIN_LOG_FILE` / `TSUSHIN_AUTO_UPDATE` | Beacon config. | `shell_beacon/config.py:179-197` |
+| `TSUSHIN_CA_BUNDLE` / `REQUESTS_CA_BUNDLE` | Optional CA bundle path for self-signed or private-CA HTTPS endpoints. | `shell_beacon/config.py:212-218`, `shell_beacon/beacon.py` |
+| `TSUSHIN_INSECURE_SKIP_VERIFY` | Explicit non-production fallback that disables TLS verification for beacon requests. | `shell_beacon/config.py:219-220`, `shell_beacon/beacon.py` |
 
-**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. If `TSUSHIN_SERVER_URL` points at an installer-generated self-signed HTTPS endpoint, the beacon host must trust that certificate (or trust the issuing CA) before registration/check-in will work. For same-host QA smoke tests only, point the beacon at local HTTP such as `http://127.0.0.1:8081/api/shell` instead of the public self-signed URL.
+**Fresh-install note — self-signed HTTPS and Shell Beacons.** The beacon uses normal TLS verification through Python `requests`; it does not automatically bypass trust failures the way a browser automation session can. Installer-generated self-signed deployments expose the generated trust material at `/tsushin-selfsigned-ca.pem` and include a trust helper so beacon hosts can install or pass the CA bundle explicitly. Use `--ca-bundle`, `TSUSHIN_CA_BUNDLE`, or `REQUESTS_CA_BUNDLE` for trusted self-signed operation. `--insecure-skip-verify` / `TSUSHIN_INSECURE_SKIP_VERIFY=true` exists only as an operator-controlled non-production fallback.
 
 ---
 

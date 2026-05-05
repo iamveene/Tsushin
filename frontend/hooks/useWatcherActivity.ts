@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { A2ASessionInfo } from '@/components/watcher/graph/types'
+import type { WatcherTeamRunEvent } from '@/lib/client'
 
 export type ActivityConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error'
 
@@ -51,7 +52,26 @@ interface AgentCommunicationEvent {
   timestamp: string
 }
 
-type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent | AgentCommunicationEvent
+interface ContinuousRunEvent {
+  type: 'continuous_run'
+  run_type: 'continuous'
+  continuous_run_id: number
+  continuous_agent_id: number
+  status: string
+  wake_event_ids: number[]
+  channel_type?: string
+  timestamp: string
+}
+
+type TeamRunActivityEvent = WatcherTeamRunEvent
+
+type WatcherControlEvent =
+  | { type: 'authenticated'; tenant_id?: string }
+  | { type: 'error'; message?: string }
+  | { type: 'pong' }
+
+type ActivityEvent = AgentProcessingEvent | SkillUsedEvent | KbUsedEvent | AgentCommunicationEvent | ContinuousRunEvent | TeamRunActivityEvent
+type WatcherMessage = WatcherControlEvent | ActivityEvent
 
 // Skill usage info for UI
 export interface SkillUseInfo {
@@ -77,6 +97,28 @@ interface ProcessingSession {
   isEnding: boolean  // true during post-processing coordinated fade-out
 }
 
+export interface ContinuousRunActivityInfo {
+  runId: number
+  continuousAgentId: number
+  status: string
+  wakeEventIds: number[]
+  channelType: string | null
+  startTime: number
+  timestamp: number
+  isEnding: boolean
+}
+
+export interface TeamRunActivityInfo {
+  runId: number
+  teamId: number | null
+  teamName: string | null
+  status: string
+  eventType: string | null
+  startTime: number
+  timestamp: number
+  isEnding: boolean
+}
+
 interface UseWatcherActivityOptions {
   enabled: boolean
   onConnectionStateChange?: (state: ActivityConnectionState) => void
@@ -98,6 +140,11 @@ interface UseWatcherActivityReturn {
   activeA2ASessions: Map<string, A2ASessionInfo>
   fadingA2ASessions: Set<string>
   agentA2ADepths: Map<number, number>
+  activeContinuousRuns: Map<number, ContinuousRunActivityInfo>
+  fadingContinuousRuns: Set<number>
+  activeTeamRuns: Map<number, TeamRunActivityInfo>
+  fadingTeamRuns: Set<number>
+  recentTeamRunActivity: WatcherTeamRunEvent[]
 }
 
 /**
@@ -118,6 +165,11 @@ export function useWatcherActivity(
   // A2A session tracking
   const [a2aSessions, setA2aSessions] = useState<Map<string, A2ASessionInfo>>(new Map())
   const [fadingA2ASessions, setFadingA2ASessions] = useState<Set<string>>(new Set())
+  const [continuousRunActivities, setContinuousRunActivities] = useState<Map<number, ContinuousRunActivityInfo>>(new Map())
+  const [fadingContinuousRuns, setFadingContinuousRuns] = useState<Set<number>>(new Set())
+  const [teamRunActivities, setTeamRunActivities] = useState<Map<number, TeamRunActivityInfo>>(new Map())
+  const [fadingTeamRuns, setFadingTeamRuns] = useState<Set<number>>(new Set())
+  const [recentTeamRunActivity, setRecentTeamRunActivity] = useState<WatcherTeamRunEvent[]>([])
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -132,6 +184,10 @@ export function useWatcherActivity(
   const sessionFadeTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
   const a2aFadeTimeoutRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const a2aStartTimeRef = useRef<Map<string, number>>(new Map())
+  const continuousRunTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const continuousRunStartTimeRef = useRef<Map<number, number>>(new Map())
+  const teamRunTimeoutRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const teamRunStartTimeRef = useRef<Map<number, number>>(new Map())
 
   const PROCESSING_TIMEOUT = 30000 // 30 seconds safety timeout
   const MIN_AGENT_GLOW_DURATION = 5000 // Minimum visible glow for fast operations
@@ -146,8 +202,11 @@ export function useWatcherActivity(
     processingSessions.forEach(session => {
       if (session.channel) channels.add(session.channel)
     })
+    continuousRunActivities.forEach(run => {
+      if (run.channelType && !run.isEnding) channels.add(run.channelType)
+    })
     return channels
-  }, [processingSessions])
+  }, [processingSessions, continuousRunActivities])
 
   // Per-agent channel pair: which channel is each currently-processing agent responding on?
   const processingAgentChannels = useMemo(() => {
@@ -227,6 +286,10 @@ export function useWatcherActivity(
     sessionFadeTimeoutRef.current.clear()
     a2aFadeTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
     a2aFadeTimeoutRef.current.clear()
+    continuousRunTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
+    continuousRunTimeoutRef.current.clear()
+    teamRunTimeoutRef.current.forEach(timeout => clearTimeout(timeout))
+    teamRunTimeoutRef.current.clear()
   }, [])
 
   // Start coordinated fade-out for an agent's entire processing chain
@@ -262,7 +325,142 @@ export function useWatcherActivity(
     sessionFadeTimeoutRef.current.set(agentId, cleanupTimeout)
   }, [])
 
-  const handleMessage = useCallback((data: any) => {
+  const startContinuousRunFadeOut = useCallback((runId: number) => {
+    setContinuousRunActivities(prev => {
+      const next = new Map(prev)
+      const run = next.get(runId)
+      if (run) {
+        next.set(runId, { ...run, isEnding: true })
+      }
+      return next
+    })
+    setFadingContinuousRuns(prev => {
+      const next = new Set(prev)
+      next.add(runId)
+      return next
+    })
+
+    const cleanupTimeout = setTimeout(() => {
+      setContinuousRunActivities(prev => {
+        const next = new Map(prev)
+        next.delete(runId)
+        return next
+      })
+      setFadingContinuousRuns(prev => {
+        const next = new Set(prev)
+        next.delete(runId)
+        return next
+      })
+      continuousRunStartTimeRef.current.delete(runId)
+      continuousRunTimeoutRef.current.delete(runId)
+    }, POST_PROCESSING_FADE_DURATION)
+
+    continuousRunTimeoutRef.current.set(runId, cleanupTimeout)
+  }, [])
+
+  const startTeamRunFadeOut = useCallback((runId: number) => {
+    setTeamRunActivities(prev => {
+      const next = new Map(prev)
+      const run = next.get(runId)
+      if (run) {
+        next.set(runId, { ...run, isEnding: true })
+      }
+      return next
+    })
+    setFadingTeamRuns(prev => {
+      const next = new Set(prev)
+      next.add(runId)
+      return next
+    })
+
+    const cleanupTimeout = setTimeout(() => {
+      setTeamRunActivities(prev => {
+        const next = new Map(prev)
+        next.delete(runId)
+        return next
+      })
+      setFadingTeamRuns(prev => {
+        const next = new Set(prev)
+        next.delete(runId)
+        return next
+      })
+      teamRunStartTimeRef.current.delete(runId)
+      teamRunTimeoutRef.current.delete(runId)
+    }, POST_PROCESSING_FADE_DURATION)
+
+    teamRunTimeoutRef.current.set(runId, cleanupTimeout)
+  }, [])
+
+  const recordTeamRunEvent = useCallback((event: WatcherTeamRunEvent) => {
+    const runId = Number(event.team_run_id)
+    if (!Number.isFinite(runId) || runId <= 0) return
+
+    const timestamp = event.timestamp || new Date().toISOString()
+    const status = event.status || 'running'
+    const eventType = event.event || null
+    const normalizedEvent: WatcherTeamRunEvent = {
+      ...event,
+      team_run_id: runId,
+      status,
+      event: eventType || event.event,
+      timestamp,
+    }
+    const eventKey = `${runId}:${eventType || 'event'}:${status}:${timestamp}`
+
+    setRecentTeamRunActivity(prev => {
+      const next = prev.filter(item => `${item.team_run_id}:${item.event || 'event'}:${item.status || ''}:${item.timestamp}` !== eventKey)
+      return [normalizedEvent, ...next].slice(0, 50)
+    })
+
+    const normalizedStatus = String(status || '').toLowerCase()
+    const isTerminal = ['success', 'completed', 'complete', 'failed', 'error', 'cancelled', 'canceled', 'skipped', 'timeout', 'goal_not_achieved', 'sentinel_blocked'].includes(normalizedStatus)
+
+    setTeamRunActivities(prev => {
+      const next = new Map(prev)
+      const existing = next.get(runId)
+      next.set(runId, {
+        runId,
+        teamId: event.team_id ?? existing?.teamId ?? null,
+        teamName: event.team_name ?? existing?.teamName ?? null,
+        status,
+        eventType,
+        startTime: existing?.startTime || Date.now(),
+        timestamp: Date.now(),
+        isEnding: false,
+      })
+      return next
+    })
+
+    if (!isTerminal) {
+      teamRunStartTimeRef.current.set(runId, teamRunStartTimeRef.current.get(runId) || Date.now())
+      const existingTimeout = teamRunTimeoutRef.current.get(runId)
+      if (existingTimeout) {
+        clearTimeout(existingTimeout)
+        teamRunTimeoutRef.current.delete(runId)
+      }
+      setFadingTeamRuns(prev => {
+        const next = new Set(prev)
+        next.delete(runId)
+        return next
+      })
+
+      const timeout = setTimeout(() => {
+        startTeamRunFadeOut(runId)
+      }, PROCESSING_TIMEOUT)
+      teamRunTimeoutRef.current.set(runId, timeout)
+      return
+    }
+
+    const existingTimeout = teamRunTimeoutRef.current.get(runId)
+    if (existingTimeout) clearTimeout(existingTimeout)
+    const startTime = teamRunStartTimeRef.current.get(runId)
+    const elapsed = startTime ? Date.now() - startTime : MIN_AGENT_GLOW_DURATION
+    const remaining = Math.max(0, MIN_AGENT_GLOW_DURATION - elapsed)
+    const timeout = setTimeout(() => startTeamRunFadeOut(runId), remaining)
+    teamRunTimeoutRef.current.set(runId, timeout)
+  }, [startTeamRunFadeOut])
+
+  const handleMessage = useCallback((data: WatcherMessage) => {
     // Handle authentication response
     if (data.type === 'authenticated') {
       console.log('[WatcherActivity] Authenticated for tenant:', data.tenant_id)
@@ -516,7 +714,85 @@ export function useWatcherActivity(
         }
       }
     }
-  }, [updateConnectionState, startCoordinatedFadeOut])
+
+    if (data.type === 'continuous_run') {
+      const event = data as ContinuousRunEvent
+      const runId = event.continuous_run_id
+      const normalizedStatus = String(event.status || '').toLowerCase()
+      const isTerminal = ['success', 'completed', 'complete', 'failed', 'error', 'cancelled', 'canceled', 'skipped'].includes(normalizedStatus)
+
+      if (!isTerminal) {
+        continuousRunStartTimeRef.current.set(runId, Date.now())
+        const existingTimeout = continuousRunTimeoutRef.current.get(runId)
+        if (existingTimeout) {
+          clearTimeout(existingTimeout)
+          continuousRunTimeoutRef.current.delete(runId)
+        }
+        setFadingContinuousRuns(prev => {
+          const next = new Set(prev)
+          next.delete(runId)
+          return next
+        })
+        setContinuousRunActivities(prev => {
+          const next = new Map(prev)
+          const existing = next.get(runId)
+          next.set(runId, {
+            runId,
+            continuousAgentId: event.continuous_agent_id,
+            status: event.status,
+            wakeEventIds: event.wake_event_ids || [],
+            channelType: event.channel_type || existing?.channelType || null,
+            startTime: existing?.startTime || Date.now(),
+            timestamp: Date.now(),
+            isEnding: false,
+          })
+          return next
+        })
+
+        const timeout = setTimeout(() => {
+          startContinuousRunFadeOut(runId)
+        }, PROCESSING_TIMEOUT)
+        continuousRunTimeoutRef.current.set(runId, timeout)
+      } else {
+        setContinuousRunActivities(prev => {
+          const next = new Map(prev)
+          const existing = next.get(runId)
+          if (existing) {
+            next.set(runId, {
+              ...existing,
+              status: event.status,
+              timestamp: Date.now(),
+              channelType: event.channel_type || existing.channelType,
+            })
+          } else {
+            next.set(runId, {
+              runId,
+              continuousAgentId: event.continuous_agent_id,
+              status: event.status,
+              wakeEventIds: event.wake_event_ids || [],
+              channelType: event.channel_type || null,
+              startTime: Date.now(),
+              timestamp: Date.now(),
+              isEnding: false,
+            })
+          }
+          return next
+        })
+
+        const existingTimeout = continuousRunTimeoutRef.current.get(runId)
+        if (existingTimeout) clearTimeout(existingTimeout)
+        const startTime = continuousRunStartTimeRef.current.get(runId)
+        const elapsed = startTime ? Date.now() - startTime : MIN_AGENT_GLOW_DURATION
+        const remaining = Math.max(0, MIN_AGENT_GLOW_DURATION - elapsed)
+        const timeout = setTimeout(() => startContinuousRunFadeOut(runId), remaining)
+        continuousRunTimeoutRef.current.set(runId, timeout)
+      }
+    }
+
+    if (data.type === 'team_run') {
+      recordTeamRunEvent(data as TeamRunActivityEvent)
+    }
+  }, [updateConnectionState, startCoordinatedFadeOut, startContinuousRunFadeOut, recordTeamRunEvent])
 
   const connect = useCallback(() => {
     if (!options.enabled) {
@@ -634,6 +910,11 @@ export function useWatcherActivity(
     setProcessingSessions(new Map())
     setA2aSessions(new Map())
     setFadingA2ASessions(new Set())
+    setContinuousRunActivities(new Map())
+    setFadingContinuousRuns(new Set())
+    setTeamRunActivities(new Map())
+    setFadingTeamRuns(new Set())
+    setRecentTeamRunActivity([])
     updateConnectionState('disconnected')
   }, [clearAllTimeouts, updateConnectionState])
 
@@ -641,6 +922,7 @@ export function useWatcherActivity(
   useEffect(() => {
     if (options.enabled) {
       reconnectAttemptsRef.current = 0
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       connect()
     }
 
@@ -683,5 +965,10 @@ export function useWatcherActivity(
     activeA2ASessions: a2aSessions,
     fadingA2ASessions,
     agentA2ADepths,
+    activeContinuousRuns: continuousRunActivities,
+    fadingContinuousRuns,
+    activeTeamRuns: teamRunActivities,
+    fadingTeamRuns,
+    recentTeamRunActivity,
   }
 }

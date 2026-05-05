@@ -1,6 +1,6 @@
 """
 Image Skill - Skills-as-Tools Architecture
-Generate new images or edit existing ones using Google Gemini.
+Generate new images or edit existing ones using Google Gemini or OpenAI.
 
 Phase: Skills-as-Tools
 - Tool name: generate_image
@@ -14,6 +14,7 @@ import asyncio
 import tempfile
 import httpx
 import uuid
+import base64
 from pathlib import Path
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 class ImageSkill(BaseSkill):
     """
-    AI-powered image skill using Google Gemini.
+    AI-powered image skill using Google Gemini and OpenAI image models.
 
     Supports TWO modes:
     1. Image Generation: Create new images from text prompts (tool-callable)
@@ -48,6 +49,7 @@ class ImageSkill(BaseSkill):
     skill_name = "Image Generation & Editing"
     skill_description = "Generate new images from text prompts or edit existing images using AI"
     execution_mode = "tool"
+    DEFAULT_MODEL = "imagen-4.0-generate-001"
 
     SUPPORTED_IMAGE_FORMATS = {
         "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
@@ -58,6 +60,20 @@ class ImageSkill(BaseSkill):
         "gemini-2.5-flash-image": "Nano Banana (Fast)",
         "gemini-3.1-flash-image-preview": "Gemini 3.1 Flash Image (Preview)",
         "gemini-3-pro-image-preview": "Nano Banana Pro (Quality)",
+        "imagen-4.0-fast-generate-001": "Imagen 4 Fast",
+        "imagen-4.0-generate-001": "Imagen 4",
+        "imagen-4.0-ultra-generate-001": "Imagen 4 Ultra",
+        "gpt-image-2": "OpenAI GPT Image 2",
+    }
+
+    IMAGEN_MODELS = {
+        "imagen-4.0-fast-generate-001",
+        "imagen-4.0-generate-001",
+        "imagen-4.0-ultra-generate-001",
+    }
+
+    OPENAI_IMAGE_MODELS = {
+        "gpt-image-2",
     }
 
     def __init__(self, token_tracker: Optional["TokenTracker"] = None):
@@ -96,7 +112,7 @@ class ImageSkill(BaseSkill):
                         "type": "string",
                         "enum": list(cls.SUPPORTED_MODELS.keys()),
                         "description": "Model to use for generation",
-                        "default": "gemini-2.5-flash-image"
+                        "default": cls.DEFAULT_MODEL
                     },
                     "aspect_ratio": {
                         "type": "string",
@@ -161,7 +177,7 @@ class ImageSkill(BaseSkill):
                 metadata={"error": "missing_prompt", "skip_ai": True}
             )
 
-        model = arguments.get("model", config.get("model", "gemini-2.5-flash-image"))
+        model = arguments.get("model", config.get("model", self.DEFAULT_MODEL))
         aspect_ratio = arguments.get("aspect_ratio", "1:1")
 
         logger.info(f"ImageSkill.execute_tool: prompt='{prompt[:50]}...', model={model}")
@@ -270,7 +286,7 @@ class ImageSkill(BaseSkill):
         - GENERATE mode: Text prompt only, no input image
         """
         try:
-            model = config.get("model", "gemini-2.5-flash-image")
+            model = config.get("model", self.DEFAULT_MODEL)
 
             # Determine mode
             has_input_image = (
@@ -290,6 +306,20 @@ class ImageSkill(BaseSkill):
                     success=False,
                     output="Please provide instructions for the image.",
                     metadata={"error": "no_instruction", "skip_ai": True}
+                )
+
+            if mode == "edit" and self._is_imagen_model(model):
+                return SkillResult(
+                    success=False,
+                    output=(
+                        f"{model} only supports text-to-image generation in the Gemini API. "
+                        "Choose a Gemini image model for image editing."
+                    ),
+                    metadata={
+                        "error": "imagen_edit_unsupported",
+                        "model": model,
+                        "skip_ai": True,
+                    }
                 )
 
             if mode == "edit":
@@ -319,7 +349,7 @@ class ImageSkill(BaseSkill):
                         metadata={"error": "image_not_found", "skip_ai": True}
                     )
 
-                # Call Gemini API for image editing
+                # Call the selected provider's image API for image editing
                 result = await self._edit_image_with_gemini(
                     image_path=image_path,
                     instruction=instruction,
@@ -382,10 +412,27 @@ class ImageSkill(BaseSkill):
         aspect_ratio: str = "1:1"
     ) -> Dict[str, Any]:
         """
-        Call Gemini API to generate a new image from text prompt.
+        Generate a new image from text prompt.
 
-        Uses the google-genai SDK with Gemini image generation models.
+        Gemini image models use the Gemini SDK; OpenAI image models use the
+        OpenAI Images API.
         """
+        if self._is_openai_image_model(model):
+            return await self._generate_image_with_openai(
+                prompt=prompt,
+                model=model,
+                config=config,
+                aspect_ratio=aspect_ratio
+            )
+
+        if self._is_imagen_model(model):
+            return await self._generate_image_with_imagen(
+                prompt=prompt,
+                model=model,
+                config=config,
+                aspect_ratio=aspect_ratio
+            )
+
         try:
             api_key = await self._get_api_key()
             if not api_key:
@@ -444,6 +491,134 @@ class ImageSkill(BaseSkill):
             logger.error(f"Gemini generation API error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def _generate_image_with_imagen(
+        self,
+        prompt: str,
+        model: str,
+        config: Dict[str, Any],
+        aspect_ratio: str = "1:1"
+    ) -> Dict[str, Any]:
+        """
+        Call the Gemini API Imagen path to generate a new image from text.
+
+        Imagen models use `models.generate_images`, not the Gemini native image
+        `generate_content` endpoint used by Nano Banana models.
+        """
+        try:
+            api_key = await self._get_api_key()
+            if not api_key:
+                return {"success": False, "error": "Gemini API key not configured"}
+
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=api_key)
+            generate_config = types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+            )
+
+            response = await asyncio.to_thread(
+                client.models.generate_images,
+                model=model,
+                prompt=prompt,
+                config=generate_config
+            )
+
+            generated_images = getattr(response, "generated_images", None) or []
+            output_path = None
+            for generated_image in generated_images:
+                image = getattr(generated_image, "image", None)
+                if image is None:
+                    continue
+
+                shared_dir = Path(tempfile.gettempdir()) / "tsushin_images"
+                shared_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"img_imagen_{uuid.uuid4().hex[:8]}.png"
+                output_path = str(shared_dir / filename)
+
+                if hasattr(image, "save"):
+                    image.save(output_path)
+                else:
+                    image_bytes = (
+                        getattr(image, "image_bytes", None)
+                        or getattr(image, "imageBytes", None)
+                    )
+                    if isinstance(image_bytes, str):
+                        image_bytes = base64.b64decode(image_bytes)
+                    if not image_bytes:
+                        output_path = None
+                        continue
+                    with open(output_path, "wb") as f:
+                        f.write(image_bytes)
+                break
+
+            if not output_path:
+                return {"success": False, "error": "No image generated in response"}
+
+            input_tokens = len(prompt) // 4
+            output_tokens = os.path.getsize(output_path) // 1000
+
+            return {
+                "success": True,
+                "output_path": output_path,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens
+            }
+
+        except Exception as e:
+            logger.error(f"Imagen generation API error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    async def _generate_image_with_openai(
+        self,
+        prompt: str,
+        model: str,
+        config: Dict[str, Any],
+        aspect_ratio: str = "1:1"
+    ) -> Dict[str, Any]:
+        """
+        Call the OpenAI Images API to generate a new image from text.
+        """
+        try:
+            api_key = await self._get_openai_api_key()
+            if not api_key:
+                return {"success": False, "error": "OpenAI API key not configured"}
+
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+            size = self._openai_size_for_aspect_ratio(aspect_ratio)
+
+            response = await asyncio.to_thread(
+                client.images.generate,
+                model=model,
+                prompt=prompt,
+                n=1,
+                size=size,
+            )
+
+            output_path = self._save_openai_image_response(response, "img_openai")
+            if not output_path:
+                return {"success": False, "error": "No image generated in response"}
+
+            input_tokens, output_tokens = self._estimate_usage_from_response(
+                response=response,
+                instruction=prompt,
+                output_path=output_path,
+            )
+
+            return {
+                "success": True,
+                "output_path": output_path,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
+
+        except Exception as e:
+            logger.error(f"OpenAI image generation API error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     async def _edit_image_with_gemini(
         self,
         image_path: str,
@@ -452,10 +627,28 @@ class ImageSkill(BaseSkill):
         config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Call Gemini API to edit an existing image.
+        Edit an existing image with the selected provider's image API.
 
-        Uses the google-genai SDK with Gemini image models.
+        Gemini image models use the Gemini SDK; OpenAI image models use the
+        OpenAI Images API.
         """
+        if self._is_openai_image_model(model):
+            return await self._edit_image_with_openai(
+                image_path=image_path,
+                instruction=instruction,
+                model=model,
+                config=config,
+            )
+
+        if self._is_imagen_model(model):
+            return {
+                "success": False,
+                "error": (
+                    f"{model} only supports text-to-image generation in the Gemini API. "
+                    "Choose a Gemini image model for image editing."
+                )
+            }
+
         try:
             api_key = await self._get_api_key()
             if not api_key:
@@ -531,6 +724,58 @@ class ImageSkill(BaseSkill):
             logger.error(f"Gemini edit API error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def _edit_image_with_openai(
+        self,
+        image_path: str,
+        instruction: str,
+        model: str,
+        config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Call the OpenAI Images API to edit an existing image.
+        """
+        try:
+            api_key = await self._get_openai_api_key()
+            if not api_key:
+                return {"success": False, "error": "OpenAI API key not configured"}
+
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+            image_bytes = os.path.getsize(image_path)
+
+            with open(image_path, "rb") as image_file:
+                response = await asyncio.to_thread(
+                    client.images.edit,
+                    model=model,
+                    image=image_file,
+                    prompt=instruction,
+                    n=1,
+                    size="auto",
+                )
+
+            output_path = self._save_openai_image_response(response, "img_openai_edit")
+            if not output_path:
+                return {"success": False, "error": "No edited image in response"}
+
+            input_tokens, output_tokens = self._estimate_usage_from_response(
+                response=response,
+                instruction=instruction,
+                output_path=output_path,
+                input_image_bytes=image_bytes,
+            )
+
+            return {
+                "success": True,
+                "output_path": output_path,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
+
+        except Exception as e:
+            logger.error(f"OpenAI image edit API error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     async def _get_api_key(self) -> Optional[str]:
         """Get Gemini API key from database."""
         try:
@@ -542,6 +787,87 @@ class ImageSkill(BaseSkill):
             return None
         except Exception:
             return None
+
+    async def _get_openai_api_key(self) -> Optional[str]:
+        """Get OpenAI API key from database."""
+        try:
+            if self._db_session:
+                tenant_id = None
+                if isinstance(getattr(self, '_config', None), dict):
+                    tenant_id = self._config.get('tenant_id')
+                return get_api_key("openai", self._db_session, tenant_id=tenant_id)
+            return None
+        except Exception:
+            return None
+
+    @classmethod
+    def _is_imagen_model(cls, model: str) -> bool:
+        return model in cls.IMAGEN_MODELS
+
+    @classmethod
+    def _is_openai_image_model(cls, model: str) -> bool:
+        return model in cls.OPENAI_IMAGE_MODELS
+
+    @classmethod
+    def _model_provider(cls, model: str) -> str:
+        if cls._is_openai_image_model(model):
+            return "openai"
+        return "gemini"
+
+    @staticmethod
+    def _openai_size_for_aspect_ratio(aspect_ratio: str) -> str:
+        if aspect_ratio in {"16:9", "4:3"}:
+            return "1536x1024"
+        if aspect_ratio in {"9:16", "3:4"}:
+            return "1024x1536"
+        return "1024x1024"
+
+    @staticmethod
+    def _usage_value(usage: Any, *keys: str) -> Optional[int]:
+        if not usage:
+            return None
+        for key in keys:
+            value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+            if isinstance(value, int):
+                return value
+        return None
+
+    def _estimate_usage_from_response(
+        self,
+        response: Any,
+        instruction: str,
+        output_path: str,
+        input_image_bytes: int = 0,
+    ) -> tuple[int, int]:
+        usage = getattr(response, "usage", None)
+        input_tokens = self._usage_value(usage, "input_tokens", "prompt_tokens")
+        output_tokens = self._usage_value(usage, "output_tokens", "completion_tokens")
+
+        if input_tokens is None:
+            input_tokens = len(instruction) // 4 + input_image_bytes // 1000
+        if output_tokens is None:
+            output_tokens = os.path.getsize(output_path) // 1000
+
+        return input_tokens, output_tokens
+
+    def _save_openai_image_response(self, response: Any, prefix: str) -> Optional[str]:
+        data = getattr(response, "data", None) or []
+        for item in data:
+            image_b64 = getattr(item, "b64_json", None)
+            if isinstance(item, dict):
+                image_b64 = item.get("b64_json") or image_b64
+            if not image_b64:
+                continue
+
+            shared_dir = Path(tempfile.gettempdir()) / "tsushin_images"
+            shared_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{prefix}_{uuid.uuid4().hex[:8]}.png"
+            output_path = str(shared_dir / filename)
+            with open(output_path, "wb") as f:
+                f.write(base64.b64decode(image_b64))
+            return output_path
+
+        return None
 
     # =========================================================================
     # HELPER METHODS
@@ -625,7 +951,7 @@ class ImageSkill(BaseSkill):
             operation_type = "image_edit" if mode == "edit" else "image_generate"
             self.token_tracker.track_usage(
                 operation_type=operation_type,
-                model_provider="gemini",
+                model_provider=self._model_provider(model),
                 model_name=model,
                 prompt_tokens=result.get("input_tokens", 0),
                 completion_tokens=result.get("output_tokens", 0),
@@ -644,7 +970,7 @@ class ImageSkill(BaseSkill):
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {
-            "model": "gemini-2.5-flash-image",
+            "model": cls.DEFAULT_MODEL,
             "edit_keywords": [
                 "edit image", "editar imagem", "edit this", "editar isso",
                 "remove", "remover", "add", "adicionar", "change", "mudar",
@@ -669,9 +995,9 @@ class ImageSkill(BaseSkill):
             "properties": {
                 "model": {
                     "type": "string",
-                    "description": "Gemini model for image generation/editing",
+                    "description": "Gemini, Imagen, or OpenAI model for image generation. Imagen 4 models do not support image editing.",
                     "enum": list(cls.SUPPORTED_MODELS.keys()),
-                    "default": "gemini-2.5-flash-image"
+                    "default": cls.DEFAULT_MODEL
                 },
                 "edit_keywords": {
                     "type": "array",

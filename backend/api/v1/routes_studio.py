@@ -20,6 +20,7 @@ from models import (
     SentinelProfile, SentinelProfileAssignment,
     HubIntegration, GmailIntegration, CalendarIntegration,
 )
+from api.agent_visibility import get_public_tenant_agent_or_404
 from api.api_auth import ApiCaller, require_api_permission
 from api.v1.schemas import COMMON_RESPONSES, NOT_FOUND_RESPONSE, VALIDATION_RESPONSE
 from constants.agent_config import MEMORY_ISOLATION_MODES
@@ -287,12 +288,7 @@ async def get_builder_data(
     sentinel profile assignments, and sandboxed tool mappings in a single call.
     Requires the `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = get_public_tenant_agent_or_404(db, agent_id, caller.tenant_id)
 
     # Agent details
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -416,12 +412,7 @@ async def save_builder_data(
     within a single transaction; rolls back on any failure.
     Requires the `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = get_public_tenant_agent_or_404(db, agent_id, caller.tenant_id)
 
     changes: Dict[str, Any] = {}
 
@@ -617,12 +608,7 @@ async def clone_agent(
     Knowledge documents and sentinel assignments are not cloned.
     Requires the `agents.write` permission.
     """
-    original = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not original:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    original = get_public_tenant_agent_or_404(db, agent_id, caller.tenant_id)
 
     # Get original contact name
     original_contact = db.query(Contact).filter(Contact.id == original.contact_id).first()

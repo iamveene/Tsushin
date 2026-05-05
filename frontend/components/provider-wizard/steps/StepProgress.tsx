@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { useProviderWizard } from '@/contexts/ProviderWizardContext'
 import { api, authenticatedFetch } from '@/lib/client'
-import type { ProviderInstanceCreate, TTSInstanceCreate } from '@/lib/client'
+import type { ProviderInstanceCreate, TTSInstanceCreate, ASRInstanceCreate } from '@/lib/client'
 import { CheckCircleIcon, AlertTriangleIcon } from '@/components/ui/icons'
 
 /**
@@ -86,7 +86,37 @@ export default function StepProgress() {
           throw new Error(`Failed to save ${draft.vendor} API key (${res.status}) ${txt}`)
         }
       }
-      // Branch 3: LLM/Image cloud or Ollama local — /api/provider-instances
+      // Branch 3a: ASR cloud — no separate provider row required. The OpenAI
+      // Whisper API call path reuses the OpenAI key already saved on the
+      // tenant under the LLM > OpenAI provider; we don't create an ASR
+      // instance for the cloud case (audio_transcript skill falls through
+      // to OpenAI when no local instance is selected).
+      else if (draft.modality === 'asr' && draft.hosting === 'cloud') {
+        setProgress({ message: 'OpenAI Whisper API uses your existing OpenAI key — nothing to provision.' })
+        // Nothing to create; mark as done immediately.
+      }
+      // Branch 3b: ASR local (speaches / openai_whisper) — /api/asr-instances
+      else if (draft.modality === 'asr' && draft.hosting === 'local') {
+        const vendorOk = draft.vendor === 'speaches' || draft.vendor === 'openai_whisper'
+        if (!vendorOk) {
+          throw new Error('Pick an ASR engine first.')
+        }
+        const defaultModel =
+          draft.vendor === 'openai_whisper'
+            ? 'base'
+            : 'Systran/faster-distil-whisper-small.en'
+        const body: ASRInstanceCreate = {
+          vendor: draft.vendor || 'openai_whisper',
+          instance_name: draft.instance_name,
+          auto_provision: draft.auto_provision !== false,
+          mem_limit: draft.mem_limit || (draft.vendor === 'openai_whisper' ? '3g' : '1.5g'),
+          default_model: defaultModel,
+        }
+        setProgress({ message: 'Creating ASR instance and starting container...' })
+        const result = await api.createASRInstance(body)
+        createdInstanceId = result.id
+      }
+      // Branch 4: LLM/Image cloud or Ollama local — /api/provider-instances
       else {
         const body: ProviderInstanceCreate = {
           vendor: draft.vendor || '',

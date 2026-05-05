@@ -1,0 +1,1 @@
+Release 0.7.0 lead-run custom embedding QA sample, 1536 profile. Fictional site: Meridian Lantern Depot. Owner: Inez Calder. Contract date: 2034-09-21. Asset ID: LEAD1536-2026-05-03T16-21-09-251Z. Secret phrase: opal compass 2026-05-03T16-21-09-251Z. Support queue: Lead-Aurora-1536. When asked, answer with the owner, contract date, support queue, asset ID, and secret phrase.
