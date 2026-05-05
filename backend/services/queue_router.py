@@ -659,6 +659,19 @@ class QueueRouter:
                 }
                 db.add(failed_run)
                 db.commit()
+                try:
+                    from services.watcher_activity_service import emit_team_run_async
+
+                    emit_team_run_async(
+                        tenant_id=item.tenant_id,
+                        team_run_id=failed_run.id,
+                        team_id=failed_run.team_id,
+                        status=failed_run.status,
+                        event="failed",
+                        error_json=failed_run.error_json,
+                    )
+                except Exception:
+                    logger.debug("Watcher team_run failure event skipped", exc_info=True)
             if wake_event_id is not None:
                 self._mark_wake_event_terminal(
                     db,

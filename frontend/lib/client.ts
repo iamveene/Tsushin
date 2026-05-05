@@ -1140,6 +1140,50 @@ export interface TeamRunStartResponse {
   poll_url: string
 }
 
+export interface WatcherTeamRunCoordinatorCommand {
+  member_run_id: number
+  step_index: number
+  agent_id?: number | null
+  agent_name?: string | null
+  command: Record<string, unknown>
+  created_at?: string | null
+}
+
+export interface WatcherTeamRunListItem extends TeamRunListItem {
+  tenant_id: string
+  team_name: string
+  team_status: string
+  member_count: number
+  coordinator_commands: WatcherTeamRunCoordinatorCommand[]
+}
+
+export interface WatcherTeamRunDetail extends WatcherTeamRunListItem {
+  member_runs: TeamRunMemberStep[]
+}
+
+export interface WatcherTeamRunListResponse {
+  items: WatcherTeamRunListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface WatcherTeamRunEvent {
+  type: 'team_run'
+  team_run_id: number
+  team_id: number
+  status: string
+  event: string
+  timestamp: string
+  team_name?: string
+  member_run_id?: number
+  step_index?: number
+  agent_id?: number
+  agent_name?: string
+  coordinator_command?: Record<string, unknown>
+  error_json?: Record<string, unknown>
+}
+
 export interface TeamDetail extends TeamListItem {
   members: TeamMemberResponse[]
   triggers: TeamTriggerResponse[]
@@ -4927,6 +4971,35 @@ export const api = {
   async getTeamRun(teamId: number, runId: number): Promise<TeamRunDetail> {
     const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/runs/${runId}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch team run')
+    return res.json()
+  },
+
+  async getWatcherTeamRuns(options: {
+    limit?: number
+    offset?: number
+    teamId?: number | null
+    status?: string
+    createdAfter?: string
+    createdBefore?: string
+    tenantId?: string
+  } = {}): Promise<WatcherTeamRunListResponse> {
+    const params = new URLSearchParams()
+    params.set('limit', String(options.limit ?? 50))
+    params.set('offset', String(options.offset ?? 0))
+    if (options.teamId) params.set('team_id', String(options.teamId))
+    if (options.status) params.set('status', options.status)
+    if (options.createdAfter) params.set('created_after', options.createdAfter)
+    if (options.createdBefore) params.set('created_before', options.createdBefore)
+    if (options.tenantId) params.set('tenant_id', options.tenantId)
+
+    const res = await authenticatedFetch(`${API_URL}/api/watcher/team-runs?${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch watcher team runs')
+    return res.json()
+  },
+
+  async getWatcherTeamRun(runId: number): Promise<WatcherTeamRunDetail> {
+    const res = await authenticatedFetch(`${API_URL}/api/watcher/team-runs/${runId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch watcher team run')
     return res.json()
   },
 

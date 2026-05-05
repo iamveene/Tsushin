@@ -251,6 +251,27 @@ class TeamRunDetail(TeamRunListItem):
     member_runs: list[TeamRunMemberStep] = Field(default_factory=list)
 
 
+class WatcherTeamRunCoordinatorCommand(BaseModel):
+    member_run_id: int
+    step_index: int
+    agent_id: Optional[int] = None
+    agent_name: Optional[str] = None
+    command: dict[str, Any]
+    created_at: Optional[datetime] = None
+
+
+class WatcherTeamRunListItem(TeamRunListItem):
+    tenant_id: str
+    team_name: str
+    team_status: str
+    member_count: int = 0
+    coordinator_commands: list[WatcherTeamRunCoordinatorCommand] = Field(default_factory=list)
+
+
+class WatcherTeamRunDetail(WatcherTeamRunListItem):
+    member_runs: list[TeamRunMemberStep] = Field(default_factory=list)
+
+
 class TeamRunStartResponse(BaseModel):
     run_id: int
     status: str
@@ -294,6 +315,13 @@ class TeamRunListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class WatcherTeamRunListResponse(BaseModel):
+    items: list[WatcherTeamRunListItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class V1TeamListResponse(BaseModel):
