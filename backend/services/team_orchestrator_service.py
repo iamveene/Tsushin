@@ -178,6 +178,7 @@ class TeamRunOrchestrator:
         agent_invoke_fn: Optional[AgentInvokeFn] = None,
         sentinel_service_factory: Optional[SentinelServiceFactory] = None,
         sentinel_enabled: Optional[bool] = None,
+        existing_run_id: Optional[int] = None,
     ):
         self.db = db
         self.tenant_id = tenant_id
@@ -187,6 +188,7 @@ class TeamRunOrchestrator:
         self.wall_clock_seconds = wall_clock_seconds
         self.agent_invoke_fn = agent_invoke_fn or _invoke_agent_for_team_member
         self.sentinel_service_factory = sentinel_service_factory
+        self.existing_run_id = existing_run_id
         self.sentinel_enabled = (
             sentinel_enabled
             if sentinel_enabled is not None
@@ -206,6 +208,8 @@ class TeamRunOrchestrator:
         if team.max_steps is not None and len(runnable_members) > team.max_steps:
             raise TeamValidationError("team_max_steps_too_low")
         team_run = self._create_run(team, trigger_event_id)
+        if self._stop_if_cancelled(team_run, skipped_members=runnable_members, first_skipped_step=1):
+            return team_run
         sentinel_result = await self._analyze_team_run_start(team, team_run, trigger_event_id)
         if self._sentinel_blocks(sentinel_result):
             self._finish_sentinel_blocked(team_run, sentinel_result, stage="team_run_start")
@@ -218,6 +222,12 @@ class TeamRunOrchestrator:
         previous_summary = ""
 
         for step_index, runnable in enumerate(runnable_members, start=1):
+            if self._stop_if_cancelled(
+                team_run,
+                skipped_members=runnable_members[step_index - 1 :],
+                first_skipped_step=step_index,
+            ):
+                return team_run
             if self._elapsed(start_monotonic) >= self.wall_clock_seconds:
                 self._finish_run(
                     team_run,
@@ -323,6 +333,13 @@ class TeamRunOrchestrator:
             prior_summaries.append(summary)
             self.db.commit()
 
+            if self._stop_if_cancelled(
+                team_run,
+                skipped_members=runnable_members[step_index:],
+                first_skipped_step=step_index + 1,
+            ):
+                return team_run
+
             if (
                 team.max_total_tokens is not None
                 and (team_run.total_input_tokens + team_run.total_output_tokens) > team.max_total_tokens
@@ -336,6 +353,9 @@ class TeamRunOrchestrator:
                 )
                 return team_run
 
+        if self._stop_if_cancelled(team_run, skipped_members=[], first_skipped_step=len(runnable_members) + 1):
+            return team_run
+
         team_run.status = TeamRunStatus.COMPLETED.value
         team_run.completed_at = datetime.utcnow()
         team_run.final_output_summary = previous_summary or previous_output[:1000]
@@ -346,6 +366,8 @@ class TeamRunOrchestrator:
     async def run_mesh(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
         team, coordinator, runnable_members = self._load_runnable_mesh_team()
         team_run = self._create_run(team, trigger_event_id)
+        if self._stop_if_cancelled(team_run, skipped_members=[], first_skipped_step=1):
+            return team_run
         sentinel_result = await self._analyze_team_run_start(team, team_run, trigger_event_id)
         if self._sentinel_blocks(sentinel_result):
             self._finish_sentinel_blocked(team_run, sentinel_result, stage="team_run_start")
@@ -357,6 +379,8 @@ class TeamRunOrchestrator:
         step_index = 1
 
         while True:
+            if self._stop_if_cancelled(team_run, skipped_members=[], first_skipped_step=step_index):
+                return team_run
             if self._limit_reached(team=team, team_run=team_run, step_index=step_index, start_monotonic=start_monotonic):
                 self._finish_mesh_limit(team_run, team, step_index, start_monotonic)
                 return team_run
@@ -409,6 +433,9 @@ class TeamRunOrchestrator:
             self._add_tokens(team_run, input_tokens, output_tokens)
             self.db.commit()
 
+            if self._stop_if_cancelled(team_run, skipped_members=[], first_skipped_step=step_index):
+                return team_run
+
             if self._token_limit_exceeded(team, team_run):
                 self._finish_run(team_run, TeamRunStatus.FAILED.value, error={"reason": "max_total_tokens_exceeded"}, skipped_members=[], first_skipped_step=step_index)
                 return team_run
@@ -454,7 +481,16 @@ class TeamRunOrchestrator:
                 return team_run
             dispatch_signatures.add(signature)
 
-            for dispatch in command.dispatches:
+            for dispatch_offset, dispatch in enumerate(command.dispatches):
+                if self._stop_if_cancelled(
+                    team_run,
+                    skipped_members=self._remaining_dispatch_runnables(
+                        runnable_members,
+                        command.dispatches[dispatch_offset:],
+                    ),
+                    first_skipped_step=step_index,
+                ):
+                    return team_run
                 if self._limit_reached(team=team, team_run=team_run, step_index=step_index, start_monotonic=start_monotonic):
                     self._finish_mesh_limit(team_run, team, step_index, start_monotonic)
                     return team_run
@@ -527,6 +563,16 @@ class TeamRunOrchestrator:
                     }
                 )
                 self.db.commit()
+
+                if self._stop_if_cancelled(
+                    team_run,
+                    skipped_members=self._remaining_dispatch_runnables(
+                        runnable_members,
+                        command.dispatches[dispatch_offset + 1 :],
+                    ),
+                    first_skipped_step=step_index,
+                ):
+                    return team_run
 
                 if self._token_limit_exceeded(team, team_run):
                     self._finish_run(team_run, TeamRunStatus.FAILED.value, error={"reason": "max_total_tokens_exceeded"}, skipped_members=[], first_skipped_step=step_index)
@@ -846,6 +892,34 @@ class TeamRunOrchestrator:
 
     def _create_run(self, team: AgentTeam, trigger_event_id: Optional[int]) -> AgentTeamRun:
         now = datetime.utcnow()
+        if self.existing_run_id is not None:
+            team_run = (
+                self.db.query(AgentTeamRun)
+                .filter(
+                    AgentTeamRun.id == self.existing_run_id,
+                    AgentTeamRun.team_id == team.id,
+                    AgentTeamRun.tenant_id == self.tenant_id,
+                )
+                .first()
+            )
+            if team_run is None:
+                raise TeamValidationError("team_run_not_found")
+            if team_run.status == TeamRunStatus.CANCELLED.value:
+                return team_run
+            if team_run.status != TeamRunStatus.PENDING.value:
+                raise TeamValidationError("team_run_not_pending")
+            team_run.status = TeamRunStatus.RUNNING.value
+            team_run.trigger_event_id = trigger_event_id
+            team_run.goal_text_snapshot = team.goal_text
+            team_run.topology_snapshot = team.topology
+            team_run.started_at = now
+            team_run.total_steps = 0
+            team_run.completed_steps = 0
+            team_run.failed_steps = 0
+            self.db.commit()
+            self.db.refresh(team_run)
+            return team_run
+
         team_run = AgentTeamRun(
             tenant_id=self.tenant_id,
             team_id=team.id,
@@ -1086,6 +1160,50 @@ class TeamRunOrchestrator:
             status = TeamRunStatus.FAILED.value
             error = {"reason": "max_steps_exceeded", "max_steps": team.max_steps}
         self._finish_run(team_run, status, error=error, skipped_members=[], first_skipped_step=step_index)
+
+    def _stop_if_cancelled(
+        self,
+        team_run: AgentTeamRun,
+        *,
+        skipped_members: list[_RunnableMember],
+        first_skipped_step: int,
+    ) -> bool:
+        self.db.refresh(team_run)
+        if team_run.status != TeamRunStatus.CANCELLED.value:
+            return False
+
+        for offset, runnable in enumerate(skipped_members):
+            self.db.add(
+                AgentTeamMemberRun(
+                    tenant_id=self.tenant_id,
+                    team_run_id=team_run.id,
+                    agent_team_member_id=runnable.member.id,
+                    agent_id=runnable.agent.id,
+                    step_index=first_skipped_step + offset,
+                    status=TeamMemberRunStatus.SKIPPED.value,
+                    error_json={"reason": TeamRunStatus.CANCELLED.value},
+                )
+            )
+            team_run.total_steps += 1
+        if team_run.error_json is None:
+            team_run.error_json = {"reason": TeamRunStatus.CANCELLED.value}
+        if team_run.completed_at is None:
+            team_run.completed_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(team_run)
+        return True
+
+    def _remaining_dispatch_runnables(
+        self,
+        runnable_members: list[_RunnableMember],
+        dispatches: list[dict[str, Any]],
+    ) -> list[_RunnableMember]:
+        remaining: list[_RunnableMember] = []
+        for dispatch in dispatches:
+            runnable = self._runnable_by_member_id(runnable_members, dispatch["member_id"])
+            if runnable is not None:
+                remaining.append(runnable)
+        return remaining
 
     def _mark_member_completed(
         self,

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 5 CRUD API layer (2026-05-05)
+
+**Summary.** Added the bounded backend HTTP API layer for Agent Teams. This delivery covers tenant-scoped CRUD/member/run endpoints for `/api/teams` and `/api/v1/teams`, manual background-task runs, cancellation, soft archive cleanup, and API response fields needed by later frontend work. Trigger dispatch and frontend Team Builder surfaces remain deferred.
+
+**API.**
+- Added shared schemas and service logic for team create/list/detail/update/archive, member add/remove/reorder, run start/list/detail/cancel, with legacy pagination as `{items,total,page,page_size}` and v1 pagination as `{data,meta}`.
+- Reused the existing `agents.*` permission model: read/list surfaces use `agents.read`, configuration/member writes use `agents.write`, manual run and cancel use `agents.execute`, and archive uses `agents.delete`.
+- Soft archive now refuses active runs, marks the team archived, removes visible members through `TeamMembershipService`, preserves run history, and leaves hidden coordinators non-public.
+- Agent read/list responses now expose `is_team_member` and `current_team_id` while continuing to hide internal coordinator agents.
+
+**Runtime safety.**
+- Manual runs pre-create an `AgentTeamRun` row, return `202` with a poll URL, then execute the orchestrator in a FastAPI background task against a fresh DB session.
+- Added `cancelled` run status and line/mesh cancellation checkpoints between steps/dispatches.
+- Hardened team scratch tools so the invoking agent must be a visible member of the target run's team.
+- Extended `TeamMembershipService` transaction control and the sequential in-team A2A permission regression where A joins before B.
+
+**Dev smoke.**
+- Added `backend/dev_tests/test_teams_api_e2e.py`, an opt-in live HTTP smoke skeleton that accepts caller-provided auth (`TSUSHIN_AUTH_COOKIE` for `/api/teams`, or `TSUSHIN_AUTH_TOKEN`/`TSUSHIN_API_KEY` for `/api/v1/teams`) and existing agent fixtures (`TSUSHIN_TEAM_AGENT_IDS`), creates temporary teams, exercises the expected `/api/teams` and `/api/v1/teams` sequence, and soft-archives only teams created by the smoke.
+- The smoke intentionally does not create agents. Missing agent IDs fail with a clear operator-facing message so live fixture setup stays explicit and non-destructive.
+
 ### Release 0.7.0 — Agent Teams Phase 4 safety layer and guard closure (2026-05-05)
 
 **Summary.** Closes the Phase 3 hidden-coordinator API guard gaps and lands the backend-only Phase 4 safety layer for Agent Teams: run-scoped memory, run scratch state, Sentinel team checks, and A2A membership snapshot/restore. Teams CRUD APIs, trigger dispatch, and frontend Team Builder remain deferred.

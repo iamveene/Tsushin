@@ -25,6 +25,7 @@ class TeamStatus(str, Enum):
 class TeamRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
     GOAL_NOT_ACHIEVED = "goal_not_achieved"

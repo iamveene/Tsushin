@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from agent.skills.base import BaseSkill, InboundMessage, SkillResult
-from models import AgentTeamRun
+from models import Agent, AgentTeamMember, AgentTeamRun, TeamMemberRole
 from services.team_run_scratch_service import TeamRunScratchService
 
 
@@ -114,8 +114,9 @@ class TeamScratchSkill(BaseSkill):
         config = config or {}
         team_run_id = config.get("team_run_id")
         tenant_id = config.get("tenant_id")
+        agent_id = config.get("agent_id")
         db = config.get("db") or self.db_session
-        if not db or not tenant_id or team_run_id is None:
+        if not db or not tenant_id or team_run_id is None or agent_id is None:
             return SkillResult(
                 success=False,
                 output="Team scratch is only available inside an Agent Team run.",
@@ -135,6 +136,26 @@ class TeamScratchSkill(BaseSkill):
                 success=False,
                 output="Team scratch run scope was not found.",
                 metadata={"skip_ai": True, "error": "team_run_not_found"},
+            )
+
+        member = (
+            db.query(AgentTeamMember)
+            .join(Agent, Agent.id == AgentTeamMember.agent_id)
+            .filter(
+                AgentTeamMember.tenant_id == tenant_id,
+                AgentTeamMember.team_id == run.team_id,
+                AgentTeamMember.agent_id == int(agent_id),
+                AgentTeamMember.role != TeamMemberRole.COORDINATOR.value,
+                Agent.tenant_id == tenant_id,
+                Agent.is_internal.is_(False),
+            )
+            .first()
+        )
+        if member is None:
+            return SkillResult(
+                success=False,
+                output="Team scratch is only available to non-internal members of this Agent Team run.",
+                metadata={"skip_ai": True, "error": "team_run_membership_required"},
             )
 
         service = TeamRunScratchService(db)

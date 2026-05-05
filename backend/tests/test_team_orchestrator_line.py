@@ -153,6 +153,17 @@ def _answer(label: str) -> str:
     )
 
 
+def _cancel_run_from_separate_session(db_session, run_id: int) -> None:
+    Session = sessionmaker(bind=db_session.get_bind())
+    other_session = Session()
+    try:
+        run = other_session.query(AgentTeamRun).filter(AgentTeamRun.id == run_id).one()
+        run.status = TeamRunStatus.CANCELLED.value
+        other_session.commit()
+    finally:
+        other_session.close()
+
+
 def test_line_runs_all_members_in_order_and_chains_context(db_session):
     _create_tenant(db_session, "tenant-a")
     agents = [
@@ -193,6 +204,44 @@ def test_line_runs_all_members_in_order_and_chains_context(db_session):
     rows = _member_runs(db_session, run.id)
     assert [row.status for row in rows] == [TeamMemberRunStatus.COMPLETED.value] * 3
     assert [row.output_summary for row in rows] == [f"summary from agent-{agent.id}" for agent in agents]
+
+
+def test_line_stops_between_steps_when_run_cancelled_by_another_session(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [
+        _create_agent(db_session, tenant_id="tenant-a", name="First"),
+        _create_agent(db_session, tenant_id="tenant-a", name="Second"),
+        _create_agent(db_session, tenant_id="tenant-a", name="Third"),
+    ]
+    team = _create_line_team(db_session, tenant_id="tenant-a", agents=agents)
+    calls = []
+
+    async def fake_invoke(**kwargs):
+        calls.append(kwargs["agent"].id)
+        _cancel_run_from_separate_session(db_session, kwargs["team_run"].id)
+        return {"answer": _answer(str(kwargs["agent"].id)), "tokens": {"prompt": 1, "completion": 1}}
+
+    run = asyncio.run(
+        TeamRunOrchestrator(
+            db_session,
+            tenant_id="tenant-a",
+            team_id=team.id,
+            agent_invoke_fn=fake_invoke,
+        ).run_line()
+    )
+
+    assert calls == [agents[0].id]
+    assert run.status == TeamRunStatus.CANCELLED.value
+    assert run.completed_at is not None
+    assert run.error_json["reason"] == TeamRunStatus.CANCELLED.value
+    assert run.completed_steps == 1
+    assert run.failed_steps == 0
+    rows = _member_runs(db_session, run.id)
+    assert [row.status for row in rows] == [
+        TeamMemberRunStatus.COMPLETED.value,
+        TeamMemberRunStatus.SKIPPED.value,
+        TeamMemberRunStatus.SKIPPED.value,
+    ]
 
 
 def test_line_aborts_on_member_failure_and_skips_remaining(db_session):
