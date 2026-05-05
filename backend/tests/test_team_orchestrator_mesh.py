@@ -31,6 +31,7 @@ from models import (  # noqa: E402
     AgentTeam,
     AgentTeamMember,
     AgentTeamMemberRun,
+    AgentTeamRun,
     Base,
     Contact,
     TeamMemberRole,
@@ -132,6 +133,17 @@ def _member_runs(db_session, run_id: int) -> list[AgentTeamMemberRun]:
     )
 
 
+def _cancel_run_from_separate_session(db_session, run_id: int) -> None:
+    Session = sessionmaker(bind=db_session.get_bind())
+    other_session = Session()
+    try:
+        run = other_session.query(AgentTeamRun).filter(AgentTeamRun.id == run_id).one()
+        run.status = TeamRunStatus.CANCELLED.value
+        other_session.commit()
+    finally:
+        other_session.close()
+
+
 def test_mesh_provisions_coordinator_dispatches_members_and_finishes(db_session):
     _create_tenant(db_session, "tenant-a")
     agents = [
@@ -204,6 +216,50 @@ def test_mesh_provisions_coordinator_dispatches_members_and_finishes(db_session)
     ]
     assert "research the issue" in rows[1].input_context_json["prompt"]
     assert calls[0][0] == TeamMemberRole.COORDINATOR.value
+
+
+def test_mesh_stops_between_steps_when_run_cancelled_by_another_session(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [
+        _create_agent(db_session, tenant_id="tenant-a", name="Researcher"),
+        _create_agent(db_session, tenant_id="tenant-a", name="Reviewer"),
+    ]
+    team = _create_mesh_team(db_session, tenant_id="tenant-a", agents=agents)
+    member_ids = [member.id for member in sorted(team.members, key=lambda row: row.execution_order or 0)]
+    calls = []
+
+    async def fake_invoke(**kwargs):
+        calls.append(kwargs["member"].id)
+        if kwargs["member"].role == TeamMemberRole.COORDINATOR.value:
+            return {
+                "answer": (
+                    "Dispatch.\n"
+                    '{"command":"dispatch","dispatches":['
+                    f'{{"member_id":{member_ids[0]},"message":"research"}},'
+                    f'{{"member_id":{member_ids[1]},"message":"review"}}'
+                    '],"reason":"need member input"}'
+                ),
+                "tokens": {"prompt": 1, "completion": 1},
+            }
+        _cancel_run_from_separate_session(db_session, kwargs["team_run"].id)
+        return {
+            "answer": '{"summary":"member complete","key_findings":[],"open_questions":[]}',
+            "tokens": {"prompt": 1, "completion": 1},
+        }
+
+    run = asyncio.run(TeamRunOrchestrator(db_session, "tenant-a", team.id, agent_invoke_fn=fake_invoke).run_mesh())
+
+    assert run.status == TeamRunStatus.CANCELLED.value
+    assert run.completed_at is not None
+    assert run.error_json["reason"] == TeamRunStatus.CANCELLED.value
+    assert len(calls) == 2
+    assert calls[1:] == [member_ids[0]]
+    rows = _member_runs(db_session, run.id)
+    assert [row.status for row in rows] == [
+        TeamMemberRunStatus.COMPLETED.value,
+        TeamMemberRunStatus.COMPLETED.value,
+        TeamMemberRunStatus.SKIPPED.value,
+    ]
 
 
 def test_mesh_parses_escalate_command_as_goal_not_achieved(db_session):

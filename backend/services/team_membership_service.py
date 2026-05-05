@@ -63,12 +63,14 @@ class TeamMembershipService:
     DEFAULT_RATE_LIMIT_RPM = 30
     DEFAULT_ALLOW_TARGET_SKILLS = False
 
-    def __init__(self, db: Session, tenant_id: str):
+    def __init__(self, db: Session, tenant_id: str, *, auto_commit: bool = True):
         self.db = db
         self.tenant_id = tenant_id
+        self.auto_commit = auto_commit
 
-    def add_agent_to_team(self, *, team_id: int, agent_id: int) -> TeamMembershipChange:
+    def add_agent_to_team(self, *, team_id: int, agent_id: int, commit: Optional[bool] = None) -> TeamMembershipChange:
         """Add an external agent as a user-visible team member."""
+        manage_transaction = self._manage_transaction(commit)
         try:
             self._validate_tenant()
             team = self._get_team(team_id)
@@ -103,7 +105,7 @@ class TeamMembershipService:
             )
             created_in_team_permission_ids = self._grant_in_team_permissions(team_id)
 
-            self.db.commit()
+            self._commit_or_flush(manage_transaction)
             return TeamMembershipChange(
                 tenant_id=self.tenant_id,
                 team_id=team_id,
@@ -113,11 +115,12 @@ class TeamMembershipService:
                 created_in_team_permission_ids=tuple(created_in_team_permission_ids),
             )
         except Exception:
-            self.db.rollback()
+            self._rollback_if_managed(manage_transaction)
             raise
 
-    def remove_agent_from_team(self, *, team_id: int, agent_id: int) -> TeamMembershipChange:
+    def remove_agent_from_team(self, *, team_id: int, agent_id: int, commit: Optional[bool] = None) -> TeamMembershipChange:
         """Remove an agent from a team and restore its external A2A state."""
+        manage_transaction = self._manage_transaction(commit)
         try:
             self._validate_tenant()
             self._get_team(team_id)
@@ -143,7 +146,7 @@ class TeamMembershipService:
             if agent.current_team_id == team_id:
                 agent.current_team_id = None
 
-            self.db.commit()
+            self._commit_or_flush(manage_transaction)
             return TeamMembershipChange(
                 tenant_id=self.tenant_id,
                 team_id=team_id,
@@ -153,8 +156,21 @@ class TeamMembershipService:
                 removed_in_team_permission_ids=tuple(removed_in_team_permission_ids),
             )
         except Exception:
-            self.db.rollback()
+            self._rollback_if_managed(manage_transaction)
             raise
+
+    def _manage_transaction(self, commit: Optional[bool]) -> bool:
+        return self.auto_commit if commit is None else bool(commit)
+
+    def _commit_or_flush(self, manage_transaction: bool) -> None:
+        if manage_transaction:
+            self.db.commit()
+        else:
+            self.db.flush()
+
+    def _rollback_if_managed(self, manage_transaction: bool) -> None:
+        if manage_transaction:
+            self.db.rollback()
 
     def _validate_tenant(self) -> None:
         tenant = self.db.query(Tenant.id).filter(Tenant.id == self.tenant_id).first()
@@ -322,6 +338,8 @@ class TeamMembershipService:
                     marker = self._get_snapshot(team_id, source_agent_id, permission.id)
                     if marker is not None and self._is_service_created_grant(marker):
                         self._apply_default_grant(permission)
+                    elif marker is not None:
+                        self._enable_preexisting_in_team_permission(permission)
                     continue
 
                 permission = AgentCommunicationPermission(
@@ -496,6 +514,11 @@ class TeamMembershipService:
         permission.max_depth = self.DEFAULT_MAX_DEPTH
         permission.rate_limit_rpm = self.DEFAULT_RATE_LIMIT_RPM
         permission.allow_target_skills = self.DEFAULT_ALLOW_TARGET_SKILLS
+
+    @staticmethod
+    def _enable_preexisting_in_team_permission(permission: AgentCommunicationPermission) -> None:
+        permission.is_enabled = True
+        permission.updated_at = datetime.utcnow()
 
     def _get_permission(
         self,

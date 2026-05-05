@@ -63,6 +63,8 @@ class PublicAgentSummary(BaseModel):
     enabled_channels: Optional[List[str]] = None
     persona: Optional[PublicAgentPersona] = None
     skills: List[str] = []
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -320,6 +322,8 @@ def _enrich_agent(agent: Agent, db: Session) -> dict:
         "enabled_channels": channels,
         "persona": persona_info,
         "skills": skill_types,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }

@@ -176,6 +176,8 @@ class AgentResponse(BaseModel):
 
     is_active: bool
     is_default: bool
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
@@ -567,6 +569,8 @@ def list_agents(
 
             "is_active": agent.is_active,
             "is_default": agent.is_default,
+            "is_team_member": bool(getattr(agent, "is_team_member", False)),
+            "current_team_id": getattr(agent, "current_team_id", None),
             "skills_count": skills_count,
             # Phase 10: Channel Configuration
             "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -712,6 +716,8 @@ def get_agent(
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "skills_count": skills_count,
         # Phase 10: Channel Configuration
         "enabled_channels": parse_enabled_channels(agent.enabled_channels),

@@ -146,7 +146,7 @@ def _create_tenant(db_session, tenant_id: str) -> Tenant:
     return tenant
 
 
-def _create_agent(db_session, *, tenant_id: str, name: str) -> Agent:
+def _create_agent(db_session, *, tenant_id: str, name: str, is_internal: bool = False) -> Agent:
     contact = Contact(
         friendly_name=name,
         role="agent",
@@ -164,6 +164,7 @@ def _create_agent(db_session, *, tenant_id: str, name: str) -> Agent:
         memory_isolation_mode="isolated",
         enable_semantic_search=True,
         is_active=True,
+        is_internal=is_internal,
     )
     db_session.add(agent)
     db_session.flush()
@@ -391,7 +392,18 @@ def test_team_run_scratch_is_isolated_by_tenant_team_and_run(db_session):
 def test_team_scratch_tool_requires_team_run_context(db_session):
     _create_tenant(db_session, "tenant-a")
     agent = _create_agent(db_session, tenant_id="tenant-a", name="Tool Agent")
+    outsider = _create_agent(db_session, tenant_id="tenant-a", name="Outsider")
+    internal_agent = _create_agent(db_session, tenant_id="tenant-a", name="Internal", is_internal=True)
     team = _create_team(db_session, tenant_id="tenant-a", name="Tool Team", agent=agent)
+    db_session.add(
+        AgentTeamMember(
+            tenant_id="tenant-a",
+            team_id=team.id,
+            agent_id=internal_agent.id,
+            role=TeamMemberRole.COORDINATOR.value,
+            execution_order=2,
+        )
+    )
     run = _create_run(db_session, tenant_id="tenant-a", team=team)
     db_session.commit()
 
@@ -431,6 +443,34 @@ def test_team_scratch_tool_requires_team_run_context(db_session):
     )
     assert isinstance(stored, SkillResult)
     assert stored.success is True
+
+    outsider_result = asyncio.run(
+        manager.execute_tool_call(
+            db=db_session,
+            agent_id=outsider.id,
+            tool_name="team_scratch_set",
+            arguments={"key": "handoff", "value": {"summary": "spoofed"}},
+            message=message,
+            return_full_result=True,
+        )
+    )
+    assert isinstance(outsider_result, SkillResult)
+    assert outsider_result.success is False
+    assert outsider_result.metadata["error"] == "team_run_membership_required"
+
+    internal_result = asyncio.run(
+        manager.execute_tool_call(
+            db=db_session,
+            agent_id=internal_agent.id,
+            tool_name="team_scratch_set",
+            arguments={"key": "handoff", "value": {"summary": "internal"}},
+            message=message,
+            return_full_result=True,
+        )
+    )
+    assert isinstance(internal_result, SkillResult)
+    assert internal_result.success is False
+    assert internal_result.metadata["error"] == "team_run_membership_required"
 
     read = asyncio.run(
         manager.execute_tool_call(

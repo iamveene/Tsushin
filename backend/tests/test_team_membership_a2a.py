@@ -229,6 +229,73 @@ def test_add_disables_and_snapshots_external_permissions(db_session):
     } == expected_payloads
 
 
+def test_later_teammate_join_reenables_permission_disabled_by_first_join(db_session):
+    _create_tenant(db_session, "tenant-a")
+    member_a = _create_agent(db_session, tenant_id="tenant-a", name="Member A")
+    member_b = _create_agent(db_session, tenant_id="tenant-a", name="Member B")
+    team = _create_team(db_session, tenant_id="tenant-a", name="Sequential Team")
+    permission = _create_permission(
+        db_session,
+        tenant_id="tenant-a",
+        source=member_a,
+        target=member_b,
+        max_depth=7,
+        rate_limit_rpm=11,
+        allow_target_skills=True,
+    )
+    db_session.commit()
+
+    service = TeamMembershipService(db_session, "tenant-a")
+    service.add_agent_to_team(team_id=team.id, agent_id=member_a.id)
+    db_session.refresh(permission)
+    assert permission.is_enabled is False
+
+    service.add_agent_to_team(team_id=team.id, agent_id=member_b.id)
+
+    db_session.refresh(permission)
+    assert permission.is_enabled is True
+    assert permission.max_depth == 7
+    assert permission.rate_limit_rpm == 11
+    assert permission.allow_target_skills is True
+
+
+def test_membership_service_can_defer_commit_and_rollback_for_bulk_callers(db_session, monkeypatch):
+    _create_tenant(db_session, "tenant-a")
+    member = _create_agent(db_session, tenant_id="tenant-a", name="Bulk Member")
+    team = _create_team(db_session, tenant_id="tenant-a", name="Bulk Team")
+    db_session.commit()
+    commit_calls = []
+    rollback_calls = []
+
+    def _track_commit():
+        commit_calls.append(True)
+
+    def _track_rollback():
+        rollback_calls.append(True)
+
+    monkeypatch.setattr(db_session, "commit", _track_commit)
+    monkeypatch.setattr(db_session, "rollback", _track_rollback)
+    service = TeamMembershipService(db_session, "tenant-a", auto_commit=False)
+
+    change = service.add_agent_to_team(team_id=team.id, agent_id=member.id)
+    with pytest.raises(TeamMembershipError, match="agent_not_found_for_tenant"):
+        service.add_agent_to_team(team_id=team.id, agent_id=member.id + 999, commit=False)
+
+    assert change.membership_id is not None
+    assert commit_calls == []
+    assert rollback_calls == []
+    assert (
+        db_session.query(AgentTeamMember)
+        .filter(
+            AgentTeamMember.tenant_id == "tenant-a",
+            AgentTeamMember.team_id == team.id,
+            AgentTeamMember.agent_id == member.id,
+        )
+        .count()
+        == 1
+    )
+
+
 def test_remove_restores_snapshot_payload_byte_equivalently_and_cleans_state(db_session):
     _create_tenant(db_session, "tenant-a")
     joining_agent = _create_agent(db_session, tenant_id="tenant-a", name="Joining")

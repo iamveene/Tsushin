@@ -197,6 +197,7 @@ backend/dev_tests/*
 !backend/dev_tests/multi_index_external_vector_ui_regression.js
 !backend/dev_tests/run_team_line_smoke.py
 !backend/dev_tests/run_team_mesh_smoke.py
+!backend/dev_tests/test_teams_api_e2e.py
 
 # Individual test files outside tests/ directory
 # (prevents accidental commits of dev test scripts)
