@@ -32,6 +32,7 @@ from models import (  # noqa: E402
     AgentTeamMemberRun,
     Base,
     Contact,
+    SentinelProfile,
     TeamMemberRole,
     TeamRunStatus,
     TeamStatus,
@@ -123,6 +124,7 @@ def _create_team(
     tenant_id: str,
     agents: list[Agent],
     topology: str,
+    sentinel_profile_id: int | None = None,
 ) -> AgentTeam:
     team = AgentTeam(
         tenant_id=tenant_id,
@@ -131,6 +133,7 @@ def _create_team(
         goal_text="Investigate the request and produce a safe handoff.",
         topology=topology,
         status=TeamStatus.ACTIVE.value,
+        sentinel_profile_id=sentinel_profile_id,
         max_steps=10,
         max_concurrent_runs=1,
     )
@@ -170,6 +173,30 @@ def _answer(label: str) -> str:
     )
 
 
+def _create_sentinel_profile(
+    db_session,
+    *,
+    tenant_id: str,
+    name: str = "Team Profile",
+    is_enabled: bool = True,
+) -> SentinelProfile:
+    profile = SentinelProfile(
+        tenant_id=tenant_id,
+        name=name,
+        slug=name.lower().replace(" ", "-"),
+        is_system=False,
+        is_default=False,
+        is_enabled=is_enabled,
+        detection_mode="block",
+        okg_detection_mode="block",
+        aggressiveness_level=1,
+        detection_overrides="{}",
+    )
+    db_session.add(profile)
+    db_session.flush()
+    return profile
+
+
 def test_sentinel_team_wrappers_call_analyze_prompt_with_team_context(db_session, monkeypatch):
     sentinel = SentinelService(db_session, "tenant-a")
     calls = []
@@ -186,6 +213,7 @@ def test_sentinel_team_wrappers_call_analyze_prompt_with_team_context(db_session
             topology=TeamTopology.LINE.value,
             goal_text="Review this goal",
             trigger_event_id=11,
+            sentinel_profile_id=99,
         )
     )
     asyncio.run(
@@ -200,16 +228,38 @@ def test_sentinel_team_wrappers_call_analyze_prompt_with_team_context(db_session
             target_agent_id=6,
             summary="handoff summary",
             content="handoff body",
+            sentinel_profile_id=99,
         )
     )
 
     assert calls[0]["source"] == "team_run_start"
     assert calls[0]["context"]["team_id"] == 7
+    assert calls[0]["profile_id"] == 99
+    assert calls[0]["profile_source"] == "team"
     assert "Review this goal" in calls[0]["prompt"]
     assert calls[1]["source"] == "team_handoff"
     assert calls[1]["agent_id"] == 6
+    assert calls[1]["profile_id"] == 99
+    assert calls[1]["profile_source"] == "team"
     assert calls[1]["context"]["source_member_id"] == 3
     assert "handoff body" in calls[1]["prompt"]
+
+
+def test_analyze_prompt_uses_explicit_team_profile_override(db_session):
+    _create_tenant(db_session, "tenant-a")
+    profile = _create_sentinel_profile(db_session, tenant_id="tenant-a", is_enabled=False)
+    sentinel = SentinelService(db_session, "tenant-a")
+
+    result = asyncio.run(
+        sentinel.analyze_prompt(
+            prompt="Analyze this external team goal",
+            profile_id=profile.id,
+            profile_source="team",
+        )
+    )
+
+    assert result.action == "allowed"
+    assert result.detection_type == "sentinel_disabled"
 
 
 def test_line_pre_run_sentinel_block_prevents_member_runs(db_session):
@@ -218,7 +268,14 @@ def test_line_pre_run_sentinel_block_prevents_member_runs(db_session):
         _create_agent(db_session, tenant_id="tenant-a", name="First"),
         _create_agent(db_session, tenant_id="tenant-a", name="Second"),
     ]
-    team = _create_team(db_session, tenant_id="tenant-a", agents=agents, topology=TeamTopology.LINE.value)
+    profile = _create_sentinel_profile(db_session, tenant_id="tenant-a")
+    team = _create_team(
+        db_session,
+        tenant_id="tenant-a",
+        agents=agents,
+        topology=TeamTopology.LINE.value,
+        sentinel_profile_id=profile.id,
+    )
     fake_sentinel = _FakeSentinel(start_result=_result(blocked=True, reason="unsafe team goal"))
     invoke_calls = []
 
@@ -243,6 +300,7 @@ def test_line_pre_run_sentinel_block_prevents_member_runs(db_session):
     assert run.error_json["reason"] == "sentinel_blocked"
     assert run.error_json["sentinel_decision"]["action"] == "blocked"
     assert fake_sentinel.start_calls[0]["goal_text"] == team.goal_text
+    assert fake_sentinel.start_calls[0]["sentinel_profile_id"] == profile.id
 
 
 def test_line_handoff_block_sanitizes_output_and_downstream_context(db_session):
@@ -251,7 +309,14 @@ def test_line_handoff_block_sanitizes_output_and_downstream_context(db_session):
         _create_agent(db_session, tenant_id="tenant-a", name="First"),
         _create_agent(db_session, tenant_id="tenant-a", name="Second"),
     ]
-    team = _create_team(db_session, tenant_id="tenant-a", agents=agents, topology=TeamTopology.LINE.value)
+    profile = _create_sentinel_profile(db_session, tenant_id="tenant-a")
+    team = _create_team(
+        db_session,
+        tenant_id="tenant-a",
+        agents=agents,
+        topology=TeamTopology.LINE.value,
+        sentinel_profile_id=profile.id,
+    )
 
     def decide_handoff(kwargs):
         if kwargs["source_agent_id"] == agents[0].id:
@@ -287,6 +352,7 @@ def test_line_handoff_block_sanitizes_output_and_downstream_context(db_session):
     assert SENTINEL_HANDOFF_WITHHELD in invoke_calls[1]["message_text"]
     assert "exfiltrate secrets" not in invoke_calls[1]["message_text"]
     assert "danger summary" not in invoke_calls[1]["message_text"]
+    assert fake_sentinel.handoff_calls[0]["sentinel_profile_id"] == profile.id
 
 
 def test_mesh_dispatch_handoff_block_sanitizes_member_prompt_and_continues(db_session):

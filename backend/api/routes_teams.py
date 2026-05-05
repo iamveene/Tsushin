@@ -11,6 +11,7 @@ from api.schemas.teams import (
     TeamListResponse,
     TeamMemberAdd,
     TeamMemberOrderUpdate,
+    TeamMemberPatch,
     TeamMemberResponse,
     TeamRunDetail,
     TeamRunListResponse,
@@ -130,6 +131,20 @@ async def remove_member(
     try:
         _service(ctx, current_user).remove_member(team_id, agent_id)
         return None
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.patch("/{team_id}/members/{agent_id}", response_model=TeamMemberResponse)
+async def update_member(
+    team_id: int,
+    agent_id: int,
+    payload: TeamMemberPatch,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User = Depends(require_permission("agents.write")),
+):
+    try:
+        return _service(ctx, current_user).update_member(team_id, agent_id, payload)
     except AgentTeamApiError as exc:
         _raise_api_error(exc)
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 9 Team Builder (2026-05-05)
+
+**Summary.** Replaced the minimal Team detail landing with the operational Team Builder surface and added the missing API/runtime contract for layout editing, team-run monitoring, and team-level Sentinel overrides.
+
+**Backend.**
+- Added Alembic `0085_agent_team_sentinel_profile.py` and exposed nullable `sentinel_profile_id` on Agent Teams so a Team-level Sentinel profile can override tenant/member profiles during team-run start and handoff analysis.
+- Added member metadata/layout PATCH endpoints under `/api/teams/{team_id}/members/{agent_id}` and `/api/v1/teams/{team_id}/members/{agent_id}` for `position_x`, `position_y`, `is_required`, and `execution_order`, with archived-team and active-run guards.
+- Extended Teams API serialization and tests for Sentinel profile ownership, member layout editing, run safety, and explicit Team Sentinel profile propagation.
+
+**Frontend.**
+- Rebuilt `/studio/teams/{id}` as a URL-backed Team Builder shell with Topology, Triggers, Sentinel, Runs, and Settings tabs.
+- Added a React Flow `TeamCanvas` with line and mesh layouts, coordinator/member node types, expandable member details, drag-to-add agent membership, line reordering, node position persistence, remove/toggle-required actions, and read-only mode while runs are active.
+- Added typed Team client helpers for member add/update/remove/reorder and team run start/list/detail/cancel. The Triggers tab can now recover partial wizard-created teams by adding, editing, or removing trigger bindings after creation.
+- Added run history/detail UI with member-run timeline, output summaries, token/cost metadata, Sentinel decision JSON, manual run start, and cancel actions.
+
+**Validation.**
+- Container Teams regression suite passed with `94 passed`; disposable Postgres Alembic replay upgraded from base through `0085 (head)`.
+- Frontend typecheck passed, lint passed with `0` errors and the existing warning set, and Docker no-cache frontend build completed the production Next build.
+- Browser QA passed against `https://localhost` with evidence under `.private/qa/v0.7.0/p9/`, covering topology, member detail, reorder, add/remove, trigger recovery, Sentinel override, run drilldown/cancel, settings, archive, Agent Studio, and Watcher graph regression.
+
 ### Release 0.7.0 — Agent Teams Phase 8 Team Wizard (2026-05-05)
 
 **Summary.** Added the first end-to-end Agent Teams creation flow in Studio and hardened the Phase 6 queue path before exposing the workflow in the UI.
