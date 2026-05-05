@@ -173,6 +173,9 @@ export interface Config {
   ollama_api_key: string | null
   // Phase 18: Global WhatsApp conversation delay
   whatsapp_conversation_delay_seconds: number
+  // v0.7.0 Track F: platform-wide agentic loop bounds (BUG-716)
+  platform_min_agentic_rounds?: number | null
+  platform_max_agentic_rounds?: number | null
 }
 
 export interface OllamaHealthResponse {
@@ -918,6 +921,10 @@ export interface Agent {
   // Agent avatar
   avatar?: string | null
 
+  // v0.7.0 Track F: bounded outer agentic loop (BUG-716)
+  max_agentic_rounds?: number | null
+  max_agentic_loop_bytes?: number | null
+
   is_active: boolean
   is_default: boolean
   skills_count?: number  // Number of enabled skills
@@ -1145,6 +1152,8 @@ export interface HubIntegration {
   health_status: string
   workspace_gid?: string
   workspace_name?: string
+  can_send?: boolean | null
+  can_draft?: boolean | null
 }
 
 export interface ConversationDetails {
@@ -1319,6 +1328,876 @@ export interface ChannelCatalogEntry {
   tenant_has_configured: boolean
 }
 
+export interface TriggerCatalogEntry {
+  id: string
+  display_name: string
+  description: string
+  requires_setup: boolean
+  setup_hint: string
+  icon_hint: string
+  tenant_has_configured: boolean
+}
+
+export interface DefaultAgentOption {
+  id: number
+  name: string
+  is_default: boolean
+}
+
+export interface DefaultAgentInstanceBinding {
+  kind: 'channel' | 'trigger'
+  channel_type: string
+  instance_id: number
+  display_name: string
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  status?: string | null
+  health_status?: string | null
+}
+
+export interface UserChannelDefaultAgent {
+  id: number
+  channel_type: string
+  user_identifier: string
+  agent_id: number
+  agent_name?: string | null
+}
+
+export interface DefaultAgentsSettings {
+  tenant_default_agent_id?: number | null
+  tenant_default_agent_name?: string | null
+  available_agents: DefaultAgentOption[]
+  channel_defaults: DefaultAgentInstanceBinding[]
+  trigger_defaults: DefaultAgentInstanceBinding[]
+  user_defaults: UserChannelDefaultAgent[]
+}
+
+export type TriggerKind = 'email' | 'webhook' | 'jira' | 'schedule' | 'github'
+export type TriggerCriteria = Record<string, unknown>
+
+export interface TriggerInstanceBase {
+  id: number
+  tenant_id: string
+  integration_name: string
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  is_active: boolean
+  status: string
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_activity_at?: string | null
+  last_cursor?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface EmailTrigger {
+  id: number
+  tenant_id: string
+  integration_name: string
+  provider: string
+  gmail_integration_id?: number | null
+  gmail_account_email?: string | null
+  gmail_integration_name?: string | null
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  poll_interval_seconds: number
+  is_active: boolean
+  status: string
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_activity_at?: string | null
+  last_cursor?: string | null
+  managed_notification_enabled?: boolean
+  managed_notification_status?: JiraManagedNotificationStatus | null
+  notification_subscription_status?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_agent_id?: number | null
+  managed_notification_agent_name?: string | null
+  managed_notification_recipient_preview?: string | null
+  managed_notification_continuous_agent_id?: number | null
+  managed_notification_subscription_id?: number | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface EmailTriggerCreateRequest {
+  integration_name: string
+  gmail_integration_id: number
+  default_agent_id?: number | null
+  search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  poll_interval_seconds?: number
+  is_active?: boolean
+}
+
+export interface EmailTriggerUpdateRequest {
+  integration_name?: string
+  gmail_integration_id?: number
+  default_agent_id?: number | null
+  search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  poll_interval_seconds?: number
+  is_active?: boolean
+}
+
+export interface EmailTriageSubscription {
+  email_trigger_id: number
+  continuous_agent_id: number
+  continuous_subscription_id: number
+  agent_id: number
+  created_agent: boolean
+  created_subscription: boolean
+  status: string
+}
+
+export interface EmailNotificationSubscriptionRequest {
+  recipient_phone?: string
+  recipient?: string
+  agent_id?: number | null
+}
+
+export interface EmailNotificationSubscriptionResponse {
+  email_trigger_id: number
+  continuous_agent_id: number
+  continuous_subscription_id: number
+  agent_id: number
+  recipient_preview: string
+  created_agent: boolean
+  created_subscription: boolean
+}
+
+export interface EmailTestQueryRequest {
+  gmail_integration_id?: number | null
+  search_query?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  max_results?: number
+}
+
+export interface EmailMessagePreview {
+  id: string
+  thread_id?: string | null
+  subject: string
+  from_address?: string | null
+  date?: string | null
+  snippet?: string | null
+  description_preview?: string | null
+  link?: string | null
+}
+
+export interface EmailTestQueryResponse {
+  success: boolean
+  total?: number | null
+  sample_count?: number | null
+  message_count?: number | null
+  messages?: EmailMessagePreview[]
+  sample_messages?: EmailMessagePreview[]
+  message?: string | null
+  error?: string | null
+}
+
+export interface EmailPollNowResponse {
+  success?: boolean
+  instance_id?: number
+  tenant_id?: string
+  status?: string | null
+  message?: string | null
+  error?: string | null
+  fetched_count?: number | null
+  message_count?: number | null
+  emitted_count?: number | null
+  wake_event_count?: number | null
+  dispatched_count?: number | null
+  duplicate_count?: number | null
+  skipped_count?: number | null
+  processed_count?: number | null
+  failed_count?: number | null
+  cursor?: string | null
+  reason?: string | null
+  dispatch_statuses?: string[]
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export interface JiraTrigger extends TriggerInstanceBase {
+  jira_integration_id?: number | null
+  jira_integration_name?: string | null
+  jira_integration_health_status?: string | null
+  jira_integration_health_status_reason?: string | null
+  site_url: string
+  project_key?: string | null
+  jql: string
+  auth_email?: string | null
+  api_token_preview?: string | null
+  poll_interval_seconds: number
+  managed_notification_enabled?: boolean
+  managed_notification_status?: JiraManagedNotificationStatus | null
+  notification_subscription_status?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_recipient_preview?: string | null
+  managed_notification_agent_id?: number | null
+  managed_notification_agent_name?: string | null
+  managed_notification_continuous_agent_id?: number | null
+  managed_notification_subscription_id?: number | null
+}
+
+export interface JiraTriggerCreateRequest {
+  integration_name: string
+  jira_integration_id?: number | null
+  site_url?: string | null
+  project_key?: string | null
+  jql: string
+  auth_email?: string | null
+  api_token?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  poll_interval_seconds?: number
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
+
+export interface JiraTriggerTestQueryRequest {
+  jira_integration_id?: number | null
+  site_url?: string | null
+  jql?: string | null
+  auth_email?: string | null
+  api_token?: string | null
+  max_results?: number
+}
+
+export type JiraProviderMode = 'programmatic' | 'agentic'
+
+export interface JiraIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  site_url: string
+  project_key?: string | null
+  auth_email?: string | null
+  api_token_preview?: string | null
+  is_active: boolean
+  provider_mode?: JiraProviderMode
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  trigger_count?: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface JiraIntegrationCreateRequest {
+  integration_name: string
+  site_url: string
+  project_key?: string | null
+  auth_email: string
+  api_token: string
+  is_active?: boolean
+  provider_mode?: JiraProviderMode
+}
+
+export interface JiraIntegrationUpdateRequest {
+  integration_name?: string
+  site_url?: string
+  project_key?: string | null
+  auth_email?: string
+  api_token?: string | null
+  is_active?: boolean
+  provider_mode?: JiraProviderMode
+}
+
+export interface JiraIssuePreview {
+  id?: string | null
+  key?: string | null
+  summary?: string | null
+  status?: string | null
+  updated?: string | null
+  issue_type?: string | null
+  issue_type_name?: string | null
+  type?: string | null
+  description?: string | null
+  description_preview?: string | null
+  url?: string | null
+  link?: string | null
+  issue_url?: string | null
+}
+
+export interface JiraTriggerTestQueryResponse {
+  success: boolean
+  total?: number | null
+  sample_count?: number | null
+  issue_count?: number | null
+  issues?: JiraIssuePreview[]
+  sample_issues?: JiraIssuePreview[]
+  recipient_preview?: string | null
+  notification_recipient_preview?: string | null
+  managed_notification_status?: JiraManagedNotificationStatus | null
+  error?: string | null
+  message?: string | null
+}
+
+export interface JiraNotificationSubscriptionRequest {
+  recipient_phone?: string
+  recipient?: string
+  agent_id?: number | null
+}
+
+export interface JiraManagedNotificationStatus {
+  status?: string | null
+  recipient_preview?: string | null
+  agent_id?: number | null
+  agent_name?: string | null
+  continuous_agent_id?: number | null
+  continuous_subscription_id?: number | null
+  created_agent?: boolean
+  created_subscription?: boolean
+  message?: string | null
+}
+
+export interface JiraNotificationSubscriptionResponse extends JiraManagedNotificationStatus {
+  jira_trigger_id?: number
+  agent_id?: number
+  recipient_preview?: string
+  continuous_agent_id?: number
+  continuous_subscription_id?: number
+  created_agent?: boolean
+  created_subscription?: boolean
+}
+
+export interface JiraPollNowResponse {
+  success?: boolean
+  instance_id?: number
+  tenant_id?: string
+  status?: string | null
+  message?: string | null
+  error?: string | null
+  fetched_count?: number | null
+  issue_count?: number | null
+  processed_count?: number | null
+  dispatched_count?: number | null
+  emitted_count?: number | null
+  matched_count?: number | null
+  duplicate_count?: number | null
+  skipped_count?: number | null
+  failed_count?: number | null
+  wake_event_count?: number | null
+  cursor?: string | null
+  reason?: string | null
+  dispatch_statuses?: string[]
+  started_at?: string | null
+  completed_at?: string | null
+  issues?: JiraIssuePreview[]
+  sample_issues?: JiraIssuePreview[]
+  details?: Record<string, unknown> | null
+}
+
+export interface ScheduleTrigger extends TriggerInstanceBase {
+  cron_expression: string
+  timezone: string
+  payload_template?: Record<string, unknown> | null
+  next_fire_at?: string | null
+  last_fire_at?: string | null
+}
+
+export interface ScheduleTriggerCreateRequest {
+  integration_name: string
+  cron_expression: string
+  timezone?: string
+  payload_template?: Record<string, unknown> | null
+  trigger_criteria?: TriggerCriteria | null
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type ScheduleTriggerUpdateRequest = Partial<ScheduleTriggerCreateRequest>
+
+export interface SchedulePreviewRequest {
+  cron_expression: string
+  timezone?: string
+  payload_template?: Record<string, unknown> | null
+}
+
+export interface SchedulePreviewResponse {
+  next_fire_times?: string[]
+  next_fire_preview?: string[]
+  next_runs?: string[]
+  timezone?: string
+  error?: string | null
+  message?: string | null
+}
+
+export type GitHubTriggerAuthMethod = 'pat' | 'app'
+
+export interface GitHubTrigger extends TriggerInstanceBase {
+  auth_method: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  has_pat_token?: boolean
+  pat_token_preview?: string | null
+  webhook_secret_preview?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  last_delivery_id?: string | null
+  inbound_url?: string
+}
+
+export interface GitHubTriggerCreateRequest {
+  integration_name: string
+  auth_method?: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  pat_token?: string | null
+  webhook_secret?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
+
+export interface GitHubTriggerTestConnectionRequest {
+  auth_method?: GitHubTriggerAuthMethod
+  repo_owner: string
+  repo_name: string
+  installation_id?: string | null
+  pat_token?: string | null
+}
+
+export interface GitHubTriggerTestConnectionResponse {
+  success: boolean
+  ok?: boolean
+  status?: string
+  status_code?: number | null
+  detail?: string | null
+  message?: string | null
+  error?: string | null
+  repository?: string | null
+}
+
+// v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
+// shared PAT + default owner/repo so the code_repository skill and GitHub
+// triggers can reuse one connection per tenant.
+export type GitHubProviderMode = 'programmatic' | 'agentic'
+
+export interface GitHubIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  default_owner?: string | null
+  default_repo?: string | null
+  pat_token_preview?: string | null
+  is_active: boolean
+  provider_mode?: GitHubProviderMode
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  trigger_count?: number
+  skill_attached_count?: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface GitHubIntegrationCreateRequest {
+  integration_name: string
+  pat_token: string
+  default_owner?: string | null
+  default_repo?: string | null
+  is_active?: boolean
+  provider_mode?: GitHubProviderMode
+}
+
+export interface GitHubIntegrationUpdateRequest {
+  integration_name?: string
+  pat_token?: string | null
+  default_owner?: string | null
+  default_repo?: string | null
+  is_active?: boolean
+  provider_mode?: GitHubProviderMode
+}
+
+export interface GitHubIntegrationTestConnectionRequest {
+  pat_token?: string | null
+  owner?: string | null
+  repo?: string | null
+}
+
+export interface GitHubIntegrationTestConnectionResponse {
+  success: boolean
+  ok?: boolean
+  status?: string
+  status_code?: number | null
+  detail?: string | null
+  message?: string | null
+  error?: string | null
+  repository?: string | null
+  full_name?: string | null
+  default_branch?: string | null
+}
+
+// v0.7.0: PR Submitted criteria envelope — matches the backend canonical
+// payload that `/api/triggers/github/test-criteria` evaluates against a
+// sample push/PR webhook payload.
+export type PRSubmittedAction =
+  | 'opened'
+  | 'reopened'
+  | 'synchronize'
+  | 'edited'
+  | 'ready_for_review'
+
+// v0.7.0 — must mirror backend ``validate_pr_criteria`` in
+// ``backend/channels/github/criteria.py``. Earlier shape used
+// ``event_type`` and flat filter fields; that mismatched the backend's
+// ``event`` + nested ``filters`` envelope and caused POST /api/triggers/github
+// to silently 422 ("trigger criteria missing required fields:
+// ['criteria_version', 'filters', 'ordering', 'window']") because the
+// validator routed on ``event=='pull_request'`` and fell through to the
+// generic envelope when the key didn't match. Caught by the v0.7.0
+// release-finishing wizard E2E QA pass.
+export interface PRSubmittedCriteria {
+  criteria_version?: number  // defaults to 1 server-side
+  event: 'pull_request'
+  actions: PRSubmittedAction[]
+  filters: {
+    branch_filter?: string | null
+    path_filters?: string[] | null
+    author_filter?: string | null
+    exclude_drafts?: boolean
+    title_contains?: string | null
+    body_contains?: string | null
+  }
+  ordering?: 'oldest_first' | 'newest_first'  // defaults to 'oldest_first'
+}
+
+export interface GitHubPRCriteriaTestRequest {
+  criteria: PRSubmittedCriteria
+  sample_payload?: Record<string, unknown> | null
+}
+
+export interface GitHubPRCriteriaTestResponse {
+  matched: boolean
+  reason?: string | null
+  rejected_field?: string | null
+  message?: string | null
+  error?: string | null
+}
+
+export interface PageResponse<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface PageParams {
+  limit?: number
+  offset?: number
+}
+
+export interface ContinuousAgent {
+  id: number
+  tenant_id: string
+  agent_id: number
+  agent_name?: string | null
+  name?: string | null
+  execution_mode: string
+  status: string
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  is_system_owned: boolean
+  subscription_count: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousAgentListParams extends PageParams {
+  status?: string
+}
+
+export interface ContinuousRun {
+  id: number
+  tenant_id: string
+  continuous_agent_id: number
+  wake_event_ids: number[]
+  execution_mode?: string | null
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  watcher_run_ref?: string | null
+  memory_refs?: Record<string, unknown> | null
+  run_threat_signals?: Record<string, unknown> | null
+  outcome_state?: Record<string, unknown> | null
+  agentic_scratchpad?: unknown
+  run_type: string
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousRunListParams extends PageParams {
+  status?: string
+  continuous_agent_id?: number
+}
+
+export interface WakeEvent {
+  id: number
+  tenant_id: string
+  continuous_agent_id?: number | null
+  continuous_subscription_id?: number | null
+  channel_type: string
+  channel_instance_id: number
+  event_type: string
+  occurred_at: string
+  dedupe_key: string
+  importance: string
+  payload_ref?: string | null
+  status: string
+  created_at: string
+}
+
+export interface WakeEventListParams extends PageParams {
+  status?: string
+  channel_type?: string
+  channel_instance_id?: number
+  occurred_after?: string
+  occurred_before?: string
+}
+
+export interface WakeEventPayload {
+  wake_event_id: number
+  payload_ref: string
+  payload: unknown
+}
+
+export interface ContinuousAgentCreate {
+  agent_id: number
+  name?: string | null
+  execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface ContinuousAgentUpdate {
+  name?: string | null
+  execution_mode?: 'autonomous' | 'hybrid' | 'notify_only'
+  delivery_policy_id?: number | null
+  budget_policy_id?: number | null
+  approval_policy_id?: number | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface ContinuousSubscription {
+  id: number
+  tenant_id: string
+  continuous_agent_id: number
+  channel_type: string
+  channel_instance_id: number
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status: string
+  is_system_owned: boolean
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ContinuousSubscriptionCreate {
+  channel_type: string
+  channel_instance_id: number
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status?: 'active' | 'paused'
+}
+
+export interface ContinuousSubscriptionUpdate {
+  event_type?: string | null
+  delivery_policy_id?: number | null
+  action_config?: Record<string, unknown> | null
+  status?: 'active' | 'paused' | 'disabled'
+}
+
+export interface OperationBreakdownItem {
+  operation: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface ModelBreakdownItem {
+  model: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface DailyTrendItem {
+  date: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface TokenUsageSummary {
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+  operation_breakdown: OperationBreakdownItem[]
+  model_breakdown: ModelBreakdownItem[]
+  daily_trend: DailyTrendItem[]
+}
+
+export interface AgentUsageSummary {
+  agent_id: number
+  agent_name: string
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+}
+
+export interface TokenUsageByAgentResponse {
+  agents: AgentUsageSummary[]
+  days: number
+}
+
+export interface SkillBreakdownItem {
+  skill: string
+  tokens: number
+  cost: number
+  count: number
+}
+
+export interface AgentTokenUsageDetail {
+  agent_id: number
+  total_tokens: number
+  total_cost: number
+  total_requests: number
+  skill_breakdown: SkillBreakdownItem[]
+  model_breakdown: ModelBreakdownItem[]
+}
+
+export interface RecentTokenUsageRecord {
+  id?: number
+  timestamp?: string
+  created_at?: string
+  agent_name?: string
+  agent_id?: number | null
+  operation_type?: string
+  skill_type?: string | null
+  model?: string
+  model_provider?: string
+  model_name?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens: number
+  estimated_cost: number
+}
+
+export interface RecentTokenUsageResponse {
+  records: RecentTokenUsageRecord[]
+  count: number
+}
+
+export type ConversationalChannelType = 'whatsapp' | 'telegram' | 'slack' | 'discord'
+
+export interface ChannelRoutingRule {
+  id: number
+  tenant_id: string
+  channel_type: ConversationalChannelType
+  channel_instance_id: number
+  event_type?: string | null
+  criteria: Record<string, unknown>
+  priority: number
+  agent_id: number
+  is_active: boolean
+  created_by?: number | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface ChannelRoutingRuleCreate {
+  event_type?: string | null
+  criteria?: Record<string, unknown>
+  priority?: number
+  agent_id: number
+  is_active?: boolean
+}
+
+export interface ChannelRoutingRuleUpdate {
+  event_type?: string | null
+  criteria?: Record<string, unknown>
+  priority?: number
+  agent_id?: number
+  is_active?: boolean
+}
+
+export interface ChannelRoutingRuleReorderRequest {
+  rule_ids: number[]
+}
+
+export type ChannelRoutingRuleListParams = PageParams
+
+export type TriggerDetailKind = TriggerKind
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | ScheduleTrigger | GitHubTrigger
+
+// v0.7.0 Wave 4: Triggers ↔ Flows binding model
+export interface FlowTriggerBinding {
+  id: number
+  tenant_id: string
+  flow_definition_id: number
+  flow_name?: string
+  trigger_kind: TriggerKind
+  trigger_instance_id: number
+  source_node_id: number | null
+  suppress_default_agent: boolean
+  is_active: boolean
+  is_system_managed: boolean
+  created_at: string
+  updated_at: string
+  last_run_status?: string | null
+  last_run_at?: string | null
+}
+
+export interface FlowTriggerBindingCreate {
+  // v0.7.0 Wave 4 — must mirror the backend Pydantic model
+  // (FlowTriggerBindingCreate in routes_flow_trigger_bindings.py).
+  // Initial Wave 4 frontend agent used `flow_id` but the backend
+  // accepts `flow_definition_id`; the deep-link prefill flow's
+  // post-create binding call silently 422'd and the modal's catch
+  // block swallowed the error.
+  flow_definition_id: number
+  trigger_kind: TriggerKind
+  trigger_instance_id: number
+  suppress_default_agent?: boolean
+  source_node_id?: number | null
+  is_active?: boolean
+}
+
+export interface FlowTriggerBindingUpdate {
+  is_active?: boolean
+  suppress_default_agent?: boolean
+}
+
 // Phase 5.0: Knowledge Management
 export interface AgentKnowledge {
   id: number
@@ -1332,6 +2211,12 @@ export interface AgentKnowledge {
   error_message?: string
   upload_date: string
   processed_date?: string
+  tags?: string[]
+}
+
+export interface AgentKnowledgeUpdate {
+  document_name?: string
+  tags?: string[]
 }
 
 export interface KnowledgeChunk {
@@ -1433,7 +2318,7 @@ export interface FlowDefinition {
   updated_at: string
   node_count?: number
   // Phase 8.0 fields
-  execution_method?: 'immediate' | 'scheduled' | 'recurring' | 'keyword'
+  execution_method?: ExecutionMethod
   scheduled_at?: string | null
   recurrence_rule?: Record<string, any> | null
   flow_type?: 'notification' | 'conversation' | 'workflow' | 'task'
@@ -1497,9 +2382,11 @@ export interface ConversationThread {
 }
 
 // Phase 8.0: Flow creation types
-export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword'  // BUG-336: added keyword
+// v0.7.0 Wave 2: added 'triggered' execution method (Triggers ↔ Flows unification)
+export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword' | 'triggered'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate'
+// v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
@@ -1532,6 +2419,17 @@ export interface FlowStepConfig {
   gate_source_step?: string
   gate_on_fail?: 'skip' | 'notify' | 'alternative'
   gate_fail_notification?: {channel?: string; recipient?: string; message_template?: string}
+  // v0.7.0 Wave 4: Source step config (trigger binding)
+  trigger_kind?: TriggerKind
+  trigger_instance_id?: number
+  // Pre-existing fields the editor already touches but were never typed.
+  // Hoisted into the interface so future edits stay type-checked.
+  output_alias?: string
+  tool_type?: 'built_in' | 'custom' | string
+  tool_id?: string
+  command_id?: string
+  skill_type?: string
+  prompt?: string
 }
 
 export interface CreateFlowStepData {
@@ -1745,6 +2643,7 @@ export interface WhatsAppMCPInstance {
   id: number
   tenant_id: string
   container_name: string
+  instance_name?: string | null
   phone_number: string
   instance_type: 'agent' | 'tester'
   mcp_api_url: string
@@ -1853,6 +2752,9 @@ export interface WebhookIntegration {
   ip_allowlist: string[] | null
   rate_limit_rpm: number
   max_payload_bytes: number
+  default_agent_id?: number | null
+  default_agent_name?: string | null
+  trigger_criteria?: TriggerCriteria | null
   is_active: boolean
   status: 'active' | 'paused' | 'error'
   health_status: 'unknown' | 'healthy' | 'unhealthy'
@@ -1872,6 +2774,8 @@ export interface WebhookIntegrationCreate {
   ip_allowlist?: string[] | null
   rate_limit_rpm?: number
   max_payload_bytes?: number
+  default_agent_id?: number | null
+  trigger_criteria?: TriggerCriteria | null
 }
 
 export interface WebhookIntegrationUpdate {
@@ -1882,6 +2786,8 @@ export interface WebhookIntegrationUpdate {
   ip_allowlist?: string[] | null
   rate_limit_rpm?: number
   max_payload_bytes?: number
+  default_agent_id?: number | null
+  trigger_criteria?: TriggerCriteria | null
   is_active?: boolean
 }
 
@@ -1897,9 +2803,32 @@ export interface WebhookSecretRotateResponse {
   warning: string
 }
 
+export interface WebhookCriteriaTestRequest {
+  payload: Record<string, unknown>
+  trigger_criteria?: TriggerCriteria | null
+}
+
+export interface WebhookCriteriaTestResponse {
+  matched: boolean
+  reason?: string | null
+}
+
 export interface WebhookSlugAvailability {
   available: boolean
   reason: string | null
+}
+
+// v0.7.0 Wave 5: ringbuffer of last-N inbound payload captures for a webhook.
+// Used by the SourceStepConfig autocomplete to infer `{{source.payload.*}}`
+// JSON paths in the Flow editor. payload_json / headers_json are RAW JSON
+// strings — callers should JSON.parse() at read time.
+export interface WebhookPayloadCapture {
+  id: number
+  webhook_id: number
+  captured_at: string
+  payload_json: string
+  headers_json: string | null
+  dedupe_key: string | null
 }
 
 // v0.6.0: Slack Integration
@@ -2825,6 +3754,44 @@ export interface VectorStoreInstanceCreate {
   cpu_quota?: number
 }
 
+// ==================== ASR Instances (v0.7.0 Track D) ====================
+
+export interface ASRInstance {
+  id: number
+  tenant_id: string
+  vendor: string  // speaches
+  instance_name: string
+  description?: string | null
+  base_url?: string | null
+  auth_username?: string | null
+  default_model?: string | null
+  health_status: string
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  is_active: boolean
+  is_auto_provisioned: boolean
+  container_status?: string | null
+  container_name?: string | null
+  container_port?: number | null
+  container_image?: string | null
+  volume_name?: string | null
+  mem_limit?: string | null
+  cpu_quota?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ASRInstanceCreate {
+  vendor?: string
+  instance_name: string
+  description?: string
+  base_url?: string
+  auto_provision?: boolean
+  mem_limit?: string
+  cpu_quota?: number
+  default_model?: string
+}
+
 // ==================== TTS Instances (v0.6.x Kokoro per-tenant) ====================
 
 export interface TTSInstance {
@@ -3465,6 +4432,9 @@ export const api = {
     is_default: boolean
     vector_store_instance_id: number | null
     vector_store_mode: string
+    // v0.7.0 Track F (BUG-716)
+    max_agentic_rounds: number | null
+    max_agentic_loop_bytes: number | null
   }>): Promise<Agent> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${id}`, {
       method: 'PUT',
@@ -3727,6 +4697,248 @@ export const api = {
     return res.json()
   },
 
+  async getTriggerCatalog(): Promise<TriggerCatalogEntry[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger catalog')
+    return res.json()
+  },
+
+  async getContinuousAgents(params: ContinuousAgentListParams = {}): Promise<PageResponse<ContinuousAgent>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous agents')
+    return res.json()
+  },
+
+  async getContinuousAgent(id: number): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous agent')
+    return res.json()
+  },
+
+  async getContinuousRuns(params: ContinuousRunListParams = {}): Promise<PageResponse<ContinuousRun>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    if (params.continuous_agent_id !== undefined) query.set('continuous_agent_id', String(params.continuous_agent_id))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-runs${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous runs')
+    return res.json()
+  },
+
+  async getContinuousRun(id: number): Promise<ContinuousRun> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-runs/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous run')
+    return res.json()
+  },
+
+  async getWakeEvents(params: WakeEventListParams = {}): Promise<PageResponse<WakeEvent>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    if (params.status) query.set('status', params.status)
+    if (params.channel_type) query.set('channel_type', params.channel_type)
+    if (params.channel_instance_id !== undefined) query.set('channel_instance_id', String(params.channel_instance_id))
+    if (params.occurred_after) query.set('occurred_after', params.occurred_after)
+    if (params.occurred_before) query.set('occurred_before', params.occurred_before)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake events')
+    return res.json()
+  },
+
+  async getWakeEvent(id: number): Promise<WakeEvent> {
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake event')
+    return res.json()
+  },
+
+  async getWakeEventPayload(id: number): Promise<WakeEventPayload> {
+    const res = await authenticatedFetch(`${API_URL}/api/wake-events/${id}/payload`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch wake event payload')
+    return res.json()
+  },
+
+  async createContinuousAgent(payload: ContinuousAgentCreate): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create continuous agent')
+    return res.json()
+  },
+
+  async updateContinuousAgent(id: number, payload: ContinuousAgentUpdate): Promise<ContinuousAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update continuous agent')
+    return res.json()
+  },
+
+  async deleteContinuousAgent(id: number, options: { force?: boolean } = {}): Promise<void> {
+    const suffix = options.force ? '?force=true' : ''
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-agents/${id}${suffix}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete continuous agent')
+  },
+
+  async listContinuousSubscriptions(
+    agentId: number,
+    params: { limit?: number; offset?: number } = {},
+  ): Promise<PageResponse<ContinuousSubscription>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions${suffix}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch continuous subscriptions')
+    return res.json()
+  },
+
+  async createContinuousSubscription(
+    agentId: number,
+    payload: ContinuousSubscriptionCreate,
+  ): Promise<ContinuousSubscription> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to create continuous subscription')
+    return res.json()
+  },
+
+  async updateContinuousSubscription(
+    agentId: number,
+    subscriptionId: number,
+    payload: ContinuousSubscriptionUpdate,
+  ): Promise<ContinuousSubscription> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions/${subscriptionId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to update continuous subscription')
+    return res.json()
+  },
+
+  async deleteContinuousSubscription(agentId: number, subscriptionId: number): Promise<void> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/continuous-agents/${agentId}/subscriptions/${subscriptionId}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to delete continuous subscription')
+  },
+
+  async getTokenUsageSummary(days: number = 30): Promise<TokenUsageSummary> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/summary?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch token usage summary')
+    return res.json()
+  },
+
+  async getTokenUsageByAgent(days: number = 30): Promise<TokenUsageByAgentResponse> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/by-agent?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch token usage by agent')
+    return res.json()
+  },
+
+  async getTokenUsageForAgent(agentId: number, days: number = 30): Promise<AgentTokenUsageDetail> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/agent/${agentId}?days=${days}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch agent token usage detail')
+    return res.json()
+  },
+
+  async getRecentTokenUsage(limit: number = 100, agentId?: number): Promise<RecentTokenUsageResponse> {
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (agentId !== undefined) params.set('agent_id', String(agentId))
+    const res = await authenticatedFetch(
+      `${API_URL}/api/analytics/token-usage/recent?${params.toString()}`,
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to fetch recent token usage')
+    return res.json()
+  },
+
+  async getDefaultAgentSettings(): Promise<DefaultAgentsSettings> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch default agent settings')
+    return res.json()
+  },
+
+  async updateTenantDefaultAgent(agentId: number | null): Promise<{ tenant_default_agent_id: number | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/tenant`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: agentId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update tenant default agent')
+    return res.json()
+  },
+
+  async updateInstanceDefaultAgent(
+    channelType: string,
+    instanceId: number,
+    agentId: number | null,
+  ): Promise<DefaultAgentInstanceBinding> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/settings/default-agents/instances/${encodeURIComponent(channelType)}/${instanceId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: agentId }),
+      },
+    )
+    if (!res.ok) await handleApiError(res, 'Failed to update instance default agent')
+    return res.json()
+  },
+
+  async upsertUserChannelDefaultAgent(payload: {
+    channel_type: string
+    user_identifier: string
+    agent_id: number
+  }): Promise<UserChannelDefaultAgent> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save user default agent')
+    return res.json()
+  },
+
+  async deleteUserChannelDefaultAgent(userDefaultId: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/default-agents/users/${userDefaultId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete user default agent')
+    return res.json()
+  },
+
   async getAgentSkills(agentId: number): Promise<AgentSkill[]> {
     const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/skills`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch agent skills')
@@ -3885,6 +5097,16 @@ export const api = {
       body: formData,
     })
     if (!res.ok) await handleApiError(res, 'Failed to upload knowledge document')
+    return res.json()
+  },
+
+  async updateKnowledgeDocument(agentId: number, docId: number, patch: AgentKnowledgeUpdate): Promise<AgentKnowledge> {
+    const res = await authenticatedFetch(`${API_URL}/api/agents/${agentId}/knowledge-base/${docId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update knowledge document')
     return res.json()
   },
 
@@ -4177,7 +5399,17 @@ export const api = {
   },
 
   // Phase 6.6-6.7: Multi-Step Flows API
-  async getFlows(params?: { limit?: number; offset?: number; search?: string; active?: boolean; flow_type?: string; execution_method?: string }): Promise<{ items: FlowDefinition[]; total: number; limit: number; offset: number }> {
+  async getFlows(params?: {
+    limit?: number
+    offset?: number
+    search?: string
+    active?: boolean
+    flow_type?: string
+    execution_method?: string
+    // v0.7.0 Wave 4: filter flows bound to a specific trigger instance
+    bound_trigger_kind?: TriggerKind
+    bound_trigger_id?: number
+  }): Promise<{ items: FlowDefinition[]; total: number; limit: number; offset: number }> {
     const searchParams = new URLSearchParams()
     if (params?.limit) searchParams.set('limit', String(params.limit))
     if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
@@ -4185,6 +5417,8 @@ export const api = {
     if (params?.active !== undefined) searchParams.set('active', String(params.active))
     if (params?.flow_type) searchParams.set('flow_type', params.flow_type)
     if (params?.execution_method) searchParams.set('execution_method', params.execution_method)
+    if (params?.bound_trigger_kind) searchParams.set('bound_trigger_kind', params.bound_trigger_kind)
+    if (params?.bound_trigger_id !== undefined) searchParams.set('bound_trigger_id', String(params.bound_trigger_id))
     const qs = searchParams.toString()
     const res = await authenticatedFetch(`${API_URL}/api/flows/${qs ? '?' + qs : ''}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch flows')
@@ -4229,6 +5463,61 @@ export const api = {
       const errorMessage = errorData.detail || 'Failed to delete flow'
       throw new Error(errorMessage)
     }
+  },
+
+  // v0.7.0 Wave 4: Flow ↔ Trigger Bindings
+  async listFlowTriggerBindings(params?: {
+    trigger_kind?: TriggerKind
+    trigger_id?: number
+    flow_id?: number
+  }): Promise<FlowTriggerBinding[]> {
+    const search = new URLSearchParams()
+    if (params?.trigger_kind) search.set('trigger_kind', params.trigger_kind)
+    if (params?.trigger_id !== undefined) search.set('trigger_id', String(params.trigger_id))
+    if (params?.flow_id !== undefined) search.set('flow_id', String(params.flow_id))
+    const qs = search.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings${qs ? '?' + qs : ''}`)
+    if (!res.ok) {
+      // Backend endpoint may not be merged yet — degrade gracefully so the UI still renders.
+      if (res.status === 404) return []
+      await handleApiError(res, 'Failed to load flow trigger bindings')
+    }
+    const data = await res.json()
+    if (Array.isArray(data)) return data
+    if (Array.isArray((data as { items?: unknown }).items)) {
+      return (data as { items: FlowTriggerBinding[] }).items
+    }
+    return []
+  },
+
+  async createFlowTriggerBinding(data: FlowTriggerBindingCreate): Promise<FlowTriggerBinding> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create flow trigger binding')
+    return res.json()
+  },
+
+  async updateFlowTriggerBinding(
+    id: number,
+    update: FlowTriggerBindingUpdate,
+  ): Promise<FlowTriggerBinding> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update flow trigger binding')
+    return res.json()
+  },
+
+  async deleteFlowTriggerBinding(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/flow-trigger-bindings/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete flow trigger binding')
   },
 
   async getFlowNodes(flowId: number): Promise<FlowNode[]> {
@@ -4913,21 +6202,426 @@ export const api = {
     return res.json()
   },
 
+  async listEmailTriggers(): Promise<EmailTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch email triggers')
+    return res.json()
+  },
+
+  async getEmailTrigger(id: number): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch email trigger')
+    return res.json()
+  },
+
+  async createEmailTrigger(data: EmailTriggerCreateRequest): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create email trigger')
+    return res.json()
+  },
+
+  async updateEmailTrigger(id: number, data: EmailTriggerUpdateRequest): Promise<EmailTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update email trigger')
+    return res.json()
+  },
+
+  async deleteEmailTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete email trigger')
+  },
+
+  async createEmailTriageSubscription(id: number): Promise<EmailTriageSubscription> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/triage-subscription`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable email triage')
+    return res.json()
+  },
+
+  async testEmailTriggerQuery(data: EmailTestQueryRequest): Promise<EmailTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test email query')
+    return res.json()
+  },
+
+  async testSavedEmailTriggerQuery(id: number, data: EmailTestQueryRequest = {}): Promise<EmailTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test email query')
+    return res.json()
+  },
+
+  async createEmailNotificationSubscription(id: number, data: EmailNotificationSubscriptionRequest): Promise<EmailNotificationSubscriptionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/notification-subscription`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable email notification subscription')
+    return res.json()
+  },
+
+  async pollEmailTriggerNow(id: number): Promise<EmailPollNowResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/email/${id}/poll-now`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to poll email trigger')
+    return res.json()
+  },
+
+  async listJiraIntegrations(): Promise<JiraIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira integrations')
+    return res.json()
+  },
+
+  async createJiraIntegration(data: JiraIntegrationCreateRequest): Promise<JiraIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create Jira integration')
+    return res.json()
+  },
+
+  async updateJiraIntegration(id: number, data: JiraIntegrationUpdateRequest): Promise<JiraIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update Jira integration')
+    return res.json()
+  },
+
+  async deleteJiraIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Jira integration')
+  },
+
+  async testJiraIntegrationQuery(data: JiraTriggerTestQueryRequest): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async testSavedJiraIntegrationQuery(id: number, data: JiraTriggerTestQueryRequest = {}): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/jira-integrations/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async listJiraTriggers(): Promise<JiraTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira triggers')
+    return res.json()
+  },
+
+  async getJiraTrigger(id: number): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch Jira trigger')
+    return res.json()
+  },
+
+  async createJiraTrigger(data: JiraTriggerCreateRequest): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create Jira trigger')
+    return res.json()
+  },
+
+  async updateJiraTrigger(id: number, data: JiraTriggerUpdateRequest): Promise<JiraTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update Jira trigger')
+    return res.json()
+  },
+
+  async deleteJiraTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete Jira trigger')
+  },
+
+  async testJiraTriggerQuery(data: JiraTriggerTestQueryRequest): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async testSavedJiraTriggerQuery(id: number, data: JiraTriggerTestQueryRequest = {}): Promise<JiraTriggerTestQueryResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/test-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test Jira query')
+    return res.json()
+  },
+
+  async createJiraNotificationSubscription(id: number, data: JiraNotificationSubscriptionRequest): Promise<JiraNotificationSubscriptionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/notification-subscription`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to enable Jira notification subscription')
+    return res.json()
+  },
+
+  async pollJiraTriggerNow(id: number): Promise<JiraPollNowResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/jira/${id}/poll-now`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to poll Jira trigger')
+    return res.json()
+  },
+
+  async listScheduleTriggers(): Promise<ScheduleTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule triggers')
+    return res.json()
+  },
+
+  async getScheduleTrigger(id: number): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch schedule trigger')
+    return res.json()
+  },
+
+  async createScheduleTrigger(data: ScheduleTriggerCreateRequest): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create schedule trigger')
+    return res.json()
+  },
+
+  async updateScheduleTrigger(id: number, data: ScheduleTriggerUpdateRequest): Promise<ScheduleTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update schedule trigger')
+    return res.json()
+  },
+
+  async deleteScheduleTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete schedule trigger')
+  },
+
+  async previewScheduleTrigger(data: SchedulePreviewRequest): Promise<SchedulePreviewResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/schedule/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to preview schedule')
+    return res.json()
+  },
+
+  async listGitHubTriggers(): Promise<GitHubTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub triggers')
+    return res.json()
+  },
+
+  async getGitHubTrigger(id: number): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub trigger')
+    return res.json()
+  },
+
+  async createGitHubTrigger(data: GitHubTriggerCreateRequest): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitHub trigger')
+    return res.json()
+  },
+
+  async updateGitHubTrigger(id: number, data: GitHubTriggerUpdateRequest): Promise<GitHubTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitHub trigger')
+    return res.json()
+  },
+
+  async deleteGitHubTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
+  },
+
+  async testGitHubTriggerConnection(data: GitHubTriggerTestConnectionRequest): Promise<GitHubTriggerTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  // ---- v0.7.0: GitHub Hub Integrations (shared PAT, mirrors Jira) ----
+
+  async listGitHubIntegrations(): Promise<GitHubIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub integrations')
+    return res.json()
+  },
+
+  async createGitHubIntegration(data: GitHubIntegrationCreateRequest): Promise<GitHubIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitHub integration')
+    return res.json()
+  },
+
+  async updateGitHubIntegration(id: number, data: GitHubIntegrationUpdateRequest): Promise<GitHubIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitHub integration')
+    return res.json()
+  },
+
+  async deleteGitHubIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
+  },
+
+  async testGitHubConnection(data: GitHubIntegrationTestConnectionRequest): Promise<GitHubIntegrationTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  async testGitHubConnectionForId(id: number, data: GitHubIntegrationTestConnectionRequest = {}): Promise<GitHubIntegrationTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/github-integrations/${id}/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub connection')
+    return res.json()
+  },
+
+  // PR Submitted criteria evaluator. Posts the criteria + an optional sample
+  // payload to the backend, which runs the same matcher used by the
+  // production webhook dispatcher and returns `{matched, reason}`.
+  async testGitHubPRCriteria(criteria: PRSubmittedCriteria, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criteria, payload: samplePayload ?? {} }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
+    return res.json()
+  },
+
+  async testGitHubPRCriteriaForTrigger(triggerId: number, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${triggerId}/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: samplePayload ?? {} }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test PR criteria')
+    return res.json()
+  },
+
+  async getTriggerDetail(kind: TriggerDetailKind, id: number): Promise<TriggerDetail> {
+    const pathByKind: Record<TriggerDetailKind, string> = {
+      email: `/api/triggers/email/${id}`,
+      webhook: `/api/triggers/webhook/${id}`,
+      jira: `/api/triggers/jira/${id}`,
+      schedule: `/api/triggers/schedule/${id}`,
+      github: `/api/triggers/github/${id}`,
+    }
+    const path = pathByKind[kind]
+    const res = await authenticatedFetch(`${API_URL}${path}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch trigger detail')
+    return res.json()
+  },
+
   // v0.6.0: Webhook-as-a-Channel
   async listWebhookIntegrations(): Promise<WebhookIntegration[]> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`)
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integrations')
     return res.json()
   },
 
   async getWebhookIntegration(id: number): Promise<WebhookIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`)
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch webhook integration')
     return res.json()
   },
 
   async createWebhookIntegration(data: WebhookIntegrationCreate): Promise<WebhookIntegrationCreateResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4940,7 +6634,7 @@ export const api = {
   },
 
   async updateWebhookIntegration(id: number, data: WebhookIntegrationUpdate): Promise<WebhookIntegration> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -4950,15 +6644,25 @@ export const api = {
   },
 
   async rotateWebhookSecret(id: number): Promise<WebhookSecretRotateResponse> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}/rotate-secret`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}/rotate-secret`, {
       method: 'POST',
     })
     if (!res.ok) await handleApiError(res, 'Failed to rotate webhook secret')
     return res.json()
   },
 
+  async testWebhookCriteria(id: number, data: WebhookCriteriaTestRequest): Promise<WebhookCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}/criteria/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test webhook criteria')
+    return res.json()
+  },
+
   async deleteWebhookIntegration(id: number): Promise<{ status: string; id: number }> {
-    const res = await authenticatedFetch(`${API_URL}/api/webhook-integrations/${id}`, {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/webhook/${id}`, {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete webhook integration')
@@ -4972,12 +6676,94 @@ export const api = {
     const params = new URLSearchParams({ slug })
     if (typeof excludeId === 'number') params.set('exclude_id', String(excludeId))
     const res = await authenticatedFetch(
-      `${API_URL}/api/webhook-integrations/slug-available?${params.toString()}`
+      `${API_URL}/api/triggers/webhook/slug-available?${params.toString()}`
     )
     if (!res.ok) {
       return { available: false, reason: 'Unable to check availability' }
     }
     return res.json()
+  },
+
+  // v0.7.0 Wave 5: last-5 inbound payload captures for a webhook. Powers
+  // the Flow editor's SourceStepConfig autocomplete so authors can browse
+  // recent payloads and click an inferred JSON path to copy
+  // `{{source.payload.<path>}}` to the clipboard. Returns [] (not throws)
+  // when the integration has no captures yet OR the endpoint is missing
+  // (older backend without Wave 5).
+  async getWebhookPayloadCaptures(webhookId: number): Promise<WebhookPayloadCapture[]> {
+    const res = await authenticatedFetch(
+      `${API_URL}/api/webhook-integrations/${webhookId}/payload-captures`
+    )
+    if (!res.ok) return []
+    return res.json()
+  },
+
+  async listChannelRoutingRules(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    params: ChannelRoutingRuleListParams = {},
+  ): Promise<PageResponse<ChannelRoutingRule>> {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules${suffix}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch channel routing rules')
+    return res.json()
+  },
+
+  async createChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    data: ChannelRoutingRuleCreate,
+  ): Promise<ChannelRoutingRule> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create channel routing rule')
+    return res.json()
+  },
+
+  async updateChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    ruleId: number,
+    data: ChannelRoutingRuleUpdate,
+  ): Promise<ChannelRoutingRule> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/${ruleId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update channel routing rule')
+    return res.json()
+  },
+
+  async reorderChannelRoutingRules(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    data: ChannelRoutingRuleReorderRequest,
+  ): Promise<PageResponse<ChannelRoutingRule>> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to reorder channel routing rules')
+    return res.json()
+  },
+
+  async deleteChannelRoutingRule(
+    channelType: ConversationalChannelType,
+    instanceId: number,
+    ruleId: number,
+  ): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/channels/${channelType}/${instanceId}/routing-rules/${ruleId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete channel routing rule')
   },
 
   // v0.6.0: Slack Integration
@@ -7550,6 +9336,83 @@ export const api = {
     })
     if (!res.ok) await handleApiError(res, 'Failed to assign TTS instance to agent')
     return res.json()
+  },
+
+  // ==================== ASR Instances (v0.7.0 Track D) ====================
+
+  async getASRInstances(vendor?: string): Promise<ASRInstance[]> {
+    const params = vendor ? `?vendor=${vendor}` : ''
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances${params}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch ASR instances')
+    return res.json()
+  },
+
+  async createASRInstance(data: ASRInstanceCreate): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok && res.status !== 202) await handleApiError(res, 'Failed to create ASR instance')
+    return res.json()
+  },
+
+  async getASRInstance(id: number): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch ASR instance')
+    return res.json()
+  },
+
+  async updateASRInstance(id: number, data: Partial<ASRInstanceCreate>): Promise<ASRInstance> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update ASR instance')
+    return res.json()
+  },
+
+  async deleteASRInstance(id: number, removeVolume: boolean = false): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}?remove_volume=${removeVolume}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete ASR instance')
+  },
+
+  async asrContainerAction(id: number, action: 'start' | 'stop' | 'restart'): Promise<{ status: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/${action}`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, `Failed to ${action} ASR container`)
+    return res.json()
+  },
+
+  async getASRContainerStatus(id: number): Promise<ContainerStatusResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/status`)
+    if (!res.ok) await handleApiError(res, 'Failed to get ASR container status')
+    return res.json()
+  },
+
+  async getASRContainerLogs(id: number, tail: number = 100): Promise<{ logs: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/asr-instances/${id}/container/logs?tail=${tail}`)
+    if (!res.ok) await handleApiError(res, 'Failed to get ASR container logs')
+    return res.json()
+  },
+
+  async getDefaultASRInstance(): Promise<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null }> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`)
+    if (!res.ok) await handleApiError(res, 'Failed to get default ASR instance')
+    return res.json()
+  },
+
+  async setDefaultASRInstance(instanceId: number | null): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/settings/asr/default`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_asr_instance_id: instanceId }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update default ASR instance')
   },
 
   // ==================== SearXNG Instances (v0.6.0-patch.7 per-tenant) ====================

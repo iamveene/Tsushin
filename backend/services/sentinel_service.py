@@ -202,7 +202,10 @@ class SentinelService:
             detect_agent_takeover=True,
             detect_poisoning=True,
             detect_shell_malicious_intent=True,
+            detect_memory_poisoning=True,
             detect_browser_ssrf=True,
+            detect_vector_store_poisoning=True,
+            detect_continuous_agent_action_approval=True,
             aggressiveness_level=1,
             llm_provider="gemini",
             llm_model="gemini-2.5-flash-lite",
@@ -238,7 +241,10 @@ class SentinelService:
             detect_agent_takeover=system_config.detect_agent_takeover,
             detect_poisoning=system_config.detect_poisoning,
             detect_shell_malicious_intent=system_config.detect_shell_malicious_intent,
+            detect_memory_poisoning=getattr(system_config, 'detect_memory_poisoning', True),
             detect_browser_ssrf=getattr(system_config, 'detect_browser_ssrf', True),
+            detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
+            detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
@@ -268,7 +274,10 @@ class SentinelService:
             merged.detect_agent_takeover = tenant_config.detect_agent_takeover
             merged.detect_poisoning = tenant_config.detect_poisoning
             merged.detect_shell_malicious_intent = tenant_config.detect_shell_malicious_intent
+            merged.detect_memory_poisoning = getattr(tenant_config, 'detect_memory_poisoning', True)
             merged.detect_browser_ssrf = getattr(tenant_config, 'detect_browser_ssrf', True)
+            merged.detect_vector_store_poisoning = getattr(tenant_config, 'detect_vector_store_poisoning', True)
+            merged.detect_continuous_agent_action_approval = getattr(tenant_config, 'detect_continuous_agent_action_approval', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
@@ -294,6 +303,10 @@ class SentinelService:
                 merged.memory_poisoning_prompt = tenant_config.memory_poisoning_prompt
             if getattr(tenant_config, 'browser_ssrf_prompt', None):
                 merged.browser_ssrf_prompt = tenant_config.browser_ssrf_prompt
+            if getattr(tenant_config, 'vector_store_poisoning_prompt', None):
+                merged.vector_store_poisoning_prompt = tenant_config.vector_store_poisoning_prompt
+            if getattr(tenant_config, 'continuous_agent_action_approval_prompt', None):
+                merged.continuous_agent_action_approval_prompt = tenant_config.continuous_agent_action_approval_prompt
 
         # Override with agent config if present (only non-None values)
         if agent_override:
@@ -307,6 +320,8 @@ class SentinelService:
                 merged.enable_shell_analysis = agent_override.enable_shell_analysis
             if agent_override.aggressiveness_level is not None:
                 merged.aggressiveness_level = agent_override.aggressiveness_level
+            if getattr(agent_override, 'detect_continuous_agent_action_approval', None) is not None:
+                merged.detect_continuous_agent_action_approval = agent_override.detect_continuous_agent_action_approval
 
         return merged
 
@@ -975,8 +990,11 @@ class SentinelService:
                 response_time_ms=int((time.time() - start_time) * 1000),
             )
 
-            # Log with exception info (if logging enabled)
-            if self._should_log_analysis(blocked_result, config):
+            # Log with exception info (if logging enabled).
+            # BUG-694 fix: previously referenced `blocked_result` which is
+            # only defined later in the function — use the local `result`
+            # built in the exception-matched branch above.
+            if self._should_log_analysis(result, config):
                 self._log_analysis(
                     analysis_type=analysis_type,
                     detection_type=detection_type,
@@ -1172,7 +1190,11 @@ class SentinelService:
         """
         Call LLM for security analysis.
 
-        Uses AIClient from agent module.
+        Uses AIClient from agent module. BUG-689 fix: AIClient.__init__ resolves
+        the provider key/instance synchronously; after construction, drop the
+        DB reference so the SQLAlchemy connection is not held during the slow
+        LLM await. Under high concurrency (e.g. the Sentinel benchmark) this
+        previously exhausted the QueuePool and stalled /api/health.
         """
         from agent.ai_client import AIClient
 
@@ -1185,6 +1207,10 @@ class SentinelService:
             tenant_id=self.tenant_id,
             token_tracker=self.token_tracker,
         )
+        # Release the session reference before the external HTTP round-trip.
+        # AIClient.generate() does not re-read self.db (token tracking writes
+        # go through token_tracker which manages its own short-lived session).
+        client.db = None
 
         result = await client.generate(
             system_prompt=system_prompt,

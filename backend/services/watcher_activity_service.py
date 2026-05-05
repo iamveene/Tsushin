@@ -295,6 +295,44 @@ class WatcherActivityService:
         await self._broadcast_to_tenant(tenant_id, message)
         logger.debug(f"Emitted agent_communication: {initiator_agent_id}->{target_agent_id}, status={status}, depth={depth}")
 
+    async def emit_continuous_run(
+        self,
+        tenant_id: str,
+        continuous_run_id: int,
+        continuous_agent_id: int,
+        status: str,
+        wake_event_ids: Optional[list[int]] = None,
+        channel_type: Optional[str] = None,
+    ) -> None:
+        """
+        Emit a continuous-agent run event.
+
+        The UI consumes this as ``type=continuous_run`` and ``run_type=continuous``
+        so Track C can badge it separately from user-initiated agent work.
+        """
+        if tenant_id not in self.tenant_connections:
+            return
+
+        message = {
+            "type": "continuous_run",
+            "run_type": "continuous",
+            "continuous_run_id": continuous_run_id,
+            "continuous_agent_id": continuous_agent_id,
+            "status": status,
+            "wake_event_ids": wake_event_ids or [],
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        if channel_type:
+            message["channel_type"] = channel_type
+
+        await self._broadcast_to_tenant(tenant_id, message)
+        logger.debug(
+            "Emitted continuous_run: run=%s agent=%s status=%s",
+            continuous_run_id,
+            continuous_agent_id,
+            status,
+        )
+
 
 # Convenience functions for fire-and-forget event emission
 def emit_agent_processing_async(
@@ -411,6 +449,30 @@ def emit_agent_communication_async(
             status=status,
             session_type=session_type,
             depth=depth
+        ))
+    except RuntimeError:
+        pass
+
+
+def emit_continuous_run_async(
+    tenant_id: str,
+    continuous_run_id: int,
+    continuous_agent_id: int,
+    status: str,
+    wake_event_ids: Optional[list[int]] = None,
+    channel_type: Optional[str] = None,
+):
+    """Fire-and-forget wrapper for continuous-agent run events."""
+    service = WatcherActivityService.get_instance()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(service.emit_continuous_run(
+            tenant_id=tenant_id,
+            continuous_run_id=continuous_run_id,
+            continuous_agent_id=continuous_agent_id,
+            status=status,
+            wake_event_ids=wake_event_ids,
+            channel_type=channel_type,
         ))
     except RuntimeError:
         pass

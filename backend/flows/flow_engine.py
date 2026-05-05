@@ -1531,8 +1531,15 @@ class SummarizationStepHandler(FlowStepHandler):
             # If still no thread_id, try to get raw text from source step
             # Check multiple field names since different step types use different keys:
             #   tool steps → raw_output, skill steps → output, slash_command → output/message
+            # BUG-711: preserve a previously-populated `source_text` (e.g. from
+            # the BUG-590 trigger-context path or from inline text/content in
+            # config_json). Without this guard, `input_data.get("trigger", {})`
+            # returns `{}` for templates that source from "trigger" and the
+            # unconditional re-assignment below clobbers the populated value
+            # with None — breaking the new_contact_welcome template on its
+            # very first step.
             if not thread_id and isinstance(source_data, dict):
-                source_text = (
+                source_text = source_text or (
                     source_data.get("raw_output")
                     or source_data.get("output")
                     or source_data.get("message")
@@ -2393,6 +2400,65 @@ class GateStepHandler(FlowStepHandler):
         return serialized
 
 
+class SourceStepHandler(FlowStepHandler):
+    """
+    v0.7.0 Triggers↔Flows Unification — Wave 2.
+
+    The ``source`` step is the canonical entry point for a flow woken by a
+    trigger. At runtime it is essentially a no-op: the dispatch path
+    (Wave 3) writes the wake event's payload + metadata into
+    ``flow_run.trigger_context_json`` under the ``"source"`` key BEFORE
+    the engine starts iterating steps. ``_build_step_context`` then
+    re-merges that dict at the context root so downstream Conversation /
+    Gate / Notification steps can reference variables like:
+
+        {{source.payload.issue.key}}
+        {{source.trigger_kind}}
+        {{source.event_type}}
+        {{source.dedupe_key}}
+        {{source.occurred_at}}
+        {{source.wake_event_id}}
+
+    The handler echoes the most useful identifiers back as its own
+    ``output_json`` so authors who prefer the ``{{step_1.trigger_kind}}``
+    style also work. Payload is intentionally NOT echoed to keep step
+    output compact — it remains addressable through ``{{source.payload.*}}``.
+
+    Position invariant: ``source`` MUST sit at position 1 (1-based) in
+    the flow. Enforced by ``FlowEngine.validate_flow_structure``.
+    """
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+        trigger_context = json.loads(flow_run.trigger_context_json) if flow_run.trigger_context_json else {}
+        source_payload = trigger_context.get("source") or {}
+
+        logger.info(
+            f"Source step executed for flow_run={flow_run.id} "
+            f"trigger_kind={source_payload.get('trigger_kind') or config.get('trigger_kind')} "
+            f"instance_id={source_payload.get('instance_id') or config.get('trigger_instance_id')}"
+        )
+
+        # Echo the lightweight identifiers; full payload stays referenceable
+        # via {{source.payload.*}} from the trigger_context root merge.
+        return {
+            "trigger_kind": source_payload.get("trigger_kind") or config.get("trigger_kind"),
+            "instance_id": source_payload.get("instance_id") or config.get("trigger_instance_id"),
+            "event_type": source_payload.get("event_type"),
+            "dedupe_key": source_payload.get("dedupe_key"),
+            "occurred_at": source_payload.get("occurred_at"),
+            "wake_event_id": source_payload.get("wake_event_id"),
+            "binding_id": source_payload.get("binding_id"),
+            "status": "completed",
+        }
+
+
 # Legacy handler for backward compatibility
 class TriggerNodeHandler(FlowStepHandler):
     """
@@ -2677,7 +2743,9 @@ class FlowEngine:
             "summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Agentic summarization
             "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
+            "source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: Triggers↔Flows source entry node
             # Legacy types (backward compatibility)
+            "Source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: legacy casing alias
             "Trigger": TriggerNodeHandler(db, self.mcp_sender, self.token_tracker),
             "Message": MessageStepHandler(db, self.mcp_sender, self.token_tracker),
             "Tool": ToolStepHandler(db, self.mcp_sender, self.token_tracker),
@@ -2904,6 +2972,29 @@ class FlowEngine:
                     ).count()
                     if target_subflows > 0:
                         raise FlowValidationError("Subflow depth limited to 1")
+
+        # v0.7.0 Triggers↔Flows Unification — source step rules.
+        # Source nodes are the canonical entry point for triggered flows
+        # (and only valid step type at position 1 when execution_method='triggered').
+        source_steps = [s for s in steps if s.type in ("source", "Source")]
+        if len(source_steps) > 1:
+            raise FlowValidationError(
+                "Flow can have at most one Source step "
+                f"(found {len(source_steps)} at positions {[s.position for s in source_steps]})"
+            )
+        for src in source_steps:
+            if src.position != 1:
+                raise FlowValidationError(
+                    f"Source step must be at position 1 (found at position {src.position})"
+                )
+
+        # If the flow declares execution_method='triggered', it MUST have a source step.
+        flow_def = self.db.query(FlowDefinition).filter(FlowDefinition.id == flow_id).first()
+        if flow_def is not None and flow_def.execution_method == "triggered":
+            if not source_steps:
+                raise FlowValidationError(
+                    "Flow with execution_method='triggered' must declare a Source step at position 1"
+                )
 
     def generate_idempotency_key(self, flow_run_id: int, step_id: int, retry: int = 0) -> str:
         """Generate idempotency key for step run."""
@@ -3173,18 +3264,26 @@ class FlowEngine:
         triggered_by: Optional[str] = None,
         parent_run_id: Optional[int] = None,
         tenant_id: Optional[str] = None,
-        resume_run_id: Optional[int] = None
+        resume_run_id: Optional[int] = None,
+        trigger_event_id: Optional[int] = None,  # v0.7.0: WakeEvent.id for correlation
+        binding_id: Optional[int] = None,         # v0.7.0: flow_trigger_binding.id (audit)
     ) -> FlowRun:
         """
         Main execution entry point.
 
         Args:
             flow_definition_id: ID of FlowDefinition to execute
-            trigger_context: Initial trigger data / input variables
+            trigger_context: Initial trigger data / input variables. For
+                triggered flows, the dispatch path nests the wake event
+                payload under the "source" key so SourceStepHandler can
+                expose ``{{source.payload.*}}`` and friends.
             initiator: Who/what started this run ('api', 'agent', 'system', 'subflow', 'scheduler')
-            trigger_type: Execution method ('immediate', 'scheduled', 'recurring', 'manual')
+            trigger_type: Execution method ('immediate', 'scheduled', 'recurring', 'manual', 'triggered')
             triggered_by: User/system identifier
             parent_run_id: If this is a subflow, ID of parent FlowRun
+            trigger_event_id: v0.7.0 — FK to wake_event for correlation
+                between the trigger that fired and the FlowRun that handled it.
+            binding_id: v0.7.0 — FK to flow_trigger_binding (audit-only).
 
         Returns:
             Completed FlowRun
@@ -3257,7 +3356,8 @@ class FlowEngine:
                 total_steps=len(steps),
                 completed_steps=0,
                 failed_steps=0,
-                trigger_context_json=json.dumps(trigger_context) if trigger_context else None
+                trigger_context_json=json.dumps(trigger_context) if trigger_context else None,
+                trigger_event_id=trigger_event_id,  # v0.7.0: correlation to WakeEvent
             )
             self.db.add(flow_run)
             self.db.commit()
@@ -3267,6 +3367,19 @@ class FlowEngine:
             # Execute steps sequentially
             # Phase 13.1: Track completed step runs for context building
             completed_step_runs: List[FlowNodeRun] = []
+
+            # BUG-713: Track step counters in local variables instead of
+            # mutating `flow_run.completed_steps` directly inside the loop.
+            # The per-iteration `self.db.refresh(flow_run)` (cancellation
+            # check, line below) reloads `flow_run` from the DB and silently
+            # discards any uncommitted in-memory increments — so the prior
+            # implementation only ever recorded the *last* iteration's
+            # increment, leaving `completed_steps` undercounted vs the actual
+            # number of successful step_runs in the DB (which `final_report`
+            # sums independently). Counting locally and assigning once after
+            # the loop guarantees the two fields stay in lock-step.
+            local_completed_steps = 0
+            local_failed_steps = 0
 
             for step in steps:
                 # BUG-LOG-011: Check for cancellation between steps
@@ -3301,7 +3414,7 @@ class FlowEngine:
                     # Check on_failure action
                     if step.on_failure == "continue":
                         logger.warning(f"Step {step.position} failed but continuing (on_failure=continue)")
-                        flow_run.failed_steps += 1
+                        local_failed_steps += 1
                     elif step.on_failure == "skip":
                         logger.warning(f"Step {step.position} failed, skipping remaining steps")
                         break
@@ -3309,11 +3422,17 @@ class FlowEngine:
                         # Default: stop execution on failure
                         logger.error(f"Step {step.position} failed, stopping flow")
                         flow_run.status = "failed"
-                        flow_run.failed_steps += 1
+                        local_failed_steps += 1
                         flow_run.error_text = f"Step {step.position} ({step.type}) failed: {step_run.error_text}"
                         break
                 else:
-                    flow_run.completed_steps += 1
+                    local_completed_steps += 1
+
+            # BUG-713: Persist the loop's accumulated counters onto flow_run
+            # before status decisions that depend on them (and before final
+            # report generation reconciles them against the DB).
+            flow_run.completed_steps = local_completed_steps
+            flow_run.failed_steps = local_failed_steps
 
             # Mark as completed if not already failed/cancelled
             if flow_run.status not in ("failed", "cancelled"):
@@ -3342,6 +3461,16 @@ class FlowEngine:
             # Generate final report
             final_report = self.generate_final_report(flow_run)
             flow_run.final_report_json = json.dumps(final_report)
+
+            # BUG-713: Reconcile the persisted counters with what the final
+            # report actually sums from FlowNodeRun rows. `generate_final_report`
+            # is the single source of truth for "how many steps succeeded /
+            # failed", so we copy its numbers onto the flow_run columns.
+            # This guarantees `flow_run.completed_steps == final_report["steps_successful"]`
+            # and `flow_run.failed_steps == final_report["steps_failed"]` at
+            # run completion, regardless of the loop's bookkeeping path.
+            flow_run.completed_steps = final_report.get("steps_successful", flow_run.completed_steps)
+            flow_run.failed_steps = final_report.get("steps_failed", flow_run.failed_steps)
 
             try:
                 self.db.commit()

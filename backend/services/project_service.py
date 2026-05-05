@@ -1103,7 +1103,7 @@ class ProjectService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            client = chromadb.PersistentClient(path=persist_dir)
+            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
 
             collection_name = self._get_collection_name(project)
             collection = client.get_or_create_collection(
@@ -1152,7 +1152,7 @@ class ProjectService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            client = chromadb.PersistentClient(path=persist_dir)
+            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
 
             collection_name = self._get_collection_name(project)
             try:
@@ -1173,7 +1173,7 @@ class ProjectService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            client = chromadb.PersistentClient(path=persist_dir)
+            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
 
             collection_name = self._get_collection_name(project)
             try:
@@ -1197,7 +1197,7 @@ class ProjectService:
             import settings
 
             persist_dir = getattr(settings, 'CHROMA_DIR', 'data/chroma')
-            client = chromadb.PersistentClient(path=persist_dir)
+            from chroma_client_factory import get_chroma_client; client = get_chroma_client(persist_dir)
 
             collection_name = self._get_collection_name(project)
             try:
