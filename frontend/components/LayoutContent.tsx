@@ -119,7 +119,14 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
 
   // Check if nav item is active
   const isActive = (href: string, activePrefix?: string) => {
-    if (href === '/') return pathname === '/'
+    if (href === '/') {
+      return pathname === '/' ||
+        pathname?.startsWith('/wake-events') ||
+        pathname?.startsWith('/continuous-agents')
+    }
+    if (href === '/agents') {
+      return pathname?.startsWith('/agents') || pathname?.startsWith('/studio')
+    }
     const prefix = activePrefix || href
     return pathname?.startsWith(prefix)
   }
@@ -717,7 +724,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
               </span>
               <span className="flex items-center gap-2">
                 <span className="font-mono text-tsushin-muted">tsn-core</span>
-                <span className="badge badge-indigo text-2xs py-0.5">v0.6.0</span>
+                <span className="badge badge-indigo text-2xs py-0.5">v0.7.0</span>
               </span>
             </div>
           </div>

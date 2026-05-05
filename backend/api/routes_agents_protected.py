@@ -9,7 +9,7 @@ Includes:
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, case
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
@@ -29,6 +29,7 @@ from auth_dependencies import (
     require_permission,
     TenantContext
 )
+from api.agent_visibility import raise_if_internal_agent
 from services.whatsapp_binding_service import parse_enabled_channels, resolve_agent_whatsapp_binding
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agents-protected"])
@@ -45,7 +46,10 @@ async def list_agents_protected(
     - Returns: Only agents from user's tenant (or all for global admin)
     """
     # Build query
-    query = ctx.db.query(Agent).filter(Agent.is_active == True)
+    query = ctx.db.query(Agent).filter(
+        Agent.is_active == True,
+        Agent.is_internal == False,
+    )
 
     # Apply tenant isolation
     query = ctx.filter_by_tenant(query, Agent.tenant_id)
@@ -225,6 +229,7 @@ async def get_agents_graph_preview(
         .outerjoin(skills_subq, Agent.id == skills_subq.c.agent_id)
         .outerjoin(knowledge_subq, Agent.id == knowledge_subq.c.agent_id)
         .outerjoin(sentinel_subq, Agent.id == sentinel_subq.c.agent_id)
+        .filter(Agent.is_internal == False)
     )
 
     # Apply tenant isolation
@@ -370,16 +375,24 @@ async def get_comm_enabled_agents(
             AgentSkill.skill_type == "agent_communication",
             AgentSkill.is_enabled == True,
         )
-        .subquery()
+        .scalar_subquery()
     )
+    enabled_source = aliased(Agent)
+    enabled_target = aliased(Agent)
     enabled_permission_rows = (
         db.query(AgentCommunicationPermission.source_agent_id)
+        .join(enabled_source, enabled_source.id == AgentCommunicationPermission.source_agent_id)
+        .join(enabled_target, enabled_target.id == AgentCommunicationPermission.target_agent_id)
         .filter(
             AgentCommunicationPermission.tenant_id == ctx.tenant_id,
             AgentCommunicationPermission.is_enabled == True,
+            enabled_source.tenant_id == ctx.tenant_id,
+            enabled_target.tenant_id == ctx.tenant_id,
+            enabled_source.is_internal == False,
+            enabled_target.is_internal == False,
         )
         .distinct()
-        .subquery()
+        .scalar_subquery()
     )
 
     agents_db = (
@@ -388,6 +401,7 @@ async def get_comm_enabled_agents(
         .filter(
             Agent.tenant_id == ctx.tenant_id,
             Agent.is_active == True,
+            Agent.is_internal == False,
             Agent.id.in_(comm_skill_rows),
             Agent.id.in_(enabled_permission_rows),
         )
@@ -404,9 +418,19 @@ async def get_comm_enabled_agents(
         for agent, friendly_name in agents_db
     ]
 
+    permission_source = aliased(Agent)
+    permission_target = aliased(Agent)
     permissions_db = (
         db.query(AgentCommunicationPermission)
-        .filter(AgentCommunicationPermission.tenant_id == ctx.tenant_id)
+        .join(permission_source, permission_source.id == AgentCommunicationPermission.source_agent_id)
+        .join(permission_target, permission_target.id == AgentCommunicationPermission.target_agent_id)
+        .filter(
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+            permission_source.tenant_id == ctx.tenant_id,
+            permission_target.tenant_id == ctx.tenant_id,
+            permission_source.is_internal == False,
+            permission_target.is_internal == False,
+        )
         .order_by(AgentCommunicationPermission.id)
         .all()
     )
@@ -445,6 +469,7 @@ async def get_agent_protected(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
@@ -510,6 +535,7 @@ async def delete_agent_protected(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     # Check tenant access
     if not ctx.can_access_resource(agent.tenant_id):
@@ -561,6 +587,7 @@ async def get_agent_skill_integrations(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -625,6 +652,7 @@ async def set_agent_skill_integration(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -693,6 +721,7 @@ async def delete_agent_skill_integration(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -727,6 +756,7 @@ async def get_available_integrations_for_skill(
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -867,6 +897,7 @@ async def get_agent_expand_data(
     agent = ctx.db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    raise_if_internal_agent(agent)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
 

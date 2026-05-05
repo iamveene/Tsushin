@@ -21,7 +21,7 @@ interface VendorOption {
   label: string
   description: string
   Icon: React.FC<IconProps>
-  /** Optional tag surfaced above the card (e.g. "Uses Nano Banana"). */
+  /** Optional tag surfaced above the card (e.g. "Preview"). */
   tag?: string
 }
 
@@ -51,13 +51,45 @@ const TTS_LOCAL: VendorOption[] = [
   { id: 'kokoro', label: 'Kokoro', description: 'Self-hosted multilingual TTS container. Per-tenant instance.', Icon: MicrophoneIcon },
 ]
 
+const ASR_CLOUD: VendorOption[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI Whisper API',
+    description: 'Cloud transcription via OpenAI’s hosted whisper-1 model. Reuses the OpenAI API key from the LLM > OpenAI provider — no separate credential to enter.',
+    Icon: MicrophoneIcon,
+  },
+]
+
+const ASR_LOCAL: VendorOption[] = [
+  {
+    id: 'openai_whisper',
+    label: 'OpenAI Whisper (self-hosted)',
+    description: 'Runs the official openai/whisper Python package inside an auto-provisioned container (onerahmet/openai-whisper-asr-webservice). Pick a model size at create time (tiny → large-v3 / turbo).',
+    Icon: MicrophoneIcon,
+    tag: 'New',
+  },
+  {
+    id: 'speaches',
+    label: 'Speaches (faster-whisper)',
+    description: 'OpenAI-compatible /v1/audio/transcriptions endpoint backed by faster-whisper (CTranslate2). Lower memory, multilingual default.',
+    Icon: MicrophoneIcon,
+  },
+]
+
 const IMAGE_CLOUD: VendorOption[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    description: 'Image generation and editing with GPT Image 2.',
+    Icon: OpenAIIcon,
+    tag: 'GPT Image 2',
+  },
   {
     id: 'gemini',
     label: 'Google Gemini',
-    description: 'Image generation via gemini-2.5-flash-image ("Nano Banana") and gemini-3-pro-image-preview ("Nano Banana Pro").',
+    description: 'Image generation via Gemini image models and direct Gemini API Imagen 4 models.',
     Icon: GeminiIcon,
-    tag: 'Uses Nano Banana / Nano Banana Pro',
+    tag: 'Gemini API Imagen 4',
   },
 ]
 
@@ -75,6 +107,8 @@ export default function StepVendorSelect() {
     if (modality === 'llm' && hosting === 'local') return LLM_LOCAL
     if (modality === 'tts' && hosting === 'cloud') return TTS_CLOUD
     if (modality === 'tts' && hosting === 'local') return TTS_LOCAL
+    if (modality === 'asr' && hosting === 'cloud') return ASR_CLOUD
+    if (modality === 'asr' && hosting === 'local') return ASR_LOCAL
     if (modality === 'image') return IMAGE_CLOUD
     return []
   }, [modality, hosting])
@@ -103,7 +137,7 @@ export default function StepVendorSelect() {
         <h3 className="text-base font-semibold text-white mb-1">Choose a provider</h3>
         <p className="text-xs text-tsushin-slate">
           {modality === 'image'
-            ? 'Image generation runs on Gemini. You can add more providers later when available.'
+            ? 'Image generation can run on OpenAI GPT Image 2 or Google Gemini, including Gemini API Imagen 4.'
             : options.length === 1
               ? 'Only one provider fits your choices — click to continue.'
               : 'Pick which vendor this instance will use.'}

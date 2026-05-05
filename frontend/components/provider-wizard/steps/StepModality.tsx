@@ -21,14 +21,20 @@ const OPTIONS: Option[] = [
   },
   {
     id: 'tts',
-    label: 'Text-to-Speech',
-    description: 'Voice synthesis for audio agents. Self-hosted Kokoro or hosted ElevenLabs.',
+    label: 'Text-to-Speech (Audio out)',
+    description: 'Voice synthesis for audio agents. Self-hosted Kokoro or hosted OpenAI / ElevenLabs / Gemini.',
+    Icon: MicrophoneIcon,
+  },
+  {
+    id: 'asr',
+    label: 'Speech-to-Text (Audio in)',
+    description: 'Voice-note transcription. Cloud OpenAI Whisper, or self-hosted Speaches / openai/whisper.',
     Icon: MicrophoneIcon,
   },
   {
     id: 'image',
     label: 'Image Generation',
-    description: 'Generate images from prompts. Uses Gemini "Nano Banana" / "Nano Banana Pro".',
+    description: 'Generate images from prompts with Gemini API Imagen 4 and OpenAI GPT Image 2.',
     Icon: BeakerIcon,
   },
 ]
@@ -48,7 +54,7 @@ export default function StepModality() {
 
   const handlePick = (m: Modality) => {
     // Auto-pick hosting for modalities where only one option exists today.
-    // Image: cloud-only (Gemini). LLM/TTS: user chooses on next step.
+    // Image: cloud-only. LLM/TTS: user chooses on next step.
     const hostingPatch = m === 'image' ? { hosting: 'cloud' as const } : {}
     patchDraft({ modality: m, ...hostingPatch })
   }
@@ -60,7 +66,7 @@ export default function StepModality() {
         <p className="text-xs text-tsushin-slate">Pick the type of provider. Each path walks you through the right configuration.</p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {OPTIONS.map(opt => {
           const Icon = opt.Icon
           const active = modality === opt.id

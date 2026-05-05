@@ -24,6 +24,32 @@ from auth_dependencies import (
     get_current_user_optional_strict_from_request,
     ensure_permission,
 )
+from services.audit_service import log_tenant_event, TenantAuditActions
+
+
+# BUG-709 FIX (v0.7.0): Predefined tenant-audit actions for provider-instance
+# CRUD. Suggested-by-bug names map cleanly onto the existing TenantAuditActions
+# convention even though they aren't yet baked into the class — using string
+# literals here keeps the change surgical and avoids touching the audit
+# constants file (and downstream syslog forwarder mappings).
+_PROVIDER_AUDIT_CREATE = "provider.created"
+_PROVIDER_AUDIT_UPDATE = "provider.updated"
+_PROVIDER_AUDIT_DELETE = "provider.deleted"
+
+
+def _provider_audit_payload(instance: ProviderInstance) -> dict:
+    """
+    BUG-709: Redacted payload for provider-instance audit events.
+    Never include `api_key`, encrypted blob, or extra_config (which can carry
+    Vertex AI service-account JSON keys). Only emit safe identifiers.
+    """
+    return {
+        "id": instance.id,
+        "vendor": instance.vendor,
+        "instance_name": instance.instance_name,
+        "is_active": bool(instance.is_active),
+        "is_default": bool(instance.is_default),
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +179,69 @@ class VendorInfoResponse(BaseModel):
     # True when this tenant has at least one active ProviderInstance for this
     # vendor (same resolution pattern as /api/tts-providers:tenant_has_configured).
     tenant_has_configured: bool = False
+
+
+# v0.7.0 — LLM Provider catalog & cascade-delete schemas
+
+class CatalogInstance(BaseModel):
+    id: int
+    instance_name: str
+    base_url: Optional[str] = None
+    is_default: bool = False
+    available_models: List[str] = []
+    health_status: str = "unknown"
+    health_status_reason: Optional[str] = None
+    is_auto_provisioned: bool = False
+    container_status: Optional[str] = None
+
+
+class CatalogVendor(BaseModel):
+    """One vendor row in GET /api/llm-providers/catalog.
+
+    Single source of truth consumed by the agent wizard, the Studio agent
+    edit modal, the playground config panel, and the Hub LLM Providers tab.
+    """
+    vendor: str
+    display_name: str
+    default_base_url: Optional[str] = None
+    supports_discovery: bool = False
+    creatable: bool = True
+    instances: List[CatalogInstance] = []
+
+
+class InstanceUsageAgent(BaseModel):
+    id: int
+    name: str
+    model_provider: str
+    model_name: str
+    is_active: bool
+
+
+class InstanceUsageResponse(BaseModel):
+    instance_id: int
+    vendor: str
+    instance_name: str
+    agents: List[InstanceUsageAgent] = []
+    dependent_count: int = 0
+
+
+class CascadeDeleteRequest(BaseModel):
+    """Body for DELETE /api/provider-instances/{id} when there are dependents.
+
+    Exactly one of ``reassign_to_instance_id`` or ``unassign`` must be provided
+    when ``dependent_count > 0``. The empty body is accepted only when there
+    are zero dependents.
+    """
+    reassign_to_instance_id: Optional[int] = None
+    unassign: Optional[bool] = False
+
+
+class CascadeDeleteResponse(BaseModel):
+    instance_name: str
+    deleted: bool
+    reassigned_count: int = 0
+    reassigned_to: Optional[Dict[str, Any]] = None
+    unassigned: bool = False
 
 
 # ==================== Helpers ====================
@@ -341,6 +430,33 @@ async def _background_test_instance(instance_id: int, user_id: int) -> None:
             pass
 
 
+# Gemini image-generation models are deliberately separated from the normal
+# Gemini LLM suggestions. ProviderInstance.available_models feeds general
+# agent model pickers, so image-only IDs must not leak into the generic
+# `gemini` bucket or live Gemini discovery results.
+GEMINI_IMAGE_MODELS = [
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+    "imagen-4.0-fast-generate-001",
+    "imagen-4.0-generate-001",
+    "imagen-4.0-ultra-generate-001",
+]
+
+
+def _is_gemini_image_model(model_id: str) -> bool:
+    return model_id in GEMINI_IMAGE_MODELS
+
+
+OPENAI_IMAGE_MODELS = [
+    "gpt-image-2",
+]
+
+
+def _is_openai_image_model(model_id: str) -> bool:
+    return model_id in OPENAI_IMAGE_MODELS
+
+
 # Curated suggestions shown in the UI as model-name autocomplete.
 # Providers with a live /models endpoint (openai/groq/grok/deepseek/openrouter via
 # Auto-detect, gemini via live discovery below) will replace this list after
@@ -353,11 +469,13 @@ PREDEFINED_MODELS = {
         "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
         "o1", "o1-mini", "o3-mini", "o4-mini",
     ],
+    "openai_image": OPENAI_IMAGE_MODELS,
     "anthropic": [
+        # Current generation. Older claude-3.5-sonnet / claude-3-opus removed
+        # from selectable list (BUG-697); pricing rows in token_tracker.py are
+        # retained for legacy invoice cost calculation.
         "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
         "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
     ],
     "gemini": [
         # Static fallback only — used when the live /v1beta/models call fails
@@ -372,6 +490,7 @@ PREDEFINED_MODELS = {
         # Gemini 2.0 / 1.5 (legacy):
         "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
     ],
+    "gemini_image": GEMINI_IMAGE_MODELS,
     "groq": [
         "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
         "mixtral-8x7b-32768", "gemma2-9b-it",
@@ -545,6 +664,32 @@ def list_provider_vendors(
     return out
 
 
+@router.get("/llm-providers/catalog", response_model=List[CatalogVendor])
+def get_llm_providers_catalog(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    v0.7.0: Single source of truth for "what providers can an agent use".
+
+    Returns one entry per supported vendor with:
+      - display name + default base URL + discovery support flag
+      - the tenant's currently active provider instances (with health and models)
+      - a ``creatable`` flag (true today for all vendors) so the UI can offer
+        an inline-create CTA when a vendor has zero instances.
+
+    Consumed by: agent creation wizard (StepBasics), Studio agent edit modal
+    (AgentConfigurationManager), Playground config panel, and the Hub LLM
+    Providers tab. They previously each fetched ``/api/provider-instances``
+    separately and applied per-surface vendor heuristics, which produced the
+    "ghost vendor" inconsistency this endpoint eliminates.
+    """
+    from services.provider_instance_service import ProviderInstanceService
+    catalog = ProviderInstanceService.get_catalog(ctx.tenant_id, db)
+    return catalog
+
+
 @router.post("/provider-instances/discover-models-raw")
 async def discover_models_raw(
     data: DiscoverModelsRawRequest,
@@ -633,6 +778,8 @@ async def discover_models_raw(
                         if not name or "generateContent" not in methods:
                             continue
                         model_id = name[len("models/"):] if name.startswith("models/") else name
+                        if _is_gemini_image_model(model_id):
+                            continue
                         models.append(model_id)
                     page_token = body.get("nextPageToken")
                     if not page_token:
@@ -646,7 +793,13 @@ async def discover_models_raw(
                     return {"models": []}
                 body = resp.json()
                 models = sorted(
-                    {m.get("id") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
+                    {
+                        model_id
+                        for m in body.get("data", [])
+                        if isinstance(m, dict)
+                        for model_id in [m.get("id")]
+                        if model_id and not (vendor == "openai" and _is_openai_image_model(model_id))
+                    }
                 )
     except (httpx.ConnectError, httpx.TimeoutException):
         return {"models": []}
@@ -684,6 +837,7 @@ def list_provider_instances(
 def create_provider_instance(
     data: ProviderInstanceCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -770,6 +924,18 @@ def create_provider_instance(
     db.refresh(instance)
     logger.info(f"Created provider instance '{data.instance_name}' (vendor={vendor}) for tenant {ctx.tenant_id}")
 
+    # BUG-709: emit tenant audit event (no api_key in payload)
+    log_tenant_event(
+        db,
+        ctx.tenant_id,
+        current_user.id,
+        _PROVIDER_AUDIT_CREATE,
+        "provider_instance",
+        str(instance.id),
+        _provider_audit_payload(instance),
+        request,
+    )
+
     # Auto-run a connection test in the background so the Hub UI dot reflects
     # real connectivity instead of staying gray ('unknown') until the user
     # clicks Test Connection. Skip when no credentials are configured (the
@@ -827,6 +993,7 @@ def update_provider_instance(
     instance_id: int,
     data: ProviderInstanceUpdate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
@@ -915,6 +1082,18 @@ def update_provider_instance(
     db.refresh(instance)
     logger.info(f"Updated provider instance {instance_id} for tenant {instance.tenant_id}")
 
+    # BUG-709: emit tenant audit event (no api_key in payload)
+    log_tenant_event(
+        db,
+        instance.tenant_id,
+        current_user.id,
+        _PROVIDER_AUDIT_UPDATE,
+        "provider_instance",
+        str(instance.id),
+        _provider_audit_payload(instance),
+        request,
+    )
+
     # Re-test in the background when something connectivity-relevant changed
     # (key, base URL, vendor-specific config, or model list). Skip pure metadata
     # edits like rename or default-toggle so we don't burn provider quota for
@@ -932,14 +1111,47 @@ def update_provider_instance(
     return _to_response(instance, db)
 
 
-@router.delete("/provider-instances/{instance_id}")
+@router.get("/provider-instances/{instance_id}/usage", response_model=InstanceUsageResponse)
+def get_provider_instance_usage(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """v0.7.0: dependent-agent dry-run for the cascade-aware delete UI.
+
+    Returns the list of agents currently bound to this instance so the
+    operator can pick a reassignment target (or accept unassigning) before
+    confirming the delete. Tenant-scoped.
+    """
+    instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+    if not ctx.can_access_resource(instance.tenant_id):
+        raise HTTPException(status_code=404, detail="Provider instance not found")
+
+    from services.provider_instance_service import ProviderInstanceService
+    usage = ProviderInstanceService.get_instance_usage(instance_id, instance.tenant_id, db)
+    return InstanceUsageResponse(**usage)
+
+
+@router.delete("/provider-instances/{instance_id}", response_model=CascadeDeleteResponse)
 def delete_provider_instance(
     instance_id: int,
+    request: Request,
+    body: Optional[CascadeDeleteRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
     ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """Soft-delete a provider instance (set is_active=False)."""
+    """Soft-delete a provider instance.
+
+    v0.7.0 cascade-aware behavior:
+      - If the instance has no dependent agents, deletes immediately (no body).
+      - If it has dependents, the body MUST set either ``reassign_to_instance_id``
+        or ``unassign=true``. Without one of these the request fails with 409
+        and the UI is expected to show the pre-delete reassign modal.
+    """
     instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="Provider instance not found")
@@ -965,11 +1177,72 @@ def delete_provider_instance(
                 detail=f"Failed to deprovision Ollama container before delete: {e}",
             )
 
-    instance.is_active = False
-    instance.updated_at = datetime.utcnow()
-    db.commit()
-    logger.info(f"Soft-deleted provider instance {instance_id} for tenant {instance.tenant_id}")
-    return {"message": f"Provider instance '{instance.instance_name}' deleted successfully"}
+    body = body or CascadeDeleteRequest()
+    from services.provider_instance_service import ProviderInstanceService
+    try:
+        result = ProviderInstanceService.delete_instance_with_reassign(
+            instance_id,
+            instance.tenant_id,
+            db,
+            reassign_to_instance_id=body.reassign_to_instance_id,
+            unassign=bool(body.unassign),
+        )
+    except ValueError as ve:
+        code = str(ve)
+        if code == "dependents_require_decision":
+            usage = ProviderInstanceService.get_instance_usage(
+                instance_id, instance.tenant_id, db
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "dependents_require_decision",
+                    "message": (
+                        f"This instance is used by {usage['dependent_count']} agent(s). "
+                        "Pass reassign_to_instance_id or unassign=true to confirm."
+                    ),
+                    "usage": usage,
+                },
+            )
+        if code == "reassign_target_invalid":
+            raise HTTPException(
+                status_code=400,
+                detail="reassign_to_instance_id must be an active provider instance in the same tenant.",
+            )
+        if code == "reassign_target_is_self":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot reassign dependents to the instance being deleted.",
+            )
+        if code == "instance_not_found":
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        raise
+
+    logger.info(
+        "Soft-deleted provider instance %s for tenant %s — reassigned=%s to=%s unassigned=%s",
+        instance_id, instance.tenant_id,
+        result.get("reassigned_count"),
+        (result.get("reassigned_to") or {}).get("id"),
+        result.get("unassigned"),
+    )
+
+    log_tenant_event(
+        db,
+        instance.tenant_id,
+        current_user.id,
+        _PROVIDER_AUDIT_DELETE,
+        "provider_instance",
+        str(instance.id),
+        {
+            **_provider_audit_payload(instance),
+            "reassigned_count": result.get("reassigned_count", 0),
+            "reassigned_to_instance_id": (result.get("reassigned_to") or {}).get("id"),
+            "unassigned": bool(result.get("unassigned")),
+        },
+        request,
+    )
+
+    return CascadeDeleteResponse(**result)
 
 
 @router.post("/provider-instances/test-connection", response_model=TestConnectionResponse)

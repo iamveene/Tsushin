@@ -20,6 +20,9 @@ import BillingTab from '@/components/watcher/BillingTab'
 import SecurityTab from '@/components/watcher/SecurityTab'
 import ChannelHealthTab from '@/components/watcher/ChannelHealthTab'
 import CommunicationTab from '@/components/watcher/CommunicationTab'
+import TeamRunsTab from '@/components/watcher/TeamRunsTab'
+import WakeEventsPage from '@/app/wake-events/page'
+import ContinuousAgentsPage from '@/app/continuous-agents/page'
 
 // Inline SVG icon to match codebase patterns
 const LockClosedIcon = ({ className }: { className?: string }) => (
@@ -28,7 +31,7 @@ const LockClosedIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing'
+type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing' | 'wake-events' | 'continuous-agents' | 'team-runs'
 
 export default function WatcherPage() {
   const [activeTab, setActiveTab] = useState<WatcherTab>('dashboard')
@@ -45,8 +48,15 @@ export default function WatcherPage() {
     { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel Security Events' },
     { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
     { id: 'communication' as WatcherTab, label: 'A2A Comms', description: 'Inter-Agent Messaging' },
+    { id: 'team-runs' as WatcherTab, label: 'Team Runs', description: 'Agent Team Executions' },
     { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
+    { id: 'wake-events' as WatcherTab, label: 'Wake Events', description: 'Trigger event browser' },
+    { id: 'continuous-agents' as WatcherTab, label: 'Continuous Agents', description: 'Always-on inventory' },
   ]
+
+  const handleTabChange = (tab: WatcherTab) => {
+    setActiveTab(tab)
+  }
 
   // Filter tabs based on permissions
   const visibleTabs = tabs.filter(tab => {
@@ -64,13 +74,15 @@ export default function WatcherPage() {
         <p className="text-tsushin-slate">Observability & Monitoring Hub</p>
       </div>
 
-      {/* Tab Navigation */}
+      {/* Tab Navigation — Wake Events and Continuous Agents stay mounted inside
+          Watcher so operators do not lose the monitoring context when they
+          switch between Watcher surfaces. */}
       <div className="mb-6">
-        <div className="glass-card rounded-xl p-1.5 inline-flex">
+        <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`
                 relative px-5 py-3 text-sm font-medium rounded-lg transition-all duration-200
                 ${activeTab === tab.id
@@ -116,7 +128,10 @@ export default function WatcherPage() {
         {activeTab === 'security' && <SecurityTab />}
         {activeTab === 'channel-health' && <ChannelHealthTab />}
         {activeTab === 'communication' && <CommunicationTab />}
+        {activeTab === 'team-runs' && <TeamRunsTab />}
         {activeTab === 'billing' && <BillingTab />}
+        {activeTab === 'wake-events' && <WakeEventsPage />}
+        {activeTab === 'continuous-agents' && <ContinuousAgentsPage />}
       </div>
     </div>
   )

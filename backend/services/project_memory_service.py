@@ -38,17 +38,13 @@ class ProjectMemoryService:
     # =========================================================================
 
     def _get_chroma_client(self):
-        """Lazy-load ChromaDB client."""
+        """Lazy-load ChromaDB client (cached process-wide via factory — BUG-695)."""
         if self._chroma_client is None:
             try:
-                import chromadb
-                from chromadb.config import Settings
+                from chroma_client_factory import get_chroma_client
 
                 chroma_dir = os.environ.get("TSN_CHROMA_DIR", "/app/data/chroma")
-                self._chroma_client = chromadb.PersistentClient(
-                    path=chroma_dir,
-                    settings=Settings(anonymized_telemetry=False)
-                )
+                self._chroma_client = get_chroma_client(chroma_dir)
             except Exception as e:
                 self.logger.error(f"Failed to initialize ChromaDB: {e}")
                 raise

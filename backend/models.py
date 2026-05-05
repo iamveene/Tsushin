@@ -1,12 +1,56 @@
 import os
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger, ForeignKeyConstraint, CheckConstraint, and_
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from datetime import datetime
+from enum import Enum
 
 Base = declarative_base()
+
+
+class TeamTopology(str, Enum):
+    LINE = "line"
+    MESH = "mesh"
+
+
+class TeamStatus(str, Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ARCHIVED = "archived"
+
+
+class TeamRunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    GOAL_NOT_ACHIEVED = "goal_not_achieved"
+    TIMEOUT = "timeout"
+    SENTINEL_BLOCKED = "sentinel_blocked"
+
+
+class TeamMemberRunStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class TeamTriggerKind(str, Enum):
+    GITHUB = "github"
+    JIRA = "jira"
+    WEBHOOK = "webhook"
+    GMAIL = "gmail"
+
+
+class TeamMemberRole(str, Enum):
+    MEMBER = "member"
+    COORDINATOR = "coordinator"
 
 
 def get_remote_access_stack_name() -> str:
@@ -62,6 +106,10 @@ class Config(Base):
 
     # Conversation delay (global, WhatsApp-only)
     whatsapp_conversation_delay_seconds = Column(Float, default=5.0)
+
+    # Agentic loop platform bounds (Track F / v0.7.0)
+    platform_min_agentic_rounds = Column(Integer, nullable=True, default=1)
+    platform_max_agentic_rounds = Column(Integer, nullable=True, default=8)
 
     # Group Message Context
     context_message_count = Column(Integer, default=10)  # Updated from 5 to 10
@@ -144,10 +192,12 @@ class Memory(Base):
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent - per-agent memory isolation
     sender_key = Column(String(255), nullable=False, index=True)  # chat_id or phone number
     messages_json = Column(JSON, default=list)  # [{"role": "user", "content": "...", "timestamp": "..."}]
+    team_run_id = Column(Integer, ForeignKey("agent_team_run.id", ondelete="SET NULL"), nullable=True, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
         Index('idx_memory_tenant_agent_sender', 'tenant_id', 'agent_id', 'sender_key'),
+        Index('idx_memory_tenant_agent_sender_team_run', 'tenant_id', 'agent_id', 'sender_key', 'team_run_id'),
     )
 
 
@@ -393,6 +443,10 @@ class Agent(Base):
     memory_decay_archive_threshold = Column(Float, default=0.05)  # Auto-archive below this effective score
     memory_decay_mmr_lambda = Column(Float, default=0.5)  # MMR diversity weight (0=max diversity, 1=pure relevance)
 
+    # v0.7.0 Track F: bounded outer agentic loop configuration
+    max_agentic_rounds = Column(Integer, nullable=True, default=1)
+    max_agentic_loop_bytes = Column(Integer, nullable=True, default=8192)
+
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
     enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook
@@ -414,6 +468,12 @@ class Agent(Base):
     is_active = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)  # Default agent for new chats
 
+    # Agent Teams (v0.7.0 Phase 1): inert flags until Team Builder/orchestrator
+    # phases wire service behavior around them.
+    is_team_member = Column(Boolean, default=False, nullable=False)
+    current_team_id = Column(Integer, ForeignKey("agent_team.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_internal = Column(Boolean, default=False, nullable=False)
+
     # Phase 7.6.2: Multi-tenancy support
     tenant_id = Column(String(50), nullable=True, index=True)  # FK to tenant
     user_id = Column(Integer, nullable=True, index=True)  # FK to user who created the agent
@@ -425,6 +485,24 @@ class Agent(Base):
     # Relationships
     # hub_integration removed - use AgentSkillIntegration for skill provider configuration
     whatsapp_integration = relationship("WhatsAppMCPInstance", foreign_keys=[whatsapp_integration_id])
+    current_team = relationship(
+        "AgentTeam",
+        primaryjoin=lambda: and_(
+            Agent.tenant_id == AgentTeam.tenant_id,
+            Agent.current_team_id == AgentTeam.id,
+        ),
+        foreign_keys=lambda: [Agent.tenant_id, Agent.current_team_id],
+        post_update=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "current_team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            name="fk_agent_tenant_current_team",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_tenant_id_id"),
+    )
 
 
 class ContactAgentMapping(Base):
@@ -440,6 +518,23 @@ class ContactAgentMapping(Base):
     tenant_id = Column(String(100), nullable=True, index=True)  # BUG-LOG-012: Tenant isolation
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UserChannelDefaultAgent(Base):
+    """Per-user default agent override for a channel within a tenant."""
+
+    __tablename__ = "user_channel_default_agent"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False, index=True)
+    user_identifier = Column(String(256), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "user_identifier", name="uq_user_channel_default_agent"),
+    )
 
 
 class ApiKey(Base):
@@ -775,6 +870,11 @@ class AgentSkill(Base):
     skill_type = Column(String(50), nullable=False)  # "audio_transcript" | "audio_response"
     is_enabled = Column(Boolean, default=True)
     config = Column(JSON, default=dict)  # Skill-specific configuration
+    auto_inject_results = Column(Boolean, nullable=True, default=True)
+    skip_ai_on_data_fetch = Column(Boolean, nullable=True, default=False)
+    max_result_bytes = Column(Integer, nullable=True, default=2048)
+    max_results_retained = Column(Integer, nullable=True, default=2)
+    max_turns_lookback = Column(Integer, nullable=True, default=6)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -810,6 +910,9 @@ class CustomSkill(Base):
     sentinel_profile_id = Column(Integer, nullable=True)
     timeout_seconds = Column(Integer, nullable=False, default=30)
     is_enabled = Column(Boolean, nullable=False, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     scan_status = Column(String(20), default='pending')  # pending|clean|rejected
     last_scan_result = Column(JSON, nullable=True)
     version = Column(String(20), nullable=False, default='1.0.0')
@@ -951,6 +1054,41 @@ class MCPServerHealth(Base):
     checked_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AgentKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-agent knowledge-base indexing defaults.
+    Stores the current KB embedding/vector/chunking contract; each
+    AgentKnowledge row snapshots these values when a document is indexed.
+    """
+    __tablename__ = "agent_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=800)
+    chunk_overlap = Column(Integer, nullable=False, default=100)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'agent_id', name='uq_agent_knowledge_config_tenant_agent'),
+        Index('idx_agent_knowledge_config_tenant_agent', 'tenant_id', 'agent_id'),
+    )
+
+
 class AgentKnowledge(Base):
     """
     Phase 5.0: Knowledge Base System
@@ -960,6 +1098,7 @@ class AgentKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     agent_id = Column(Integer, nullable=False, index=True)  # FK to Agent
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # "pdf", "txt", "docx", "csv", "json"
     file_path = Column(String(500), nullable=False)  # Path to stored file
@@ -969,6 +1108,20 @@ class AgentKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1145,6 +1298,7 @@ class ProjectKnowledge(Base):
 
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, nullable=False, index=True)  # FK to Project
+    tenant_id = Column(String(50), nullable=True, index=True)
     document_name = Column(String(255), nullable=False)
     document_type = Column(String(20), nullable=False)  # pdf, txt, csv, json, etc.
     file_path = Column(String(500), nullable=False)
@@ -1154,7 +1308,57 @@ class ProjectKnowledge(Base):
     error_message = Column(Text, nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     processed_date = Column(DateTime, nullable=True)
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(30), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(20), nullable=True)
+    vector_store_instance_id = Column(Integer, nullable=True)
+    vector_store_index_id = Column(Integer, nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=True)
+    chunk_size = Column(Integer, nullable=True)
+    chunk_overlap = Column(Integer, nullable=True)
+    parser = Column(String(30), nullable=True)
+    index_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProjectKnowledgeConfig(Base):
+    """
+    v0.7.0: Per-project knowledge-base indexing defaults.
+
+    Mirrors AgentKnowledgeConfig so project KB can use external embedding
+    providers and multi-index vector stores without mutating existing docs.
+    """
+    __tablename__ = "project_knowledge_config"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False, default="local")
+    embedding_model = Column(String(100), nullable=False, default="all-MiniLM-L6-v2")
+    embedding_dims = Column(Integer, nullable=False, default=384)
+    embedding_metric = Column(String(20), nullable=False, default="cosine")
+    vector_store_instance_id = Column(Integer, ForeignKey("vector_store_instance.id", ondelete="SET NULL"), nullable=True)
+    vector_store_index_id = Column(Integer, ForeignKey("vector_store_index.id", ondelete="SET NULL"), nullable=True)
+    vector_collection_name = Column(String(255), nullable=True)
+    vector_namespace = Column(String(255), nullable=True)
+    chunk_strategy = Column(String(30), nullable=False, default="fixed_text")
+    chunk_size = Column(Integer, nullable=False, default=500)
+    chunk_overlap = Column(Integer, nullable=False, default=50)
+    parser = Column(String(30), nullable=False, default="auto")
+    search_top_k = Column(Integer, nullable=False, default=5)
+    similarity_threshold = Column(Float, nullable=False, default=0.3)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'project_id', name='uq_project_knowledge_config_tenant_project'),
+        Index('idx_project_knowledge_config_tenant_project', 'tenant_id', 'project_id'),
+    )
 
 
 class ProjectKnowledgeChunk(Base):
@@ -1631,6 +1835,9 @@ class FlowDefinition(Base):
 
     # Existing fields
     is_active = Column(Boolean, default=True)
+    is_system_owned = Column(Boolean, nullable=False, default=False)
+    editable_by_tenant = Column(Boolean, nullable=False, default=True)
+    deletable_by_tenant = Column(Boolean, nullable=False, default=True)
     version = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1643,6 +1850,13 @@ class FlowDefinition(Base):
     # Relationships
     steps = relationship("FlowNode", back_populates="flow", cascade="all, delete-orphan", order_by="FlowNode.position")
     runs = relationship("FlowRun", back_populates="flow", cascade="all, delete-orphan")
+    # v0.7.0: Triggers↔Flows Unification — bindings to one or more triggers.
+    bindings = relationship(
+        "FlowTriggerBinding",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("idx_flow_execution_method", "execution_method"),
@@ -1738,6 +1952,17 @@ class FlowRun(Base):
     trigger_context_json = Column(Text)  # Initial trigger data / input variables
     final_report_json = Column(Text)  # Aggregated summary / output
     error_text = Column(Text)
+
+    # v0.7.0: Triggers↔Flows Unification — correlation back to the
+    # WakeEvent that woke this flow (for triggered flows). NULL for
+    # manual / scheduled / API-driven runs. SET NULL on wake_event
+    # delete (audit retention boundary).
+    trigger_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1838,6 +2063,7 @@ class ConversationThread(Base):
     # State Persistence
     conversation_history = Column(JSON, default=list)  # [{role: 'agent'|'user', content: str, timestamp: str}]
     context_data = Column(JSON, default=dict)  # Extracted data from conversation (for use in subsequent steps)
+    agentic_scratchpad = Column(JSON, nullable=True)  # Bounded multi-round agentic loop trace
 
     # Goal tracking
     goal_achieved = Column(Boolean, default=False)
@@ -1980,6 +2206,76 @@ class AmadeusIntegration(HubIntegration):
     __mapper_args__ = {
         'polymorphic_identity': 'amadeus',
     }
+
+
+class JiraIntegration(HubIntegration):
+    """
+    Jira Tool API Integration.
+    Stores tenant-scoped Jira Cloud connection settings for Jira triggers.
+    """
+    __tablename__ = "jira_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+    # 'programmatic' = REST API + token (shipped); 'agentic' = Atlassian Remote
+    # MCP (OAuth 2.1) — UI exposes the option as "coming soon" but backend
+    # rejects this value with 400 until the agentic transport ships.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'jira',
+    }
+
+    __table_args__ = (
+        Index("idx_jira_integration_site_url", "site_url"),
+        Index("idx_jira_integration_auth_email", "auth_email"),
+    )
+
+
+class GitHubIntegration(HubIntegration):
+    """
+    GitHub Hub Integration.
+
+    Stores tenant-scoped GitHub connection settings used by the
+    ``code_repository`` skill. The ``provider`` column is currently always
+    ``github`` but is reserved so the table can host other repository
+    providers (Bitbucket, GitLab) in the future.
+
+    Auth today: Personal Access Token (PAT). ``auth_method`` reserves space
+    for ``app`` (GitHub App installation) when that ships.
+
+    Mirrors the shape of :class:`JiraIntegration` exactly (polymorphic
+    single-table-inheritance subclass of ``HubIntegration``).
+    """
+    __tablename__ = "github_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    # Reserved for future providers (bitbucket, gitlab). Always 'github' today.
+    provider = Column(String(32), nullable=False, server_default="github")
+    # 'pat' (shipped) | 'app' (reserved — GitHub App installation flow)
+    auth_method = Column(String(20), nullable=False, server_default="pat")
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    # Optional default repo owner / name surfaced in the UI as a convenience
+    # so callers don't have to specify both each request.
+    default_owner = Column(String(100), nullable=True)
+    default_repo = Column(String(100), nullable=True)
+    # 'programmatic' = REST API + PAT (shipped); 'agentic' reserved for a
+    # future GitHub MCP transport. Backend rejects 'agentic' until shipped.
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'github',
+    }
+
+    __table_args__ = (
+        Index("idx_github_integration_provider", "provider"),
+        Index("idx_github_integration_default_owner", "default_owner"),
+    )
 
 
 # ============================================================================
@@ -2240,6 +2536,7 @@ class SentinelConfig(Base):
     detect_memory_poisoning = Column(Boolean, default=True, nullable=False)
     detect_browser_ssrf = Column(Boolean, default=True, nullable=False)
     detect_vector_store_poisoning = Column(Boolean, default=True, nullable=False)
+    detect_continuous_agent_action_approval = Column(Boolean, default=True, nullable=False)
 
     # Aggressiveness: 0=Off, 1=Moderate, 2=Aggressive, 3=Extra Aggressive
     aggressiveness_level = Column(Integer, default=1, nullable=False)
@@ -2258,6 +2555,7 @@ class SentinelConfig(Base):
     memory_poisoning_prompt = Column(Text, nullable=True)
     browser_ssrf_prompt = Column(Text, nullable=True)
     vector_store_poisoning_prompt = Column(Text, nullable=True)
+    continuous_agent_action_approval_prompt = Column(Text, nullable=True)
 
     # Performance settings
     cache_ttl_seconds = Column(Integer, default=300, nullable=False)  # 5-minute cache
@@ -2327,6 +2625,7 @@ class SentinelAgentConfig(Base):
     # Vector store access controls (Item 5)
     vector_store_access_enabled = Column(Boolean, nullable=True)  # NULL = inherit
     vector_store_allowed_configs = Column(JSON, nullable=True)  # List of allowed VectorStoreInstance IDs
+    detect_continuous_agent_action_approval = Column(Boolean, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -2357,7 +2656,7 @@ class SentinelAnalysisLog(Base):
 
     # Analysis classification
     analysis_type = Column(String(30), nullable=False)  # 'prompt', 'tool', 'shell'
-    detection_type = Column(String(30), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
+    detection_type = Column(String(64), nullable=False)  # 'prompt_injection', 'agent_takeover', etc.
 
     # Input data (truncated for storage)
     input_content = Column(Text, nullable=False)  # First 500 chars of input
@@ -2410,7 +2709,7 @@ class SentinelAnalysisCache(Base):
     # Cache key components
     input_hash = Column(String(64), nullable=False)  # SHA-256 of input
     analysis_type = Column(String(30), nullable=False)
-    detection_type = Column(String(30), nullable=False)
+    detection_type = Column(String(64), nullable=False)
     aggressiveness_level = Column(Integer, nullable=False)
 
     # Cached results
@@ -2634,8 +2933,18 @@ class SentinelProfileAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    profile = relationship("SentinelProfile", backref="assignments")
-    agent = relationship("Agent", backref="sentinel_profile_assignments")
+    # passive_deletes=True on both backrefs: profile_id is CASCADE+NOT NULL
+    # (deleting a SentinelProfile would fail without this) and agent_id is
+    # CASCADE+nullable=True (without this the row is left as a zombie with NULL
+    # agent_id instead of being deleted as the CASCADE intends).
+    profile = relationship(
+        "SentinelProfile",
+        backref=backref("assignments", passive_deletes=True),
+    )
+    agent = relationship(
+        "Agent",
+        backref=backref("sentinel_profile_assignments", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "agent_id", "skill_type", name="uq_sentinel_profile_assignment_scope"),
@@ -2835,6 +3144,7 @@ class WhatsAppMCPInstance(Base):
     # Token-based auth to prevent cross-tenant MCP access
     api_secret = Column(String(64), nullable=True)  # 32-byte hex-encoded secret
     api_secret_created_at = Column(DateTime, nullable=True)  # For rotation tracking
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Relationships
     # tenant = relationship("Tenant")  # Requires models_rbac import
@@ -2889,6 +3199,7 @@ class TelegramBotInstance(Base):
 
     # Metadata
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -2931,6 +3242,7 @@ class SlackIntegration(Base):
     last_health_check = Column(DateTime, nullable=True)      # v0.6.0 Item 38
     dm_policy = Column(String(20), default="allowlist")      # open/allowlist/disabled
     allowed_channels = Column(JSON, default=[])              # List of allowed channel_ids
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -2970,6 +3282,7 @@ class DiscordIntegration(Base):
     dm_policy = Column(String(20), default="allowlist")         # open/allowlist/disabled
     allowed_guilds = Column(JSON, default=[])                   # List of allowed guild (server) IDs
     guild_channel_config = Column(JSON, default={})             # Per-guild channel configuration
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -3042,6 +3355,8 @@ class WebhookIntegration(Base):
     # Retry config
     max_retry_attempts = Column(Integer, default=3)
     retry_timeout_seconds = Column(Integer, default=300)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    trigger_criteria = Column(JSON, nullable=True)
 
     # Audit
     created_by = Column(Integer, ForeignKey('user.id'), nullable=False)
@@ -3051,6 +3366,822 @@ class WebhookIntegration(Base):
     __table_args__ = (
         Index("idx_webhook_integration_tenant", "tenant_id"),
         Index("idx_webhook_integration_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Triggers↔Flows Unification — flow_trigger_binding + webhook payload capture
+# ============================================================================
+
+
+class FlowTriggerBinding(Base):
+    """
+    v0.7.0: Edge between a trigger (channel instance) and a Flow.
+
+    One Flow can listen to N triggers (fan-in across kinds). One trigger
+    can wake N Flows (fan-out). Combined with the new ``source`` step
+    type, this is what lets ``trigger_dispatch_service`` enqueue
+    FlowRuns alongside the legacy ContinuousRuns.
+
+    ``trigger_instance_id`` is a *semantic* FK into one of the per-kind
+    channel-instance tables (jira_trigger / email_trigger /
+    github_trigger / schedule_trigger / webhook_integration). It is NOT
+    declared as a SQL FK because there is no single target table —
+    binding cleanup on trigger DELETE is handled application-side by
+    ``flow_binding_service.delete_bindings_for_trigger``.
+
+    Phase A auto-generation (Wave 4) creates a binding row for every
+    new trigger with ``is_system_managed=True`` so the auto-flow can be
+    distinguished from user-authored bindings.
+
+    Whole feature is gated by ``TSN_FLOWS_TRIGGER_BINDING_ENABLED``
+    (default false in 0.7.0).
+    """
+    __tablename__ = "flow_trigger_binding"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    flow_definition_id = Column(
+        Integer,
+        ForeignKey("flow_definition.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    # Pointer to the FlowNode of type 'source' inside the bound flow.
+    # SET NULL on flow_node delete so a Source-step deletion doesn't
+    # orphan the binding row; FlowEngine recreates it lazily.
+    source_node_id = Column(
+        Integer,
+        ForeignKey("flow_node.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # When True: dispatch skips the legacy ContinuousRun for this
+    # (kind, instance_id), letting the bound Flow take over fully.
+    # Default False on backfilled rows for parallel-run safety; new
+    # user-authored bindings default True (clean ownership).
+    suppress_default_agent = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    # Marks the auto-generated 1-flow-per-trigger row created by Phase A.
+    is_system_managed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    flow = relationship("FlowDefinition", back_populates="bindings")
+    source_node = relationship("FlowNode")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "flow_definition_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_flow_trigger_binding_unique",
+        ),
+        Index(
+            "ix_flow_trigger_binding_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id", "is_active",
+        ),
+        Index("ix_flow_trigger_binding_flow", "flow_definition_id"),
+    )
+
+
+class WebhookPayloadCapture(Base):
+    """
+    v0.7.0: Last-N (default 5) inbound payloads per webhook integration.
+
+    Used by Wave 5's frontend autocomplete to infer
+    ``{{source.payload.*}}`` paths in the Flow editor. The ringbuffer
+    is enforced application-side in ``routes_webhook_inbound.py`` after
+    a successful dispatch — older rows are deleted to keep at most the
+    5 most recent for each ``(tenant_id, webhook_id)``.
+
+    Payload is stored as text (truncated to ~64KB at write time).
+    Headers are minimally redacted (auth/cookie stripped). Both fields
+    are JSON.parse'd at read time.
+    """
+    __tablename__ = "webhook_payload_capture"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    webhook_id = Column(
+        Integer,
+        ForeignKey("webhook_integration.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    captured_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    headers_json = Column(Text, nullable=True)
+    dedupe_key = Column(String(512), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_payload_capture_recent",
+            "tenant_id", "webhook_id", "captured_at",
+        ),
+    )
+
+
+# ============================================================================
+# v0.7.0: Email Trigger Instances
+# ============================================================================
+
+class EmailChannelInstance(Base):
+    """
+    v0.7.0: Persisted email trigger configuration.
+
+    Phase 1 stores the control-plane row only: which Gmail integration to
+    watch, which agent should receive wakeups by default, and the basic
+    query/poll metadata the later EmailTrigger adapter will consume.
+    """
+    __tablename__ = "email_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    provider = Column(String(32), default="gmail", nullable=False)
+    gmail_integration_id = Column(Integer, ForeignKey("gmail_integration.id", ondelete="CASCADE"), nullable=True, index=True)
+    search_query = Column(String(500), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=60, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)  # active | paused | error
+    health_status = Column(String(20), default="unknown", nullable=False)  # unknown | healthy | unhealthy
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_email_channel_instance_tenant", "tenant_id"),
+        Index("idx_email_channel_instance_status", "status"),
+    )
+
+
+# ============================================================================
+# v0.7.0: Jira, Schedule, and GitHub Trigger Instances
+# ============================================================================
+
+class JiraChannelInstance(Base):
+    """Persisted Jira trigger configuration for JQL-polled wake events."""
+
+    __tablename__ = "jira_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    site_url = Column(String(500), nullable=False)
+    project_key = Column(String(64), nullable=True)
+    jql = Column(Text, nullable=False)
+    jira_integration_id = Column(Integer, ForeignKey("jira_integration.id", ondelete="SET NULL"), nullable=True, index=True)
+    auth_email = Column(String(255), nullable=True)
+    api_token_encrypted = Column(Text, nullable=True)
+    api_token_preview = Column(String(32), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=300, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    jira_integration = relationship("JiraIntegration")
+
+    __table_args__ = (
+        Index("idx_jira_channel_instance_tenant", "tenant_id"),
+        Index("idx_jira_channel_instance_status", "status"),
+        Index("idx_jira_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_jira_channel_instance_jira_integration_id", "jira_integration_id"),
+    )
+
+
+class GitHubChannelInstance(Base):
+    """Persisted GitHub trigger configuration for signed webhook deliveries."""
+
+    __tablename__ = "github_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    # v0.7.0-fix Phase 3: GitHub triggers MUST link to a Hub GitHubIntegration
+    # row. Per-trigger PATs were removed; the trigger reads its credentials
+    # from the linked integration at call time.
+    github_integration_id = Column(
+        Integer,
+        ForeignKey("github_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    repo_owner = Column(String(100), nullable=False)
+    repo_name = Column(String(100), nullable=False)
+    webhook_secret_encrypted = Column(Text, nullable=True)
+    webhook_secret_preview = Column(String(32), nullable=True)
+    events = Column(JSON, nullable=True)
+    branch_filter = Column(String(255), nullable=True)
+    path_filters = Column(JSON, nullable=True)
+    author_filter = Column(String(255), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    last_delivery_id = Column(String(128), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_github_channel_instance_tenant", "tenant_id"),
+        Index("idx_github_channel_instance_status", "status"),
+        Index("idx_github_channel_instance_repo", "tenant_id", "repo_owner", "repo_name"),
+        Index("idx_github_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+# ============================================================================
+# v0.7.0 Phase 2: Continuous-Agent Control Plane
+# ============================================================================
+
+class DeliveryPolicy(Base):
+    """
+    Tenant-owned policy controlling wake-event batching, dedupe, and delivery
+    timing for continuous agents.
+    """
+    __tablename__ = "delivery_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    batch_window_seconds = Column(Integer, default=0, nullable=False)
+    dedupe_window_seconds = Column(Integer, default=300, nullable=False)
+    quiet_hours = Column(JSON, nullable=True)
+    importance_threshold = Column(String(16), default="normal", nullable=False)
+    cooldown_seconds = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_delivery_policy_tenant_name"),
+        Index("ix_delivery_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class BudgetPolicy(Base):
+    """
+    Tenant-owned budget/rate policy for continuous-agent execution.
+    on_exhaustion: pause | degrade_to_hybrid | notify_only.
+    """
+    __tablename__ = "budget_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    max_runs_per_day = Column(Integer, nullable=True)
+    max_agentic_runs_per_day = Column(Integer, nullable=True)
+    max_tokens_per_day = Column(BigInteger, nullable=True)
+    max_tool_invocations_per_day = Column(Integer, nullable=True)
+    on_exhaustion = Column(String(32), default="pause", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_budget_policy_tenant_name"),
+        Index("ix_budget_policy_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class ContinuousAgent(Base):
+    """Always-on wrapper around an Agent. CRUD exposed via routes_continuous."""
+    __tablename__ = "continuous_agent"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=True)
+    # v0.7.0-fix Phase 6: every continuous agent must declare its purpose so
+    # operators understand what it does without reading the wrapped Agent's
+    # system prompt.
+    purpose = Column(Text, nullable=True)
+    # action_kind codifies the four shapes a continuous agent can take:
+    # tool_run | send_message | conditional_branch | react_only.
+    action_kind = Column(String(32), nullable=True)
+    execution_mode = Column(String(16), default="hybrid", nullable=False)  # autonomous | hybrid | notify_only
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    budget_policy_id = Column(Integer, ForeignKey("budget_policy.id", ondelete="SET NULL"), nullable=True)
+    approval_policy_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent", foreign_keys=[agent_id])
+    delivery_policy = relationship("DeliveryPolicy")
+    budget_policy = relationship("BudgetPolicy")
+    subscriptions = relationship(
+        "ContinuousSubscription",
+        primaryjoin="ContinuousAgent.id == ContinuousSubscription.continuous_agent_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_continuous_agent_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_agent_agent", "agent_id"),
+    )
+
+
+class ContinuousSubscription(Base):
+    """
+    Links a continuous agent to a trigger/channel instance that can emit wakes.
+    channel_instance_id is validated by service/API code because the instance
+    table varies by channel_type.
+    """
+    __tablename__ = "continuous_subscription"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    delivery_policy_id = Column(Integer, ForeignKey("delivery_policy.id", ondelete="SET NULL"), nullable=True)
+    action_config = Column(JSON, nullable=True)
+    status = Column(String(16), default="active", nullable=False)  # active | paused | disabled | error
+    is_system_owned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent", overlaps="subscriptions")
+    delivery_policy = relationship("DeliveryPolicy")
+
+    __table_args__ = (
+        Index("ix_continuous_subscription_tenant_status", "tenant_id", "status"),
+        Index("ix_continuous_subscription_instance", "tenant_id", "channel_type", "channel_instance_id"),
+    )
+
+
+class WakeEvent(Base):
+    """
+    Audit-style event emitted by a trigger and consumed by a continuous run.
+    Payload content is not stored inline in v0.7.0 A2; payload_ref points to an
+    opaque local file path or future blob key after upstream redaction.
+    """
+    __tablename__ = "wake_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    continuous_subscription_id = Column(Integer, ForeignKey("continuous_subscription.id", ondelete="SET NULL"), nullable=True, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=False)
+    occurred_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    dedupe_key = Column(String(512), nullable=False)
+    importance = Column(String(16), default="normal", nullable=False)  # low | normal | high
+    payload_ref = Column(String(512), nullable=True)
+    status = Column(String(16), default="pending", nullable=False)  # pending | claimed | processed | filtered | failed
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    continuous_agent = relationship("ContinuousAgent")
+    continuous_subscription = relationship("ContinuousSubscription")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel_type", "channel_instance_id", "dedupe_key", name="uq_wake_event_dedupe"),
+        UniqueConstraint("tenant_id", "id", name="uq_wake_event_tenant_id_id"),
+        Index("ix_wake_event_tenant_occurred", "tenant_id", "occurred_at"),
+        Index("ix_wake_event_continuous_agent", "continuous_agent_id", "occurred_at"),
+        Index("ix_wake_event_subscription", "continuous_subscription_id", "occurred_at"),
+    )
+
+
+class ContinuousRun(Base):
+    """
+    Execution history for a continuous-agent wake. It is retained with
+    RESTRICT tenant semantics for audit/incident review.
+    """
+    __tablename__ = "continuous_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="RESTRICT"), nullable=False, index=True)
+    continuous_agent_id = Column(Integer, ForeignKey("continuous_agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    wake_event_ids = Column(JSON, nullable=True)
+    execution_mode = Column(String(16), nullable=True)
+    status = Column(String(16), default="queued", nullable=False)  # queued | running | succeeded | failed | cancelled | skipped
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    watcher_run_ref = Column(String(128), nullable=True)
+    memory_refs = Column(JSON, nullable=True)
+    run_threat_signals = Column(JSON, nullable=True)
+    outcome_state = Column(JSON, nullable=True)
+    agentic_scratchpad = Column(JSON, nullable=True)
+    run_type = Column(String(32), default="continuous", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    continuous_agent = relationship("ContinuousAgent")
+
+    __table_args__ = (
+        Index("ix_continuous_run_tenant_status", "tenant_id", "status", "started_at"),
+        Index("ix_continuous_run_agent_started", "continuous_agent_id", "started_at"),
+    )
+
+
+class AgentTeam(Base):
+    """Tenant-owned multi-agent team definition (v0.7.0 Agent Teams Phase 1)."""
+    __tablename__ = "agent_team"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    goal_text = Column(Text, nullable=True)
+    topology = Column(String(16), default=TeamTopology.LINE.value, nullable=False)
+    status = Column(String(16), default=TeamStatus.DRAFT.value, nullable=False)
+    coordinator_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    sentinel_profile_id = Column(Integer, ForeignKey("sentinel_profile.id", ondelete="SET NULL"), nullable=True, index=True)
+    max_steps = Column(Integer, default=10, nullable=False)
+    max_total_tokens = Column(Integer, nullable=True)
+    max_concurrent_runs = Column(Integer, default=1, nullable=False)
+    tools_json = Column(JSON, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    coordinator_agent = relationship(
+        "Agent",
+        primaryjoin=lambda: and_(
+            AgentTeam.tenant_id == Agent.tenant_id,
+            AgentTeam.coordinator_agent_id == Agent.id,
+        ),
+        foreign_keys=lambda: [AgentTeam.tenant_id, AgentTeam.coordinator_agent_id],
+    )
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
+    sentinel_profile = relationship("SentinelProfile", foreign_keys=[sentinel_profile_id])
+    members = relationship(
+        "AgentTeamMember",
+        back_populates="team",
+        cascade="save-update, merge",
+        passive_deletes=True,
+        order_by="AgentTeamMember.execution_order",
+    )
+    triggers = relationship(
+        "AgentTeamTrigger",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    runs = relationship(
+        "AgentTeamRun",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "coordinator_agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            name="fk_agent_team_tenant_coordinator_agent",
+        ),
+        UniqueConstraint("tenant_id", "name", name="uq_agent_team_tenant_name"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_tenant_id_id"),
+        Index("ix_agent_team_tenant_status", "tenant_id", "status"),
+    )
+
+
+class AgentTeamMember(Base):
+    """Agent membership in one team. v0.7.0 enforces one team per agent."""
+    __tablename__ = "agent_team_member"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    role = Column(String(16), default=TeamMemberRole.MEMBER.value, nullable=False)
+    execution_order = Column(Integer, nullable=True)
+    is_required = Column(Boolean, default=True, nullable=False)
+    position_x = Column(Float, nullable=True)
+    position_y = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="members")
+    agent = relationship("Agent", overlaps="members,team")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("team_id", "agent_id", name="uq_agent_team_member_team_agent"),
+        UniqueConstraint("agent_id", name="uq_agent_team_member_agent"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_member_tenant_id_id"),
+        Index("ix_agent_team_member_tenant_team", "tenant_id", "team_id"),
+        Index("ix_agent_team_member_agent", "agent_id"),
+    )
+
+
+class AgentTeamTrigger(Base):
+    """Trigger binding prepared for later team-run dispatch phases."""
+    __tablename__ = "agent_team_trigger"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    trigger_kind = Column(String(32), nullable=False)
+    config_json = Column(JSON, nullable=True)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="triggers")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_agent_team_trigger_tenant_kind", "tenant_id", "trigger_kind"),
+        Index("ix_agent_team_trigger_team_enabled", "team_id", "is_enabled"),
+    )
+
+
+class AgentTeamRun(Base):
+    """Execution history for one Agent Team run."""
+    __tablename__ = "agent_team_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    status = Column(String(24), default=TeamRunStatus.PENDING.value, nullable=False)
+    trigger_event_id = Column(Integer, ForeignKey("wake_event.id", ondelete="SET NULL"), nullable=True, index=True)
+    goal_text_snapshot = Column(Text, nullable=True)
+    topology_snapshot = Column(String(16), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    total_steps = Column(Integer, default=0, nullable=False)
+    completed_steps = Column(Integer, default=0, nullable=False)
+    failed_steps = Column(Integer, default=0, nullable=False)
+    final_output_summary = Column(Text, nullable=True)
+    error_json = Column(JSON, nullable=True)
+    total_input_tokens = Column(Integer, default=0, nullable=False)
+    total_output_tokens = Column(Integer, default=0, nullable=False)
+    total_cost_cents = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", back_populates="runs")
+    trigger_event = relationship(
+        "WakeEvent",
+        primaryjoin=lambda: and_(
+            AgentTeamRun.tenant_id == WakeEvent.tenant_id,
+            AgentTeamRun.trigger_event_id == WakeEvent.id,
+        ),
+        foreign_keys=lambda: [AgentTeamRun.tenant_id, AgentTeamRun.trigger_event_id],
+        viewonly=True,
+    )
+    member_runs = relationship(
+        "AgentTeamMemberRun",
+        back_populates="team_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AgentTeamMemberRun.step_index",
+    )
+    scratch_items = relationship(
+        "TeamRunScratch",
+        back_populates="team_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "trigger_event_id"],
+            ["wake_event.tenant_id", "wake_event.id"],
+            name="fk_agent_team_run_tenant_trigger_event",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_team_run_tenant_id_id"),
+        UniqueConstraint("tenant_id", "team_id", "id", name="uq_agent_team_run_tenant_team_id_id"),
+        Index("ix_agent_team_run_tenant_status_started", "tenant_id", "status", "started_at"),
+        Index("ix_agent_team_run_team_started", "team_id", "started_at"),
+        Index("ix_agent_team_run_trigger_event", "trigger_event_id"),
+    )
+
+
+class AgentTeamMemberRun(Base):
+    """Per-member audit row inside one team run."""
+    __tablename__ = "agent_team_member_run"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_run_id = Column(Integer, nullable=False, index=True)
+    agent_team_member_id = Column(
+        Integer,
+        ForeignKey("agent_team_member.id", ondelete="SET NULL", name="fk_agent_team_member_run_member_id"),
+        nullable=True,
+        index=True,
+    )
+    agent_id = Column(Integer, nullable=True, index=True)
+    step_index = Column(Integer, nullable=False)
+    status = Column(String(16), default=TeamMemberRunStatus.PENDING.value, nullable=False)
+    input_context_json = Column(JSON, nullable=True)
+    output_text = Column(Text, nullable=True)
+    output_summary = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, default=0, nullable=False)
+    output_tokens = Column(Integer, default=0, nullable=False)
+    sentinel_decision_json = Column(JSON, nullable=True)
+    error_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team_run = relationship("AgentTeamRun", back_populates="member_runs")
+    team_member = relationship("AgentTeamMember", foreign_keys=[agent_team_member_id], overlaps="member_runs,team_run")
+    agent = relationship("Agent", overlaps="member_runs,team_member,team_run")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_team_member_id"],
+            ["agent_team_member.tenant_id", "agent_team_member.id"],
+            name="fk_agent_team_member_run_tenant_member",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        Index("ix_agent_team_member_run_tenant", "tenant_id", "team_run_id"),
+        Index("ix_agent_team_member_run_run_step", "team_run_id", "step_index"),
+        Index("ix_agent_team_member_run_agent", "agent_id", "started_at"),
+    )
+
+
+class TeamRunScratch(Base):
+    """Cross-agent scratch state scoped to one team run."""
+    __tablename__ = "team_run_scratch"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    team_run_id = Column(Integer, nullable=False, index=True)
+    key = Column(String(255), nullable=False)
+    value_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    team = relationship("AgentTeam", overlaps="scratch_items")
+    team_run = relationship("AgentTeamRun", back_populates="scratch_items", overlaps="team")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.team_id", "agent_team_run.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "team_run_id", "key", name="uq_team_run_scratch_tenant_run_key"),
+        Index("ix_team_run_scratch_tenant_run", "tenant_id", "team_run_id"),
+        Index("ix_team_run_scratch_team", "team_id"),
+    )
+
+
+class AgentTeamMemberA2ASnapshot(Base):
+    """Serialized external A2A permission state captured while an agent is in a team."""
+    __tablename__ = "agent_team_member_a2a_snapshot"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id = Column(Integer, nullable=False, index=True)
+    agent_id = Column(Integer, nullable=False, index=True)
+    permission_id = Column(Integer, ForeignKey("agent_communication_permission.id", ondelete="SET NULL"), nullable=True, index=True)
+    permission_payload_json = Column(JSON, nullable=False)
+    disabled_at = Column(DateTime, nullable=True)
+    restored_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    team = relationship("AgentTeam")
+    agent = relationship("Agent", overlaps="team")
+    permission = relationship(
+        "AgentCommunicationPermission",
+        primaryjoin=lambda: and_(
+            AgentTeamMemberA2ASnapshot.tenant_id == AgentCommunicationPermission.tenant_id,
+            AgentTeamMemberA2ASnapshot.permission_id == AgentCommunicationPermission.id,
+        ),
+        foreign_keys=lambda: [
+            AgentTeamMemberA2ASnapshot.tenant_id,
+            AgentTeamMemberA2ASnapshot.permission_id,
+        ],
+        viewonly=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agent.tenant_id", "agent.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "permission_id"],
+            ["agent_communication_permission.tenant_id", "agent_communication_permission.id"],
+            name="fk_agent_team_a2a_snapshot_tenant_permission",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "team_id",
+            "agent_id",
+            "permission_id",
+            name="uq_agent_team_a2a_snapshot_tenant_permission",
+        ),
+        Index("ix_agent_team_a2a_snapshot_tenant_team", "tenant_id", "team_id"),
+        Index("ix_agent_team_a2a_snapshot_agent", "agent_id"),
+    )
+
+
+class ChannelEventRule(Base):
+    """
+    Per-channel routing rule evaluated before default-agent fallback. Trigger
+    details remain per-type APIs in A2; this table is the generic channel rule
+    contract for later UI/adapter work.
+    """
+    __tablename__ = "channel_event_rule"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel_type = Column(String(32), nullable=False)
+    channel_instance_id = Column(Integer, nullable=False)
+    event_type = Column(String(64), nullable=True)
+    criteria = Column(JSON, nullable=False, default=dict)
+    priority = Column(Integer, default=100, nullable=False)
+    agent_id = Column(Integer, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    agent = relationship("Agent")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "channel_instance_id",
+            "priority",
+            name="uq_channel_event_rule_priority",
+        ),
+        Index("ix_channel_event_rule_instance", "tenant_id", "channel_type", "channel_instance_id", "is_active"),
+        Index("ix_channel_event_rule_agent", "agent_id"),
     )
 
 
@@ -3333,7 +4464,12 @@ class ConversationTag(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="tags")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL, so let Postgres delete
+    # the tag rather than letting SQLAlchemy NULL the FK first (which would fail).
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("tags", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_tag_tenant_user", "tenant_id", "user_id"),
@@ -3359,7 +4495,12 @@ class ConversationInsight(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    thread = relationship("ConversationThread", backref="insights")
+    # passive_deletes=True: thread_id is CASCADE+NOT NULL — same rationale as
+    # ConversationTag above.
+    thread = relationship(
+        "ConversationThread",
+        backref=backref("insights", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_insight_tenant_user", "tenant_id", "user_id"),
@@ -3385,8 +4526,18 @@ class ConversationLink(Base):
     user_id = Column(Integer, nullable=False, index=True)
 
     # Relationships
-    source_thread = relationship("ConversationThread", foreign_keys=[source_thread_id], backref="outgoing_links")
-    target_thread = relationship("ConversationThread", foreign_keys=[target_thread_id], backref="incoming_links")
+    # passive_deletes=True: both *_thread_id columns are CASCADE+NOT NULL, so
+    # let Postgres delete the link row when either thread is removed.
+    source_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[source_thread_id],
+        backref=backref("outgoing_links", passive_deletes=True),
+    )
+    target_thread = relationship(
+        "ConversationThread",
+        foreign_keys=[target_thread_id],
+        backref=backref("incoming_links", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_conversation_link_tenant_user", "tenant_id", "user_id"),
@@ -3411,10 +4562,13 @@ class MessageQueue(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(String(50), nullable=False, index=True)
     channel = Column(String(20), nullable=False, index=True)  # "playground"|"whatsapp"|"telegram"|"api"
+    message_type = Column(String(32), nullable=False, default="inbound_message", index=True)
     status = Column(String(20), nullable=False, default="pending", index=True)
     # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
-    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=True, index=True)
+    team_id = Column(Integer, nullable=True, index=True)
+    team_run_id = Column(Integer, nullable=True, index=True)
     sender_key = Column(String(255), nullable=False)
 
     payload = Column(JSON, nullable=False)
@@ -3434,8 +4588,60 @@ class MessageQueue(Base):
     completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "((message_type = 'team_run' AND agent_id IS NULL AND team_id IS NOT NULL AND team_run_id IS NOT NULL) "
+            "OR (message_type != 'team_run' AND agent_id IS NOT NULL))",
+            name="ck_mq_agent_or_team_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            name="fk_mq_tenant_team",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.id"],
+            name="fk_mq_tenant_team_run",
+            ondelete="CASCADE",
+        ),
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
+        Index("ix_mq_tenant_team_status", "tenant_id", "team_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
+    )
+
+
+class ChannelEventDedupe(Base):
+    """
+    v0.7.0 Phase 0: durable dedupe/outcome ledger for trigger events.
+    Instance ownership is validated in service code because trigger instance
+    tables vary by channel type.
+    """
+    __tablename__ = "channel_event_dedupe"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    channel_type = Column(String(32), nullable=False)
+    instance_id = Column(Integer, nullable=False)
+    dedupe_key = Column(String(512), nullable=False)
+    outcome = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "channel_type",
+            "instance_id",
+            "dedupe_key",
+            name="uq_channel_event_dedupe",
+        ),
+        Index("ix_channel_event_dedupe_tenant_created", "tenant_id", "created_at"),
+        Index("ix_channel_event_dedupe_instance", "tenant_id", "instance_id", "created_at"),
     )
 
 
@@ -3515,11 +4721,24 @@ class AgentCommunicationPermission(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    source_agent = relationship("Agent", foreign_keys=[source_agent_id], backref="outgoing_comm_permissions")
-    target_agent = relationship("Agent", foreign_keys=[target_agent_id], backref="incoming_comm_permissions")
+    # passive_deletes=True: the FK is ondelete="CASCADE" + NOT NULL, so we let
+    # Postgres delete the row when the parent agent is removed instead of letting
+    # SQLAlchemy try to UPDATE ... SET <agent_id>=NULL first (which violates the
+    # NOT NULL constraint and surfaces as a 409 in the agent delete endpoint).
+    source_agent = relationship(
+        "Agent",
+        foreign_keys=[source_agent_id],
+        backref=backref("outgoing_comm_permissions", passive_deletes=True),
+    )
+    target_agent = relationship(
+        "Agent",
+        foreign_keys=[target_agent_id],
+        backref=backref("incoming_comm_permissions", passive_deletes=True),
+    )
 
     __table_args__ = (
         UniqueConstraint("source_agent_id", "target_agent_id", name="uq_agent_comm_perm_pair"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_comm_perm_tenant_id_id"),
         Index("ix_agent_comm_perm_tenant", "tenant_id"),
         Index("ix_agent_comm_perm_source", "source_agent_id"),
         Index("ix_agent_comm_perm_target", "target_agent_id"),
@@ -3547,6 +4766,7 @@ class AgentCommunicationSession(Base):
     total_messages = Column(Integer, default=0)
     error_text = Column(Text, nullable=True)
     parent_session_id = Column(Integer, ForeignKey("agent_communication_session.id", ondelete="SET NULL"), nullable=True)
+    team_run_id = Column(Integer, ForeignKey("agent_team_run.id", ondelete="SET NULL"), nullable=True, index=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
@@ -3554,11 +4774,13 @@ class AgentCommunicationSession(Base):
     initiator_agent = relationship("Agent", foreign_keys=[initiator_agent_id])
     target_agent_rel = relationship("Agent", foreign_keys=[target_agent_id])
     parent_session = relationship("AgentCommunicationSession", remote_side=[id], backref="child_sessions")
+    team_run = relationship("AgentTeamRun")
     messages = relationship("AgentCommunicationMessage", back_populates="session", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_agent_comm_session_tenant", "tenant_id"),
         Index("ix_agent_comm_session_tenant_status", "tenant_id", "status"),
+        Index("ix_agent_comm_session_tenant_team_run", "tenant_id", "team_run_id"),
         Index("ix_agent_comm_session_initiator", "initiator_agent_id", "started_at"),
         Index("ix_agent_comm_session_target", "target_agent_id"),
     )
@@ -3654,6 +4876,230 @@ class VectorStoreInstance(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "instance_name", name="uq_vector_store_instance_tenant_name"),
         Index("idx_vsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+class VectorStoreIndex(Base):
+    """
+    v0.7.0: Immutable logical/physical index inside a VectorStoreInstance.
+
+    A VectorStoreInstance is the container/cluster/connection. This table
+    records each purpose + owner + embedding contract as a separate
+    collection/index/namespace within that shared connection.
+    """
+    __tablename__ = "vector_store_index"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    purpose = Column(String(32), nullable=False, index=True)  # agent_kb|project_kb|case_memory
+    owner_type = Column(String(32), nullable=False)
+    owner_id = Column(Integer, nullable=False)
+    embedding_provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
+    embedding_provider = Column(String(30), nullable=False)
+    embedding_model = Column(String(128), nullable=False)
+    embedding_dims = Column(Integer, nullable=False)
+    embedding_metric = Column(String(24), nullable=False, default="cosine")
+    embedding_task_document = Column(String(64), nullable=True)
+    embedding_task_query = Column(String(64), nullable=True)
+    physical_collection_name = Column(String(255), nullable=False)
+    physical_namespace = Column(String(255), nullable=False)
+    physical_index_name = Column(String(255), nullable=True)
+    contract_hash = Column(String(24), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "vector_store_instance_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "contract_hash",
+            name="uq_vector_store_index_contract_owner",
+        ),
+        Index(
+            "idx_vector_store_index_lookup",
+            "tenant_id",
+            "purpose",
+            "owner_type",
+            "owner_id",
+            "embedding_dims",
+        ),
+    )
+
+
+class CaseMemory(Base):
+    """
+    v0.7.0 Trigger Case Memory MVP — compact post-execution case record.
+
+    Each row is one terminal trigger-driven execution. Up to three vectors
+    (problem/action/outcome) are stored in the configured vector store with
+    deterministic IDs ``case_{origin_kind}_{run_id}_{kind}`` and metadata
+    that joins back to this row via ``case_id``. The embedding contract
+    (provider/model/dims/metric/task) used at write time is stamped here so
+    a tenant that later switches their default ``VectorStoreInstance`` to a
+    different model does not retroactively invalidate older cases.
+
+    Per-tenant gate via ``Tenant.case_memory_enabled`` (DB column, settable
+    from the tenant settings UI; defaults TRUE so every tenant gets the
+    feature out of the box). Opting out is a tenant-level decision.
+    """
+
+    __tablename__ = "case_memory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    agent_id = Column(
+        Integer,
+        ForeignKey("agent.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    wake_event_id = Column(
+        Integer,
+        ForeignKey("wake_event.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    continuous_run_id = Column(
+        Integer,
+        ForeignKey("continuous_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    flow_run_id = Column(
+        Integer,
+        ForeignKey("flow_run.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    team_run_id = Column(
+        Integer,
+        ForeignKey("agent_team_run.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    origin_kind = Column(String(24), nullable=False)  # continuous_run | flow_run
+    trigger_kind = Column(String(32), nullable=True)  # email | webhook | jira | github
+    subject_digest = Column(String(128), nullable=True)
+    problem_summary = Column(Text, nullable=True)
+    action_summary = Column(Text, nullable=True)
+    outcome_summary = Column(Text, nullable=True)
+    outcome_label = Column(String(24), nullable=False, default="unknown")
+    # ^ resolved | failed | skipped | escalated | unknown
+    vector_store_instance_id = Column(
+        Integer,
+        ForeignKey("vector_store_instance.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    vector_store_index_id = Column(
+        Integer,
+        ForeignKey("vector_store_index.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    embedding_provider_instance_id = Column(Integer, nullable=True)
+    embedding_provider = Column(String(32), nullable=True)
+    embedding_model = Column(String(128), nullable=True)
+    embedding_dims = Column(Integer, nullable=True)
+    embedding_metric = Column(String(24), nullable=True)
+    embedding_task = Column(String(64), nullable=True)
+    vector_refs_json = Column(JSON, nullable=True)
+    index_status = Column(String(16), nullable=False, default="pending")
+    # ^ pending | indexed | partial | failed | skipped
+    summary_status = Column(String(16), nullable=False, default="generated")
+    # ^ generated | fallback | unavailable
+    occurred_at = Column(DateTime, nullable=True)
+    indexed_at = Column(DateTime, nullable=True)
+    last_recalled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_case_memory_tenant_agent_occurred", "tenant_id", "agent_id", "occurred_at"),
+        Index("ix_case_memory_tenant_team_run", "tenant_id", "team_run_id"),
+    )
+
+
+class TriggerRecapConfig(Base):
+    """
+    v0.7.x Trigger Memory Recap — per-trigger configuration row.
+
+    One row per ``(tenant_id, trigger_kind, trigger_instance_id)``. When
+    ``enabled=True`` and the parent tenant has ``case_memory_recap_enabled``
+    set TRUE, the trigger dispatcher expands ``query_template`` (Jinja2
+    sandboxed) against the redacted wake event payload, calls
+    ``case_memory_service.search_similar_cases`` with the configured
+    scope/k/min_similarity/vector_kind, renders ``format_template``, and
+    attaches the rendered text to the queue payload under
+    ``memory_recap``. The queue worker injects the recap into the
+    agent's first-turn user message (or as a system addendum, depending
+    on ``inject_position``) so the LLM cannot ignore relevant past
+    cases by cherry-picking the wrong tool result.
+
+    ``trigger_instance_id`` is a *semantic* FK into the per-kind channel
+    tables (email_channel_instance / jira_channel_instance /
+    github_channel_instance / webhook_integration). Cleanup on trigger
+    DELETE is the caller's responsibility.
+
+    Master tenant gate: ``Tenant.case_memory_recap_enabled`` (DB column,
+    settable from the tenant settings UI). Per-trigger ``enabled`` field
+    defaults FALSE so existing triggers don't get recap retroactively;
+    operators opt in by toggling on the trigger detail page or wizard.
+    """
+
+    __tablename__ = "trigger_recap_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(
+        String(50),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'email' | 'jira' | 'github' | 'webhook' (semantic FK).
+    trigger_kind = Column(String(32), nullable=False)
+    trigger_instance_id = Column(Integer, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+    # Jinja2 template expanded against the redacted payload.
+    query_template = Column(Text, nullable=False, default="")
+    # 'agent' | 'trigger_kind' | 'trigger_instance'
+    scope = Column(String(24), nullable=False, default="trigger_instance")
+    k = Column(Integer, nullable=False, default=3)
+    min_similarity = Column(Float, nullable=False, default=0.35)
+    vector_kind = Column(String(16), nullable=False, default="problem")
+    include_failed = Column(Boolean, nullable=False, default=True)
+    format_template = Column(Text, nullable=False, default="")
+    # 'prepend_user_msg' | 'system_addendum'
+    inject_position = Column(String(24), nullable=False, default="prepend_user_msg")
+    max_recap_chars = Column(Integer, nullable=False, default=1500)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "trigger_kind",
+            "trigger_instance_id",
+            name="uq_trigger_recap_config_unique",
+        ),
+        Index(
+            "ix_trigger_recap_config_lookup",
+            "tenant_id", "trigger_kind", "trigger_instance_id",
+        ),
     )
 
 
@@ -3795,6 +5241,73 @@ class TTSInstance(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "instance_name", name="uq_tts_instance_tenant_name"),
         Index("idx_tsi_tenant_vendor", "tenant_id", "vendor"),
+    )
+
+
+# ============================================================================
+# v0.7.0 Track D: ASR Instance (Auto-Provisioned Whisper/Speaches Containers)
+# Per-tenant speech-to-text container lifecycle — mirrors the Kokoro/SearXNG pattern.
+# ============================================================================
+
+class ASRInstance(Base):
+    """Per-tenant ASR provider instance with optional auto-provisioned container.
+
+    Track D starts with vendor='speaches', an OpenAI-compatible Whisper/faster-
+    whisper server that Tsushin provisions per tenant. The row stores the
+    runtime URL plus the encrypted per-instance API token used by the backend
+    provider and warm-up path.
+    """
+    __tablename__ = "asr_instance"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+
+    vendor = Column(String(20), nullable=False, default="speaches")
+    instance_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Connection — base_url populated post-provision with DNS alias URL, or
+    # set directly for externally hosted OpenAI-compatible Whisper endpoints.
+    base_url = Column(String(500), nullable=True)
+
+    # Per-instance auth. The token is encrypted at rest using the same
+    # tenant-scoped TokenEncryption conventions as provider API keys.
+    auth_username = Column(String(50), nullable=True, default="tsushin")
+    api_token_encrypted = Column(Text, nullable=True)
+
+    # Default model used for warm-up and as the provider fallback when the
+    # skill config doesn't specify a concrete model id.
+    default_model = Column(
+        String(200),
+        nullable=True,
+        default="Systran/faster-distil-whisper-small.en",
+    )
+
+    # Health monitoring
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+
+    # Flags
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_auto_provisioned = Column(Boolean, default=False, nullable=False)
+
+    # Auto-provisioning (Docker-managed containers)
+    container_name = Column(String(200), nullable=True)
+    container_id = Column(String(80), nullable=True)
+    container_port = Column(Integer, nullable=True)
+    container_status = Column(String(20), default="none", nullable=False)
+    container_image = Column(String(200), nullable=True)
+    volume_name = Column(String(150), nullable=True)
+    mem_limit = Column(String(20), nullable=True)
+    cpu_quota = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_name", name="uq_asr_instance_tenant_name"),
+        Index("idx_asri_tenant_vendor", "tenant_id", "vendor"),
     )
 
 

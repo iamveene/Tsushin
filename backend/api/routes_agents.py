@@ -60,6 +60,12 @@ def _is_agent_contact_conflict(exc: IntegrityError) -> bool:
     )
 
 
+def _forbid_internal_agent(agent: Agent, *, status_code: int = 403) -> None:
+    if getattr(agent, "is_internal", False):
+        detail = "Agent not found" if status_code == 404 else "Internal coordinator agents cannot be managed through public agent APIs"
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
 # ==================== Tone Preset Schemas ====================
 
 class TonePresetResponse(BaseModel):
@@ -164,17 +170,23 @@ class AgentResponse(BaseModel):
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
 
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-716 — surface in UI)
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
+
     is_active: bool
     is_default: bool
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
     discord_integration_id: Optional[int] = None  # Discord bot integration
-    webhook_integration_id: Optional[int] = None  # v0.6.0: Webhook integration
+    webhook_integration_id: Optional[int] = None  # Legacy v0.6.0 binding; webhook is a Trigger in v0.7.0
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -223,12 +235,16 @@ class AgentCreate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -272,12 +288,16 @@ class AgentUpdate(BaseModel):
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -450,7 +470,7 @@ def list_agents(
     """List all agents with optional filters (requires agents.read permission)"""
 
     # Apply tenant filtering
-    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id)
+    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id).filter(Agent.is_internal == False)
 
     if active_only:
         query = query.filter(Agent.is_active == True)
@@ -549,6 +569,8 @@ def list_agents(
 
             "is_active": agent.is_active,
             "is_default": agent.is_default,
+            "is_team_member": bool(getattr(agent, "is_team_member", False)),
+            "current_team_id": getattr(agent, "current_team_id", None),
             "skills_count": skills_count,
             # Phase 10: Channel Configuration
             "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -562,6 +584,10 @@ def list_agents(
             # v0.6.0: Vector Store Configuration
             "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
             "vector_store_mode": getattr(agent, 'vector_store_mode', None),
+
+            # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in list response
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
@@ -591,6 +617,7 @@ def get_agent(
     # and avoid leaking resource existence to other tenants.
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -689,6 +716,8 @@ def get_agent(
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "skills_count": skills_count,
         # Phase 10: Channel Configuration
         "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -697,6 +726,10 @@ def get_agent(
         "slack_integration_id": agent.slack_integration_id,
         "discord_integration_id": agent.discord_integration_id,
         "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+
+        # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in GET response
+        "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+        "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -864,6 +897,7 @@ def update_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(db_agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(db_agent)
 
     # Validate contact if being changed
     if agent.contact_id is not None and agent.contact_id != db_agent.contact_id:
@@ -951,6 +985,8 @@ def update_agent(
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "provider_instance_id",
         "vector_store_instance_id", "vector_store_mode",
+        # BUG-710: bounded agentic loop knobs (column existed; PUT path was dropping them).
+        "max_agentic_rounds", "max_agentic_loop_bytes",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)
@@ -1002,6 +1038,7 @@ def delete_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Capture agent name before deletion
     agent_contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -1250,6 +1287,7 @@ def create_contact_agent_mapping(
     # Verify agent belongs to user's tenant (prevent cross-tenant mapping)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Check if mapping already exists
     existing = db.query(ContactAgentMapping).filter(
@@ -1372,6 +1410,7 @@ def get_agent_custom_tools(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Get all mappings with tool details
     mappings = db.query(AgentSandboxedTool).filter(
@@ -1412,6 +1451,7 @@ def add_agent_custom_tool(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     tool = db.query(SandboxedTool).filter(SandboxedTool.id == data.sandboxed_tool_id).first()
     if not tool:
@@ -1469,6 +1509,7 @@ def update_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,
@@ -1512,6 +1553,7 @@ def delete_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,

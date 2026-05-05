@@ -6,11 +6,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
+import SplitButton from '@/components/ui/SplitButton'
 import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
@@ -23,6 +24,9 @@ import {
   LightningIcon,
   KeyIcon,
   LightbulbIcon,
+  BotIcon,
+  PlusIcon,
+  UsersIcon,
 } from '@/components/ui/icons'
 
 interface AgentFormData {
@@ -38,7 +42,6 @@ interface AgentFormData {
   model_provider: string
   model_name: string
   is_active: boolean
-  is_default: boolean
 }
 
 // AVAILABLE_TOOLS removed - legacy tools migrated to Skills system
@@ -46,13 +49,14 @@ interface AgentFormData {
 
 export default function AgentsPage() {
   const toast = useToast()
+  const router = useRouter()
   // BUG-610 FIX: Read-only members (no agents.write) were seeing and
-  // clicking create / delete / set-default / toggle buttons. The backend
-  // rejected those with 403 but the buttons still rendered — confusing
-  // UX and a noisy signal in audit logs. Gate every mutation control on
-  // ``canWriteAgents``.
+  // clicking create / delete / toggle buttons. The backend rejected those
+  // with 403 but the buttons still rendered — confusing UX and a noisy
+  // signal in audit logs. Gate every mutation control on ``canWriteAgents``.
   const { hasPermission } = useAuth()
   const canWriteAgents = hasPermission('agents.write')
+  const canReadDefaultAgents = hasPermission('org.settings.read')
   const searchParams = useSearchParams()
   const [agents, setAgents] = useState<Agent[]>([])
   const [tones, setTones] = useState<TonePreset[]>([])
@@ -84,7 +88,6 @@ export default function AgentsPage() {
     model_provider: '',
     model_name: '',
     is_active: true,
-    is_default: false
   })
   const [keywordInput, setKeywordInput] = useState('')
   const [useCustomTone, setUseCustomTone] = useState(false)
@@ -104,6 +107,11 @@ export default function AgentsPage() {
     } else {
       agentWizard.openWizard()
     }
+  }
+
+  const openTeamsUI = () => {
+    if (!canWriteAgents) return
+    router.push('/studio/teams?new=1')
   }
 
   // Legacy modal pre-fill from a persisted Guided draft (set when the user
@@ -232,7 +240,6 @@ export default function AgentsPage() {
       model_provider: defaults.model_provider,
       model_name: defaults.model_name,
       is_active: true,
-      is_default: false
     })
     setKeywordInput('')
     setUseCustomTone(false)
@@ -298,16 +305,6 @@ export default function AgentsPage() {
       await loadData()
     } catch (err: any) {
       toast.error('Update Failed', err.message || 'Failed to update agent')
-    }
-  }
-
-  const handleSetDefault = async (agent: Agent) => {
-    if (agent.is_default) return
-    try {
-      await api.updateAgent(agent.id, { is_default: true })
-      await loadData()
-    } catch (err: any) {
-      toast.error('Update Failed', err.message || 'Failed to set default agent')
     }
   }
 
@@ -417,7 +414,6 @@ export default function AgentsPage() {
         model_provider: formData.model_provider,
         model_name: formData.model_name,
         is_active: formData.is_active,
-        is_default: formData.is_default
       }
 
       if (useCustomTone) {
@@ -471,15 +467,27 @@ export default function AgentsPage() {
             <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
           </div>
           {canWriteAgents && (
-            <button
-              onClick={openCreateUI}
-              className="btn-primary flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Create Agent
-            </button>
+            <SplitButton
+              primaryLabel="Create Agent"
+              primaryIcon={<PlusIcon size={16} />}
+              onPrimaryClick={openCreateUI}
+              options={[
+                {
+                  id: 'agent',
+                  label: 'Agent',
+                  description: 'Open the guided agent wizard.',
+                  icon: <BotIcon size={16} />,
+                  onSelect: openCreateUI,
+                },
+                {
+                  id: 'team',
+                  label: 'Team',
+                  description: 'Open Studio Teams.',
+                  icon: <UsersIcon size={16} />,
+                  onSelect: openTeamsUI,
+                },
+              ]}
+            />
           )}
         </div>
       </div>
@@ -543,6 +551,30 @@ export default function AgentsPage() {
                 </svg>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div className="glass-card rounded-xl border border-tsushin-warning/20 bg-tsushin-warning/5 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Default routing now lives in Settings</h2>
+              <p className="mt-1 text-sm text-tsushin-slate">
+                Agent Studio still shows which agent is the tenant default, but changes now happen from the dedicated Default Agents settings page.
+              </p>
+            </div>
+            {canReadDefaultAgents ? (
+              <Link
+                href="/settings/default-agents"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-warning/30 bg-tsushin-warning/10 px-4 py-2 text-sm font-medium text-tsushin-warning hover:bg-tsushin-warning/20 transition-colors"
+              >
+                Manage Default Agents
+                <span aria-hidden="true">→</span>
+              </Link>
+            ) : (
+              <p className="text-sm text-tsushin-slate md:text-right">
+                Ask an organization admin with settings access to update default routing.
+              </p>
+            )}
           </div>
         </div>
 
@@ -640,6 +672,11 @@ export default function AgentsPage() {
                                 ○ Inactive
                               </span>
                             )}
+                            {agent.is_team_member && (
+                              <span className="badge badge-team flex items-center gap-1">
+                                <UsersIcon size={12} /> Team
+                              </span>
+                            )}
                             {(agentSkillsCounts[agent.id] || 0) > 0 && (
                               <span className="badge badge-indigo flex items-center gap-1">
                                 <LightningIcon size={12} /> {agentSkillsCounts[agent.id]} skills
@@ -669,6 +706,7 @@ export default function AgentsPage() {
                     <div className="flex gap-2 ml-4 flex-shrink-0">
                       <Link
                         href={`/agents/${agent.id}`}
+                        prefetch={false}
                         className="btn-primary py-1.5 px-3 text-sm flex items-center gap-1.5"
                       >
                         <SettingsIcon size={14} /> Manage
@@ -691,14 +729,6 @@ export default function AgentsPage() {
                           >
                             {agent.is_active ? 'Deactivate' : 'Activate'}
                           </button>
-                          {!agent.is_default && (
-                            <button
-                              onClick={() => handleSetDefault(agent)}
-                              className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-warning/10 text-tsushin-warning border border-tsushin-warning/30 hover:bg-tsushin-warning/20 transition-all"
-                            >
-                              Set Default
-                            </button>
-                          )}
                           <button
                             onClick={() => handleDeleteAgent(agent.id)}
                             className="py-1.5 px-3 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
@@ -1142,15 +1172,6 @@ export default function AgentsPage() {
                     className="mr-2 accent-tsushin-success"
                   />
                   <span className="text-sm font-medium">Active</span>
-                </label>
-                <label className="flex items-center text-tsushin-slate hover:text-white cursor-pointer transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={formData.is_default}
-                    onChange={(e) => setFormData({ ...formData, is_default: e.target.checked })}
-                    className="mr-2 accent-tsushin-warning"
-                  />
-                  <span className="text-sm font-medium">Set as Default Agent</span>
                 </label>
               </div>
 

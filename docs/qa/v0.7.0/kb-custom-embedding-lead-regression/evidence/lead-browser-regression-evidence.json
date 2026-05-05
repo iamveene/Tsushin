@@ -1,0 +1,733 @@
+{
+  "started_at": "2026-05-03T16:21:09.251Z",
+  "evidence_dir": "/Users/vinicios/code/tsushin/docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence",
+  "agent_id": 6,
+  "agent_name": "CustomerService",
+  "screenshots": [
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/00-login.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/01-post-login.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/02-hub-overview.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/10-1536-01-before.png",
+    "docs/qa/v0.7.0/kb-custom-embedding-lead-regression/evidence/99-error-state.png"
+  ],
+  "console": [
+    {
+      "level": "error",
+      "text": "Failed to load data: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getAgentRuns (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:3942)\n    at f (https://localhost/_next/static/chunks/app/page-3674080465ef5aff.js:1:38061)\n    at https://localhost/_next/static/chunks/app/page-3674080465ef5aff.js:1:37901\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116763)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch toolbox status: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at n8 (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:200301)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187097)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch API keys: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at nk (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187381)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:186986)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch Hub integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at n7 (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:200465)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187037)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load Discord integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getDiscordIntegrations (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:58081)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:7:3010\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187062)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch MCP servers: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getMCPServers (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:117291)\n    at nC (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187819)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187107)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load email triggers: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listEmailTriggers (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:45362)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:7:3975\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187067)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load MCP instances: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getMCPInstances (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:40959)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:183875\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187042)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load system config: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getConfig (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:3313)\n    at nw (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187205)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187001)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load webhook integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listWebhookIntegrations (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:52113)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:7:4151\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187082)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load Jira triggers: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listJiraTriggers (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:48252)\n    at nb (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:184396)\n    at nf (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185025)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187087)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load GitHub triggers: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listGitHubTriggers (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:49696)\n    at ny (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:184866)\n    at nf (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185030)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187087)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to resolve public ingress: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getMyPublicIngress (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:59596)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:7:4343\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187092)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load Jira integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listJiraIntegrations (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:47014)\n    at nv (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:184557)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187072)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch vector store instances: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getVectorStoreInstances (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:106429)\n    at nS (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187957)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187011)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load GitHub integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.listGitHubIntegrations (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:50555)\n    at nj (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:184713)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187077)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load tester status: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getTesterStatus (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:42892)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:184266\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187047)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load Telegram instances: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getTelegramInstances (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:44158)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:201175\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187052)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load Slack integrations: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getSlackIntegrations (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:56953)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:7:2067\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187057)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "error",
+      "text": "Failed to fetch provider instances: TypeError: Failed to fetch\n    at n (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:120)\n    at s (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:1594)\n    at Object.getProviderInstances (https://localhost/_next/static/chunks/8795-1fba19483a9a4000.js:1:103138)\n    at n_ (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187682)\n    at nN (https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:187006)\n    at https://localhost/_next/static/chunks/app/hub/page-9bcec92a044c3885.js:1:185058\n    at ik (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:92679)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116718)\n    at uh (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116380)\n    at ug (https://localhost/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js:1:116698)"
+    },
+    {
+      "level": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    },
+    {
+      "level": "warning",
+      "text": "The resource https://localhost/_next/static/css/b637bda732a2c38e.css was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally."
+    }
+  ],
+  "network_errors": [
+    {
+      "url": "https://localhost/api/agent-runs?limit=50",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/discord/integrations/",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/mcp-servers",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/hub/searxng/instances",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/ollama/health",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/toolbox/status",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/flows?_rsc=1a77h",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/triggers/email",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/tts-instances",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/mcp/instances/",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/hub/google/credentials",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/api-keys",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/asr-instances",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/config",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/triggers/webhook",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/hub/integrations",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/triggers/jira",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/triggers/github",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/tenant/me/public-ingress",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/system/status",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=sxftb",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/hub/jira-integrations",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/settings/tts/default",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/vector-stores",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/hub/github-integrations",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/tts-providers",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/mcp/instances/tester/status",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/telegram/instances/",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/settings?_rsc=1a77h",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/slack/integrations/",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/flows?_rsc=1m1z4",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/provider-instances",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://localhost/api/tts-providers/kokoro/status",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "http_errors": [],
+  "dialogs": [],
+  "steps": [
+    {
+      "at": "2026-05-03T16:21:10.764Z",
+      "step": "provider/dimension discovery",
+      "gemini": {
+        "id": 4,
+        "dimensions": [
+          768,
+          1536,
+          3072
+        ]
+      },
+      "qdrant": {
+        "id": 19,
+        "name": "gemini-1536",
+        "model": "gemini-embedding-001",
+        "dims": 1536
+      }
+    }
+  ],
+  "api": {
+    "me": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 1,
+        "email": "test@example.com",
+        "full_name": "Test Owner",
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "tenant_name": "Tsushin QA",
+        "is_global_admin": false,
+        "is_active": true,
+        "email_verified": false,
+        "permissions": [
+          "agents.read",
+          "agents.write",
+          "agents.delete",
+          "agents.execute",
+          "contacts.read",
+          "contacts.write",
+          "contacts.delete",
+          "memory.read",
+          "memory.write",
+          "memory.delete",
+          "flows.read",
+          "flows.write",
+          "flows.delete",
+          "flows.execute",
+          "knowledge.read",
+          "knowledge.write",
+          "knowledge.delete",
+          "mcp.instances.read",
+          "mcp.instances.create",
+          "mcp.instances.manage",
+          "mcp.instances.delete",
+          "telegram.instances.create",
+          "telegram.instances.read",
+          "telegram.instances.manage",
+          "telegram.instances.delete",
+          "integrations.slack.read",
+          "integrations.slack.write",
+          "integrations.discord.read",
+          "integrations.discord.write",
+          "integrations.webhook.read",
+          "integrations.webhook.write",
+          "hub.read",
+          "hub.write",
+          "hub.delete",
+          "users.read",
+          "users.invite",
+          "users.manage",
+          "users.remove",
+          "org.settings.read",
+          "org.settings.write",
+          "billing.read",
+          "billing.write",
+          "analytics.read",
+          "audit.read",
+          "audit.export",
+          "tools.read",
+          "tools.manage",
+          "tools.execute",
+          "shell.read",
+          "shell.write",
+          "shell.execute",
+          "shell.approve",
+          "watcher.read",
+          "api_clients.read",
+          "api_clients.write",
+          "api_clients.delete",
+          "scheduler.read",
+          "scheduler.create",
+          "scheduler.edit",
+          "scheduler.cancel",
+          "skills.mcp_server.manage",
+          "skills.custom.create",
+          "skills.custom.read",
+          "skills.custom.execute",
+          "skills.custom.delete",
+          "channel_health.read",
+          "channel_health.write",
+          "agent_communication.read",
+          "agent_communication.write",
+          "vector_stores.read",
+          "vector_stores.write"
+        ],
+        "created_at": "2026-04-06T00:43:33.892205",
+        "last_login_at": "2026-05-03T16:21:10.183609"
+      }
+    },
+    "originalKbConfig": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": null,
+        "embedding_provider": "local",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dims": 384,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": null,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    "originalAgent": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 6,
+        "contact_id": 6,
+        "contact_name": "CustomerService",
+        "system_prompt": "You are CustomerService, a friendly and helpful customer support agent.\n\nYour role:\n- Assist customers with inquiries and issues\n- Provide product/service information\n- Resolve problems efficiently\n- Escalate complex issues when needed\n- Maintain a positive customer experience\n\nCommunication style:\n- Warm and empathetic\n- Patient and understanding\n- Solution-oriented\n- Professional and courteous\n\nBest practices:\n- Listen actively to customer concerns\n- Acknowledge frustrations\n- Provide step-by-step solutions\n- Follow up to ensure resolution\n- Thank customers for their patience",
+        "tone_preset_id": null,
+        "tone_preset_name": null,
+        "custom_tone": null,
+        "persona_id": null,
+        "persona_name": null,
+        "keywords": [],
+        "model_provider": "gemini",
+        "model_name": "gemini-2.5-flash",
+        "response_template": "{response}",
+        "memory_size": null,
+        "trigger_dm_enabled": true,
+        "trigger_group_filters": [],
+        "trigger_number_filters": null,
+        "context_message_count": null,
+        "context_char_limit": null,
+        "enable_semantic_search": true,
+        "semantic_search_results": 10,
+        "semantic_similarity_threshold": 0.5,
+        "memory_decay_enabled": false,
+        "memory_decay_lambda": 0.01,
+        "memory_decay_archive_threshold": 0.05,
+        "memory_decay_mmr_lambda": 0.5,
+        "provider_instance_id": 4,
+        "vector_store_instance_id": null,
+        "vector_store_mode": "override",
+        "max_agentic_rounds": 1,
+        "max_agentic_loop_bytes": 8192,
+        "is_active": true,
+        "is_default": false,
+        "skills_count": 3,
+        "enabled_channels": [
+          "playground",
+          "whatsapp",
+          "telegram"
+        ],
+        "whatsapp_integration_id": 3,
+        "telegram_integration_id": null,
+        "slack_integration_id": null,
+        "discord_integration_id": null,
+        "webhook_integration_id": null,
+        "created_at": "2026-04-06T00:43:33.958760",
+        "updated_at": "2026-05-02T13:43:04.460256"
+      }
+    },
+    "embeddingOptions": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "providers": [
+          {
+            "provider": "local",
+            "provider_instance_id": null,
+            "instance_name": "Built-in local embeddings",
+            "vendor": "local",
+            "configured": true,
+            "health_status": "healthy",
+            "base_url": null,
+            "models": [
+              {
+                "provider": "local",
+                "model": "all-MiniLM-L6-v2",
+                "label": "Local MiniLM",
+                "supported_dimensions": [
+                  384
+                ],
+                "default_dimensions": 384,
+                "max_dimensions": 384,
+                "requires_provider_instance": false,
+                "supports_dimensions_parameter": false
+              }
+            ],
+            "default_model": "all-MiniLM-L6-v2",
+            "default_dimensions": 384,
+            "test_status": "built_in"
+          },
+          {
+            "provider": "gemini",
+            "provider_instance_id": 4,
+            "instance_name": "gemini1",
+            "vendor": "gemini",
+            "configured": true,
+            "health_status": "healthy",
+            "base_url": null,
+            "models": [
+              {
+                "provider": "gemini",
+                "model": "gemini-embedding-2",
+                "label": "Gemini Embedding 2",
+                "supported_dimensions": [
+                  768,
+                  1536,
+                  3072
+                ],
+                "default_dimensions": 1536,
+                "max_dimensions": 3072,
+                "requires_provider_instance": true,
+                "supports_dimensions_parameter": true
+              },
+              {
+                "provider": "gemini",
+                "model": "gemini-embedding-001",
+                "label": "Gemini Embedding 001",
+                "supported_dimensions": [
+                  768,
+                  1536,
+                  3072
+                ],
+                "default_dimensions": 1536,
+                "max_dimensions": 3072,
+                "requires_provider_instance": true,
+                "supports_dimensions_parameter": true
+              }
+            ],
+            "default_model": "gemini-embedding-2",
+            "default_dimensions": 1536,
+            "test_status": "healthy"
+          },
+          {
+            "provider": "ollama",
+            "provider_instance_id": 21,
+            "instance_name": "Ollama (Local)",
+            "vendor": "ollama",
+            "configured": true,
+            "health_status": "unknown",
+            "base_url": "http://host.docker.internal:11434",
+            "models": [
+              {
+                "provider": "ollama",
+                "model": "nomic-embed-text",
+                "label": "nomic-embed-text",
+                "supported_dimensions": [],
+                "default_dimensions": null,
+                "max_dimensions": null,
+                "requires_provider_instance": true,
+                "supports_dimensions_parameter": true
+              }
+            ],
+            "default_model": "nomic-embed-text",
+            "default_dimensions": null,
+            "test_status": "unknown"
+          },
+          {
+            "provider": "openai",
+            "provider_instance_id": 5,
+            "instance_name": "op1",
+            "vendor": "openai",
+            "configured": true,
+            "health_status": "unknown",
+            "base_url": null,
+            "models": [
+              {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "label": "OpenAI text-embedding-3-small",
+                "supported_dimensions": [
+                  256,
+                  512,
+                  1024,
+                  1536
+                ],
+                "default_dimensions": 1536,
+                "max_dimensions": 1536,
+                "requires_provider_instance": true,
+                "supports_dimensions_parameter": true
+              },
+              {
+                "provider": "openai",
+                "model": "text-embedding-3-large",
+                "label": "OpenAI text-embedding-3-large",
+                "supported_dimensions": [
+                  256,
+                  512,
+                  1024,
+                  3072
+                ],
+                "default_dimensions": 3072,
+                "max_dimensions": 3072,
+                "requires_provider_instance": true,
+                "supports_dimensions_parameter": true
+              }
+            ],
+            "default_model": "text-embedding-3-small",
+            "default_dimensions": 1536,
+            "test_status": "unknown"
+          }
+        ],
+        "default": {
+          "provider": "local",
+          "provider_instance_id": null,
+          "model": "all-MiniLM-L6-v2",
+          "dimensions": 384
+        }
+      }
+    },
+    "vectorStores": {
+      "status": 200,
+      "ok": true,
+      "body": [
+        {
+          "id": 19,
+          "tenant_id": "tenant_20260406004333855618_c58c99",
+          "vendor": "qdrant",
+          "instance_name": "gemini-1536",
+          "description": "Wave 3 provisioned: Qdrant + Gemini 1536-d for case-memory v2 testing.",
+          "base_url": "http://vs-qdrant-0fe9a9f6-19:6333",
+          "credentials_configured": true,
+          "credentials_preview": "AIza...jEGY",
+          "extra_config": {
+            "embedding_provider": "gemini",
+            "embedding_model": "gemini-embedding-001",
+            "embedding_dims": 1536,
+            "embedding_metric": "cosine",
+            "embedding_task_document": "RETRIEVAL_DOCUMENT",
+            "embedding_task_query": "RETRIEVAL_QUERY",
+            "collection_name": "case_memory_tenant_20260406004333855618_c58c99"
+          },
+          "security_config": {},
+          "health_status": "healthy",
+          "health_status_reason": "Qdrant connected",
+          "last_health_check": "2026-04-29T22:00:18.247185",
+          "is_default": false,
+          "is_active": true,
+          "is_auto_provisioned": true,
+          "container_status": "running",
+          "container_name": "tsushin-vs-qdrant-0fe9a9f6-19",
+          "container_port": 6300,
+          "created_at": "2026-04-29T21:20:53.044105",
+          "updated_at": "2026-04-30T06:25:50.589994"
+        }
+      ]
+    },
+    "cleanup_docs_list": {
+      "status": 200,
+      "ok": true,
+      "body": []
+    },
+    "cleanup_restore_kb_config": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": null,
+        "embedding_provider": "local",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dims": 384,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": null,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    },
+    "docsAfterCleanup": {
+      "status": 200,
+      "ok": true,
+      "body": []
+    },
+    "kbConfigAfterCleanup": {
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": null,
+        "embedding_provider": "local",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dims": 384,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": null,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    }
+  },
+  "cleanup": [
+    {
+      "action": "restore original KB config",
+      "status": 200,
+      "restored": {
+        "id": 2,
+        "tenant_id": "tenant_20260406004333855618_c58c99",
+        "agent_id": 6,
+        "embedding_provider_instance_id": null,
+        "embedding_provider": "local",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dims": 384,
+        "embedding_metric": "cosine",
+        "vector_store_instance_id": null,
+        "vector_collection_name": null,
+        "vector_namespace": null,
+        "chunk_strategy": "fixed_text",
+        "chunk_size": 800,
+        "chunk_overlap": 100,
+        "parser": "auto",
+        "search_top_k": 5,
+        "similarity_threshold": 0.3
+      }
+    }
+  ],
+  "bugs": [],
+  "limitations": [],
+  "error": {
+    "message": "page.waitForFunction: Timeout 15000ms exceeded.",
+    "stack": "page.waitForFunction: Timeout 15000ms exceeded.\n    at configureKb ([stdin]:108:14)\n    at async [stdin]:191:5"
+  },
+  "finished_at": "2026-05-03T16:21:27.072Z"
+}

@@ -292,6 +292,15 @@ class TenantAuditActions:
     AGENT_COMM_PERMISSION_UPDATE = "agent_comm.permission.update"
     AGENT_COMM_PERMISSION_DELETE = "agent_comm.permission.delete"
 
+    # Shell / Beacon
+    SHELL_COMMAND_QUEUED = "shell.command_queued"
+    SHELL_COMMAND_BLOCKED = "shell.command_blocked"
+    SHELL_COMMAND_PENDING_APPROVAL = "shell.command_pending_approval"
+    SHELL_APPROVAL_REQUESTED = "shell.approval_requested"
+    SHELL_APPROVED = "shell.approved"
+    SHELL_REJECTED = "shell.rejected"
+    SHELL_EXPIRED = "shell.expired"
+
 
 class TenantAuditService:
     """Service for tenant-scoped audit event recording and querying."""
@@ -483,8 +492,18 @@ class TenantAuditService:
             output.truncate(0)
 
     def purge_expired(self, tenant_id: str, retention_days: int) -> int:
-        """Delete events older than retention period. Returns count deleted."""
+        """Delete events older than retention period. Returns count deleted.
+
+        audit_event is protected by a BEFORE DELETE trigger (BUG-704). To allow
+        legitimate retention purges, we set `app.audit_event_retention_purge`
+        on the current transaction. SET LOCAL is automatically reset at COMMIT
+        so the bypass cannot leak to subsequent transactions.
+        """
+        from sqlalchemy import text as sa_text
+
         cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        if self.db.bind.dialect.name == "postgresql":
+            self.db.execute(sa_text("SET LOCAL app.audit_event_retention_purge = 'true'"))
         count = (
             self.db.query(AuditEvent)
             .filter(AuditEvent.tenant_id == tenant_id, AuditEvent.created_at < cutoff)

@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href=""><img src="https://img.shields.io/badge/status-beta-orange" alt="Status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-v0.6.0-blue" alt="Version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-v0.7.0-blue" alt="Version"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -19,7 +19,7 @@
 ## Feature Highlights
 
 - **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
-- **6 channels** — WhatsApp (WAHA), Telegram, Slack, Discord, HTTP Webhook (HMAC-signed), and a built-in Playground web chat.
+- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, and GitHub under Hub → Triggers; scheduled and recurring automation lives in Flows; Jira/GitHub credentials are managed under Hub → Tool APIs.
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
 - **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph).
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas.
@@ -27,7 +27,7 @@
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
 - **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
-- **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, or recurring (cron) execution; 8 step types with template-variable interpolation.
+- **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, recurring, keyword, or triggered execution. Triggered flows select an existing Hub trigger and get a locked Source step plus `flow_trigger_binding`; Source is not manually addable.
 - **Sentinel security** — AI-powered detection of prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), browser SSRF, and vector-store poisoning. Profiles with block / warn-only / detect-only / off modes.
 - **Studio** — visual agent builder, personas, contacts, projects (knowledge isolation), custom skills, and agent-to-agent communication.
 - **Playground** — real-time streaming chat, audio recording + Whisper transcription, document-only uploads, command palette, memory inspector, expert mode. Plus **Playground Mini**, a floating quick-test bubble available on every authenticated page with markdown-rendered replies and a one-click expand-to-full-Playground handover that preserves the conversation.
@@ -39,7 +39,7 @@
 
 ---
 
-## What's New in v0.6.0
+## Previously in v0.6.0
 
 v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes since the last `main` release:
 
@@ -70,6 +70,7 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 - **Manual-cert pre-flight validation** — key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves deployments behind Sectigo/GoDaddy).
 - **SSL config persistence** across installer re-runs (`SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH`).
 - **Frontend rebuild on `NEXT_PUBLIC_API_URL` change** — the installer diffs the previous `.env` and rebuilds the image no-cache instead of silently shipping a stale cached bundle.
+- **Stack-scoped frontend proxy builds** — compose passes `${TSN_STACK_NAME}-backend:8081` into the frontend image build and runtime env, so HTTP installs stay pinned to their own backend even when another Tsushin stack shares `tsushin-network`.
 
 **Platform & Tooling**
 - **Next.js 16** upgrade — `outputFileTracingRoot`, `turbopack.root`, typed-routes reference in `next-env.d.ts`.
@@ -83,6 +84,26 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 - **Graph View** — WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, target-node pulse during A2A, stale A2A-edge auto-cleanup.
 
 **Full change log**: [docs/changelog.md](docs/changelog.md) contains ~50 detailed entries for every fix, migration, wizard step, and regression-test suite that shipped in this release.
+
+---
+
+## What's New in v0.7.0
+
+v0.7.0 separates conversational **Channels** from event **Triggers**. Hub → Channels hosts WhatsApp/Telegram/Slack/Discord/Playground setup, Hub → Triggers hosts Email/Webhook/Jira/GitHub event sources, Watcher owns wake-event and continuous-agent monitoring, and Flows own scheduled or recurring execution.
+
+**Headline changes:**
+
+- **Unified Trigger Creation Wizard** — one wizard creates Email, Webhook, Jira, and GitHub triggers, selects or creates the required Hub integration, and hands off to the generated or wired flow at `/flows?edit=<auto_flow_id>` so operators configure outputs in the Flow editor.
+- **Triggers ↔ Flows Unification (Waves 1-5)** — every new trigger now mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification chain) in the same transaction. The Flow create path also supports **Triggered** by selecting an existing Email/Gmail, Jira, GitHub, or Webhook Hub trigger, then auto-generating a locked Source step and `flow_trigger_binding`. Source is a trigger-owned entry step, not a manual step type. The dispatcher fans wake events out to bound flows alongside the legacy ContinuousAgent path. All gated by env vars (`TSN_FLOWS_TRIGGER_BINDING_ENABLED`, `TSN_FLOWS_AUTO_GENERATION_ENABLED`, `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY`) for safe staged rollout.
+- **Variable Reference panel everywhere** — every templated step-config field (skill prompt, conversation objective, agentic gate prompt, slash-command body, gate-fail notification, etc.) gets the live Variable Reference panel with previous-step outputs + per-trigger-kind deep payload paths (Jira `payload.issue.key`, GitHub `payload.pull_request.title`, etc.). Drag-and-drop chips into any field.
+- **Code Repository skill (GitHub)** — 12-action capability-gated skill (read on by default, write off by default) with a reusable encrypted `GitHubIntegration` Hub row and `pull_request` trigger criteria envelope. Same contract as `ticket_management` (Jira) — same `WRITE` badges in the agent UI, same tool-spec gating so the LLM never even sees disabled actions.
+- **Granular Gmail send capability** — `gmail` skill split into `search` / `read_message` (default ON) and `send` / `reply` / `draft` (default OFF). Same capability-gating contract; surfaces a real masked bug where `SkillManager` was ignoring saved per-agent capability config.
+- **Ticket Management skill (Jira)** — agents can search/read/act on tickets via `ticket_operation` tool. Capability-gated; write actions (`update`, `add_comment`, `transition`) off by default and filtered out of the LLM's tool spec.
+- **Final Jira trigger slice** — live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted Hub → Tool APIs Jira credentials, and notification output configured through the generated Flow. See [docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md](docs/qa/v0.7.0/phase-9-jira-trigger-finalization-summary.md) for sanitized validation.
+- **Email trigger criteria parity** — saved Gmail queries are mirrored into `trigger_criteria`, operators can test sample messages and force a poll-now run, and output routing is configured through the generated Flow.
+- **Release-finishing UX** — `ConfirmDialog` with type-the-name protection for destructive trigger / flow / webhook-secret-rotation actions; tenantless-admin Hub gating (zero `400 User has no tenant` console errors when global admins browse `/hub` without a tenant context).
+
+**Full change log:** [docs/changelog.md](docs/changelog.md) — 30+ detailed entries covering every wave, fix, and migration shipped in this release.
 
 ---
 
@@ -125,7 +146,7 @@ The installer handles infrastructure only (containers, networking, SSL, `.env` s
 
 For the Parallels Ubuntu VM workflow used in fresh-install audits, you can sync the repo from your Mac with `bash deploy-to-vm.sh`, then SSH to the VM and run `sudo python3 install.py` from `~/tsushin`.
 
-For SSL installs, the generated Caddy config now targets stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps `https://localhost` pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
+The generated Caddy config and frontend proxy build now target stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps both HTTP and HTTPS browser traffic pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
 
 → Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [docs/documentation.md §4 Deployment & Operations](docs/documentation.md#4-deployment--operations).
 
@@ -136,6 +157,16 @@ curl http://localhost:8081/api/health      # Liveness
 curl http://localhost:8081/api/readiness   # Readiness (checks PostgreSQL)
 docker compose ps                          # Container states
 ```
+
+### Development QA
+
+v0.7.0 adds a frontend visual baseline suite for release preparation:
+
+```bash
+npm --prefix frontend run test:visual
+```
+
+The committed baselines live under `frontend/tests/visual/`; private reports, traces, and temporary screenshots stay in `.private/qa/v0.7.0/`.
 
 ---
 
@@ -195,7 +226,7 @@ docker compose ps                          # Container states
 | Memory, knowledge, vector stores | [§10](docs/documentation.md#10-memory--knowledge), [§11](docs/documentation.md#11-vector-stores) |
 | Sentinel security | [§12](docs/documentation.md#12-security--sentinel) |
 | Flows & scheduler | [§13](docs/documentation.md#13-flows), [§14](docs/documentation.md#14-scheduler--triggers) |
-| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](docs/documentation.md#15-channels) |
+| Channels and triggers (WhatsApp / Telegram / Slack / Discord / Playground; Email / Webhook / Jira / GitHub) | [§14](docs/documentation.md#14-scheduler--triggers), [§15](docs/documentation.md#15-channels) |
 | Contacts, projects, playground | [§16](docs/documentation.md#16-contacts--channel-mapping), [§17](docs/documentation.md#17-projects-studio), [§18](docs/documentation.md#18-playground) |
 | LLM providers & hub integrations | [§19](docs/documentation.md#19-llm-providers), [§20](docs/documentation.md#20-hub-integrations) |
 | Settings UI (every subpage) & system admin | [§21](docs/documentation.md#21-settings--ui-taxonomy), [§22](docs/documentation.md#22-system-admin-global-admin-only) |
@@ -243,7 +274,7 @@ TSN_METRICS_ENABLED=true
 
 **Operational notes for WhatsApp:**
 - Prefer `docker compose build --no-cache backend` followed by `docker compose up -d backend` (and the equivalent frontend commands) instead of `docker compose down`. The external `tsushin-network` now survives `down`, but routine rebuilds should still avoid tearing down the compose services.
-- Hub → Communication now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
+- Hub → Channels now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
 - Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
 
 → Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](docs/documentation.md#29-appendix-a-complete-environment-variable-reference).
@@ -270,4 +301,4 @@ Tsushin is open-source software licensed under the [MIT License](LICENSE).
 
 ---
 
-**Version 0.6.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)
+**Version 0.7.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)

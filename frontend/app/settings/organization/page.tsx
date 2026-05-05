@@ -30,6 +30,8 @@ interface OrgState {
   currentUsers: number
   currentAgents: number
   currentRequests: number
+  caseMemoryEnabled: boolean
+  caseMemoryRecapEnabled: boolean
 }
 
 export default function OrganizationSettingsPage() {
@@ -69,6 +71,8 @@ export default function OrganizationSettingsPage() {
         currentUsers: stats.users.current,
         currentAgents: stats.agents.current,
         currentRequests: stats.monthly_requests.current,
+        caseMemoryEnabled: org.case_memory_enabled !== false,
+        caseMemoryRecapEnabled: org.case_memory_recap_enabled !== false,
       })
     } catch (err) {
       console.error('Failed to load organization:', err)
@@ -95,6 +99,48 @@ export default function OrganizationSettingsPage() {
       setError(typeof detail === 'string' ? detail : 'Failed to save changes')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // v0.7.x — flip a single case-memory toggle. Each call PUTs only the
+  // changed field so the user gets an immediate save on click rather
+  // than a separate "Save" button for this section.
+  const handleCaseMemoryToggle = async (
+    field: 'case_memory_enabled' | 'case_memory_recap_enabled',
+    nextValue: boolean,
+  ) => {
+    if (!orgData || !canEdit) return
+    const previous = orgData
+    // Optimistic UI update.
+    setOrgData({
+      ...orgData,
+      caseMemoryEnabled: field === 'case_memory_enabled' ? nextValue : orgData.caseMemoryEnabled,
+      caseMemoryRecapEnabled:
+        field === 'case_memory_recap_enabled' ? nextValue : orgData.caseMemoryRecapEnabled,
+    })
+    setError(null)
+    setSuccess(false)
+    try {
+      const result = await api.updateOrganizationCaseMemoryConfig(orgData.id, {
+        [field]: nextValue,
+      })
+      setOrgData((current) =>
+        current
+          ? {
+              ...current,
+              caseMemoryEnabled: result.case_memory_enabled,
+              caseMemoryRecapEnabled: result.case_memory_recap_enabled,
+            }
+          : current,
+      )
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
+    } catch (err: any) {
+      console.error('Failed to save case memory config:', err)
+      // Roll back optimistic update.
+      setOrgData(previous)
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to save case memory setting'
+      setError(typeof detail === 'string' ? detail : 'Failed to save case memory setting')
     }
   }
 
@@ -288,6 +334,101 @@ export default function OrganizationSettingsPage() {
               </div>
             </div>
           )}
+
+          {/* Case Memory (v0.7.x) — per-tenant gates for the trigger
+              case-memory subsystem. Both flags default TRUE per tenant
+              and are managed entirely from this UI (no env var). */}
+          <div className="glass-card rounded-xl p-6">
+            <h2 className="text-xl font-semibold text-white mb-2">Case Memory</h2>
+            <p className="text-sm text-tsushin-slate mb-6">
+              Control how trigger-driven runs accumulate and re-use organizational memory.
+            </p>
+
+            <div className="space-y-6">
+              {/* Indexer toggle */}
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex-1 min-w-0">
+                  <label
+                    htmlFor="case-memory-enabled"
+                    className="block text-sm font-medium text-white mb-1"
+                  >
+                    Enable trigger case memory
+                  </label>
+                  <p className="text-xs text-tsushin-slate leading-relaxed">
+                    When enabled, terminal trigger-driven runs index a compact case row plus
+                    problem/action/outcome vectors for the agent&apos;s resolved vector store.
+                    Past cases become searchable via the{' '}
+                    <code className="text-teal-400">find_similar_past_cases</code> skill.
+                  </p>
+                </div>
+                <button
+                  id="case-memory-enabled"
+                  type="button"
+                  role="switch"
+                  aria-checked={orgData.caseMemoryEnabled}
+                  disabled={!canEdit}
+                  onClick={() =>
+                    handleCaseMemoryToggle('case_memory_enabled', !orgData.caseMemoryEnabled)
+                  }
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                    orgData.caseMemoryEnabled ? 'bg-teal-500' : 'bg-white/10'
+                  }`}
+                >
+                  <span className="sr-only">Toggle case memory</span>
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                      orgData.caseMemoryEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Recap injection toggle — depends on the indexer flag. */}
+              <div
+                className={`flex items-start justify-between gap-6 ${
+                  orgData.caseMemoryEnabled ? '' : 'opacity-50'
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <label
+                    htmlFor="case-memory-recap-enabled"
+                    className="block text-sm font-medium text-white mb-1"
+                  >
+                    Inject memory recap into agent context at dispatch
+                  </label>
+                  <p className="text-xs text-tsushin-slate leading-relaxed">
+                    When enabled, the trigger dispatcher pre-builds a memory recap from past
+                    similar cases and prepends it to the agent&apos;s first-turn context.
+                    Disabling this stops recap injection cluster-wide for this tenant without
+                    touching individual trigger configs.
+                  </p>
+                </div>
+                <button
+                  id="case-memory-recap-enabled"
+                  type="button"
+                  role="switch"
+                  aria-checked={orgData.caseMemoryRecapEnabled}
+                  disabled={!canEdit || !orgData.caseMemoryEnabled}
+                  onClick={() =>
+                    handleCaseMemoryToggle(
+                      'case_memory_recap_enabled',
+                      !orgData.caseMemoryRecapEnabled,
+                    )
+                  }
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                    orgData.caseMemoryRecapEnabled ? 'bg-teal-500' : 'bg-white/10'
+                  }`}
+                >
+                  <span className="sr-only">Toggle memory recap injection</span>
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                      orgData.caseMemoryRecapEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          </div>
 
           {/* Danger Zone */}
           {hasPermission('org.settings.write') && <DangerZone />}
