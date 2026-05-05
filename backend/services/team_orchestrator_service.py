@@ -44,6 +44,8 @@ class TeamValidationError(TeamOrchestrationError):
 
 
 AgentInvokeFn = Callable[..., Awaitable[dict[str, Any]]]
+SentinelServiceFactory = Callable[..., Any]
+SENTINEL_HANDOFF_WITHHELD = "[Sentinel: handoff content withheld]"
 
 
 @dataclass(frozen=True)
@@ -174,6 +176,8 @@ class TeamRunOrchestrator:
         agent_service_factory=None,
         wall_clock_seconds: int = 600,
         agent_invoke_fn: Optional[AgentInvokeFn] = None,
+        sentinel_service_factory: Optional[SentinelServiceFactory] = None,
+        sentinel_enabled: Optional[bool] = None,
     ):
         self.db = db
         self.tenant_id = tenant_id
@@ -182,6 +186,12 @@ class TeamRunOrchestrator:
         self.agent_service_factory = agent_service_factory
         self.wall_clock_seconds = wall_clock_seconds
         self.agent_invoke_fn = agent_invoke_fn or _invoke_agent_for_team_member
+        self.sentinel_service_factory = sentinel_service_factory
+        self.sentinel_enabled = (
+            sentinel_enabled
+            if sentinel_enabled is not None
+            else sentinel_service_factory is not None or agent_invoke_fn is None
+        )
 
     async def run(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
         team = self._load_active_team()
@@ -196,6 +206,11 @@ class TeamRunOrchestrator:
         if team.max_steps is not None and len(runnable_members) > team.max_steps:
             raise TeamValidationError("team_max_steps_too_low")
         team_run = self._create_run(team, trigger_event_id)
+        sentinel_result = await self._analyze_team_run_start(team, team_run, trigger_event_id)
+        if self._sentinel_blocks(sentinel_result):
+            self._finish_sentinel_blocked(team_run, sentinel_result, stage="team_run_start")
+            return team_run
+
         start_monotonic = time.monotonic()
 
         prior_summaries: list[str] = []
@@ -279,6 +294,17 @@ class TeamRunOrchestrator:
 
             answer = result.get("answer") or ""
             summary, parsed = _parse_member_answer(answer)
+            target_runnable = runnable_members[step_index] if step_index < len(runnable_members) else None
+            answer, summary, parsed = await self._apply_handoff_sentinel(
+                team=team,
+                team_run=team_run,
+                member_run=member_run,
+                source_runnable=runnable,
+                target_runnable=target_runnable,
+                answer=answer,
+                summary=summary,
+                parsed_summary=parsed,
+            )
             input_tokens, output_tokens = _token_counts(result.get("tokens"))
             self._mark_member_completed(
                 member_run,
@@ -320,6 +346,11 @@ class TeamRunOrchestrator:
     async def run_mesh(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
         team, coordinator, runnable_members = self._load_runnable_mesh_team()
         team_run = self._create_run(team, trigger_event_id)
+        sentinel_result = await self._analyze_team_run_start(team, team_run, trigger_event_id)
+        if self._sentinel_blocks(sentinel_result):
+            self._finish_sentinel_blocked(team_run, sentinel_result, stage="team_run_start")
+            return team_run
+
         start_monotonic = time.monotonic()
         transcript: list[dict[str, Any]] = []
         dispatch_signatures: set[tuple[tuple[int, str], ...]] = set()
@@ -403,6 +434,14 @@ class TeamRunOrchestrator:
                 self.db.refresh(team_run)
                 return team_run
 
+            command = await self._sanitize_mesh_dispatch_handoffs(
+                team=team,
+                team_run=team_run,
+                coordinator_run=coordinator_run,
+                coordinator=coordinator,
+                runnable_members=runnable_members,
+                command=command,
+            )
             signature = self._dispatch_signature(command)
             if signature in dispatch_signatures:
                 self._finish_run(
@@ -458,6 +497,16 @@ class TeamRunOrchestrator:
 
                 answer = result.get("answer") or ""
                 summary, parsed_summary = _parse_member_answer(answer)
+                answer, summary, parsed_summary = await self._apply_handoff_sentinel(
+                    team=team,
+                    team_run=team_run,
+                    member_run=member_run,
+                    source_runnable=runnable,
+                    target_runnable=coordinator,
+                    answer=answer,
+                    summary=summary,
+                    parsed_summary=parsed_summary,
+                )
                 input_tokens, output_tokens = _token_counts(result.get("tokens"))
                 self._mark_member_completed(
                     member_run,
@@ -482,6 +531,254 @@ class TeamRunOrchestrator:
                 if self._token_limit_exceeded(team, team_run):
                     self._finish_run(team_run, TeamRunStatus.FAILED.value, error={"reason": "max_total_tokens_exceeded"}, skipped_members=[], first_skipped_step=step_index)
                     return team_run
+
+    def _make_sentinel_service(self):
+        if not self.sentinel_enabled:
+            return None
+        from services.sentinel_service import SentinelService
+
+        factory = self.sentinel_service_factory or SentinelService
+        return factory(self.db, self.tenant_id, token_tracker=self.token_tracker)
+
+    async def _analyze_team_run_start(
+        self,
+        team: AgentTeam,
+        team_run: AgentTeamRun,
+        trigger_event_id: Optional[int],
+    ):
+        service = self._make_sentinel_service()
+        if service is None:
+            return None
+        try:
+            return await service.analyze_team_run_start(
+                team_id=team.id,
+                topology=team.topology,
+                goal_text=team.goal_text,
+                trigger_event_id=trigger_event_id,
+                sender_key=f"team:{team.id}:run:{team_run.id}:start",
+            )
+        except Exception as exc:
+            return self._sentinel_exception_result("team_run_start", exc)
+
+    async def _analyze_team_handoff(
+        self,
+        *,
+        team: AgentTeam,
+        team_run: AgentTeamRun,
+        step_index: int,
+        source_runnable: _RunnableMember,
+        target_runnable: Optional[_RunnableMember],
+        summary: Optional[str],
+        content: Optional[str],
+    ):
+        service = self._make_sentinel_service()
+        if service is None:
+            return None
+        try:
+            return await service.analyze_team_handoff(
+                team_id=team.id,
+                team_run_id=team_run.id,
+                topology=team.topology,
+                step_index=step_index,
+                source_member_id=source_runnable.member.id,
+                source_agent_id=source_runnable.agent.id,
+                target_member_id=target_runnable.member.id if target_runnable else None,
+                target_agent_id=target_runnable.agent.id if target_runnable else None,
+                summary=summary,
+                content=content,
+                sender_key=f"team:{team.id}:run:{team_run.id}:handoff:{step_index}",
+            )
+        except Exception as exc:
+            return self._sentinel_exception_result("team_handoff", exc)
+
+    async def _apply_handoff_sentinel(
+        self,
+        *,
+        team: AgentTeam,
+        team_run: AgentTeamRun,
+        member_run: AgentTeamMemberRun,
+        source_runnable: _RunnableMember,
+        target_runnable: Optional[_RunnableMember],
+        answer: str,
+        summary: str,
+        parsed_summary: dict[str, Any],
+    ) -> tuple[str, str, dict[str, Any]]:
+        result = await self._analyze_team_handoff(
+            team=team,
+            team_run=team_run,
+            step_index=member_run.step_index,
+            source_runnable=source_runnable,
+            target_runnable=target_runnable,
+            summary=summary,
+            content=answer,
+        )
+        if result is None:
+            return answer, summary, parsed_summary
+
+        self._append_member_sentinel_decision(
+            member_run,
+            self._sentinel_decision_payload(
+                "team_handoff",
+                result,
+                context={
+                    "handoff_kind": "member_output",
+                    "target_member_id": target_runnable.member.id if target_runnable else None,
+                    "target_agent_id": target_runnable.agent.id if target_runnable else None,
+                },
+            ),
+        )
+        if not self._sentinel_blocks(result):
+            return answer, summary, parsed_summary
+
+        sanitized_summary = dict(parsed_summary or {})
+        sanitized_summary.update(
+            {
+                "summary": SENTINEL_HANDOFF_WITHHELD,
+                "key_findings": [],
+                "open_questions": [],
+                "sentinel_handoff_blocked": True,
+            }
+        )
+        return SENTINEL_HANDOFF_WITHHELD, SENTINEL_HANDOFF_WITHHELD, sanitized_summary
+
+    async def _sanitize_mesh_dispatch_handoffs(
+        self,
+        *,
+        team: AgentTeam,
+        team_run: AgentTeamRun,
+        coordinator_run: AgentTeamMemberRun,
+        coordinator: _RunnableMember,
+        runnable_members: list[_RunnableMember],
+        command: CoordinatorCommand,
+    ) -> CoordinatorCommand:
+        if command.command != "dispatch":
+            return command
+
+        sanitized_dispatches: list[dict[str, Any]] = []
+        changed = False
+        for dispatch in command.dispatches:
+            target_runnable = self._runnable_by_member_id(runnable_members, dispatch["member_id"])
+            message = dispatch["message"]
+            result = await self._analyze_team_handoff(
+                team=team,
+                team_run=team_run,
+                step_index=coordinator_run.step_index,
+                source_runnable=coordinator,
+                target_runnable=target_runnable,
+                summary=command.reason,
+                content=message,
+            )
+            if result is not None:
+                self._append_member_sentinel_decision(
+                    coordinator_run,
+                    self._sentinel_decision_payload(
+                        "team_handoff",
+                        result,
+                        context={
+                            "handoff_kind": "mesh_dispatch",
+                            "target_member_id": dispatch["member_id"],
+                            "target_agent_id": target_runnable.agent.id if target_runnable else None,
+                        },
+                    ),
+                )
+                if self._sentinel_blocks(result):
+                    message = SENTINEL_HANDOFF_WITHHELD
+                    changed = True
+
+            sanitized_dispatches.append({"member_id": dispatch["member_id"], "message": message})
+
+        if not changed:
+            return command
+
+        raw = dict(command.raw)
+        raw["dispatches"] = list(sanitized_dispatches)
+        return CoordinatorCommand(
+            command=command.command,
+            raw=raw,
+            dispatches=tuple(sanitized_dispatches),
+            summary=command.summary,
+            reason=command.reason,
+        )
+
+    @staticmethod
+    def _sentinel_blocks(result: Any) -> bool:
+        return bool(result and getattr(result, "action", None) == "blocked")
+
+    @staticmethod
+    def _sentinel_exception_result(stage: str, exc: Exception):
+        from services.sentinel_service import SentinelAnalysisResult
+
+        return SentinelAnalysisResult(
+            is_threat_detected=True,
+            threat_score=1.0,
+            threat_reason=f"Sentinel {stage} analysis failed: {type(exc).__name__}",
+            action="blocked",
+            detection_type="sentinel_error",
+            analysis_type="prompt",
+            cached=False,
+            response_time_ms=0,
+        )
+
+    def _sentinel_decision_payload(
+        self,
+        stage: str,
+        result: Any,
+        *,
+        context: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        if hasattr(result, "to_dict"):
+            payload = result.to_dict()
+        else:
+            payload = {
+                "is_threat_detected": bool(getattr(result, "is_threat_detected", False)),
+                "threat_score": getattr(result, "threat_score", 0.0),
+                "threat_reason": getattr(result, "threat_reason", None),
+                "action": getattr(result, "action", None),
+                "detection_type": getattr(result, "detection_type", None),
+                "analysis_type": getattr(result, "analysis_type", None),
+            }
+        payload["stage"] = stage
+        payload["blocked"] = self._sentinel_blocks(result)
+        if context:
+            payload["context"] = context
+        return payload
+
+    @staticmethod
+    def _append_member_sentinel_decision(
+        member_run: AgentTeamMemberRun,
+        payload: dict[str, Any],
+    ) -> None:
+        existing = member_run.sentinel_decision_json
+        if not existing:
+            member_run.sentinel_decision_json = payload
+            return
+        if isinstance(existing, dict) and isinstance(existing.get("decisions"), list):
+            decisions = list(existing["decisions"])
+        else:
+            decisions = [existing]
+        decisions.append(payload)
+        member_run.sentinel_decision_json = {"decisions": decisions}
+
+    def _finish_sentinel_blocked(
+        self,
+        team_run: AgentTeamRun,
+        result: Any,
+        *,
+        stage: str,
+    ) -> None:
+        team_run.status = TeamRunStatus.SENTINEL_BLOCKED.value
+        team_run.error_json = {
+            "reason": "sentinel_blocked",
+            "stage": stage,
+            "sentinel_decision": self._sentinel_decision_payload(
+                stage,
+                result,
+                context={"team_run_id": team_run.id, "team_id": team_run.team_id},
+            ),
+        }
+        team_run.completed_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(team_run)
 
     def _load_active_team(self) -> AgentTeam:
         team = (
