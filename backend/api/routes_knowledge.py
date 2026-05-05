@@ -55,7 +55,13 @@ def get_db():
         db.close()
 
 
-def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent:
+def verify_agent_access(
+    agent_id: int,
+    db: Session,
+    ctx: TenantContext,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
     """
     Verify agent exists and user has access to it.
 
@@ -67,6 +73,9 @@ def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+    if getattr(agent, "is_internal", False):
+        detail = "Agent not found" if internal_status_code == 404 else "Internal coordinator agents cannot be managed through public knowledge APIs"
+        raise HTTPException(status_code=internal_status_code, detail=detail)
 
     return agent
 
@@ -233,7 +242,7 @@ def create_or_update_fact(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    verify_agent_access(agent_id, db, ctx, internal_status_code=403)
 
     knowledge_service = KnowledgeService(db)
 
@@ -277,7 +286,7 @@ def delete_fact(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    verify_agent_access(agent_id, db, ctx, internal_status_code=403)
 
     # Find and delete fact
     fact = db.query(SemanticKnowledge).filter(
@@ -309,7 +318,7 @@ def delete_user_knowledge(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    verify_agent_access(agent_id, db, ctx)
+    verify_agent_access(agent_id, db, ctx, internal_status_code=403)
 
     knowledge_service = KnowledgeService(db)
     deleted_count = knowledge_service.delete_user_facts(
@@ -402,7 +411,7 @@ async def trigger_fact_extraction(
     Phase 7.9.2: Verifies user can access this agent (tenant check).
     """
     # Verify agent access
-    agent = verify_agent_access(agent_id, db, ctx)
+    agent = verify_agent_access(agent_id, db, ctx, internal_status_code=403)
 
     # Create memory system instance
     # Note: This is a simplified version. In production, you'd want to use

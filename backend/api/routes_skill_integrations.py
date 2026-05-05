@@ -111,7 +111,13 @@ class SkillProvidersResponse(BaseModel):
 
 
 # Helper function for agent ownership verification
-def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent:
+def verify_agent_access(
+    db: Session,
+    agent_id: int,
+    ctx: TenantContext,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
     """
     Verify agent exists and user has access to it.
 
@@ -134,6 +140,9 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    if getattr(agent, "is_internal", False):
+        detail = f"Agent {agent_id} not found" if internal_status_code == 404 else "Internal coordinator agents cannot be managed through public skill integration APIs"
+        raise HTTPException(status_code=internal_status_code, detail=detail)
     return agent
 
 
@@ -274,6 +283,8 @@ async def get_skill_integration(
             "exists": True
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting skill integration: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Skill operation failed")
@@ -312,7 +323,7 @@ async def update_skill_integration(
         from datetime import datetime
 
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         # Validate permissions config if provided
         if request.config and "permissions" in request.config:
@@ -427,7 +438,7 @@ async def delete_skill_integration(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         existing = db.query(AgentSkillIntegration)\
             .filter(AgentSkillIntegration.agent_id == agent_id)\

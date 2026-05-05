@@ -253,6 +253,29 @@ class SecurityProfileAssignRequest(BaseModel):
 # Helpers
 # ============================================================================
 
+def _get_tenant_agent(
+    db: Session,
+    agent_id: int,
+    tenant_id: str,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if agent.is_internal:
+        detail = (
+            "Agent not found"
+            if internal_status_code == 404
+            else "Internal coordinator agents cannot be managed through public API v1"
+        )
+        raise HTTPException(status_code=internal_status_code, detail=detail)
+    return agent
+
+
 def _enrich_agent(agent: Agent, db: Session) -> dict:
     """Build a rich agent summary from database records."""
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -381,7 +404,10 @@ async def list_agents(
     """
     from sqlalchemy import func
 
-    query = db.query(Agent).filter(Agent.tenant_id == caller.tenant_id)
+    query = db.query(Agent).filter(
+        Agent.tenant_id == caller.tenant_id,
+        Agent.is_internal == False,
+    )
 
     if is_active is not None:
         query = query.filter(Agent.is_active == is_active)
@@ -430,12 +456,7 @@ async def get_agent(
     sandboxed tools, memory settings, and channel configuration.
     Requires `agents.read` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id)
     return _get_agent_detail(agent, db)
 
 
@@ -462,6 +483,7 @@ async def create_agent(
         current_agent_count = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.is_active == True,
+            Agent.is_internal == False,
         ).count()
         if current_agent_count >= tenant.max_agents:
             raise HTTPException(
@@ -493,6 +515,7 @@ async def create_agent(
         db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.is_default == True,
+            Agent.is_internal == False,
         ).update({"is_default": False})
         db.commit()
 
@@ -580,12 +603,7 @@ async def update_agent(
     Only provided fields are updated; omitted fields remain unchanged.
     Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     # Validate persona_id if provided (tenant isolation)
     if request.persona_id is not None:
@@ -630,17 +648,13 @@ async def delete_agent(
     Cannot delete the last remaining agent for a tenant. If the deleted agent
     is the default, another agent is automatically promoted. Requires `agents.delete` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     # Cannot delete default agent if it's the only one for this tenant
     if agent.is_default:
         total_agents = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
+            Agent.is_internal == False,
         ).count()
         if total_agents == 1:
             raise HTTPException(status_code=400, detail="Cannot delete the only agent")
@@ -649,6 +663,7 @@ async def delete_agent(
         next_agent = db.query(Agent).filter(
             Agent.tenant_id == caller.tenant_id,
             Agent.id != agent_id,
+            Agent.is_internal == False,
         ).first()
         if next_agent:
             next_agent.is_default = True
@@ -674,12 +689,7 @@ async def assign_skills(
     Adds the specified skill types to the agent. Use `replace: true` to replace
     all existing skills. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     if request.replace:
         db.query(AgentSkill).filter(AgentSkill.agent_id == agent.id).delete()
@@ -719,12 +729,7 @@ async def remove_skill(
     Deletes the specified skill type assignment. Returns 404 if the skill is not
     assigned to this agent. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     deleted = db.query(AgentSkill).filter(
         AgentSkill.agent_id == agent.id,
@@ -753,12 +758,7 @@ async def assign_persona(
     Set `persona_id` to assign a persona, or `null` to clear.
     Validates tenant ownership of the persona. Requires `agents.write` permission.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == caller.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_tenant_agent(db, agent_id, caller.tenant_id, internal_status_code=403)
 
     if request.persona_id is not None:
         persona = db.query(Persona).filter(

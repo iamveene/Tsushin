@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 3 mesh coordinator runtime (2026-05-05)
+
+**Summary.** Adds the backend-only mesh topology runtime and hidden coordinator boundary for Agent Teams. This remains internal service work only: no Teams CRUD API, queue dispatch, trigger wiring, Sentinel team hook, memory-read scoping, or frontend Team Builder surface is exposed in this slice.
+
+**Backend.**
+- Added `team_coordinator_service.py` to create or reuse one hidden internal coordinator agent per mesh team, using the system AI defaults, the same tenant, `is_internal=true`, `is_team_member=true`, `current_team_id=team.id`, and no retained skills, tools, skill integrations, or knowledge-base attachments.
+- Added `backend/agent/prompts/team_coordinator.md` and `TeamRunOrchestrator.run_mesh()` with coordinator commands parsed from the final JSON object: `dispatch`, `finish`, or `escalate`.
+- Mesh runs now persist coordinator and dispatched member audit rows, aggregate tokens, enforce `max_steps`, `max_total_tokens`, wall-clock timeout, active-team gating, wrong-tenant validation, and repeated-dispatch loop detection.
+- Tightened the uncommitted `0083_agent_teams_init.py` foundation for mesh exposure: tenant-scoped composite constraints now cover coordinator agents, current team references, wake-event triggers, A2A permission snapshots, and member-run history preserves `agent_id` while `agent_team_member_id` is set null after member removal.
+- Filtered `is_internal=true` agents out of the standard `/api/agents` list and Agent Builder's global agent palette.
+- Hidden coordinator agent detail/builder reads now resolve as not found, while public update/delete, skill mutation, skill-integration mutation, custom-tool assignment, semantic-knowledge mutation, and knowledge-base attachment/reprocess paths reject internal agents with a guarded error.
+
+**Tests.**
+- Added focused mesh-orchestrator tests for dispatch/finish, escalation, max-step/token/wall-clock guards, loop detection, active-status validation, hidden coordinator reuse, and coordinator no-skills enforcement.
+- Added `backend/dev_tests/run_team_mesh_smoke.py` for deterministic container validation without requiring a live model provider.
+
+**Docs.**
+- Corrected Agent Teams smoke command examples to use the container path `/app/dev_tests/*.py`.
+
+### Release 0.7.0 — Agent Teams Phase 2 line orchestrator MVP (2026-05-04)
+
+**Summary.** Adds the internal backend line-topology orchestrator for Agent Teams. This remains backend-only: no Teams API, queue dispatch, trigger binding, Sentinel team hook, memory-read scoping, or frontend surface is exposed in this slice.
+
+**Backend.**
+- Hardened the uncommitted `0083_agent_teams_init.py` foundation with tenant-aware composite ownership constraints for team members, triggers, runs, member-run audit rows, scratch rows, and A2A snapshots. Physical team deletion is now restricted while memberships exist so future A2A snapshot/restore cleanup cannot be bypassed.
+- Added `TeamRunOrchestrator.run_line()` as an internal service that creates an `AgentTeamRun`, executes active members by `execution_order`, stores `AgentTeamMemberRun` audit rows, chains prior summaries into later member prompts, aggregates token counts, enforces wall-clock and token caps, and marks downstream members `skipped` after failure.
+- Extended `AgentService` with an optional `team_run_id` context argument. Phase 2 stores the context only; memory scoping remains deferred to the planned Phase 4 safety layer.
+- Added a deterministic backend smoke script at `backend/dev_tests/run_team_line_smoke.py` for container validation without requiring a live model provider.
+
+**Tests.**
+- Strengthened Phase 1 schema tests for cross-tenant rejection, restricted physical deletes, and A2A snapshot restore equivalence.
+- Added focused line-orchestrator tests for ordered execution, summary chaining, member failure and skip behavior, timeout handling, token cap enforcement, malformed-summary fallback, and fail-closed validation for empty, mesh, or wrong-tenant teams.
+
+### Release 0.7.0 — Agent Teams Phase 1 DB foundation (2026-05-04)
+
+**Summary.** Starts the Agent Teams build with schema and ORM foundations only. This phase adds the durable data model for teams, members, triggers, runs, member-run audit rows, shared scratch state, and A2A permission snapshots. No Teams API, orchestrator, queue dispatch, Sentinel hook, or frontend behavior ships in this slice.
+
+**Backend.**
+- Added Alembic `0083_agent_teams_init.py`, chained from live head `0082`, for the new team/run/scratch/snapshot tables plus nullable cross-reference columns on agent, A2A sessions, memory, and case memory.
+- Added SQLAlchemy models and Python enum constants for the Agent Teams schema while keeping database status/topology values as strings for simpler migrations.
+- Preserved existing single-agent behavior: new `team_run_id` fields are nullable, existing memory rows remain valid, and hidden/team-member agent flags default to false.
+
+**Tests.**
+- Added focused model coverage for team persistence, single-team membership uniqueness, run-child cascade behavior, A2A snapshot payload round-tripping, nullable memory/case-memory `team_run_id`, and tenant-scoped team queries.
+- Regression target for this phase includes memory tenant scoping, A2A service lifecycle, trigger-delete cascade safety, backend health, and a browser smoke of the existing dashboard/agent list.
+- Validation completed on the rebuilt backend: Alembic live DB upgraded `0082 -> 0083`; disposable Postgres smoke DB upgraded from empty to head, downgraded `0083 -> 0082`, then re-upgraded to `0083`; focused container pytest passed with addopts disabled (`6 + 7 + 16 + 2` tests); `https://localhost/api/health` returned healthy; browser smoke logged in as `test@example.com`, loaded Watcher and Agent Studio, and found zero console errors.
+
 ### Release 0.7.0 — Speaches volume-mount regression fix (2026-05-03)
 
 **Summary.** Audio transcription via the Speaches self-hosted ASR engine was silently failing on every container recreate because the named volume was bound to the wrong path inside the container. The upstream `ghcr.io/speaches-ai/speaches:latest-cpu` image now runs as the non-root `ubuntu` user (uid 1000), so its HuggingFace cache lives at `/home/ubuntu/.cache/huggingface`. Our `WhisperContainerManager` was still binding the volume to `/root/.cache/huggingface` — a path the running user has no reason to read or write — leaving the volume empty and forcing a fresh model download on every restart that PRELOAD_MODELS could not satisfy. With no model on disk, `POST /v1/audio/transcriptions` returned 404, the backend silently fell back to OpenAI Whisper, and (when the tenant's OpenAI key was a placeholder) the user saw only the generic "couldn't process your message" error.

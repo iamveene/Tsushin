@@ -146,6 +146,32 @@ v0.7.0 Phase 0 prepares the shared surfaces that later trigger, continuous-agent
 * **Visual regression baseline** — `npm --prefix frontend run test:visual` runs the committed frontend entrypoint screenshots; runtime traces and reports stay under `.private/qa/v0.7.0/`.
 * **Phase 0.5 fixture gate** — `backend/tests/test_phase0_5_fixtures.py` validates the committed ASR clips, while `backend/dev_tests/export_gmail_oauth_fixture.py` and `backend/tests/test_gmail_oauth_fixture.py` share the canonical `backend/tests/fixtures/gmail_oauth.enc` path, fail closed on missing decryption material, require a real Gmail integration re-authorized with both `gmail.readonly` and `gmail.send`, let the Hub Gmail re-authorize action request that send scope without a curl-only workaround, and resolve the Google token-encryption key from the live config store when env-only lookup is unavailable. Phase 3.1 draft validation later adds the stricter `gmail.compose` requirement because Gmail drafts are not covered by `gmail.send` alone.
 
+### 2.4.1 v0.7.0 Agent Teams Phase 1 DB foundation
+
+Agent Teams begins as a schema-only foundation in `0083_agent_teams_init.py`, chained from the live `0082` migration head. This phase adds first-class storage for `agent_team`, `agent_team_member`, `agent_team_trigger`, `agent_team_run`, `agent_team_member_run`, `team_run_scratch`, and `agent_team_member_a2a_snapshot`.
+
+The existing `agent` table gains `is_team_member`, `current_team_id`, and `is_internal` flags for later Team Builder and hidden coordinator behavior. `agent_communication_session`, `memory`, and `case_memory` gain nullable `team_run_id` references so later phases can correlate in-team A2A traffic and isolate per-run memory without invalidating current direct-agent usage.
+
+No operator-facing Teams UI, public API route, queue dispatch path, orchestrator execution, Sentinel team hook, or memory-read behavior changes in this phase. All new fields are inert until the later Agent Teams phases wire them into services and frontend surfaces.
+
+### 2.4.2 v0.7.0 Agent Teams Phase 2 line orchestrator MVP
+
+Phase 2 adds the first runtime behavior behind an internal backend service only. `TeamRunOrchestrator.run_line()` loads a tenant-owned line team, creates an `agent_team_run`, executes active members in `execution_order`, stores one `agent_team_member_run` audit row per member, passes prior summaries into later member prompts, and records the final output summary on the run.
+
+This phase also hardens the uncommitted Phase 1 schema with tenant-aware composite ownership constraints for team members, triggers, runs, member-run audit rows, scratch rows, and A2A snapshots. Direct physical deletion of a team with members is restricted so later membership services can perform A2A snapshot restore deliberately instead of losing state through a cascade.
+
+`AgentService` now accepts an optional `team_run_id` context argument, but Phase 2 does not alter memory read/write behavior. Team-run memory scoping, Sentinel team hooks, A2A membership snapshot/restore services, queue dispatch, HTTP CRUD routes, and all frontend Teams surfaces remain deferred to later Agent Teams phases.
+
+### 2.4.3 v0.7.0 Agent Teams Phase 3 mesh coordinator runtime
+
+Phase 3 adds the backend-only mesh topology runtime. `team_coordinator_service.py` provisions or reuses one hidden coordinator agent per mesh team with the same tenant, `is_internal=true`, `is_team_member=true`, `current_team_id=team.id`, the system AI default model configuration, and no retained skills, tools, skill integrations, or knowledge-base attachments. The coordinator prompt lives at `backend/agent/prompts/team_coordinator.md`.
+
+`TeamRunOrchestrator.run_mesh()` creates an `agent_team_run`, asks the coordinator for a final JSON command, and handles `dispatch`, `finish`, and `escalate`. Dispatch commands create audited `agent_team_member_run` rows for the selected members; coordinator turns are also retained as hidden member-run audit rows. The runtime aggregates token counts and enforces active-team gating, `max_steps`, `max_total_tokens`, wall-clock timeout, tenant ownership, and repeated-dispatch loop detection.
+
+The public agent surfaces enforce the coordinator boundary: `/api/agents` and the Agent Builder global agent palette filter out `is_internal=true` agents, direct public detail/builder reads resolve as not found, and public mutation or attachment paths reject hidden coordinators. This covers agent update/delete, skill mutation/test, skill-integration mutation, custom-tool assignment/toggle/removal, semantic-knowledge mutation, and knowledge-base upload/config/update/delete/reprocess paths.
+
+Container smoke scripts for Agent Teams should be invoked from the mounted dev-test path, for example `docker exec tsushin-backend python /app/dev_tests/run_team_line_smoke.py` or `docker exec tsushin-backend python /app/dev_tests/run_team_mesh_smoke.py`.
+
 ### 2.5 v0.7.0 Wave 1 checkpoint (Track A backend + Track F0 prep)
 
 The first Wave 1 merge on `release/0.7.0` is intentionally a backend-first checkpoint, not the full release feature set.
@@ -1005,6 +1031,8 @@ Two skills drive inter-agent behavior:
 
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
   Source: `backend/agent/skills/agent_communication_skill.py:28-31`
+
+Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Later phases add public Teams APIs, Team Wizard/Builder, trigger dispatch, Sentinel handoff checks, memory scoping, and Watcher Team Runs UI.
 
 **Agent Switcher execution modes** (v0.6.0):
 
@@ -2676,7 +2704,7 @@ A compact companion to the full Playground, mounted globally in `frontend/app/la
 
 ### 18.6.1 Live Regression Harness
 
-For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py`.
+For live-stack regression and diagnosis, use `backend/dev_tests/run_playground_regression_live.py` from the repo, or `/app/dev_tests/run_playground_regression_live.py` inside the backend container when the dev-test directory is mounted there.
 
 **Purpose.** This runner validates the existing Playground / Playground Mini / Watcher Graph contracts on the currently running local HTTPS stack without introducing any new test-only product endpoints. It is intended for "the stack is already up, tell me whether full Playground, Mini, watcher activity, KB glow, provider glow, and A2A still work right now" passes.
 

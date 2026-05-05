@@ -95,13 +95,26 @@ def get_db():
         db.close()
 
 
-def _verify_agent_access(agent_id: int, current_user: User, db: Session) -> Agent:
+def _verify_agent_access(
+    agent_id: int,
+    current_user: User,
+    db: Session,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
     """Resolve an agent and enforce tenant ownership for knowledge operations."""
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if not current_user.is_global_admin and agent.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if getattr(agent, "is_internal", False):
+        detail = (
+            "Agent not found"
+            if internal_status_code == 404
+            else "Internal coordinator agents cannot have public knowledge-base attachments"
+        )
+        raise HTTPException(status_code=internal_status_code, detail=detail)
     return agent
 
 
@@ -270,7 +283,7 @@ async def upload_knowledge(
     The document will be processed asynchronously in the background.
     """
     # Verify agent exists and user has access (same tenant or global admin)
-    _verify_agent_access(agent_id, current_user, db)
+    _verify_agent_access(agent_id, current_user, db, internal_status_code=403)
 
     # Sanitize filename to prevent path traversal attacks
     safe_filename = secure_filename(file.filename or "document")
@@ -429,7 +442,7 @@ def update_knowledge_config(
     _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Update per-agent KB indexing defaults used by future uploads/reprocesses."""
-    agent = _verify_agent_access(agent_id, current_user, db)
+    agent = _verify_agent_access(agent_id, current_user, db, internal_status_code=403)
     tenant_id = agent.tenant_id or current_user.tenant_id
     if not tenant_id:
         raise HTTPException(status_code=400, detail="Agent is missing tenant context")
@@ -494,7 +507,7 @@ def update_knowledge_detail(
     _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Rename a knowledge document and/or update its tags."""
-    _verify_agent_access(agent_id, current_user, db)
+    _verify_agent_access(agent_id, current_user, db, internal_status_code=403)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -552,7 +565,7 @@ def delete_knowledge(
     _perm: None = Depends(require_permission("knowledge.delete")),
 ):
     """Delete a knowledge document and all its chunks (requires authentication)."""
-    _verify_agent_access(agent_id, current_user, db)
+    _verify_agent_access(agent_id, current_user, db, internal_status_code=403)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
@@ -607,7 +620,7 @@ def reprocess_knowledge(
     _perm: None = Depends(require_permission("knowledge.write")),
 ):
     """Reprocess a knowledge document (re-chunk and re-embed, requires authentication)."""
-    _verify_agent_access(agent_id, current_user, db)
+    _verify_agent_access(agent_id, current_user, db, internal_status_code=403)
 
     service = KnowledgeService(db)
     knowledge = service.get_knowledge_by_id(knowledge_id)
