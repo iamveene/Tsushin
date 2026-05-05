@@ -5,6 +5,7 @@ import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import {
   api,
   authenticatedFetch,
@@ -14,13 +15,10 @@ import {
   type EmailTrigger,
   type GitHubTrigger,
   type JiraIssuePreview,
-  type JiraManagedNotificationStatus,
-  type JiraNotificationSubscriptionResponse,
   type JiraPollNowResponse,
   type JiraTrigger,
   type PageResponse,
   type PublicIngressInfo,
-  type ScheduleTrigger,
   type TriggerKind,
   type WakeEvent,
   type WebhookIntegration,
@@ -29,7 +27,6 @@ import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import {
   AlertTriangleIcon,
   BellIcon,
-  CalendarDaysIcon,
   CodeIcon,
   EnvelopeIcon,
   GitHubIcon,
@@ -54,13 +51,14 @@ import Divider from '@/components/triggers/Divider'
 import SourceSection from '@/components/triggers/sections/SourceSection'
 import RoutingSection from '@/components/triggers/sections/RoutingSection'
 import OutputsSection from '@/components/triggers/sections/OutputsSection'
+import MemoryRecapCard from '@/components/triggers/sections/MemoryRecapCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
 
 // Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
 // handles `email` and `webhook` kinds. The standalone fork pages are
 // reduced to one-line wrappers around `<TriggerDetailShell kind=...>`.
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github' | 'email' | 'webhook'>
-type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'github' | 'email' | 'webhook'>
+type BreadthTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
 interface Props {
@@ -81,13 +79,6 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
     iconClass: 'text-blue-300',
     accentClass: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
   },
-  schedule: {
-    label: 'Schedule Trigger',
-    description: 'Cron-based wake source with structured payloads.',
-    Icon: CalendarDaysIcon,
-    iconClass: 'text-amber-300',
-    accentClass: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
-  },
   github: {
     label: 'GitHub Trigger',
     description: 'Repository event source for engineering activity.',
@@ -97,7 +88,7 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
   },
   email: {
     label: 'Email Trigger',
-    description: 'Gmail-backed wake source with managed notification + triage outputs.',
+    description: 'Gmail-backed wake source with manual poll and triage outputs.',
     Icon: EnvelopeIcon,
     iconClass: 'text-emerald-300',
     accentClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
@@ -146,21 +137,6 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-function JsonBlock({ value, emptyLabel }: { value: unknown; emptyLabel: string }) {
-  if (!value) {
-    return (
-      <div className="rounded-xl border border-dashed border-tsushin-border p-6 text-sm text-tsushin-slate">
-        {emptyLabel}
-      </div>
-    )
-  }
-  return (
-    <pre className="max-h-96 overflow-auto rounded-xl border border-tsushin-border bg-black/30 p-4 text-xs text-cyan-100">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  )
-}
-
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -170,41 +146,12 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   )
 }
 
-function formatJsonText(value: Record<string, unknown> | null | undefined): string {
-  return value ? JSON.stringify(value, null, 2) : ''
-}
-
-function parseJsonObjectText(text: string, label: string): Record<string, unknown> | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  const parsed = JSON.parse(trimmed)
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object`)
-  }
-  return parsed as Record<string, unknown>
-}
-
 function splitList(text?: string | null): string[] | null {
   const values = (text || '')
     .split(/[\n,]/)
     .map((value) => value.trim())
     .filter(Boolean)
   return values.length > 0 ? values : null
-}
-
-function jiraManagedNotificationFromTrigger(trigger: JiraTrigger): JiraManagedNotificationStatus | null {
-  if (trigger.managed_notification_status) return trigger.managed_notification_status
-  if (!trigger.managed_notification_enabled && !trigger.notification_subscription_status && !trigger.managed_notification_recipient_preview && !trigger.notification_recipient_preview) {
-    return null
-  }
-  return {
-    status: trigger.notification_subscription_status || (trigger.managed_notification_enabled ? 'active' : 'inactive'),
-    recipient_preview: trigger.managed_notification_recipient_preview || trigger.notification_recipient_preview,
-    agent_id: trigger.managed_notification_agent_id || trigger.default_agent_id,
-    agent_name: trigger.managed_notification_agent_name,
-    continuous_agent_id: trigger.managed_notification_continuous_agent_id,
-    continuous_subscription_id: trigger.managed_notification_subscription_id,
-  }
 }
 
 function pollResultSummary(result: JiraPollNowResponse): string {
@@ -291,14 +238,6 @@ function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): C
       jiraProjectKey: jira.project_key || '',
     }
   }
-  if (kind === 'schedule') {
-    const schedule = trigger as ScheduleTrigger
-    return {
-      cronExpression: schedule.cron_expression,
-      timezone: schedule.timezone,
-      payloadTemplateText: formatJsonText(schedule.payload_template),
-    }
-  }
   if (kind === 'github') {
     const github = trigger as GitHubTrigger
     return {
@@ -341,19 +280,16 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [jiraSampleIssues, setJiraSampleIssues] = useState<JiraIssuePreview[]>([])
   const [jiraPolling, setJiraPolling] = useState(false)
   const [jiraPollResult, setJiraPollResult] = useState<JiraPollNowResponse | null>(null)
-  const [jiraNotificationLoading, setJiraNotificationLoading] = useState(false)
-  const [jiraNotificationStatus, setJiraNotificationStatus] = useState<JiraManagedNotificationStatus | null>(null)
-  const [jiraNotificationRecipient, setJiraNotificationRecipient] = useState('')
 
   // Email-specific state
   const [gmailIntegrations, setGmailIntegrations] = useState<EmailGmailIntegrationSummary[]>([])
-  const [emailNotificationRecipient, setEmailNotificationRecipient] = useState('')
-  const [emailNotificationLoading, setEmailNotificationLoading] = useState(false)
   const [emailTriageLoading, setEmailTriageLoading] = useState(false)
+  const [emailGmailReauthLoading, setEmailGmailReauthLoading] = useState(false)
   const [emailPolling, setEmailPolling] = useState(false)
   const [emailPollResult, setEmailPollResult] = useState<EmailPollNowResponse | null>(null)
   const [emailQueryTesting, setEmailQueryTesting] = useState(false)
   const [emailQueryResult, setEmailQueryResult] = useState<EmailTestQueryResponse | null>(null)
+  const [caseMemoryRecapAvailable, setCaseMemoryRecapAvailable] = useState(true)
 
   // Webhook-specific state
   const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
@@ -377,7 +313,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       ])
       const nextTrigger = triggerData as BreadthTrigger
       setTrigger(nextTrigger)
-      setJiraNotificationStatus(kind === 'jira' ? jiraManagedNotificationFromTrigger(nextTrigger as JiraTrigger) : null)
       setCriteriaText(formatCriteriaText(nextTrigger.trigger_criteria))
       setSourceDraft(sourceFromTrigger(kind, nextTrigger))
       setEventsPage(wakeEvents)
@@ -392,11 +327,28 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   useEffect(() => {
     if (!hasValidId) {
-      router.replace('/hub?tab=communication')
+      router.replace('/hub?tab=triggers')
       return
     }
     loadData()
   }, [hasValidId, loadData, router])
+
+  useEffect(() => {
+    let cancelled = false
+    api.getFeatureFlags()
+      .then((flags) => {
+        if (cancelled) return
+        setCaseMemoryRecapAvailable(
+          Boolean(flags.case_memory_enabled && (flags.case_memory_recap_enabled ?? true)),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setCaseMemoryRecapAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const events = useMemo(
     () => (eventsPage?.items || []).filter((event) => event.channel_instance_id === triggerId),
@@ -428,7 +380,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       const next = !trigger.is_active
       let updated: BreadthTrigger
       if (kind === 'jira') updated = await api.updateJiraTrigger(trigger.id, { is_active: next })
-      else if (kind === 'schedule') updated = await api.updateScheduleTrigger(trigger.id, { is_active: next })
       else if (kind === 'github') updated = await api.updateGitHubTrigger(trigger.id, { is_active: next })
       else if (kind === 'email') updated = await api.updateEmailTrigger(trigger.id, { is_active: next })
       else updated = await api.updateWebhookIntegration(trigger.id, { is_active: next })
@@ -439,39 +390,6 @@ export default function TriggerDetailShell({ kind }: Props) {
       setError(getErrorMessage(err, 'Failed to update trigger'))
     } finally {
       setSaving(false)
-    }
-  }
-
-  const enableJiraNotification = async (target: JiraTrigger): Promise<JiraNotificationSubscriptionResponse | null> => {
-    const recipient = jiraNotificationRecipient.trim()
-    if (!recipient) {
-      setError('WhatsApp recipient is required to enable Jira notifications')
-      return null
-    }
-    const result = await api.createJiraNotificationSubscription(target.id, {
-      recipient_phone: recipient,
-    })
-    setJiraNotificationStatus({
-      ...result,
-      status: 'active',
-    })
-    setJiraNotificationRecipient('')
-    return result
-  }
-
-  const handleEnableJiraNotification = async () => {
-    if (!trigger || kind !== 'jira') return
-    setJiraNotificationLoading(true)
-    setError(null)
-    try {
-      const result = await enableJiraNotification(trigger as JiraTrigger)
-      if (!result) return
-      setSuccess(result?.created_subscription ? 'Jira WhatsApp notification enabled' : 'Jira WhatsApp notification is active')
-      setTimeout(() => setSuccess(null), 3000)
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to enable Jira WhatsApp notification'))
-    } finally {
-      setJiraNotificationLoading(false)
     }
   }
 
@@ -519,29 +437,6 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
-  const handleEnableEmailNotification = async () => {
-    if (!trigger || kind !== 'email') return
-    const recipient = emailNotificationRecipient.trim()
-    if (!recipient) {
-      setError('WhatsApp recipient is required to enable email notifications')
-      return
-    }
-    setEmailNotificationLoading(true)
-    setError(null)
-    try {
-      const result = await api.createEmailNotificationSubscription(trigger.id, { recipient_phone: recipient })
-      setSuccess(result.created_subscription ? 'Email WhatsApp notification enabled' : 'Email WhatsApp notification is already active')
-      setEmailNotificationRecipient('')
-      const refreshed = await api.getEmailTrigger(trigger.id)
-      setTrigger(refreshed)
-      setTimeout(() => setSuccess(null), 3000)
-    } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to enable email WhatsApp notification'))
-    } finally {
-      setEmailNotificationLoading(false)
-    }
-  }
-
   const handleEnableEmailTriage = async () => {
     if (!trigger || kind !== 'email') return
     setEmailTriageLoading(true)
@@ -554,6 +449,52 @@ export default function TriggerDetailShell({ kind }: Props) {
       setError(getErrorMessage(err, 'Failed to enable email triage'))
     } finally {
       setEmailTriageLoading(false)
+    }
+  }
+
+  const handleChooseEmailTriageAgent = () => {
+    setActiveTab('overview')
+    window.setTimeout(() => {
+      const routingCard = document.getElementById('routing-card')
+      routingCard?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const routingButton = routingCard?.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')
+      if (routingButton && routingButton.getAttribute('aria-expanded') !== 'true') {
+        routingButton.click()
+      }
+      routingButton?.focus()
+    }, 0)
+  }
+
+  const handleReconnectEmailGmailForDrafts = async () => {
+    if (!trigger || kind !== 'email') return
+    const email = trigger as EmailTrigger
+    const integrationId = gmailIntegration?.id ?? email.gmail_integration_id
+    if (!integrationId) {
+      setError('This Email trigger is not linked to a Gmail integration. Review the Gmail account in Hub before enabling triage.')
+      return
+    }
+    setEmailGmailReauthLoading(true)
+    setError(null)
+    try {
+      const currentPath = typeof window !== 'undefined'
+        ? `${window.location.pathname}${window.location.search}`
+        : `/hub/triggers/email/${email.id}`
+      const params = new URLSearchParams({
+        redirect_url: currentPath,
+        include_send_scope: 'true',
+      })
+      const response = await authenticatedFetch(`/api/hub/google/reauthorize/${integrationId}?${params}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        throw new Error(errorData.detail || `HTTP ${response.status}`)
+      }
+      const data = await response.json()
+      window.location.href = data.authorization_url
+    } catch (err: unknown) {
+      setEmailGmailReauthLoading(false)
+      setError(getErrorMessage(err, 'Failed to start Gmail reauthorization'))
     }
   }
 
@@ -613,9 +554,12 @@ export default function TriggerDetailShell({ kind }: Props) {
     }
   }
 
+  const [showRotateConfirm, setShowRotateConfirm] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   const handleRotateWebhookSecret = async () => {
     if (!trigger || kind !== 'webhook') return
-    if (!confirm('Rotate the webhook signing secret? Any callers using the previous secret will start failing immediately.')) return
+    setShowRotateConfirm(false)
     setWebhookRotating(true)
     setError(null)
     try {
@@ -644,13 +588,6 @@ export default function TriggerDetailShell({ kind }: Props) {
           trigger_criteria: triggerCriteria,
           project_key: sourceDraft.jiraProjectKey?.trim() || null,
           jql: sourceDraft.jiraJql?.trim() || (trigger as JiraTrigger).jql,
-        })
-      } else if (kind === 'schedule') {
-        updated = await api.updateScheduleTrigger(trigger.id, {
-          trigger_criteria: triggerCriteria,
-          cron_expression: sourceDraft.cronExpression?.trim() || (trigger as ScheduleTrigger).cron_expression,
-          timezone: sourceDraft.timezone?.trim() || (trigger as ScheduleTrigger).timezone,
-          payload_template: parseJsonObjectText(sourceDraft.payloadTemplateText || '', 'Payload template'),
         })
       } else if (kind === 'github') {
         updated = await api.updateGitHubTrigger(trigger.id, {
@@ -685,14 +622,12 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const deleteTrigger = async () => {
     if (!trigger) return
-    if (!confirm(`Delete ${kind} trigger "${trigger.integration_name}"? This cannot be undone.`)) return
+    setShowDeleteConfirm(false)
     setSaving(true)
     setError(null)
     try {
       if (kind === 'jira') {
         await api.deleteJiraTrigger(trigger.id)
-      } else if (kind === 'schedule') {
-        await api.deleteScheduleTrigger(trigger.id)
       } else if (kind === 'github') {
         await api.deleteGitHubTrigger(trigger.id)
       } else if (kind === 'email') {
@@ -700,7 +635,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       } else {
         await api.deleteWebhookIntegration(trigger.id)
       }
-      router.push('/hub?tab=communication')
+      router.push('/hub?tab=triggers')
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to delete trigger'))
       setSaving(false)
@@ -720,13 +655,10 @@ export default function TriggerDetailShell({ kind }: Props) {
   }
 
   // Wave 3 of the Triggers ↔ Flows unification: Overview tab renders three
-  // explicit sections (Source / Routing / Outputs) for jira, github, schedule,
+  // explicit sections (Source / Routing / Outputs) for jira, github,
   // email, and webhook.
   const renderOverview = () => {
     if (!trigger) return null
-    const status = kind === 'jira'
-      ? jiraNotificationStatus || jiraManagedNotificationFromTrigger(trigger as JiraTrigger)
-      : null
     return (
       <div className="space-y-6">
         <SectionHeader title="Source" subtitle="Where events come from." />
@@ -739,7 +671,7 @@ export default function TriggerDetailShell({ kind }: Props) {
           copied={webhookCopied}
           onCopyInboundUrl={handleCopyInboundUrl}
           rotatingSecret={webhookRotating}
-          onRotateWebhookSecret={kind === 'webhook' ? handleRotateWebhookSecret : undefined}
+          onRotateWebhookSecret={kind === 'webhook' ? () => setShowRotateConfirm(true) : undefined}
           canWriteHub={canWriteHub}
         />
 
@@ -765,24 +697,31 @@ export default function TriggerDetailShell({ kind }: Props) {
           kind={kind}
           trigger={trigger}
           canWriteHub={canWriteHub}
-          jiraNotificationStatus={status}
-          jiraPhoneInput={jiraNotificationRecipient}
-          onJiraPhoneChange={setJiraNotificationRecipient}
-          onEnableJiraNotification={handleEnableJiraNotification}
-          jiraNotificationLoading={jiraNotificationLoading}
           jiraPollResult={jiraPollResult}
           onJiraPollNow={handleJiraPollNow}
           jiraPolling={jiraPolling}
           emailGmailIntegration={kind === 'email' ? gmailIntegration : null}
-          emailPhoneInput={emailNotificationRecipient}
-          onEmailPhoneChange={setEmailNotificationRecipient}
-          onEnableEmailNotification={handleEnableEmailNotification}
-          emailNotificationLoading={emailNotificationLoading}
           emailPollResult={emailPollResult}
           onEmailPollNow={handleEmailPollNow}
           emailPolling={emailPolling}
           onEnableEmailTriage={handleEnableEmailTriage}
+          onChooseEmailTriageAgent={handleChooseEmailTriageAgent}
+          onReconnectEmailGmail={handleReconnectEmailGmailForDrafts}
           emailTriageLoading={emailTriageLoading}
+          emailGmailReauthLoading={emailGmailReauthLoading}
+        />
+
+        <Divider />
+
+        <SectionHeader
+          title="Memory Recap"
+          subtitle="Recall snippets from past similar cases when this trigger fires."
+        />
+        <MemoryRecapCard
+          kind={kind}
+          triggerId={trigger.id}
+          canWriteHub={canWriteHub}
+          caseMemoryEnabled={caseMemoryRecapAvailable}
         />
       </div>
     )
@@ -790,7 +729,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const renderCriteriaTab = () => {
     if (!trigger) return null
-    const showSidePanel = kind === 'jira' || kind === 'schedule' || kind === 'github'
+    const showSidePanel = kind === 'jira' || kind === 'github'
     const webhookId = trigger.id
     return (
       <div className={showSidePanel ? 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]' : 'space-y-3'}>
@@ -894,14 +833,6 @@ export default function TriggerDetailShell({ kind }: Props) {
                   />
                 </>
               )}
-              {kind === 'schedule' && (
-                <>
-                  <DetailRow label="Cron">{(trigger as ScheduleTrigger).cron_expression}</DetailRow>
-                  <DetailRow label="Payload template">
-                    <JsonBlock value={(trigger as ScheduleTrigger).payload_template} emptyLabel="No payload template saved." />
-                  </DetailRow>
-                </>
-              )}
               {kind === 'github' && (
                 <>
                   <DetailRow label="Events">{((trigger as GitHubTrigger).events || []).join(', ') || 'Default events'}</DetailRow>
@@ -922,7 +853,7 @@ export default function TriggerDetailShell({ kind }: Props) {
         <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
           <BellIcon size={18} /> Recent wake events
         </h2>
-        <Link href={`/hub/wake-events?channel_type=${kind}`} className="text-sm text-cyan-200 hover:text-white">
+        <Link href={`/wake-events?channel_type=${kind}`} className="text-sm text-cyan-200 hover:text-white">
           Open browser
         </Link>
       </div>
@@ -945,7 +876,7 @@ export default function TriggerDetailShell({ kind }: Props) {
               {events.map((event) => (
                 <tr key={event.id} className="border-b border-tsushin-border/60">
                   <td className="px-3 py-2">
-                    <Link href={`/hub/wake-events?highlight=${event.id}`} className="font-mono text-cyan-200 hover:text-white">#{event.id}</Link>
+                    <Link href={`/wake-events?highlight=${event.id}`} className="font-mono text-cyan-200 hover:text-white">#{event.id}</Link>
                     <div className="text-xs text-tsushin-slate">{event.event_type}</div>
                   </td>
                   <td className="px-3 py-2 text-white">{event.status}</td>
@@ -1001,7 +932,7 @@ export default function TriggerDetailShell({ kind }: Props) {
             {canWriteHub && (
               <button
                 type="button"
-                onClick={deleteTrigger}
+                onClick={() => setShowDeleteConfirm(true)}
                 disabled={saving}
                 className="mt-4 inline-flex items-center gap-2 rounded-lg border border-red-500/50 bg-red-500/20 px-4 py-2 text-sm text-red-100 hover:text-white disabled:opacity-50"
               >
@@ -1022,7 +953,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/hub?tab=communication" className="hover:text-white">Hub</Link>
+            <Link href="/hub?tab=triggers" className="hover:text-white">Hub</Link>
             <span>/</span>
             <span>{config.label}</span>
           </div>
@@ -1157,6 +1088,40 @@ export default function TriggerDetailShell({ kind }: Props) {
           {activeTab === 'danger' && renderDangerTab()}
         </div>
       )}
+
+      {/* v0.7.0 release-finishing UX fix — replace native window.confirm()
+          with the styled in-app ConfirmDialog. */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title={`Delete ${kind} trigger?`}
+        message={
+          trigger ? (
+            <>
+              You are about to permanently delete the trigger
+              {' '}<span className="font-mono text-white">&quot;{trigger.integration_name}&quot;</span>.
+              {' '}This removes the saved source binding, all wake-event history,
+              and any auto-generated default Flow attached to it. This cannot be undone.
+            </>
+          ) : 'This cannot be undone.'
+        }
+        confirmLabel="Delete trigger"
+        danger
+        requireType={trigger?.integration_name ?? null}
+        isBusy={saving}
+        onConfirm={deleteTrigger}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showRotateConfirm}
+        title="Rotate webhook signing secret?"
+        message="Any caller still using the previous secret will start failing immediately. The new secret is shown once after rotation — copy it before closing the page."
+        confirmLabel="Rotate secret"
+        danger
+        isBusy={webhookRotating}
+        onConfirm={handleRotateWebhookSecret}
+        onCancel={() => setShowRotateConfirm(false)}
+      />
     </div>
   )
 }

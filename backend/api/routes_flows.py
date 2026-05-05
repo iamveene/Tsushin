@@ -14,7 +14,7 @@ import logging
 import json
 import asyncio
 
-from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent
+from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent, FlowTriggerBinding
 from auth_dependencies import (
     require_permission,
     get_current_user_required,
@@ -129,6 +129,15 @@ class FlowDefinitionResponse(BaseModel):
     default_agent_id: Optional[int] = None
     # BUG-336: Keyword triggers
     trigger_keywords: Optional[List] = None
+
+    # v0.7.0 release-finishing: surface system-managed trigger metadata so the UI
+    # can render a "Jira/GitHub/Email/... Trigger" badge and disable Delete on
+    # auto-generated flows. All four are additive and default to user-authored
+    # behaviour so existing callers keep working unchanged.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None  # 'jira'|'email'|'github'|'webhook'
 
     class Config:
         from_attributes = True
@@ -310,6 +319,22 @@ def count_flow_nodes(db: Session, flow_id: int) -> int:
 def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
     count = count_flow_nodes(db, flow.id)
+    is_system_owned = bool(getattr(flow, "is_system_owned", False))
+
+    # Only look up the trigger kind for system-managed flows so user-authored
+    # flows pay no extra query cost.
+    system_trigger_kind: Optional[str] = None
+    if is_system_owned:
+        binding_row = (
+            db.query(FlowTriggerBinding.trigger_kind)
+            .filter(
+                FlowTriggerBinding.flow_definition_id == flow.id,
+                FlowTriggerBinding.is_system_managed.is_(True),
+            )
+            .first()
+        )
+        system_trigger_kind = binding_row[0] if binding_row else None
+
     return FlowDefinitionResponse(
         id=flow.id,
         name=flow.name,
@@ -325,7 +350,11 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         scheduled_at=flow.scheduled_at,
         flow_type=flow.flow_type or "workflow",
         default_agent_id=flow.default_agent_id,
-        trigger_keywords=flow.trigger_keywords or []  # BUG-336
+        trigger_keywords=flow.trigger_keywords or [],  # BUG-336
+        is_system_owned=is_system_owned,
+        editable_by_tenant=bool(getattr(flow, "editable_by_tenant", True)),
+        deletable_by_tenant=bool(getattr(flow, "deletable_by_tenant", True)),
+        system_trigger_kind=system_trigger_kind,
     )
 
 
@@ -892,6 +921,72 @@ def get_run_nodes(
 
 VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
 VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword", "triggered"}  # v0.7.0 Wave 2: added 'triggered' for source-step-driven flows
+VALID_SOURCE_TRIGGER_KINDS = {"email", "webhook", "jira", "github"}
+
+
+def _validate_flow_create_execution_config(flow: FlowCreate) -> None:
+    """Validate execution-method invariants before POST /flows/create persists."""
+    source_steps = [step for step in (flow.steps or []) if step.type == StepType.SOURCE]
+
+    if len(source_steps) > 1:
+        positions = [step.position for step in source_steps]
+        raise HTTPException(
+            status_code=422,
+            detail=f"Flow can have exactly one Source step for triggered execution (found {len(source_steps)} at positions {positions})",
+        )
+
+    source_step = source_steps[0] if source_steps else None
+    if source_step is not None and source_step.position != 1:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Source step must be at position 1 (found at position {source_step.position})",
+        )
+
+    if flow.execution_method == ExecutionMethod.TRIGGERED:
+        if source_step is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Flow with execution_method='triggered' must declare exactly one Source step at position 1",
+            )
+
+        trigger_kind = (source_step.config.trigger_kind or "").strip().lower()
+        if trigger_kind not in VALID_SOURCE_TRIGGER_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Source step config.trigger_kind must be one of: {sorted(VALID_SOURCE_TRIGGER_KINDS)}",
+            )
+
+        trigger_instance_id = source_step.config.trigger_instance_id
+        if trigger_instance_id is None or trigger_instance_id <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Source step config.trigger_instance_id must be greater than 0",
+            )
+    elif source_step is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Source steps are only supported for execution_method='triggered'",
+        )
+
+    if flow.execution_method == ExecutionMethod.SCHEDULED and flow.scheduled_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="scheduled_at is required when execution_method='scheduled'",
+        )
+
+    if flow.execution_method == ExecutionMethod.RECURRING and flow.recurrence_rule is None:
+        raise HTTPException(
+            status_code=422,
+            detail="recurrence_rule is required when execution_method='recurring'",
+        )
+
+    if flow.execution_method == ExecutionMethod.KEYWORD:
+        keywords = flow.trigger_keywords or []
+        if not any(isinstance(keyword, str) and keyword.strip() for keyword in keywords):
+            raise HTTPException(
+                status_code=422,
+                detail="At least one non-empty trigger keyword is required when execution_method='keyword'",
+            )
 
 
 def _ensure_flow_editable(flow: "FlowDefinition") -> None:
@@ -992,6 +1087,8 @@ def create_flow_v2(
     Supports execution methods, flow types, and inline step creation.
     """
     try:
+        _validate_flow_create_execution_config(flow)
+
         db_flow = FlowDefinition(
             name=flow.name,
             description=flow.description,

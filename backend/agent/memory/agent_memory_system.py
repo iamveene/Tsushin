@@ -107,6 +107,13 @@ class AgentMemorySystem:
             self._tenant_id_cache = agent.tenant_id
         return self._tenant_id_cache
 
+    @staticmethod
+    def scoped_sender_key(user_id: str, team_run_id: Optional[int] = None) -> str:
+        """Return the effective memory key for direct or team-run scoped memory."""
+        if team_run_id is None:
+            return user_id
+        return f"team_run:{team_run_id}:{user_id}"
+
     def _load_memory_from_db(self) -> None:
         """
         Load persisted memory from the database into the ring buffer.
@@ -133,6 +140,10 @@ class AgentMemorySystem:
             loaded_count = 0
             for record in memory_records:
                 sender_key = record.sender_key
+                if record.team_run_id is not None:
+                    prefix = f"team_run:{record.team_run_id}:"
+                    if not sender_key.startswith(prefix):
+                        sender_key = self.scoped_sender_key(sender_key, record.team_run_id)
                 messages = record.messages_json
 
                 if messages:
@@ -152,7 +163,8 @@ class AgentMemorySystem:
         role: str,
         content: str,
         message_id: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        team_run_id: Optional[int] = None,
     ) -> None:
         """
         Add a message to agent memory (Layer 1 + 2).
@@ -163,37 +175,45 @@ class AgentMemorySystem:
             content: Message content
             message_id: Optional unique message ID
             metadata: Optional additional metadata
+            team_run_id: Optional Agent Team run scope. When set, memory is
+                isolated under a run-scoped sender key and persisted with
+                Memory.team_run_id.
         """
+        effective_user_id = self.scoped_sender_key(user_id, team_run_id)
+
         # Add agent_id to metadata
         if metadata is None:
             metadata = {}
         metadata['agent_id'] = self.agent_id
+        if team_run_id is not None:
+            metadata['team_run_id'] = team_run_id
+            metadata['team_run_sender_key'] = user_id
 
         # Add to working memory + episodic memory
         await self.semantic_memory.add_message(
-            sender_key=user_id,
+            sender_key=effective_user_id,
             role=role,
             content=content,
             message_id=message_id,
             metadata=metadata
         )
 
-        self.logger.debug(f"Agent {self.agent_id}: Added {role} message from {user_id}")
+        self.logger.debug(f"Agent {self.agent_id}: Added {role} message from {effective_user_id}")
 
         # Persist to database (Memory table) for stats and conversation inspection
-        self._persist_memory_to_db(user_id)
+        self._persist_memory_to_db(effective_user_id, team_run_id=team_run_id)
 
         # Trigger fact extraction off the user-facing path. This keeps memory
         # enrichment enabled without making reply latency wait on another LLM call.
         if self.auto_extract_facts and role == 'assistant':
-            existing_task = self._fact_extraction_tasks.get(user_id)
+            existing_task = self._fact_extraction_tasks.get(effective_user_id)
             if existing_task and not existing_task.done():
                 self.logger.debug(
-                    f"Agent {self.agent_id}: fact extraction already pending for {user_id}, skipping duplicate trigger"
+                    f"Agent {self.agent_id}: fact extraction already pending for {effective_user_id}, skipping duplicate trigger"
                 )
             else:
-                self._fact_extraction_tasks[user_id] = asyncio.create_task(
-                    self._run_fact_extraction(user_id)
+                self._fact_extraction_tasks[effective_user_id] = asyncio.create_task(
+                    self._run_fact_extraction(effective_user_id)
                 )
 
     async def get_context(
@@ -201,7 +221,8 @@ class AgentMemorySystem:
         user_id: str,
         current_message: str,
         include_knowledge: bool = True,
-        include_shared: bool = False
+        include_shared: bool = False,
+        team_run_id: Optional[int] = None,
     ) -> Dict:
         """
         Get comprehensive context for responding to a message.
@@ -217,10 +238,13 @@ class AgentMemorySystem:
             current_message: Current message to respond to
             include_knowledge: Include learned facts about user
             include_shared: Include shared memory from other agents
+            team_run_id: Optional Agent Team run scope to retrieve only memory
+                stored for that run.
 
         Returns:
             Dictionary with all context layers
         """
+        effective_user_id = self.scoped_sender_key(user_id, team_run_id)
         context = {
             'working_memory': [],       # Recent messages
             'episodic_memories': [],    # Relevant past conversations
@@ -234,7 +258,7 @@ class AgentMemorySystem:
 
         # Layer 1 + 2: Get hybrid context from semantic memory
         memory_context = await self.semantic_memory.get_context(
-            sender_key=user_id,
+            sender_key=effective_user_id,
             current_message=current_message,
             max_semantic_results=self.config.get("semantic_search_results", 5),
             similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
@@ -246,7 +270,7 @@ class AgentMemorySystem:
 
         # Layer 3: Get semantic knowledge about user
         if include_knowledge:
-            facts = self._get_user_facts(user_id, decay_config=active_decay)
+            facts = self._get_user_facts(effective_user_id, decay_config=active_decay)
             context['semantic_facts'] = facts
 
         # Layer 4: Shared memory (cross-agent knowledge)
@@ -260,7 +284,7 @@ class AgentMemorySystem:
 
         # Layer 5: OKG long-term memory auto-recall (v0.6.0 Item 3)
         try:
-            okg_context = await self._get_okg_context(user_id, current_message)
+            okg_context = await self._get_okg_context(effective_user_id, current_message)
             if okg_context:
                 context['okg_memories'] = okg_context
         except Exception as e:
@@ -641,7 +665,7 @@ class AgentMemorySystem:
             self.logger.debug(f"OKG context injection skipped: {e}")
             return None
 
-    def _persist_memory_to_db(self, user_id: str) -> None:
+    def _persist_memory_to_db(self, user_id: str, team_run_id: Optional[int] = None) -> None:
         """
         Persist the current ring buffer state for a user to the Memory table.
 
@@ -652,6 +676,8 @@ class AgentMemorySystem:
 
         Args:
             user_id: User identifier (sender_key)
+            team_run_id: Optional Agent Team run scope. Direct memory is
+                persisted with NULL team_run_id.
         """
         from models import Memory
 
@@ -669,6 +695,10 @@ class AgentMemorySystem:
                 Memory.agent_id == self.agent_id,
                 Memory.sender_key == user_id,
             )
+            if team_run_id is None:
+                query = query.filter(Memory.team_run_id.is_(None))
+            else:
+                query = query.filter(Memory.team_run_id == team_run_id)
             if tenant_id:
                 query = query.filter(Memory.tenant_id == tenant_id)
             else:
@@ -694,7 +724,8 @@ class AgentMemorySystem:
                     tenant_id=tenant_id,
                     agent_id=self.agent_id,
                     sender_key=user_id,
-                    messages_json=messages
+                    messages_json=messages,
+                    team_run_id=team_run_id,
                 )
                 self.db.add(memory_record)
 

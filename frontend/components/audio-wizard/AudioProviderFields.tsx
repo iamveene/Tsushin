@@ -434,7 +434,7 @@ export function AudioVoiceFields({
   )
 }
 
-export type ASRUsageMode = 'openai' | 'tenant_default' | 'instance'
+export type ASRUsageMode = 'openai' | 'instance'
 
 export interface AudioTranscriptFieldsValue {
   responseMode?: 'conversational' | 'transcript_only'
@@ -456,17 +456,12 @@ export function AudioTranscriptFields({
   showResponseMode = true,
 }: AudioTranscriptFieldsProps) {
   const [instances, setInstances] = useState<ASRInstance[]>([])
-  const [defaultAsr, setDefaultAsr] = useState<{ default_asr_instance_id: number | null; provider: string; instance: ASRInstance | null } | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      api.getASRInstances().catch(() => []),
-      api.getDefaultASRInstance().catch(() => ({ default_asr_instance_id: null, provider: 'openai', instance: null })),
-    ]).then(([loadedInstances, loadedDefault]) => {
+    api.getASRInstances().catch(() => [] as ASRInstance[]).then(loadedInstances => {
       if (cancelled) return
       setInstances(loadedInstances)
-      setDefaultAsr(loadedDefault)
     })
     return () => { cancelled = true }
   }, [])
@@ -531,25 +526,8 @@ export function AudioTranscriptFields({
                 : 'border-white/10 bg-white/[0.02] hover:border-white/20'
             }`}
           >
-            <div className="text-white font-medium text-sm">OpenAI Whisper</div>
+            <div className="text-white font-medium text-sm">OpenAI Whisper (cloud)</div>
             <div className="text-xs text-gray-400 mt-1">Cloud transcription path. Requires OpenAI credentials in Hub.</div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => chooseMode('tenant_default')}
-            className={`w-full text-left p-4 rounded-xl border transition-colors ${
-              value.asrMode === 'tenant_default'
-                ? 'border-teal-400 bg-teal-500/10'
-                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
-            }`}
-          >
-            <div className="text-white font-medium text-sm">Use tenant default</div>
-            <div className="text-xs text-gray-400 mt-1">
-              {defaultAsr?.instance
-                ? `Currently resolves to ${defaultAsr.instance.instance_name}.`
-                : 'No local default is set yet, so this falls back to OpenAI Whisper.'}
-            </div>
           </button>
 
           <button
@@ -562,13 +540,35 @@ export function AudioTranscriptFields({
                 : 'border-white/10 bg-white/[0.02] hover:border-white/20'
             }`}
           >
-            <div className="text-white font-medium text-sm">Pin a specific local instance</div>
+            <div className="text-white font-medium text-sm">Pin a local instance</div>
             <div className="text-xs text-gray-400 mt-1">
               {instances.length > 0
-                ? 'Useful when this agent should stay on one dedicated Whisper/Speaches node.'
-                : 'No local ASR instances available yet. Create one in Settings → ASR.'}
+                ? 'Pin this agent to one tenant-owned ASR container (Speaches or openai_whisper).'
+                : 'No local ASR instances available yet.'}
             </div>
           </button>
+          {instances.length === 0 && (
+            // Separate sibling: the disabled button above blocks click events
+            // on its children (HTML disabled-button semantics), so this CTA
+            // lives outside the button. Dispatching a custom DOM event keeps
+            // the wizard orchestration in hub/page.tsx — no context coupling.
+            <div className="mt-2 px-4 py-3 rounded-xl border border-teal-500/20 bg-teal-500/5 text-xs text-gray-300">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tsushin:open-provider-wizard', {
+                      detail: { modality: 'asr', hosting: 'local' }
+                    }))
+                  }
+                }}
+                className="text-teal-400 hover:text-teal-300 underline font-medium"
+              >
+                + Create an ASR instance now
+              </button>
+              <span className="text-gray-400">{' '}or go to Hub → Add Provider → Speech-to-Text → Local.</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -582,7 +582,7 @@ export function AudioTranscriptFields({
           >
             {instances.map(inst => (
               <option key={inst.id} value={inst.id}>
-                {inst.instance_name} ({inst.container_status || 'none'})
+                {inst.instance_name} — {inst.vendor || 'unknown'} ({inst.container_status || 'none'})
               </option>
             ))}
           </select>
@@ -623,19 +623,12 @@ export function AudioTranscriptFields({
 
       <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
         {value.asrMode === 'openai' && (
-          <div>Uses OpenAI Whisper directly. This is the current default behavior for existing agents.</div>
-        )}
-        {value.asrMode === 'tenant_default' && (
-          <div>
-            {defaultAsr?.instance
-              ? `Uses the tenant default ASR instance (${defaultAsr.instance.instance_name}). If that default is cleared later, this agent falls back to OpenAI Whisper.`
-              : 'No tenant default local ASR is set yet, so this mode currently behaves the same as OpenAI Whisper.'}
-          </div>
+          <div>Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under Hub → AI Providers → OpenAI.</div>
         )}
         {value.asrMode === 'instance' && (
           <div>
             {selectedInstance
-              ? `Pins this agent to ${selectedInstance.instance_name}. Tenant default changes will not affect it.`
+              ? `Pins this agent to ${selectedInstance.instance_name} (${selectedInstance.vendor}). Voice notes never leave the tenant — they're transcribed locally inside the auto-provisioned container.`
               : 'Select a local ASR instance to pin this agent.'}
           </div>
         )}

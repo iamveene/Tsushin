@@ -33,3 +33,10 @@ __all__ = [
     'SearchSkill',
     'ImageAnalysisSkill',
 ]
+
+# v0.7.x Trigger Case Memory — find_similar_past_cases is always exported.
+# Per-tenant opt-in is via Agent.vector_store_instance_id and per-trigger
+# TriggerRecapConfig.enabled, not via a global env flag.
+from .find_similar_past_cases import FindSimilarPastCasesSkill  # noqa: F401
+
+__all__.append("FindSimilarPastCasesSkill")

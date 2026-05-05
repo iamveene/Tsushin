@@ -267,6 +267,10 @@
     @apply bg-tsushin-indigo/15 text-tsushin-indigo-glow border border-tsushin-indigo/25;
   }
 
+  .badge-team {
+    @apply bg-tsushin-indigo/15 text-tsushin-indigo-glow border border-tsushin-indigo/25;
+  }
+
   .badge-accent {
     @apply bg-tsushin-accent/15 text-tsushin-accent border border-tsushin-accent/25;
   }

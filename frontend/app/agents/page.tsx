@@ -6,11 +6,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
+import SplitButton from '@/components/ui/SplitButton'
 import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
@@ -23,6 +24,9 @@ import {
   LightningIcon,
   KeyIcon,
   LightbulbIcon,
+  BotIcon,
+  PlusIcon,
+  UsersIcon,
 } from '@/components/ui/icons'
 
 interface AgentFormData {
@@ -45,6 +49,7 @@ interface AgentFormData {
 
 export default function AgentsPage() {
   const toast = useToast()
+  const router = useRouter()
   // BUG-610 FIX: Read-only members (no agents.write) were seeing and
   // clicking create / delete / toggle buttons. The backend rejected those
   // with 403 but the buttons still rendered — confusing UX and a noisy
@@ -102,6 +107,11 @@ export default function AgentsPage() {
     } else {
       agentWizard.openWizard()
     }
+  }
+
+  const openTeamsUI = () => {
+    if (!canWriteAgents) return
+    router.push('/studio/teams?new=1')
   }
 
   // Legacy modal pre-fill from a persisted Guided draft (set when the user
@@ -457,15 +467,27 @@ export default function AgentsPage() {
             <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
           </div>
           {canWriteAgents && (
-            <button
-              onClick={openCreateUI}
-              className="btn-primary flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Create Agent
-            </button>
+            <SplitButton
+              primaryLabel="Create Agent"
+              primaryIcon={<PlusIcon size={16} />}
+              onPrimaryClick={openCreateUI}
+              options={[
+                {
+                  id: 'agent',
+                  label: 'Agent',
+                  description: 'Open the guided agent wizard.',
+                  icon: <BotIcon size={16} />,
+                  onSelect: openCreateUI,
+                },
+                {
+                  id: 'team',
+                  label: 'Team',
+                  description: 'Open Studio Teams.',
+                  icon: <UsersIcon size={16} />,
+                  onSelect: openTeamsUI,
+                },
+              ]}
+            />
           )}
         </div>
       </div>
@@ -650,6 +672,11 @@ export default function AgentsPage() {
                                 ○ Inactive
                               </span>
                             )}
+                            {agent.is_team_member && (
+                              <span className="badge badge-team flex items-center gap-1">
+                                <UsersIcon size={12} /> Team
+                              </span>
+                            )}
                             {(agentSkillsCounts[agent.id] || 0) > 0 && (
                               <span className="badge badge-indigo flex items-center gap-1">
                                 <LightningIcon size={12} /> {agentSkillsCounts[agent.id]} skills
@@ -679,6 +706,7 @@ export default function AgentsPage() {
                     <div className="flex gap-2 ml-4 flex-shrink-0">
                       <Link
                         href={`/agents/${agent.id}`}
+                        prefetch={false}
                         className="btn-primary py-1.5 px-3 text-sm flex items-center gap-1.5"
                       >
                         <SettingsIcon size={14} /> Manage

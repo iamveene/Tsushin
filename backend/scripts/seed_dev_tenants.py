@@ -3,7 +3,7 @@
 Dev-only second-tenant seeder for cross-tenant runtime testing.
 
 Creates a second tenant ("acme2-dev" by default) with two users (owner + member),
-the standard set of system agents, and two paused trigger stubs (Email + Schedule).
+the standard set of system agents, and a paused Email trigger stub.
 The script is opt-in and idempotent: re-running it exits 0 with "already seeded"
 when the tenant row exists.
 
@@ -33,7 +33,7 @@ from sqlalchemy.orm import sessionmaker
 
 import settings as settings_module
 from auth_utils import hash_password
-from models import EmailChannelInstance, ScheduleChannelInstance
+from models import EmailChannelInstance
 from models_rbac import Role, Tenant, User, UserRole
 from services.agent_seeding import seed_default_agents
 
@@ -150,31 +150,6 @@ def _get_or_create_email_stub(db, *, tenant_id: str, owner_id: int) -> Optional[
     return instance
 
 
-def _get_or_create_schedule_stub(db, *, tenant_id: str, owner_id: int) -> Optional[ScheduleChannelInstance]:
-    existing = (
-        db.query(ScheduleChannelInstance)
-        .filter(
-            ScheduleChannelInstance.tenant_id == tenant_id,
-            ScheduleChannelInstance.integration_name == "Acme2 Weekly Digest",
-        )
-        .first()
-    )
-    if existing is not None:
-        return existing
-    instance = ScheduleChannelInstance(
-        tenant_id=tenant_id,
-        integration_name="Acme2 Weekly Digest",
-        cron_expression="0 9 * * MON",
-        timezone="UTC",
-        is_active=False,
-        status="paused",
-        created_by=owner_id,
-    )
-    db.add(instance)
-    db.flush()
-    return instance
-
-
 def seed_tenant(args: argparse.Namespace, db) -> None:
     existing_tenant = db.query(Tenant).filter(Tenant.id == args.tenant_id).first()
     if existing_tenant is not None:
@@ -187,7 +162,6 @@ def seed_tenant(args: argparse.Namespace, db) -> None:
         print(f"[dry-run] Would create member: {args.member_email}")
         print(f"[dry-run] Would seed 3 default agents")
         print(f"[dry-run] Would create paused EmailChannelInstance 'Acme2 Email Watch'")
-        print(f"[dry-run] Would create paused ScheduleChannelInstance 'Acme2 Weekly Digest'")
         return
 
     owner_role = _resolve_role(db, "owner")
@@ -218,7 +192,6 @@ def seed_tenant(args: argparse.Namespace, db) -> None:
 
     seeded_agents = seed_default_agents(args.tenant_id, owner.id, db)
     _get_or_create_email_stub(db, tenant_id=args.tenant_id, owner_id=owner.id)
-    _get_or_create_schedule_stub(db, tenant_id=args.tenant_id, owner_id=owner.id)
 
     db.commit()
 
@@ -228,7 +201,6 @@ def seed_tenant(args: argparse.Namespace, db) -> None:
     print(f"Member:       {args.member_email} (password: {args.password})")
     print(f"Agents:       {len(seeded_agents)}")
     print(f"Email stub:   Acme2 Email Watch (paused)")
-    print(f"Schedule stub:Acme2 Weekly Digest (paused)")
 
     if args.with_continuous:
         print(

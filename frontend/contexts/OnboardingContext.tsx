@@ -56,6 +56,7 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 const TOTAL_STEPS = 16
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
+const MINIMIZED_KEY_PREFIX = 'tsushin_onboarding_minimized'
 
 function getStorageKey(userId: number | null): string | null {
   if (userId === null) {
@@ -66,6 +67,10 @@ function getStorageKey(userId: number | null): string | null {
 
 function getStartedKey(storageKey: string): string {
   return storageKey.replace(LEGACY_STORAGE_KEY, STARTED_KEY_PREFIX)
+}
+
+function getMinimizedKey(storageKey: string): string {
+  return storageKey.replace(LEGACY_STORAGE_KEY, MINIMIZED_KEY_PREFIX)
 }
 
 function getCompletedForUser(storageKey: string): boolean {
@@ -207,8 +212,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }
 
     const completed = getCompletedForUser(storageKey)
+    // BUG-QA070-A1-001: Restore minimized state so the pill survives page reloads.
+    // The minimized key is set independently and is itself sufficient evidence the tour
+    // was started — don't gate on previouslyStarted because manual launches via
+    // startTour() do not persist the started key.
+    const previouslyMinimized = !completed && localStorage.getItem(getMinimizedKey(storageKey)) === 'true'
     // BUG-536: Restore "started" state from localStorage so page reloads don't restart the tour
-    const previouslyStarted = !completed && localStorage.getItem(getStartedKey(storageKey)) === 'true'
+    const previouslyStarted = !completed && (previouslyMinimized || localStorage.getItem(getStartedKey(storageKey)) === 'true')
 
     tourDismissedRef.current = completed
     if (!completed) {
@@ -216,10 +226,19 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }
     queueMicrotask(() => {
       setState(prev => {
-        if (prev.hasCompletedOnboarding === completed) {
-          return prev
+        const next = { ...prev }
+        let changed = false
+        if (prev.hasCompletedOnboarding !== completed) {
+          next.hasCompletedOnboarding = completed
+          changed = true
         }
-        return { ...prev, hasCompletedOnboarding: completed }
+        // BUG-QA070-A1-001: rehydrate active+minimized so the pill renders after reload
+        if (previouslyMinimized && !prev.isMinimized) {
+          next.isActive = true
+          next.isMinimized = true
+          changed = true
+        }
+        return changed ? next : prev
       })
     })
 
@@ -262,6 +281,14 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     clearAutoStartTimer()
     tourStartedRef.current = true
     tourDismissedRef.current = false
+    // BUG-QA070-A1-001: Persist "started" so a reload-then-rehydrate path knows the
+    // tour was launched (the auto-start timer also writes this — manual launches
+    // need the same to survive reloads).
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.setItem(getStartedKey(storageKey), 'true')
+      localStorage.removeItem(getMinimizedKey(storageKey))  // fresh launch is not minimized
+    }
     setState(prev => ({
       ...prev,
       isActive: true,
@@ -291,10 +318,19 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }
 
   const minimize = () => {
+    // BUG-QA070-A1-001: Persist minimized state so the pill survives page reloads
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.setItem(getMinimizedKey(storageKey), 'true')
+    }
     setState(prev => ({ ...prev, isMinimized: true }))
   }
 
   const maximize = () => {
+    const storageKey = activeStorageKeyRef.current
+    if (storageKey) {
+      localStorage.removeItem(getMinimizedKey(storageKey))
+    }
     setState(prev => ({ ...prev, isMinimized: false }))
   }
 
@@ -304,6 +340,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
       localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
+      localStorage.removeItem(getMinimizedKey(storageKey))  // BUG-QA070-A1-001: clear minimized flag too
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()
@@ -324,6 +361,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
       localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
+      localStorage.removeItem(getMinimizedKey(storageKey))  // BUG-QA070-A1-001: clear minimized flag too
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()
@@ -341,6 +379,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (storageKey) {
       localStorage.setItem(storageKey, 'true')
       localStorage.removeItem(getStartedKey(storageKey))  // BUG-536: clear started flag
+      localStorage.removeItem(getMinimizedKey(storageKey))  // BUG-QA070-A1-001: clear minimized flag too
     }
     tourDismissedRef.current = true
     clearAutoStartTimer()

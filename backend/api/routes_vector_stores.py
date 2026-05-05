@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import logging
 
-from models import VectorStoreInstance
+from models import VectorStoreIndex, VectorStoreInstance
 from auth_dependencies import (
     TenantContext,
     get_tenant_context,
@@ -93,6 +93,10 @@ class VectorStoreInstanceResponse(BaseModel):
     container_status: Optional[str] = None
     container_name: Optional[str] = None
     container_port: Optional[int] = None
+    indexes: List["VectorStoreIndexResponse"] = []
+    default_index: Optional["VectorStoreIndexResponse"] = None
+    default_vector_store_index_id: Optional[int] = None
+    long_term_memory_index_id: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -108,10 +112,74 @@ class TestConnectionResponse(BaseModel):
     vector_count: Optional[int] = None
 
 
+class VectorStoreIndexResponse(BaseModel):
+    id: int
+    tenant_id: str
+    vector_store_instance_id: Optional[int]
+    purpose: str
+    owner_type: str
+    owner_id: int
+    embedding_provider_instance_id: Optional[int] = None
+    embedding_provider: str
+    embedding_model: str
+    embedding_dims: int
+    embedding_metric: str
+    embedding_task_document: Optional[str] = None
+    embedding_task_query: Optional[str] = None
+    physical_collection_name: str
+    physical_namespace: str
+    physical_index_name: Optional[str] = None
+    contract_hash: str
+    is_active: bool
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class VectorStoreIndexResolveRequest(BaseModel):
+    purpose: str
+    owner_type: str = "tenant"
+    owner_id: int = 0
+    contract: Optional[Dict[str, Any]] = None
+    embedding_provider_instance_id: Optional[int] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dims: Optional[int] = None
+    embedding_metric: Optional[str] = None
+    embedding_task_document: Optional[str] = None
+    embedding_task_query: Optional[str] = None
+    physical_collection_name: Optional[str] = None
+    physical_index_name: Optional[str] = None
+    physical_namespace: Optional[str] = None
+    create: bool = True
+
+
 # ==================== Helpers ====================
 
 def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
     from services.vector_store_instance_service import VectorStoreInstanceService
+    from services.vector_store_index_resolver import VectorStoreIndexResolver
+    resolver = VectorStoreIndexResolver(db)
+    indexes = []
+    default_index = None
+    if instance is not None:
+        rows = (
+            db.query(VectorStoreIndex)
+            .filter(
+                VectorStoreIndex.tenant_id == instance.tenant_id,
+                VectorStoreIndex.vector_store_instance_id == instance.id,
+                VectorStoreIndex.is_active == True,
+            )
+            .order_by(VectorStoreIndex.created_at.desc())
+            .all()
+        )
+        indexes = [resolver.to_response(row) for row in rows]
+        extra = instance.extra_config or {}
+        if isinstance(extra, dict):
+            default_index_id = extra.get("default_vector_store_index_id") or extra.get("long_term_memory_index_id")
+            default_index = next(
+                (item for item in indexes if item.get("id") == default_index_id),
+                None,
+            )
     return {
         "id": instance.id,
         "tenant_id": instance.tenant_id,
@@ -132,9 +200,30 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "container_status": getattr(instance, 'container_status', None),
         "container_name": getattr(instance, 'container_name', None),
         "container_port": getattr(instance, 'container_port', None),
+        "indexes": indexes,
+        "default_index": default_index,
+        "default_vector_store_index_id": (instance.extra_config or {}).get("default_vector_store_index_id") if isinstance(instance.extra_config or {}, dict) else None,
+        "long_term_memory_index_id": (instance.extra_config or {}).get("long_term_memory_index_id") if isinstance(instance.extra_config or {}, dict) else None,
         "created_at": instance.created_at.isoformat() if instance.created_at else None,
         "updated_at": instance.updated_at.isoformat() if instance.updated_at else None,
     }
+
+
+def _vector_index_contract_from_request(data: VectorStoreIndexResolveRequest) -> Dict[str, Any]:
+    contract = dict(data.contract or {})
+    for key in (
+        "embedding_provider_instance_id",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dims",
+        "embedding_metric",
+        "embedding_task_document",
+        "embedding_task_query",
+    ):
+        value = getattr(data, key)
+        if value is not None:
+            contract[key] = value
+    return contract
 
 
 # ==================== CRUD Endpoints ====================
@@ -218,6 +307,78 @@ async def get_vector_store_instance(
     return _to_response(instance, db)
 
 
+@router.get(
+    "/vector-stores/{instance_id}/indexes",
+    tags=["Vector Stores"],
+    response_model=List[VectorStoreIndexResponse],
+)
+async def list_vector_store_indexes(
+    instance_id: int,
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    from services.vector_store_instance_service import VectorStoreInstanceService
+    from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+    instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Vector store instance not found")
+    indexes = (
+        db.query(VectorStoreIndex)
+        .filter(
+            VectorStoreIndex.tenant_id == ctx.tenant_id,
+            VectorStoreIndex.vector_store_instance_id == instance_id,
+            VectorStoreIndex.is_active == True,
+        )
+        .order_by(VectorStoreIndex.purpose, VectorStoreIndex.owner_type, VectorStoreIndex.owner_id, VectorStoreIndex.created_at.desc())
+        .all()
+    )
+    return [VectorStoreIndexResolver.to_dict(index) for index in indexes]
+
+
+@router.post(
+    "/vector-stores/{instance_id}/indexes/resolve",
+    tags=["Vector Stores"],
+    response_model=VectorStoreIndexResponse,
+)
+async def resolve_vector_store_index(
+    instance_id: int,
+    data: VectorStoreIndexResolveRequest,
+    ctx: TenantContext = Depends(require_permission("org.settings.write")),
+    db: Session = Depends(get_db),
+):
+    from services.vector_store_instance_service import VectorStoreInstanceService
+    from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+    instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Vector store instance not found")
+
+    try:
+        index = VectorStoreIndexResolver.resolve_or_create(
+            db,
+            tenant_id=ctx.tenant_id,
+            vector_store_instance_id=instance_id,
+            purpose=data.purpose,
+            owner_type=data.owner_type,
+            owner_id=data.owner_id,
+            contract=_vector_index_contract_from_request(data),
+            physical_collection_name=data.physical_collection_name,
+            physical_index_name=data.physical_index_name,
+            physical_namespace=data.physical_namespace,
+            create=data.create,
+        )
+        if not index:
+            raise HTTPException(status_code=404, detail="Vector store index not found")
+        return VectorStoreIndexResolver.to_dict(index)
+    except ValueError as exc:
+        db.rollback()
+        message = str(exc)
+        if message == "Vector store instance not found":
+            raise HTTPException(status_code=404, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+
+
 @router.put("/vector-stores/{instance_id}", tags=["Vector Stores"])
 async def update_vector_store_instance(
     instance_id: int,
@@ -281,6 +442,147 @@ async def test_vector_store_connection(
     from services.vector_store_instance_service import VectorStoreInstanceService
     result = await VectorStoreInstanceService.test_connection(instance_id, ctx.tenant_id, db)
     return result
+
+
+# ==================== v0.7.x Wave 2-C: Test-Embedding ====================
+
+
+class TestEmbeddingRequest(BaseModel):
+    """Optional override of the sample text used for the round-trip."""
+
+    text: str = "hello world"
+
+
+class TestEmbeddingResponse(BaseModel):
+    """Diagnostic shape — never raises a 5xx on embed failure.
+
+    The operator surface (the Vector Stores page) needs to render the
+    error message inline rather than parse it out of an HTTP error
+    body. ``success=False`` together with a populated ``error`` string
+    is the contract.
+    """
+
+    success: bool
+    dims: int
+    sample_norm: float
+    latency_ms: int
+    provider: str
+    model: str
+    error: Optional[str] = None
+
+
+@router.post(
+    "/vector-stores/{instance_id}/test-embedding",
+    tags=["Vector Stores"],
+    response_model=TestEmbeddingResponse,
+)
+async def test_vector_store_embedding(
+    instance_id: int,
+    body: Optional[TestEmbeddingRequest] = None,
+    ctx: TenantContext = Depends(require_permission("org.settings.read")),
+    db: Session = Depends(get_db),
+):
+    """Round-trip a sample text through the instance's embedding contract.
+
+    Used by Group E success criteria — operators verify a Gemini
+    instance can actually embed before binding it to an agent. Returns
+    HTTP 200 even on failure so the UI can surface the error message
+    in-line; only tenant isolation / not-found returns 404.
+    """
+    import math
+    import time
+
+    from services.vector_store_instance_service import VectorStoreInstanceService
+    from services.case_embedding_resolver import EmbeddingContract
+
+    instance = VectorStoreInstanceService.get_instance(instance_id, ctx.tenant_id, db)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Vector store instance not found")
+
+    extra = instance.extra_config or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    provider = str(extra.get("embedding_provider") or "local")
+    model = str(extra.get("embedding_model") or (
+        "gemini-embedding-2" if provider == "gemini" else "all-MiniLM-L6-v2"
+    ))
+    try:
+        dims = int(extra.get("embedding_dims") or (1536 if provider == "gemini" else 384))
+    except (TypeError, ValueError):
+        dims = 1536 if provider == "gemini" else 384
+
+    sample_text = (body.text if body is not None else None) or "hello world"
+
+    started = time.monotonic()
+    try:
+        if provider != "local" and extra.get("embedding_provider_instance_id"):
+            from services.embedding_provider_service import EmbeddingProviderService
+
+            credentials = EmbeddingProviderService.resolve_provider_credentials(
+                tenant_id=ctx.tenant_id,
+                provider=provider,
+                provider_instance_id=extra.get("embedding_provider_instance_id"),
+                db=db,
+            )
+        else:
+            credentials = VectorStoreInstanceService.resolve_credentials(instance, db)
+
+        contract = EmbeddingContract(
+            provider=provider,
+            model=model,
+            dimensions=dims,
+            metric=str(extra.get("metric") or "cosine"),
+            task=extra.get("embedding_task"),
+            task_document=str(extra.get("embedding_task_document") or "RETRIEVAL_DOCUMENT"),
+            task_query=str(extra.get("embedding_task_query") or "RETRIEVAL_QUERY"),
+            vector_store_instance_id=instance.id,
+            embedding_provider_instance_id=extra.get("embedding_provider_instance_id"),
+        )
+
+        from agent.memory.embedding_service import get_shared_embedding_service
+
+        embedder = get_shared_embedding_service(
+            contract=contract,
+            credentials=credentials,
+        )
+        vector = embedder.embed_text(sample_text, task_type="RETRIEVAL_DOCUMENT")
+        if vector is None:
+            raise ValueError("embedder returned None")
+
+        actual_dims = len(vector)
+        # L2 norm — gives operators a quick sanity-check that the
+        # vector isn't all-zeros.
+        sq = 0.0
+        for v in vector:
+            sq += float(v) * float(v)
+        sample_norm = math.sqrt(sq)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return TestEmbeddingResponse(
+            success=True,
+            dims=actual_dims,
+            sample_norm=sample_norm,
+            latency_ms=latency_ms,
+            provider=provider,
+            model=model,
+            error=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostic path
+        latency_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "test_vector_store_embedding failed for tenant=%s instance=%s: %s",
+            ctx.tenant_id,
+            instance_id,
+            type(exc).__name__,
+        )
+        return TestEmbeddingResponse(
+            success=False,
+            dims=0,
+            sample_norm=0.0,
+            latency_ms=latency_ms,
+            provider=provider,
+            model=model,
+            error=str(exc),
+        )
 
 
 @router.get("/vector-stores/{instance_id}/stats", tags=["Vector Stores"])

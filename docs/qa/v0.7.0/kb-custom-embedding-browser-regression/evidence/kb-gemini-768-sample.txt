@@ -1,0 +1,10 @@
+Release 0.7.0 custom embedding QA sample, 768 profile.
+
+The fictional archive is called Cedar Prism Archive.
+Archive owner: Theo Marlowe.
+Review date: 2032-02-14.
+Asset ID: CPA-768-CANARY.
+Secret phrase: saffron signal.
+Support queue: Borealis-29.
+
+When asked about this profile, answer with the archive name, owner, review date, asset ID, support queue, and secret phrase.

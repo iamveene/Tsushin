@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * ChannelsWizard — guided entry point for the Hub > Communication tab.
+ * ChannelsWizard — guided entry point for the Hub > Channels tab.
  *
  * Replaces the six scattered per-channel CTAs ("+ Create WhatsApp Instance"
  * at tab level, "+ Create Bot" / "+ Connect Workspace" / "+ Connect Bot" /

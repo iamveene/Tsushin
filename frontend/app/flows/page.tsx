@@ -40,6 +40,7 @@ import {
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
+import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import {
   MessageIcon,
@@ -70,6 +71,8 @@ import {
   FileTextIcon,
   ClipboardIcon,
   ShieldCheckIcon,
+  CodeIcon,
+  GitHubIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
@@ -93,8 +96,26 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'triggered', label: 'Triggered', Icon: ZapIcon },  // v0.7.0 Wave 2: Triggers \u2194 Flows unification
 ]
 
+const FLOW_TRIGGER_KINDS: TriggerKind[] = ['email', 'jira', 'github', 'webhook']
+
+type TriggerOption = {
+  kind: TriggerKind
+  id: number
+  label: string
+  description: string
+  status: string
+  isActive: boolean
+}
+
+const TRIGGER_KIND_OPTIONS: { value: TriggerKind; label: string; description: string; Icon: React.FC<IconProps> }[] = [
+  { value: 'email', label: 'Gmail / Email', description: 'New messages or Gmail query matches', Icon: MailIcon },
+  { value: 'jira', label: 'Jira', description: 'JQL matches from a Jira integration', Icon: ClipboardIcon },
+  { value: 'github', label: 'GitHub', description: 'Repository webhook events', Icon: GitHubIcon },
+  { value: 'webhook', label: 'Webhook', description: 'Inbound webhook payloads', Icon: WebhookIcon },
+]
+
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
-  // v0.7.0 Wave 2: 'source' step is locked at position 0, max 1 per flow.
+  // v0.7.0 Wave 2: 'source' step is locked at position 1, max 1 per flow.
   // The dropdown filters this out when a source step already exists; the
   // step row hides Delete + reorder buttons when type === 'source'.
   { value: 'source', label: 'Source', Icon: ZapIcon, description: 'Trigger event that wakes this flow' },
@@ -107,6 +128,141 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
   { value: 'gate', label: 'Gate', Icon: ShieldCheckIcon, description: 'Conditional check \u2014 block or pass' },
 ]
+
+function isBoundSourceStep(step: { type?: string; config?: Record<string, unknown> | null }): boolean {
+  if (step.type !== 'source') return true
+  const config = step.config || {}
+  return isValidTriggerKind(config.trigger_kind) && Number(config.trigger_instance_id) > 0
+}
+
+function hasUnboundSourceStep(steps?: Array<{ type?: string; config?: Record<string, unknown> | null }>): boolean {
+  return Boolean(steps?.some(step => !isBoundSourceStep(step)))
+}
+
+function getAddableStepTypes(
+  steps: Array<{ type?: string }>,
+  allowSourceStep: boolean
+): typeof STEP_TYPES {
+  return STEP_TYPES.filter((type) => (
+    type.value !== 'source'
+    || (allowSourceStep && !steps.some((s) => s.type === 'source'))
+  ))
+}
+
+function isValidTriggerKind(value: unknown): value is TriggerKind {
+  return typeof value === 'string' && FLOW_TRIGGER_KINDS.includes(value as TriggerKind)
+}
+
+function triggerKindLabel(kind: TriggerKind): string {
+  return TRIGGER_KIND_OPTIONS.find(option => option.value === kind)?.label || kind
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function triggerOptionFromRecord(kind: TriggerKind, raw: unknown): TriggerOption {
+  const record = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const id = Number(record.id || 0)
+  const integrationName = readString(record, 'integration_name')
+  const defaultLabel = `${triggerKindLabel(kind)} trigger #${id || '?'}`
+  let label = integrationName || defaultLabel
+  const details: string[] = []
+
+  if (kind === 'email') {
+    label = integrationName || readString(record, 'gmail_integration_name') || readString(record, 'gmail_account_email') || defaultLabel
+    const account = readString(record, 'gmail_account_email')
+    const query = readString(record, 'search_query')
+    if (account) details.push(account)
+    if (query) details.push(`Query: ${query}`)
+  } else if (kind === 'jira') {
+    const project = readString(record, 'project_key')
+    const jql = readString(record, 'jql')
+    label = integrationName || project || defaultLabel
+    if (project) details.push(`Project: ${project}`)
+    if (jql) details.push(`JQL: ${jql}`)
+  } else if (kind === 'github') {
+    const owner = readString(record, 'repo_owner')
+    const repo = readString(record, 'repo_name')
+    const repoLabel = owner && repo ? `${owner}/${repo}` : null
+    label = integrationName || repoLabel || defaultLabel
+    if (repoLabel) details.push(repoLabel)
+    const events = Array.isArray(record.events) ? record.events.filter((event): event is string => typeof event === 'string') : []
+    if (events.length > 0) details.push(`Events: ${events.join(', ')}`)
+  } else if (kind === 'webhook') {
+    const slug = readString(record, 'slug')
+    label = integrationName || slug || defaultLabel
+    if (slug) details.push(`/${slug}`)
+    const callback = readString(record, 'callback_url')
+    if (callback) details.push(callback)
+  }
+
+  const status = readString(record, 'status') || readString(record, 'health_status') || 'unknown'
+  const isActive = record.is_active === undefined ? status !== 'paused' : Boolean(record.is_active)
+
+  return {
+    kind,
+    id,
+    label,
+    description: details.join(' - ') || `ID ${id}`,
+    status,
+    isActive,
+  }
+}
+
+function buildBoundSourceStep(kind: TriggerKind, id: number): CreateFlowStepData {
+  return {
+    name: 'Source',
+    type: 'source',
+    position: 1,
+    config: {
+      trigger_kind: kind,
+      trigger_instance_id: id,
+    } as FlowStepConfig,
+  }
+}
+
+function upsertBoundSourceStep(
+  steps: CreateFlowStepData[] = [],
+  kind: TriggerKind,
+  id: number
+): CreateFlowStepData[] {
+  const nonSourceSteps = steps.filter(step => step.type !== 'source')
+  return [buildBoundSourceStep(kind, id), ...nonSourceSteps].map((step, index) => ({
+    ...step,
+    position: index + 1,
+  }))
+}
+
+function removeSourceSteps(steps: CreateFlowStepData[] = []): CreateFlowStepData[] {
+  return steps.filter(step => step.type !== 'source').map((step, index) => ({
+    ...step,
+    position: index + 1,
+  }))
+}
+
+function defaultRecurrenceRule(): NonNullable<CreateFlowData['recurrence_rule']> {
+  return {
+    frequency: 'daily',
+    interval: 1,
+    timezone: 'America/Sao_Paulo',
+  }
+}
+
+function toDateTimeLocalValue(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function fromDateTimeLocalValue(value: string): string | undefined {
+  if (!value) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
 
 const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
@@ -210,7 +366,7 @@ export default function FlowsPage() {
   const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
   const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
   const prefillKind: TriggerKind | null =
-    prefillKindParam && ['jira', 'email', 'github', 'schedule', 'webhook'].includes(prefillKindParam)
+    prefillKindParam && ['jira', 'email', 'github', 'webhook'].includes(prefillKindParam)
       ? prefillKindParam
       : null
   const prefillTriggerId =
@@ -266,6 +422,7 @@ export default function FlowsPage() {
       // Read-only users can't create flows; surface a toast and clear the params.
       toast.warning('Insufficient permissions', 'You need flows.write to create flows from a trigger.')
       prefillConsumedRef.current = true
+      clearPrefillParams()
       return
     }
     // Wait for trigger name to resolve so the auto-filled flow name carries
@@ -881,10 +1038,11 @@ export default function FlowsPage() {
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-medium text-white group-hover:text-teal-400 transition-colors">
                                   {flow.name}
                                 </span>
+                                <TriggerOriginBadge flow={flow} />
                                 {threadCount > 0 && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                     <span className="relative flex h-1.5 w-1.5">
@@ -974,15 +1132,29 @@ export default function FlowsPage() {
                                     </svg>
                                   )}
                                 </button>
-                                <button
-                                  onClick={() => handleDeleteFlow(flow.id)}
-                                  className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                                  title="Delete"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
+                                {(() => {
+                                  const canDelete = flow.deletable_by_tenant !== false
+                                  return (
+                                    <button
+                                      onClick={() => canDelete && handleDeleteFlow(flow.id)}
+                                      disabled={!canDelete}
+                                      className={`p-2 rounded-lg transition-colors ${
+                                        canDelete
+                                          ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+                                          : 'text-red-400/30 cursor-not-allowed'
+                                      }`}
+                                      title={
+                                        canDelete
+                                          ? 'Delete'
+                                          : 'Auto-generated from a trigger — delete the trigger to remove this flow.'
+                                      }
+                                    >
+                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  )
+                                })()}
                               </>
                             )}
                           </div>
@@ -1271,6 +1443,36 @@ function TypeBadge({ type }: { type: FlowType }) {
   )
 }
 
+// v0.7.0 release-finishing — system-managed (auto-generated from a trigger)
+// flow badge. Trigger wizards mint a flow with `is_system_owned=true`; this
+// chip surfaces the origin so operators don't mistake it for a hand-built
+// flow. Renders nothing for user-authored flows.
+const TRIGGER_KIND_BADGE: Record<
+  'jira' | 'email' | 'github' | 'webhook',
+  { label: string; classes: string; Icon: React.FC<IconProps> }
+> = {
+  jira:     { label: 'Jira Trigger',     classes: 'bg-blue-500/10 border-blue-500/30 text-blue-300',         Icon: CodeIcon },
+  email:    { label: 'Email Trigger',    classes: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300', Icon: EnvelopeIcon },
+  github:   { label: 'GitHub Trigger',   classes: 'bg-violet-500/10 border-violet-500/30 text-violet-300',   Icon: GitHubIcon },
+  webhook:  { label: 'Webhook Trigger',  classes: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',         Icon: WebhookIcon },
+}
+
+function TriggerOriginBadge({ flow }: { flow: FlowDefinition }) {
+  if (!flow.is_system_owned) return null
+  const kind = (flow.system_trigger_kind || 'webhook') as keyof typeof TRIGGER_KIND_BADGE
+  const cfg = TRIGGER_KIND_BADGE[kind] || TRIGGER_KIND_BADGE.webhook
+  const Icon = cfg.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border ${cfg.classes}`}
+      title={`Auto-generated from ${kind} trigger — editable, but not deletable. Delete the trigger to remove this flow.`}
+    >
+      <Icon size={12} />
+      {cfg.label}
+    </span>
+  )
+}
+
 function ExecutionBadge({ method }: { method: ExecutionMethod }) {
   const config: Record<string, { label: string; color: string; icon: JSX.Element }> = {
     immediate: {
@@ -1292,6 +1494,11 @@ function ExecutionBadge({ method }: { method: ExecutionMethod }) {
       label: 'Keyword',
       color: 'text-cyan-400',
       icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
+    },
+    triggered: {
+      label: 'Triggered',
+      color: 'text-emerald-400',
+      icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3L4 14h7l-1 7 9-11h-7l1-7z" /></svg>
     },
   }
 
@@ -1483,30 +1690,19 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 }) {
   const toast = useToast()
   const [step, setStep] = useState<'config' | 'steps'>('config')
+  const hasTriggerPrefill = Boolean(prefillTriggerKind && prefillTriggerId > 0)
+  const initialTriggerKind = prefillTriggerKind || 'email'
+  const initialTriggerId = hasTriggerPrefill ? prefillTriggerId : 0
   const initialFlowData: CreateFlowData = useMemo(() => {
-    if (prefillTriggerKind && prefillTriggerId > 0) {
-      const kindLabel = prefillTriggerKind.charAt(0).toUpperCase() + prefillTriggerKind.slice(1)
+    if (hasTriggerPrefill && prefillTriggerKind) {
+      const kindLabel = triggerKindLabel(prefillTriggerKind)
       const namePart = prefillTriggerName ? `: ${prefillTriggerName}` : ` #${prefillTriggerId}`
-      const sourceStep: CreateFlowStepData = {
-        name: 'Source',
-        type: 'source',
-        // v0.7.0 Wave 2 invariant: positions are 1-based and source must
-        // sit at position 1. Wave 4 prefill originally used position 0 and
-        // POST /api/flows/create silently 422'd because the backend
-        // validator rejects positions < 1 (helper at routes_flows.py:280)
-        // — modal stayed open with no toast (caught by Wave 4 QA).
-        position: 1,
-        config: {
-          trigger_kind: prefillTriggerKind,
-          trigger_instance_id: prefillTriggerId,
-        } as FlowStepConfig,
-      }
       return {
         name: `${kindLabel}${namePart}`,
         description: `Auto-prefilled from ${kindLabel} trigger ${prefillTriggerId}.`,
         flow_type: 'workflow',
         execution_method: 'triggered',
-        steps: [sourceStep],
+        steps: [buildBoundSourceStep(prefillTriggerKind, prefillTriggerId)],
       }
     }
     return {
@@ -1516,22 +1712,188 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
       execution_method: 'immediate',
       steps: [],
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [hasTriggerPrefill, prefillTriggerId, prefillTriggerKind, prefillTriggerName])
   const [flowData, setFlowData] = useState<CreateFlowData>(initialFlowData)
+  const [selectedTriggerKind, setSelectedTriggerKind] = useState<TriggerKind>(initialTriggerKind)
+  const [selectedTriggerId, setSelectedTriggerId] = useState<number>(initialTriggerId)
+  const [triggerOptions, setTriggerOptions] = useState<TriggerOption[]>(() => (
+    hasTriggerPrefill && prefillTriggerKind
+      ? [{
+        kind: prefillTriggerKind,
+        id: prefillTriggerId,
+        label: prefillTriggerName || `${triggerKindLabel(prefillTriggerKind)} trigger #${prefillTriggerId}`,
+        description: `ID ${prefillTriggerId}`,
+        status: 'loading',
+        isActive: true,
+      }]
+      : []
+  ))
+  const [triggerOptionsLoading, setTriggerOptionsLoading] = useState(false)
+  const [triggerOptionsError, setTriggerOptionsError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const flowDataRef = useRef(flowData)
   flowDataRef.current = flowData
   // Flush callbacks registered by each StepConfigForm
   const createFlushRef = useRef<Map<number, () => void>>(new Map())
+  const selectedTrigger = triggerOptions.find(option => option.kind === selectedTriggerKind && option.id === selectedTriggerId) || null
+  const hasSelectedTrigger = flowData.execution_method === 'triggered' && selectedTriggerId > 0
+
+  const loadTriggerOptions = useCallback(async (kind: TriggerKind) => {
+    setTriggerOptionsLoading(true)
+    setTriggerOptionsError(null)
+    try {
+      let records: unknown[] = []
+      if (kind === 'email') {
+        records = await api.listEmailTriggers()
+      } else if (kind === 'jira') {
+        records = await api.listJiraTriggers()
+      } else if (kind === 'github') {
+        records = await api.listGitHubTriggers()
+      } else if (kind === 'webhook') {
+        records = await api.listWebhookIntegrations()
+      }
+      setTriggerOptions(records.map(record => triggerOptionFromRecord(kind, record)).filter(option => option.id > 0))
+    } catch (error) {
+      console.error('Failed to load trigger options:', error)
+      setTriggerOptionsError(error instanceof Error ? error.message : 'Failed to load triggers')
+    } finally {
+      setTriggerOptionsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (flowData.execution_method !== 'triggered') return
+    loadTriggerOptions(selectedTriggerKind)
+  }, [flowData.execution_method, loadTriggerOptions, selectedTriggerKind])
+
+  useEffect(() => {
+    if (flowData.execution_method !== 'triggered') return
+
+    if (selectedTriggerId > 0) {
+      setFlowData(prev => {
+        const nextSteps = upsertBoundSourceStep(prev.steps || [], selectedTriggerKind, selectedTriggerId)
+        const selectedName = selectedTrigger?.label || `${triggerKindLabel(selectedTriggerKind)} trigger #${selectedTriggerId}`
+        return {
+          ...prev,
+          name: prev.name.trim() ? prev.name : `${triggerKindLabel(selectedTriggerKind)}: ${selectedName}`,
+          description: prev.description?.trim()
+            ? prev.description
+            : `Auto-prefilled from ${triggerKindLabel(selectedTriggerKind)} trigger ${selectedTriggerId}.`,
+          steps: nextSteps,
+        }
+      })
+    } else {
+      setFlowData(prev => ({
+        ...prev,
+        steps: removeSourceSteps(prev.steps || []),
+      }))
+    }
+  }, [flowData.execution_method, selectedTrigger, selectedTriggerId, selectedTriggerKind])
+
+  function handleExecutionMethodChange(method: ExecutionMethod) {
+    setFlowData(prev => {
+      const next: CreateFlowData = {
+        ...prev,
+        execution_method: method,
+      }
+
+      if (method === 'triggered') {
+        next.steps = selectedTriggerId > 0
+          ? upsertBoundSourceStep(prev.steps || [], selectedTriggerKind, selectedTriggerId)
+          : removeSourceSteps(prev.steps || [])
+      } else {
+        next.steps = removeSourceSteps(prev.steps || [])
+      }
+
+      if (method === 'recurring' && !next.recurrence_rule) {
+        next.recurrence_rule = defaultRecurrenceRule()
+      }
+
+      return next
+    })
+  }
+
+  function handleTriggerKindChange(kind: TriggerKind) {
+    setSelectedTriggerKind(kind)
+    setSelectedTriggerId(0)
+    setFlowData(prev => ({
+      ...prev,
+      steps: removeSourceSteps(prev.steps || []),
+    }))
+  }
+
+  function validateFlowConfig(data: CreateFlowData = flowData): boolean {
+    if (!data.name.trim()) {
+      toast.warning('Validation', 'Please provide a flow name')
+      return false
+    }
+
+    if (data.execution_method === 'scheduled') {
+      if (!data.scheduled_at || Number.isNaN(Date.parse(data.scheduled_at))) {
+        toast.warning('Schedule time required', 'Choose when this scheduled flow should run.')
+        return false
+      }
+    }
+
+    if (data.execution_method === 'recurring' && !data.recurrence_rule) {
+      setFlowData(prev => ({ ...prev, recurrence_rule: defaultRecurrenceRule() }))
+    }
+
+    if (data.execution_method === 'keyword') {
+      const keywords = (data.trigger_keywords || []).map(keyword => keyword.trim()).filter(Boolean)
+      if (keywords.length === 0) {
+        toast.warning('Keyword required', 'Add at least one keyword or slash command.')
+        return false
+      }
+    }
+
+    if (data.execution_method === 'triggered') {
+      if (!selectedTriggerId || selectedTriggerId <= 0) {
+        toast.warning('Choose a trigger first', 'Select an existing Gmail, Jira, GitHub, or Webhook trigger to wire the Source step.')
+        return false
+      }
+    }
+
+    return true
+  }
+
+  function normalizedFlowPayload(data: CreateFlowData): CreateFlowData {
+    const payload: CreateFlowData = {
+      ...data,
+      steps: data.steps ? [...data.steps] : [],
+    }
+
+    if (payload.execution_method === 'recurring' && !payload.recurrence_rule) {
+      payload.recurrence_rule = defaultRecurrenceRule()
+    }
+
+    if (payload.execution_method === 'scheduled') {
+      payload.scheduled_at = fromDateTimeLocalValue(payload.scheduled_at || '')
+    }
+
+    if (payload.execution_method === 'keyword') {
+      payload.trigger_keywords = (payload.trigger_keywords || []).map(keyword => keyword.trim()).filter(Boolean)
+    }
+
+    if (payload.execution_method === 'triggered' && selectedTriggerId > 0) {
+      payload.steps = upsertBoundSourceStep(payload.steps, selectedTriggerKind, selectedTriggerId)
+    } else {
+      payload.steps = removeSourceSteps(payload.steps)
+    }
+
+    return payload
+  }
 
   async function handleSubmit() {
-    if (!flowData.name.trim()) {
-      toast.warning('Validation', 'Please provide a flow name')
+    if (!validateFlowConfig()) return
+
+    const pendingPayload = normalizedFlowPayload(flowData)
+    if ((pendingPayload.steps?.length || 0) === 0) {
+      toast.warning('Validation', 'Please add at least one step to your flow')
       return
     }
-    if ((flowData.steps?.length || 0) === 0) {
-      toast.warning('Validation', 'Please add at least one step to your flow')
+    if (hasUnboundSourceStep(pendingPayload.steps as Array<{ type?: string; config?: Record<string, unknown> | null }>)) {
+      toast.warning('Source step needs a trigger', 'Select an existing Hub trigger so the source step includes trigger_kind and trigger_instance_id.')
       return
     }
 
@@ -1545,24 +1907,25 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 
     setSubmitting(true)
     try {
-      const payload = flowDataRef.current
+      const payload = normalizedFlowPayload(flowDataRef.current)
       const created = await api.createFlowV2(payload)
-      // v0.7.0 Wave 4: when the modal was opened from a trigger deep-link,
-      // also create the flow_trigger_binding row so the new flow is wired
-      // immediately. If binding fails, surface a toast but still close —
-      // the user can retry from the trigger page's WiredFlowsCard.
-      if (prefillTriggerKind && prefillTriggerId > 0 && created?.id) {
+      // Create the flow_trigger_binding row for any triggered flow created
+      // from either a Hub deep-link or the Flows-page trigger selector.
+      if (payload.execution_method === 'triggered' && selectedTriggerId > 0 && created?.id) {
         try {
           await api.createFlowTriggerBinding({
             flow_definition_id: created.id,
-            trigger_kind: prefillTriggerKind,
-            trigger_instance_id: prefillTriggerId,
+            trigger_kind: selectedTriggerKind,
+            trigger_instance_id: selectedTriggerId,
             suppress_default_agent: true,
           })
           toast.success('Flow created', 'Flow is wired to the trigger and will run when it fires.')
         } catch (bindErr: unknown) {
           const msg = bindErr instanceof Error ? bindErr.message : 'Could not create binding'
-          toast.warning('Flow created — binding failed', `${msg}. You can wire it from the trigger page.`)
+          await api.deleteFlow(created.id, true).catch((deleteErr) => {
+            console.warn('Failed to clean up flow after binding failure:', deleteErr)
+          })
+          throw new Error(`Flow binding failed: ${msg}`)
         }
       }
       onSuccess()
@@ -1674,7 +2037,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                       <button
                         key={method.value}
                         type="button"
-                        onClick={() => setFlowData(prev => ({ ...prev, execution_method: method.value }))}
+                        onClick={() => handleExecutionMethodChange(method.value)}
                         className={`p-3 rounded-lg border text-center transition-all ${flowData.execution_method === method.value
                             ? 'border-cyan-500 bg-cyan-500/10 text-white'
                             : 'border-slate-700 hover:border-slate-600 text-slate-300'
@@ -1688,15 +2051,145 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                     )
                   })}
                 </div>
+                {/* v0.7.0-fix Phase 7: per-kind hint so the operator knows
+                    what each method is for at the point of choice. */}
+                <p className="text-xs text-slate-500 mt-2">
+                  {flowData.execution_method === 'immediate' && 'Run once, right after Save. Best for ad-hoc workflows or testing the steps.'}
+                  {flowData.execution_method === 'scheduled' && 'Run once at a specific timestamp. Best for one-off future runs (e.g. send a digest tomorrow at 9am).'}
+                  {flowData.execution_method === 'recurring' && 'Run on a cron expression / RRule. Best for daily/weekly/hourly batch work.'}
+                  {flowData.execution_method === 'keyword' && 'Fires when a configured slash-command keyword is matched in chat. Best for on-demand workflows the operator triggers manually.'}
+                  {flowData.execution_method === 'triggered' && 'Bind to a Hub trigger so the flow fires when an external event arrives (Email/Jira/GitHub/Webhook).'}
+                </p>
               </div>
+
+              {flowData.execution_method === 'triggered' && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-cyan-50 mb-2">Trigger source</label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {TRIGGER_KIND_OPTIONS.map(option => {
+                        const KindIcon = option.Icon
+                        const active = selectedTriggerKind === option.value
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => handleTriggerKindChange(option.value)}
+                            className={`p-3 rounded-lg border text-left transition-all ${active
+                                ? 'border-cyan-400 bg-cyan-400/15 text-white'
+                                : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-slate-500'
+                              }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <KindIcon size={18} />
+                              <span className="text-sm font-medium">{option.label}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-400">{option.description}</p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <label className="block text-sm font-medium text-cyan-50">Existing trigger</label>
+                      <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
+                        Manage triggers
+                      </a>
+                    </div>
+
+                    {triggerOptionsLoading && (
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-sm text-slate-300">
+                        Loading {triggerKindLabel(selectedTriggerKind)} triggers...
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && triggerOptionsError && (
+                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
+                        <div>{triggerOptionsError}</div>
+                        <button
+                          type="button"
+                          onClick={() => loadTriggerOptions(selectedTriggerKind)}
+                          className="mt-2 text-xs text-red-100 underline underline-offset-2 hover:text-white"
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && !triggerOptionsError && triggerOptions.length === 0 && (
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-sm text-slate-300">
+                        <div>No {triggerKindLabel(selectedTriggerKind)} triggers found.</div>
+                        <a href="/hub?tab=triggers" className="mt-2 inline-flex text-xs text-cyan-200 hover:text-white">
+                          Create one in Hub Triggers
+                        </a>
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && !triggerOptionsError && triggerOptions.length > 0 && (
+                      <div className="space-y-2">
+                        {triggerOptions.map(option => {
+                          const active = selectedTriggerKind === option.kind && selectedTriggerId === option.id
+                          return (
+                            <button
+                              key={`${option.kind}-${option.id}`}
+                              type="button"
+                              disabled={!option.isActive && !active}
+                              onClick={() => setSelectedTriggerId(option.id)}
+                              className={`w-full rounded-lg border p-3 text-left transition-all ${active
+                                  ? 'border-cyan-400 bg-cyan-400/15 text-white'
+                                  : option.isActive
+                                    ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:border-slate-500'
+                                    : 'border-slate-700 bg-slate-900/30 text-slate-500 cursor-not-allowed'
+                                }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-medium">{option.label}</div>
+                                  <div className="mt-1 text-xs text-slate-400">{option.description}</div>
+                                </div>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${option.isActive
+                                    ? 'border-green-500/30 bg-green-500/10 text-green-300'
+                                    : 'border-slate-600 bg-slate-700/40 text-slate-400'
+                                  }`}>
+                                  {option.status}
+                                </span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {hasSelectedTrigger && (
+                      <p className="mt-2 text-xs text-cyan-100/80">
+                        The Source step will be locked to {selectedTrigger?.label || `${triggerKindLabel(selectedTriggerKind)} trigger #${selectedTriggerId}`}.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {flowData.execution_method === 'scheduled' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Schedule Time</label>
+                  <div className="flex items-center justify-between gap-3 mb-1.5">
+                    <label className="block text-sm font-medium text-slate-300">Schedule Time</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const oneHourFromNow = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+                        setFlowData(prev => ({ ...prev, scheduled_at: toDateTimeLocalValue(oneHourFromNow) }))
+                      }}
+                      className="text-xs px-2 py-1 rounded border border-cyan-500/30 text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 transition-colors"
+                    >
+                      In 1 hour
+                    </button>
+                  </div>
                   <input
                     type="datetime-local"
                     value={flowData.scheduled_at || ''}
-                    onChange={(e) => setFlowData(prev => ({ ...prev, scheduled_at: new Date(e.target.value).toISOString() }))}
+                    onChange={(e) => setFlowData(prev => ({ ...prev, scheduled_at: e.target.value }))}
                     className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white
                                focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
                   />
@@ -1761,6 +2254,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
               customSkills={customSkills}
               onChange={(steps) => setFlowData(prev => ({ ...prev, steps }))}
               flushCallbacksRef={createFlushRef}
+              allowSourceStep={hasSelectedTrigger}
             />
           )}
         </div>
@@ -1780,7 +2274,9 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
           <button
             type="button"
             onClick={() => {
-              if (step === 'config') setStep('steps')
+              if (step === 'config') {
+                if (validateFlowConfig()) setStep('steps')
+              }
               else handleSubmit()
             }}
             disabled={submitting || (step === 'steps' && (flowData.steps?.length || 0) === 0)}
@@ -1797,7 +2293,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 
 // ==================== STEP BUILDER ====================
 
-function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef }: {
+function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allowSourceStep = false }: {
   steps: CreateFlowStepData[]
   agents: Agent[]
   contacts: Contact[]
@@ -1806,6 +2302,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   customSkills?: any[]
   onChange: (steps: CreateFlowStepData[]) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
+  allowSourceStep?: boolean
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [showAddStep, setShowAddStep] = useState(steps.length === 0)
@@ -1820,8 +2317,9 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function addStep(stepType: StepType) {
-    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    // Source steps are trigger-owned and locked at position 1.
     if (stepType === 'source') {
+      if (!allowSourceStep) return
       if (steps.some((s) => s.type === 'source')) return
       const newStep: CreateFlowStepData = {
         name: 'Source',
@@ -2024,8 +2522,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
-            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
+            {/* Source steps are only created by trigger-prefilled Flow drafts. */}
+            {getAddableStepTypes(steps, allowSourceStep).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -2429,6 +2927,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
 
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
+
   return (
     <div className="space-y-4">
       {/* Step Name */}
@@ -2548,7 +3054,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -2559,7 +3065,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -2568,21 +3074,25 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.initial_prompt || ''}
               onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
-              placeholder="First message to send..."
+              placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -2761,13 +3271,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -2874,7 +3386,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 {step.config?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -2883,6 +3395,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -2917,13 +3431,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -3159,13 +3674,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -3214,21 +3731,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -3238,6 +3756,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -3320,35 +3840,9 @@ function EditableStepBuilder({
 
   // Add a new step
   async function addStep(stepType: StepType) {
-    // v0.7.0 Wave 2: source step is locked at position 0 and capped at 1 per flow.
+    // Source steps are trigger-owned; adding one manually cannot create the
+    // matching flow_trigger_binding row.
     if (stepType === 'source') {
-      if (steps.some((s) => s.type === 'source')) return
-      const newStep: EditableStepData = {
-        name: 'Source',
-        type: 'source',
-        position: 1,
-        config: {},
-        allow_multi_turn: false,
-        max_turns: undefined,
-        _saving: true,
-      }
-      const tempSteps = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
-      onStepsChange(tempSteps)
-      setShowAddStep(false)
-      try {
-        const created = await api.createFlowStep(flowId, editableToCreatePayload(newStep) as any)
-        // Replace temp source step (now at index 0) with the real one and
-        // re-emit the rest with bumped positions.
-        const finalSteps = tempSteps.map((s, i) =>
-          i === 0 ? flowNodeToEditable(created) : s
-        )
-        onStepsChange(finalSteps)
-        setEditingIndex(0)
-      } catch (error) {
-        console.error('Failed to create source step:', error)
-        onStepsChange(steps)
-        toast.error('Step Error', 'Failed to create source step')
-      }
       return
     }
 
@@ -3649,8 +4143,8 @@ function EditableStepBuilder({
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {/* v0.7.0 Wave 2: hide 'source' if a source step already exists (max 1 per flow). */}
-            {STEP_TYPES.filter((type) => type.value !== 'source' || !steps.some((s) => s.type === 'source')).map(type => {
+            {/* Source steps are trigger-owned and cannot be added manually while editing. */}
+            {getAddableStepTypes(steps, false).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -3795,6 +4289,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
 
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
+
   return (
     <div className="space-y-4">
       {/* Step Name */}
@@ -3914,7 +4416,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -3925,7 +4427,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -3934,21 +4436,25 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.initial_prompt || ''}
               onValueChange={(v) => updateConfig('initial_prompt', v)}
               rows={2}
-              placeholder="First message to send..."
+              placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -4112,13 +4618,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -4225,7 +4733,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 {currentConfig?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -4234,6 +4742,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -4268,13 +4778,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -4510,13 +5021,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -4565,21 +5078,22 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -4589,6 +5103,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -4773,7 +5289,10 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white">Edit Flow</h2>
-            <p className="text-sm text-slate-400">Flow #{flowId}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-sm text-slate-400">Flow #{flowId}</p>
+              {flow && <TriggerOriginBadge flow={flow} />}
+            </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4842,7 +5361,11 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-slate-300 mb-2">Execution Method</label>
                 <div className="grid grid-cols-3 gap-3">
-                  {EXECUTION_METHODS.map(method => {
+                  {EXECUTION_METHODS.filter(method => (
+                    flow.execution_method === 'triggered'
+                      ? method.value === 'triggered'
+                      : method.value !== 'triggered'
+                  )).map(method => {
                     const MethodIcon = method.Icon
                     return (
                       <button
@@ -4861,6 +5384,11 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                     )
                   })}
                 </div>
+                {flow.execution_method !== 'triggered' && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Triggered flows are wired from Hub Triggers so their Source step and binding stay in sync.
+                  </p>
+                )}
               </div>
 
               {flow.execution_method === 'scheduled' && (

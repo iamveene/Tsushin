@@ -56,6 +56,15 @@ function buildRecoveryLoginUrl(): string {
   return `/auth/login?${params.toString()}`
 }
 
+function navigateAfterSessionCookieSet(target: string, routerPush: (href: string) => void) {
+  if (typeof window !== 'undefined') {
+    window.location.assign(target)
+    return
+  }
+
+  routerPush(target)
+}
+
 // SEC-005 Phase 3: localStorage token storage removed entirely.
 // All auth now relies on httpOnly cookie (tsushin_session) set by backend.
 // localStorage cleanup for users upgrading from previous versions.
@@ -71,6 +80,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const skipNextSessionBootstrapRef = useRef(false)
+  const userRef = useRef<User | null>(null)
+
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   // Load user from httpOnly cookie on mount
   useEffect(() => {
@@ -84,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    if (skipNextSessionBootstrapRef.current && user) {
+    if (skipNextSessionBootstrapRef.current && userRef.current) {
       skipNextSessionBootstrapRef.current = false
       setLoading(false)
       return
@@ -139,11 +153,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Redirect based on user type.
     // Global admins land on Core settings where the System card group lives.
-    if (response.user.is_global_admin) {
-      router.push('/settings')
-    } else {
-      router.push('/')
-    }
+    navigateAfterSessionCookieSet(
+      response.user.is_global_admin ? '/settings' : '/',
+      (target) => router.push(target)
+    )
   }
 
   const loginWithGoogle = async (options?: {
@@ -265,7 +278,6 @@ export function useAuth() {
  */
 export function useRequireAuth() {
   const { user, loading, hasPermission } = useAuth()
-  const router = useRouter()
   const pathname = usePathname() || ''
 
   useEffect(() => {

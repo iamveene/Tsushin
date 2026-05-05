@@ -10,10 +10,9 @@
  * CTA that deep-links into the Flows editor with the trigger pre-wired
  * as a Source step.
  *
- * Lives inside `OutputsSection`, directly below the Managed Notification
- * card (when present) and above the Manual Poll card. For kinds that
- * have no managed outputs (github / schedule / webhook), this card
- * carries the empty-state messaging.
+ * Lives inside `OutputsSection` next to any per-kind manual tools. For kinds
+ * that have no managed outputs (github / webhook), this card carries the
+ * empty-state messaging.
  *
  * Permission model:
  *   - read: `flows.read` (silently rendered as empty if missing)
@@ -28,6 +27,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import {
   api,
   type FlowTriggerBinding,
@@ -39,6 +39,7 @@ import {
   ExternalLinkIcon,
   LightningIcon,
   PlusIcon,
+  RefreshIcon,
   TrashIcon,
 } from '@/components/ui/icons'
 
@@ -47,8 +48,7 @@ interface Props {
   triggerId: number
   /**
    * Optional callback fired after the bindings list mutates (toggle /
-   * unbind / refresh). The parent uses this so the suppress-default
-   * banner on the Managed Notification card stays in sync.
+   * unbind / refresh).
    */
   onBindingsChange?: (bindings: FlowTriggerBinding[]) => void
 }
@@ -91,6 +91,7 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
 
   const [bindings, setBindings] = useState<FlowTriggerBinding[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
 
   const createHref = useMemo(
@@ -101,11 +102,13 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
   async function refresh() {
     if (!canRead || !triggerId) {
       setBindings([])
+      setLoadError(null)
       onBindingsChange?.([])
       setLoading(false)
       return
     }
     setLoading(true)
+    setLoadError(null)
     try {
       const items = await api.listFlowTriggerBindings({
         trigger_kind: triggerKind,
@@ -113,8 +116,9 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       })
       setBindings(items)
       onBindingsChange?.(items)
-    } catch (err) {
-      // Backend endpoint may not be merged yet — stay quiet, just empty.
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to load wired flows'
+      setLoadError(msg)
       setBindings([])
       onBindingsChange?.([])
     } finally {
@@ -151,13 +155,11 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
     }
   }
 
-  async function handleUnbind(b: FlowTriggerBinding) {
-    if (!canWrite) return
-    if (b.is_system_managed) return
-    const ok = typeof window !== 'undefined' && window.confirm(
-      `Unbind "${b.flow_name || 'this flow'}" from this trigger? The flow will no longer wake when the trigger fires. The flow itself will not be deleted.`,
-    )
-    if (!ok) return
+  // v0.7.0 release-finishing UX fix — replace native window.confirm()
+  // with the styled in-app ConfirmDialog.
+  const [unbindTarget, setUnbindTarget] = useState<FlowTriggerBinding | null>(null)
+
+  async function performUnbind(b: FlowTriggerBinding) {
     setBusyId(b.id)
     try {
       await api.deleteFlowTriggerBinding(b.id)
@@ -165,12 +167,19 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       setBindings(next)
       onBindingsChange?.(next)
       toast.success('Flow unbound', `${b.flow_name || 'Flow'} is no longer wired to this trigger.`)
+      setUnbindTarget(null)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to unbind flow'
       toast.error('Unbind failed', msg)
     } finally {
       setBusyId(null)
     }
+  }
+
+  function handleUnbind(b: FlowTriggerBinding) {
+    if (!canWrite) return
+    if (b.is_system_managed) return
+    setUnbindTarget(b)
   }
 
   if (!canRead) {
@@ -205,7 +214,22 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           </div>
         )}
 
-        {!loading && bindings.length === 0 && (
+        {!loading && loadError && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>{loadError}</span>
+              <button
+                type="button"
+                onClick={refresh}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-300/40 bg-red-500/10 px-2.5 py-1 text-xs text-red-100 hover:text-white"
+              >
+                <RefreshIcon size={12} /> Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && !loadError && bindings.length === 0 && (
           <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-surface/40 px-4 py-6 text-center">
             <p className="text-sm text-tsushin-slate">
               No custom flows are wired to this trigger yet.
@@ -221,7 +245,7 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           </div>
         )}
 
-        {!loading && bindings.map((b) => {
+        {!loading && !loadError && bindings.map((b) => {
           const pill = statusPill(b)
           const lastWhen = formatRelative(b.last_run_at)
           const editHref = `/flows?edit=${b.flow_definition_id}`
@@ -295,6 +319,30 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
           )
         })}
       </div>
+
+      <ConfirmDialog
+        isOpen={unbindTarget !== null}
+        title="Unbind this flow?"
+        message={
+          unbindTarget ? (
+            <>
+              <span className="font-mono text-white">{unbindTarget.flow_name || 'this flow'}</span>
+              {' '}will no longer wake when this trigger fires. The flow itself
+              is not deleted; you can re-wire it from the Flows editor at any
+              time.
+            </>
+          ) : 'The flow will no longer wake when the trigger fires.'
+        }
+        confirmLabel="Unbind flow"
+        danger
+        isBusy={unbindTarget !== null && busyId === unbindTarget.id}
+        onConfirm={() => {
+          if (unbindTarget) {
+            return performUnbind(unbindTarget)
+          }
+        }}
+        onCancel={() => setUnbindTarget(null)}
+      />
     </div>
   )
 }

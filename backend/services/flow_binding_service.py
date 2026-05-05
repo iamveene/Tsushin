@@ -6,7 +6,7 @@ flows, plus the cleanup hook that trigger DELETE handlers call.
 
 Wave 4 adds ``ensure_system_managed_flow_for_trigger`` — Phase A's
 auto-Flow generator. When a new trigger is created (any of jira /
-email / github / schedule / webhook), this function creates a
+email / github / webhook), this function creates a
 system-managed FlowDefinition with the canonical
 Source → Gate → Conversation → Notification chain plus a
 ``flow_trigger_binding`` row, so every trigger arrives with its own
@@ -45,7 +45,6 @@ _KIND_NAME_FIELDS: dict[str, str] = {
     "jira": "integration_name",
     "email": "integration_name",
     "github": "integration_name",
-    "schedule": "name",
     "webhook": "integration_name",
 }
 
@@ -54,7 +53,6 @@ _KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
     "jira": "Process the inbound Jira event and surface the actionable insight.",
     "email": "Process the inbound email and surface the actionable insight.",
     "github": "Process the inbound GitHub event and surface the actionable insight.",
-    "schedule": "Process the scheduled fire and execute its routine.",
     "webhook": "Process the inbound webhook payload and surface the actionable insight.",
 }
 
@@ -70,7 +68,6 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         EmailChannelInstance,
         GitHubChannelInstance,
         JiraChannelInstance,
-        ScheduleChannelInstance,
         WebhookIntegration,
     )
 
@@ -78,7 +75,6 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         "jira": JiraChannelInstance,
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
-        "schedule": ScheduleChannelInstance,
         "webhook": WebhookIntegration,
     }.get(trigger_kind)
     if table is None:
@@ -119,6 +115,53 @@ def find_system_managed_flow_for_trigger(
     if binding is None:
         return None
     return db.query(FlowDefinition).filter(FlowDefinition.id == binding.flow_definition_id).first()
+
+
+def sync_system_managed_flow_default_agent(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+    default_agent_id: Optional[int],
+) -> bool:
+    """Keep the generated trigger Flow aligned with the trigger's default agent.
+
+    Trigger PATCH endpoints own ``default_agent_id``. The system-managed
+    Flow mirrors that value both on the FlowDefinition and on its generated
+    Conversation node, so a trigger edit changes the actual execution path.
+    """
+    flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    if flow is None:
+        return False
+
+    changed = False
+    if flow.default_agent_id != default_agent_id:
+        flow.default_agent_id = default_agent_id
+        changed = True
+
+    conversation_nodes = (
+        db.query(FlowNode)
+        .filter(
+            FlowNode.flow_definition_id == flow.id,
+            FlowNode.type == "conversation",
+        )
+        .all()
+    )
+    for node in conversation_nodes:
+        if node.agent_id != default_agent_id:
+            node.agent_id = default_agent_id
+            node.updated_at = datetime.utcnow()
+            changed = True
+
+    if changed:
+        flow.updated_at = datetime.utcnow()
+    return changed
 
 
 def ensure_system_managed_flow_for_trigger(
@@ -228,6 +271,7 @@ def ensure_system_managed_flow_for_trigger(
         name="Default agent",
         agent_id=default_agent_id,
         conversation_objective=objective,
+        on_failure="continue" if notification_enabled and notification_recipient else None,
         config_json=json.dumps({
             "objective": objective,
             "allow_multi_turn": False,
@@ -243,7 +287,7 @@ def ensure_system_managed_flow_for_trigger(
         config_json=json.dumps({
             "enabled": bool(notification_enabled and notification_recipient),
             "channel": "whatsapp",
-            "recipient_phone": notification_recipient,
+            "recipient": notification_recipient,
         }),
     )
     db.add(notification_node)
@@ -285,14 +329,19 @@ def update_auto_flow_notification(
     """v0.7.0 Wave 4 — write-through helper for the casual-user notification toggle.
 
     Locates the system-managed auto-flow for a trigger and flips its
-    Notification node ``enabled`` + ``recipient_phone``. Returns a dict
+    Notification node ``enabled`` + ``recipient``. Returns a dict
     describing the resulting node config, or None when no auto-flow
     exists (e.g. trigger pre-dates the auto-gen rollout — fallback to
     the legacy ContinuousAgent path).
 
+    NOTE: the kwarg is named ``recipient_phone`` for backwards
+    compatibility with the existing email/jira notification subscription
+    endpoints, but it is written as ``recipient`` in the node config to
+    match the key NotificationStepHandler reads at flow_engine.py:362.
+
     Mirrors the API contract of the existing
-    ``ensure_jira_notification_subscription`` so the
-    notification-subscription endpoints can shim cleanly.
+    the trigger creation wizard and Flow editor so notification delivery stays
+    on the auto-flow path.
     """
     flow = find_system_managed_flow_for_trigger(
         db,
@@ -338,16 +387,33 @@ def update_auto_flow_notification(
 
     config["enabled"] = bool(enabled)
     config["channel"] = config.get("channel", "whatsapp")
+    # Drop any legacy ``recipient_phone`` key from earlier versions so the
+    # engine sees a single source of truth.
+    config.pop("recipient_phone", None)
     if recipient_phone is not None:
-        config["recipient_phone"] = recipient_phone
+        config["recipient"] = recipient_phone
     notification_node.config_json = json.dumps(config)
     notification_node.updated_at = datetime.utcnow()
+
+    if enabled and config.get("recipient"):
+        conversation_nodes = (
+            db.query(FlowNode)
+            .filter(
+                FlowNode.flow_definition_id == flow.id,
+                FlowNode.type == "conversation",
+            )
+            .all()
+        )
+        for node in conversation_nodes:
+            if node.on_failure != "continue":
+                node.on_failure = "continue"
+                node.updated_at = datetime.utcnow()
 
     return {
         "flow_definition_id": flow.id,
         "notification_node_id": notification_node.id,
         "enabled": config["enabled"],
-        "recipient_phone": config.get("recipient_phone"),
+        "recipient": config.get("recipient"),
         "channel": config.get("channel"),
     }
 
@@ -438,7 +504,7 @@ def delete_bindings_for_trigger(
     """Hard-delete every binding row for a (tenant, kind, instance).
 
     Called by the per-kind trigger DELETE handlers (jira / email /
-    github / schedule / webhook) because ``trigger_instance_id`` is a
+    github / webhook) because ``trigger_instance_id`` is a
     semantic FK and cannot CASCADE on its own.
 
     When ``delete_system_managed_flows=True`` (the default), any
@@ -493,6 +559,67 @@ def delete_bindings_for_trigger(
                     db.delete(flow)
 
     return len(bindings)
+
+
+def delete_system_owned_continuous_artifacts_for_trigger(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+) -> int:
+    """Remove system-owned ContinuousSubscription rows for a deleted trigger.
+
+    The legacy Jira/Email notification and triage paths created system-owned
+    ContinuousAgent/ContinuousSubscription artifacts keyed by
+    ``(channel_type, channel_instance_id)``. Trigger deletion owns those rows
+    even after the public notification endpoints are retired. User-owned
+    subscriptions are deliberately left untouched.
+    """
+    from models import ContinuousAgent, ContinuousSubscription
+
+    subscriptions = (
+        db.query(ContinuousSubscription)
+        .filter(
+            ContinuousSubscription.tenant_id == tenant_id,
+            ContinuousSubscription.channel_type == trigger_kind,
+            ContinuousSubscription.channel_instance_id == trigger_instance_id,
+            ContinuousSubscription.is_system_owned.is_(True),
+        )
+        .all()
+    )
+    if not subscriptions:
+        return 0
+
+    continuous_agent_ids = {sub.continuous_agent_id for sub in subscriptions}
+    for subscription in subscriptions:
+        db.delete(subscription)
+    db.flush()
+
+    for continuous_agent_id in continuous_agent_ids:
+        remaining_subscription = (
+            db.query(ContinuousSubscription.id)
+            .filter(
+                ContinuousSubscription.tenant_id == tenant_id,
+                ContinuousSubscription.continuous_agent_id == continuous_agent_id,
+            )
+            .first()
+        )
+        if remaining_subscription is not None:
+            continue
+        continuous_agent = (
+            db.query(ContinuousAgent)
+            .filter(
+                ContinuousAgent.id == continuous_agent_id,
+                ContinuousAgent.tenant_id == tenant_id,
+                ContinuousAgent.is_system_owned.is_(True),
+            )
+            .first()
+        )
+        if continuous_agent is not None:
+            db.delete(continuous_agent)
+
+    return len(subscriptions)
 
 
 def find_source_node_id(

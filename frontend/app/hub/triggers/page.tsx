@@ -5,7 +5,7 @@
  *
  * Wave 1 of the Triggers ↔ Flows unification (release/0.7.0). Closes the
  * 404 + redirect-loop bug where visiting /hub/triggers had no destination
- * page. Lists all 5 trigger kinds (jira, email, github, schedule, webhook)
+ * page. Lists all active trigger kinds (jira, email, github, webhook)
  * in a single table with kind / status / search filters.
  *
  * Wave 2-3 will likely embed source/routing/outputs sections per trigger,
@@ -15,14 +15,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
-import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type ScheduleTrigger, type WebhookIntegration } from '@/lib/client'
+import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
-import { AlertTriangleIcon, BellIcon, CalendarDaysIcon, CodeIcon, EnvelopeIcon, GitHubIcon, RefreshIcon, WebhookIcon } from '@/components/ui/icons'
+import { AlertTriangleIcon, BellIcon, CodeIcon, EnvelopeIcon, GitHubIcon, RefreshIcon, WebhookIcon } from '@/components/ui/icons'
 
-type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'webhook'
 
 interface TriggerRow {
-  kind: 'jira' | 'email' | 'github' | 'schedule' | 'webhook'
+  kind: 'jira' | 'email' | 'github' | 'webhook'
   id: number
   name: string
   status: string
@@ -38,7 +38,6 @@ const KIND_LABEL: Record<TriggerRow['kind'], string> = {
   jira: 'Jira',
   email: 'Email',
   github: 'GitHub',
-  schedule: 'Schedule',
   webhook: 'Webhook',
 }
 
@@ -46,7 +45,6 @@ const KIND_ICON_CLASS: Record<TriggerRow['kind'], string> = {
   jira: 'text-blue-300',
   email: 'text-emerald-300',
   github: 'text-violet-300',
-  schedule: 'text-amber-300',
   webhook: 'text-cyan-300',
 }
 
@@ -59,8 +57,6 @@ function KindIcon({ kind, className }: { kind: TriggerRow['kind']; className?: s
       return <EnvelopeIcon size={16} className={merged} />
     case 'github':
       return <GitHubIcon size={16} className={merged} />
-    case 'schedule':
-      return <CalendarDaysIcon size={16} className={merged} />
     case 'webhook':
       return <WebhookIcon size={16} className={merged} />
   }
@@ -123,21 +119,6 @@ function githubToRow(t: GitHubTrigger): TriggerRow {
   }
 }
 
-function scheduleToRow(t: ScheduleTrigger): TriggerRow {
-  return {
-    kind: 'schedule',
-    id: t.id,
-    name: t.integration_name,
-    status: t.status,
-    health: t.health_status,
-    is_active: t.is_active,
-    default_agent_id: t.default_agent_id ?? null,
-    default_agent_name: t.default_agent_name ?? null,
-    last_activity_at: t.last_activity_at ?? null,
-    href: `/hub/triggers/schedule/${t.id}`,
-  }
-}
-
 function webhookToRow(t: WebhookIntegration): TriggerRow {
   return {
     kind: 'webhook',
@@ -169,19 +150,31 @@ export default function HubTriggersIndexPage() {
     setLoading(true)
     setError(null)
     try {
-      const [jira, email, github, schedule, webhook] = await Promise.all([
-        api.listJiraTriggers().catch(() => []),
-        api.listEmailTriggers().catch(() => []),
-        api.listGitHubTriggers().catch(() => []),
-        api.listScheduleTriggers().catch(() => []),
-        api.listWebhookIntegrations().catch(() => []),
+      const failures: string[] = []
+      const listOrFailure = async <T,>(label: string, promise: Promise<T[]>): Promise<T[]> => {
+        try {
+          return await promise
+        } catch {
+          failures.push(label)
+          return []
+        }
+      }
+      const [jira, email, github, webhook] = await Promise.all([
+        listOrFailure('Jira', api.listJiraTriggers()),
+        listOrFailure('Email', api.listEmailTriggers()),
+        listOrFailure('GitHub', api.listGitHubTriggers()),
+        listOrFailure('Webhook', api.listWebhookIntegrations()),
       ])
+      if (failures.length) {
+        setError(`Could not load ${failures.join(', ')} trigger data. Showing the sources that responded.`)
+      }
+      // v0.7.0-fix Phase 9.4: render order matches the Hub Triggers tab —
+      // Email → Webhook → Jira → GitHub. Sort/filter UI overrides as usual.
       const next: TriggerRow[] = [
-        ...jira.map(jiraToRow),
         ...email.map(emailToRow),
-        ...github.map(githubToRow),
-        ...schedule.map(scheduleToRow),
         ...webhook.map(webhookToRow),
+        ...jira.map(jiraToRow),
+        ...github.map(githubToRow),
       ]
       setRows(next)
     } catch (err) {
@@ -197,7 +190,6 @@ export default function HubTriggersIndexPage() {
       return
     }
     loadAll()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead])
 
   const filtered = useMemo(() => {
@@ -248,18 +240,30 @@ export default function HubTriggersIndexPage() {
             Triggers
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            All inbound channels that can wake an agent. Jira, Email, GitHub, Schedule, and Webhook in one place.
+            All inbound channels that can wake an agent. Jira, Email, GitHub, and Webhook in one place.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={loadAll}
-          disabled={loading}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-        >
-          <RefreshIcon size={16} />
-          Refresh
-        </button>
+        {/* v0.7.0-fix Phase 9.7: registry now exposes + Add Trigger so users
+            can create from this surface without bouncing to /hub?tab=triggers. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={loadAll}
+            disabled={loading}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+          >
+            <RefreshIcon size={16} />
+            Refresh
+          </button>
+          {hasPermission('hub.write') && (
+            <Link
+              href="/hub?tab=triggers"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600/20 border border-cyan-600/50 px-4 py-2 text-sm text-cyan-200 hover:text-white hover:bg-cyan-600/30"
+            >
+              + Add Trigger
+            </Link>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -282,11 +286,10 @@ export default function HubTriggersIndexPage() {
           className="rounded-lg border border-tsushin-border bg-black/30 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
         >
           <option value="">All kinds</option>
-          <option value="jira">Jira</option>
           <option value="email">Email</option>
-          <option value="github">GitHub</option>
-          <option value="schedule">Schedule</option>
           <option value="webhook">Webhook</option>
+          <option value="jira">Jira</option>
+          <option value="github">GitHub</option>
         </select>
         <select
           value={statusFilter}
@@ -314,10 +317,10 @@ export default function HubTriggersIndexPage() {
           {rows.length === 0 && (
             <p className="mt-2 text-sm text-tsushin-slate">
               Configure a new trigger from the{' '}
-              <Link href="/hub?tab=communication" className="text-cyan-300 hover:text-white">
+              <Link href="/hub?tab=triggers" className="text-cyan-300 hover:text-white">
                 Hub
               </Link>{' '}
-              communication tab.
+              triggers tab.
             </p>
           )}
         </div>
@@ -340,13 +343,13 @@ export default function HubTriggersIndexPage() {
                   className="border-b border-tsushin-border/60 transition-colors hover:bg-black/20"
                 >
                   <td className="px-4 py-3">
-                    <Link href={row.href} className="inline-flex items-center gap-2 text-tsushin-fog hover:text-white">
+                    <Link href={row.href} prefetch={false} className="inline-flex items-center gap-2 text-tsushin-fog hover:text-white">
                       <KindIcon kind={row.kind} />
                       {KIND_LABEL[row.kind]}
                     </Link>
                   </td>
                   <td className="px-4 py-3">
-                    <Link href={row.href} className="font-medium text-cyan-200 hover:text-white">
+                    <Link href={row.href} prefetch={false} className="font-medium text-cyan-200 hover:text-white">
                       {row.name}
                     </Link>
                     <div className="text-xs text-tsushin-slate">#{row.id}</div>

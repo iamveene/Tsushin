@@ -60,6 +60,12 @@ def _is_agent_contact_conflict(exc: IntegrityError) -> bool:
     )
 
 
+def _forbid_internal_agent(agent: Agent, *, status_code: int = 403) -> None:
+    if getattr(agent, "is_internal", False):
+        detail = "Agent not found" if status_code == 404 else "Internal coordinator agents cannot be managed through public agent APIs"
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
 # ==================== Tone Preset Schemas ====================
 
 class TonePresetResponse(BaseModel):
@@ -170,6 +176,8 @@ class AgentResponse(BaseModel):
 
     is_active: bool
     is_default: bool
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
@@ -462,7 +470,7 @@ def list_agents(
     """List all agents with optional filters (requires agents.read permission)"""
 
     # Apply tenant filtering
-    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id)
+    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id).filter(Agent.is_internal == False)
 
     if active_only:
         query = query.filter(Agent.is_active == True)
@@ -561,6 +569,8 @@ def list_agents(
 
             "is_active": agent.is_active,
             "is_default": agent.is_default,
+            "is_team_member": bool(getattr(agent, "is_team_member", False)),
+            "current_team_id": getattr(agent, "current_team_id", None),
             "skills_count": skills_count,
             # Phase 10: Channel Configuration
             "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -607,6 +617,7 @@ def get_agent(
     # and avoid leaking resource existence to other tenants.
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -705,6 +716,8 @@ def get_agent(
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "skills_count": skills_count,
         # Phase 10: Channel Configuration
         "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -884,6 +897,7 @@ def update_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(db_agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(db_agent)
 
     # Validate contact if being changed
     if agent.contact_id is not None and agent.contact_id != db_agent.contact_id:
@@ -1024,6 +1038,7 @@ def delete_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Capture agent name before deletion
     agent_contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -1272,6 +1287,7 @@ def create_contact_agent_mapping(
     # Verify agent belongs to user's tenant (prevent cross-tenant mapping)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Check if mapping already exists
     existing = db.query(ContactAgentMapping).filter(
@@ -1394,6 +1410,7 @@ def get_agent_custom_tools(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Get all mappings with tool details
     mappings = db.query(AgentSandboxedTool).filter(
@@ -1434,6 +1451,7 @@ def add_agent_custom_tool(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     tool = db.query(SandboxedTool).filter(SandboxedTool.id == data.sandboxed_tool_id).first()
     if not tool:
@@ -1491,6 +1509,7 @@ def update_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,
@@ -1534,6 +1553,7 @@ def delete_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,

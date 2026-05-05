@@ -33,15 +33,19 @@ const baseInputClasses = 'w-full px-3 py-2 border border-tsushin-border rounded-
  * <Input type="text" label="API Key" placeholder="Enter your API key" />
  */
 export function Input({ label, error, helperText, className = '', ...props }: InputProps) {
+  const generatedId = React.useId()
+  const inputId = props.id ?? (label ? generatedId : undefined)
+
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
+        <label htmlFor={inputId} className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <input
         {...props}
+        id={inputId}
         className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       />
       {helperText && (
@@ -60,15 +64,19 @@ export function Input({ label, error, helperText, className = '', ...props }: In
  * <TextArea label="Description" rows={4} />
  */
 export function TextArea({ label, error, helperText, className = '', ...props }: TextAreaProps) {
+  const generatedId = React.useId()
+  const textAreaId = props.id ?? (label ? generatedId : undefined)
+
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
+        <label htmlFor={textAreaId} className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <textarea
         {...props}
+        id={textAreaId}
         className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       />
       {helperText && (
@@ -90,15 +98,19 @@ export function TextArea({ label, error, helperText, className = '', ...props }:
  * </Select>
  */
 export function Select({ label, error, helperText, className = '', children, ...props }: SelectProps) {
+  const generatedId = React.useId()
+  const selectId = props.id ?? (label ? generatedId : undefined)
+
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-medium mb-2 text-tsushin-fog">
+        <label htmlFor={selectId} className="block text-sm font-medium mb-2 text-tsushin-fog">
           {label}
         </label>
       )}
       <select
         {...props}
+        id={selectId}
         className={`${baseInputClasses} ${error ? 'border-tsushin-vermilion' : ''} ${className}`}
       >
         {children}

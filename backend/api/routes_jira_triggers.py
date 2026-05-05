@@ -25,9 +25,21 @@ from services.jira_integration_service import (
     resolve_jira_config,
     token_preview,
 )
-from services.jira_notification_service import (
-    ensure_jira_notification_subscription,
-    jira_notification_status,
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+    sync_system_managed_flow_default_agent,
+)
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
 )
 
 
@@ -44,17 +56,19 @@ _MAX_SAMPLE_SIZE = 10
 
 
 class JiraTriggerCreate(BaseModel):
+    """v0.7.0-fix Phase 4: jira_integration_id is required; auth_email/
+    api_token/site_url are read from the linked Hub integration."""
+
     integration_name: str = Field(..., min_length=1, max_length=100)
-    jira_integration_id: Optional[int] = Field(default=None, ge=1)
-    site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    jira_integration_id: int = Field(..., ge=1)
     project_key: Optional[str] = Field(default=None, max_length=64)
     jql: str = Field(..., min_length=1, max_length=4000)
-    auth_email: Optional[str] = Field(default=None, max_length=255)
-    api_token: Optional[str] = Field(default=None, min_length=1, max_length=4096)
     trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int = Field(default=300, ge=60, le=86400)
     default_agent_id: Optional[int] = Field(default=None, ge=1)
     is_active: bool = True
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("integration_name", "jql")
     @classmethod
@@ -64,22 +78,10 @@ class JiraTriggerCreate(BaseModel):
             raise ValueError("value must not be empty")
         return normalized
 
-    @field_validator("site_url")
-    @classmethod
-    def _normalize_site_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        return _normalize_site_url(value)
-
     @field_validator("project_key")
     @classmethod
     def _normalize_project_key(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional(value, upper=True)
-
-    @field_validator("auth_email")
-    @classmethod
-    def _normalize_auth_email(cls, value: Optional[str]) -> Optional[str]:
-        return _normalize_optional(value)
 
     @field_validator("trigger_criteria")
     @classmethod
@@ -93,13 +95,13 @@ class JiraTriggerCreate(BaseModel):
 
 
 class JiraTriggerUpdate(BaseModel):
+    """v0.7.0-fix Phase 4: cannot accept auth_email/api_token/site_url —
+    those fields are owned by the linked Hub Jira integration."""
+
     integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     jira_integration_id: Optional[int] = Field(default=None, ge=1)
-    site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
     project_key: Optional[str] = Field(default=None, max_length=64)
     jql: Optional[str] = Field(default=None, min_length=1, max_length=4000)
-    auth_email: Optional[str] = Field(default=None, max_length=255)
-    api_token: Optional[str] = Field(default=None, min_length=1, max_length=4096)
     trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
     default_agent_id: Optional[int] = Field(default=None, ge=1)
@@ -115,22 +117,10 @@ class JiraTriggerUpdate(BaseModel):
             raise ValueError("value must not be empty")
         return normalized
 
-    @field_validator("site_url")
-    @classmethod
-    def _normalize_site_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        return _normalize_site_url(value)
-
     @field_validator("project_key")
     @classmethod
     def _normalize_project_key(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional(value, upper=True)
-
-    @field_validator("auth_email")
-    @classmethod
-    def _normalize_auth_email(cls, value: Optional[str]) -> Optional[str]:
-        return _normalize_optional(value)
 
     @field_validator("trigger_criteria")
     @classmethod
@@ -143,13 +133,6 @@ class JiraTriggerUpdate(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
-class JiraManagedNotificationStatus(BaseModel):
-    status: str
-    recipient_preview: Optional[str] = None
-    agent_id: Optional[int] = None
-    agent_name: Optional[str] = None
-    continuous_agent_id: Optional[int] = None
-    continuous_subscription_id: Optional[int] = None
 
 
 class JiraTriggerRead(BaseModel):
@@ -163,8 +146,6 @@ class JiraTriggerRead(BaseModel):
     site_url: str
     project_key: Optional[str] = None
     jql: str
-    auth_email: Optional[str] = None
-    api_token_preview: Optional[str] = None
     trigger_criteria: Optional[dict[str, Any]] = None
     poll_interval_seconds: int
     default_agent_id: Optional[int] = None
@@ -176,42 +157,24 @@ class JiraTriggerRead(BaseModel):
     last_health_check: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     last_cursor: Optional[str] = None
-    managed_notification_enabled: bool = False
-    managed_notification_status: Optional[JiraManagedNotificationStatus] = None
-    notification_subscription_status: Optional[str] = None
-    notification_recipient_preview: Optional[str] = None
-    managed_notification_agent_id: Optional[int] = None
-    managed_notification_agent_name: Optional[str] = None
-    managed_notification_recipient_preview: Optional[str] = None
-    managed_notification_continuous_agent_id: Optional[int] = None
-    managed_notification_subscription_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    auto_flow_id: Optional[int] = None
+    # Notification config lives on the auto-generated Flow's Notification node
+    # and is discovered via auto_flow_id + FlowDefinition.nodes.
 
 
 class JiraTestQueryRequest(BaseModel):
-    jira_integration_id: Optional[int] = Field(default=None, ge=1)
-    site_url: Optional[str] = Field(default=None, min_length=1, max_length=500)
-    jql: Optional[str] = Field(default=None, min_length=1, max_length=4000)
-    auth_email: Optional[str] = Field(default=None, max_length=255)
-    api_token: Optional[str] = Field(default=None, min_length=1, max_length=4096)
-    max_results: int = Field(default=3, ge=1, le=_MAX_SAMPLE_SIZE)
+    """v0.7.0-fix Phase 4: dry-runs require a Hub jira_integration_id;
+    auth_email/api_token/site_url are no longer accepted on the wire."""
 
-    @field_validator("site_url")
-    @classmethod
-    def _normalize_site_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        return _normalize_site_url(value)
+    jira_integration_id: Optional[int] = Field(default=None, ge=1)
+    jql: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    max_results: int = Field(default=3, ge=1, le=_MAX_SAMPLE_SIZE)
 
     @field_validator("jql")
     @classmethod
     def _normalize_jql(cls, value: Optional[str]) -> Optional[str]:
-        return _normalize_optional(value)
-
-    @field_validator("auth_email")
-    @classmethod
-    def _normalize_auth_email(cls, value: Optional[str]) -> Optional[str]:
         return _normalize_optional(value)
 
 
@@ -235,30 +198,6 @@ class JiraTestQueryResponse(BaseModel):
     sample_issues: list[JiraIssueSample]
     message: Optional[str] = None
     error: Optional[str] = None
-
-
-class JiraNotificationSubscriptionRead(BaseModel):
-    jira_trigger_id: int
-    continuous_agent_id: int
-    continuous_subscription_id: int
-    agent_id: int
-    recipient_preview: str
-    created_agent: bool
-    created_subscription: bool
-
-
-class JiraNotificationSubscriptionRequest(BaseModel):
-    recipient_phone: Optional[str] = Field(default=None, min_length=5, max_length=64)
-    recipient: Optional[str] = Field(default=None, min_length=5, max_length=64)
-    agent_id: Optional[int] = Field(default=None, ge=1)
-
-    @field_validator("recipient_phone", "recipient")
-    @classmethod
-    def _normalize_recipient(cls, value: Optional[str]) -> Optional[str]:
-        return _normalize_optional(value)
-
-    def resolved_recipient(self) -> Optional[str]:
-        return self.recipient_phone or self.recipient
 
 
 class JiraPollNowResponse(BaseModel):
@@ -353,10 +292,21 @@ def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optiona
 
 
 def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
     try:
         config = resolve_jira_config(db, instance)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Jira integration not found") from exc
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=instance.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=instance.id,
+    )
     jira_integration_name = None
     jira_integration_health_status = None
     jira_integration_health_status_reason = None
@@ -369,21 +319,6 @@ def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
             jira_integration_name = integration.display_name or integration.name
             jira_integration_health_status = integration.health_status
             jira_integration_health_status_reason = integration.health_status_reason
-    notification = jira_notification_status(db, tenant_id=instance.tenant_id, jira_trigger_id=instance.id)
-    notification_status_value = None
-    if notification["continuous_subscription_id"] is not None:
-        notification_status_value = "active" if notification["enabled"] else "inactive"
-    notification_agent_name = _agent_name(db, instance.tenant_id, notification["agent_id"])
-    managed_notification_status = None
-    if notification_status_value is not None:
-        managed_notification_status = JiraManagedNotificationStatus(
-            status=notification_status_value,
-            recipient_preview=notification["recipient_preview"],
-            agent_id=notification["agent_id"],
-            agent_name=notification_agent_name,
-            continuous_agent_id=notification["continuous_agent_id"],
-            continuous_subscription_id=notification["continuous_subscription_id"],
-        )
     return JiraTriggerRead(
         id=instance.id,
         tenant_id=instance.tenant_id,
@@ -395,8 +330,6 @@ def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
         site_url=config.site_url,
         project_key=instance.project_key or config.project_key,
         jql=instance.jql,
-        auth_email=config.auth_email,
-        api_token_preview=config.api_token_preview,
         trigger_criteria=instance.trigger_criteria,
         poll_interval_seconds=instance.poll_interval_seconds,
         default_agent_id=instance.default_agent_id,
@@ -408,17 +341,9 @@ def _to_read(db: Session, instance: JiraChannelInstance) -> JiraTriggerRead:
         last_health_check=instance.last_health_check,
         last_activity_at=instance.last_activity_at,
         last_cursor=instance.last_cursor,
-        managed_notification_enabled=bool(notification["enabled"]),
-        managed_notification_status=managed_notification_status,
-        notification_subscription_status=notification_status_value,
-        notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_agent_id=notification["agent_id"],
-        managed_notification_agent_name=notification_agent_name,
-        managed_notification_recipient_preview=notification["recipient_preview"],
-        managed_notification_continuous_agent_id=notification["continuous_agent_id"],
-        managed_notification_subscription_id=notification["continuous_subscription_id"],
         created_at=instance.created_at,
         updated_at=instance.updated_at,
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -595,22 +520,8 @@ def create_jira_trigger(
     if payload.default_agent_id is not None:
         _load_active_agent(db, ctx.tenant_id, payload.default_agent_id)
 
-    jira_integration = None
-    if payload.jira_integration_id is not None:
-        jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
-    if payload.site_url is None and jira_integration is None:
-        raise HTTPException(status_code=400, detail="site_url or jira_integration_id is required")
-
-    encrypted_token = None
-    token_preview = None
-    if payload.api_token:
-        encrypted_token = _encrypt_token(db, ctx.tenant_id, payload.api_token)
-        token_preview = _token_preview(payload.api_token)
-    elif jira_integration is not None:
-        encrypted_token = jira_integration.api_token_encrypted
-        token_preview = jira_integration.api_token_preview
-
-    site_url = payload.site_url or jira_integration.site_url
+    jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
+    site_url = jira_integration.site_url
     project_key = payload.project_key if payload.project_key is not None else getattr(jira_integration, "project_key", None)
     instance = JiraChannelInstance(
         tenant_id=ctx.tenant_id,
@@ -619,9 +530,11 @@ def create_jira_trigger(
         site_url=site_url,
         project_key=project_key,
         jql=payload.jql,
-        auth_email=payload.auth_email if payload.auth_email is not None else getattr(jira_integration, "auth_email", None),
-        api_token_encrypted=encrypted_token,
-        api_token_preview=token_preview,
+        # Legacy auth columns (auth_email/api_token_encrypted/api_token_preview)
+        # are kept on the model for runtime compatibility but never written to
+        # from the API path. The runtime channel reads via resolve_jira_config
+        # which prefers the linked integration. v0.7.0-fix Phase 4b will drop
+        # these columns once the runtime is fully decoupled.
         trigger_criteria=payload.trigger_criteria,
         poll_interval_seconds=payload.poll_interval_seconds,
         default_agent_id=payload.default_agent_id,
@@ -649,6 +562,8 @@ def create_jira_trigger(
                 trigger_kind="jira",
                 trigger_instance_id=instance.id,
                 default_agent_id=instance.default_agent_id,
+                notification_recipient=payload.notification_recipient,
+                notification_enabled=payload.notification_enabled,
             )
             db.commit()
     except Exception:
@@ -667,21 +582,18 @@ async def run_jira_test_query(
 ) -> JiraTestQueryResponse:
     if not payload.jql:
         raise HTTPException(status_code=400, detail="jql is required")
-    jira_integration = None
-    if payload.jira_integration_id is not None:
-        jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
-    if not payload.site_url and jira_integration is None:
-        raise HTTPException(status_code=400, detail="site_url or jira_integration_id is required")
-    auth_email = payload.auth_email
-    api_token = payload.api_token
-    if jira_integration is not None:
-        auth_email = auth_email if auth_email is not None else jira_integration.auth_email
-        if api_token is None and jira_integration.api_token_encrypted:
-            api_token = _decrypt_token(db, ctx.tenant_id, jira_integration.api_token_encrypted)
+    if payload.jira_integration_id is None:
+        raise HTTPException(status_code=400, detail="jira_integration_id is required")
+    jira_integration = _load_jira_integration(db, ctx.tenant_id, payload.jira_integration_id)
+    api_token = (
+        _decrypt_token(db, ctx.tenant_id, jira_integration.api_token_encrypted)
+        if jira_integration.api_token_encrypted
+        else None
+    )
     return await _run_test_query(
-        site_url=payload.site_url or jira_integration.site_url,
+        site_url=jira_integration.site_url,
         jql=payload.jql,
-        auth_email=auth_email,
+        auth_email=jira_integration.auth_email,
         api_token=api_token,
         max_results=payload.max_results,
     )
@@ -700,101 +612,17 @@ async def run_saved_jira_test_query(
         config = resolve_jira_config(db, instance)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Jira integration not found") from exc
-    site_url = payload.site_url or config.site_url
-    jql = payload.jql or instance.jql
-    auth_email = payload.auth_email if payload.auth_email is not None else config.auth_email
-    api_token = payload.api_token
-    if api_token is None and config.api_token_encrypted:
-        api_token = _decrypt_token(db, instance.tenant_id, config.api_token_encrypted)
-
+    api_token = (
+        _decrypt_token(db, instance.tenant_id, config.api_token_encrypted)
+        if config.api_token_encrypted
+        else None
+    )
     return await _run_test_query(
-        site_url=site_url,
-        jql=jql,
-        auth_email=auth_email,
+        site_url=config.site_url,
+        jql=payload.jql or instance.jql,
+        auth_email=config.auth_email,
         api_token=api_token,
         max_results=payload.max_results,
-    )
-
-
-@router.post("/{trigger_id}/notification-subscription", response_model=JiraNotificationSubscriptionRead)
-def create_jira_notification_subscription(
-    trigger_id: int,
-    payload: JiraNotificationSubscriptionRequest = JiraNotificationSubscriptionRequest(),
-    ctx: TenantContext = Depends(get_tenant_context),
-    current_user=Depends(require_permission("hub.write")),
-    db: Session = Depends(get_db),
-) -> JiraNotificationSubscriptionRead:
-    recipient = payload.resolved_recipient()
-    if recipient is None:
-        raise HTTPException(status_code=400, detail="WhatsApp recipient is required")
-    if payload.agent_id is not None:
-        instance = _load_jira_trigger(db, ctx.tenant_id, trigger_id)
-        _load_active_agent(db, ctx.tenant_id, payload.agent_id)
-        instance.default_agent_id = payload.agent_id
-        db.add(instance)
-        db.flush()
-    # v0.7.0 Wave 4 — auto-flow notification write-through.
-    # When TSN_FLOWS_AUTO_GENERATION_ENABLED, also flip the system-managed
-    # auto-flow's Notification node so the bound flow path produces the
-    # same WhatsApp send. Backward-compatible: the legacy ContinuousAgent
-    # path STILL runs (parallel-run safety) until Wave 5 backfill flips
-    # suppress_default_agent on the binding. API contract unchanged.
-    try:
-        from config.feature_flags import flows_auto_generation_enabled
-        from services.flow_binding_service import update_auto_flow_notification
-
-        if flows_auto_generation_enabled():
-            update_auto_flow_notification(
-                db,
-                tenant_id=ctx.tenant_id,
-                trigger_kind="jira",
-                trigger_instance_id=trigger_id,
-                enabled=True,
-                recipient_phone=recipient,
-            )
-    except Exception:
-        logger.exception(
-            "Auto-flow notification write-through failed for jira trigger %s; legacy path proceeds",
-            trigger_id,
-        )
-
-    try:
-        result = ensure_jira_notification_subscription(
-            db,
-            tenant_id=ctx.tenant_id,
-            jira_trigger_id=trigger_id,
-            created_by=getattr(current_user, "id", None),
-            recipient_phone=recipient,
-        )
-    except ValueError as exc:
-        reason = str(exc)
-        if reason == "jira_trigger_not_found":
-            raise HTTPException(status_code=404, detail="Jira trigger not found") from exc
-        if reason in {"invalid_whatsapp_recipient"}:
-            raise HTTPException(status_code=400, detail="Invalid WhatsApp recipient") from exc
-        if reason in {"agent_limit_reached"}:
-            raise HTTPException(status_code=409, detail="Agent limit reached for this tenant") from exc
-        if reason in {"default_agent_not_found"}:
-            raise HTTPException(status_code=400, detail="Jira trigger default agent is not active") from exc
-        if reason in {
-            "whatsapp_channel_disabled",
-            "whatsapp_integration_unavailable",
-            "whatsapp_integration_ambiguous",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail="Jira notifications require a single active tenant-owned WhatsApp agent instance.",
-            ) from exc
-        raise HTTPException(status_code=400, detail=reason) from exc
-
-    return JiraNotificationSubscriptionRead(
-        jira_trigger_id=result.jira_trigger_id,
-        continuous_agent_id=result.continuous_agent_id,
-        continuous_subscription_id=result.continuous_subscription_id,
-        agent_id=result.agent_id,
-        recipient_preview=result.recipient_preview,
-        created_agent=result.created_agent,
-        created_subscription=result.created_subscription,
     )
 
 
@@ -836,35 +664,25 @@ def update_jira_trigger(
         if data["default_agent_id"] is not None:
             _load_active_agent(db, ctx.tenant_id, data["default_agent_id"])
         instance.default_agent_id = data["default_agent_id"]
+        sync_system_managed_flow_default_agent(
+            db,
+            tenant_id=ctx.tenant_id,
+            trigger_kind="jira",
+            trigger_instance_id=instance.id,
+            default_agent_id=instance.default_agent_id,
+        )
     if "integration_name" in data:
         instance.integration_name = data["integration_name"]
-    if "jira_integration_id" in data:
-        if data["jira_integration_id"] is None:
-            instance.jira_integration_id = None
-        else:
-            integration = _load_jira_integration(db, ctx.tenant_id, data["jira_integration_id"])
-            instance.jira_integration_id = integration.id
-            instance.site_url = integration.site_url
-            instance.auth_email = integration.auth_email
-            instance.api_token_encrypted = integration.api_token_encrypted
-            instance.api_token_preview = integration.api_token_preview
-            if instance.project_key is None:
-                instance.project_key = integration.project_key
-    if "site_url" in data:
-        instance.site_url = data["site_url"]
+    if "jira_integration_id" in data and data["jira_integration_id"] is not None:
+        integration = _load_jira_integration(db, ctx.tenant_id, data["jira_integration_id"])
+        instance.jira_integration_id = integration.id
+        instance.site_url = integration.site_url
+        if instance.project_key is None:
+            instance.project_key = integration.project_key
     if "project_key" in data:
         instance.project_key = data["project_key"]
     if "jql" in data:
         instance.jql = data["jql"]
-    if "auth_email" in data:
-        instance.auth_email = data["auth_email"]
-    if "api_token" in data:
-        if data["api_token"] is None:
-            instance.api_token_encrypted = None
-            instance.api_token_preview = None
-        else:
-            instance.api_token_encrypted = _encrypt_token(db, instance.tenant_id, data["api_token"])
-            instance.api_token_preview = _token_preview(data["api_token"])
     if "trigger_criteria" in data:
         instance.trigger_criteria = data["trigger_criteria"]
     if "poll_interval_seconds" in data and data["poll_interval_seconds"] is not None:
@@ -887,6 +705,98 @@ def delete_jira_trigger(
     db: Session = Depends(get_db),
 ) -> None:
     instance = _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+    )
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+    )
     db.delete(instance)
     db.commit()
     return None
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def get_jira_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    return get_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+    )
+
+
+@router.put("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def put_jira_trigger_recap_config(
+    trigger_id: int,
+    payload: TriggerRecapConfigWrite,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    return put_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{trigger_id}/recap-config", status_code=status.HTTP_204_NO_CONTENT)
+def delete_jira_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> None:
+    _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    delete_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+    )
+    return None
+
+
+@router.post("/{trigger_id}/test-recap", response_model=TriggerRecapTestResponse)
+def post_jira_trigger_test_recap(
+    trigger_id: int,
+    payload: TriggerRecapTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _load_jira_trigger(db, ctx.tenant_id, trigger_id)
+    return run_test_recap_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="jira",
+        trigger_instance_id=trigger_id,
+        body=payload,
+    )

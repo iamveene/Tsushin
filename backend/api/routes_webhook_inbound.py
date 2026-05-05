@@ -314,6 +314,15 @@ async def receive_webhook(
     )
     db.add(replay_row)
     try:
+        # BUG-705 (race-safe replay detection): flush so the unique constraint
+        # is evaluated immediately. We DO NOT commit here yet — committing
+        # before agent lookup would consume the dedupe token even on a 404
+        # (no configured agent) or 400 (malformed body), permanently blocking
+        # legitimate retries after a misconfiguration is fixed. The commit
+        # below at "commit replay row" happens once we know the request will
+        # be enqueued; if any earlier step raises an HTTPException, FastAPI's
+        # session cleanup rolls back the staged row and the dedupe slot is
+        # released.
         db.flush()
     except IntegrityError:
         db.rollback()
@@ -372,6 +381,12 @@ async def receive_webhook(
         logger.warning(f"Webhook {webhook_id}: no configured agent for tenant {integration.tenant_id}")
         raise HTTPException(status_code=404, detail="No agent configured for this webhook")
 
+    # BUG-705 (commit replay row): we have an active integration, valid signature,
+    # parseable body, AND a configured agent — we are committed to enqueueing.
+    # Lock in the replay-protection row so it survives any best-effort rollback
+    # in the payload-capture block below.
+    db.commit()
+
     # --- Layer 8: enqueue ---
     payload = {
         "webhook_id": webhook_id,
@@ -412,9 +427,13 @@ async def receive_webhook(
             {"wid": integration.id},
         )
         db.commit()
-    except Exception:
-        logger.exception(
-            "Webhook %s: payload capture failed (non-fatal); dispatch proceeds", webhook_id
+    except Exception as _capture_err:
+        # Best-effort: capture failure must NEVER abort dispatch. Use warning
+        # level (not exception) so a transient hiccup — e.g. table lock,
+        # missing webhook_payload_capture table on stale schemas — does not
+        # spam stack traces in production logs on every retry.
+        logger.warning(
+            "Webhook %s: payload capture failed (non-fatal): %s", webhook_id, _capture_err
         )
         db.rollback()
 

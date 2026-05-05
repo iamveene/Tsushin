@@ -164,7 +164,19 @@ class SkillManager:
             from agent.skills.code_repository_skill import CodeRepositorySkill
             self.register_skill(CodeRepositorySkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository")
+            # v0.7.x: Trigger Case Memory — find_similar_past_cases always
+            # registered. Per-tenant opt-in is via Agent.vector_store_instance_id
+            # and per-trigger TriggerRecapConfig.enabled.
+            from agent.skills.find_similar_past_cases import FindSimilarPastCasesSkill
+            self.register_skill(FindSimilarPastCasesSkill)
+
+            # Agent Teams Phase 4: internal scratch tools are registered so
+            # team-run AgentService contexts can expose them without requiring a
+            # user-managed AgentSkill row.
+            from agent.skills.team_scratch_skill import TeamScratchSkill
+            self.register_skill(TeamScratchSkill)
+
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository, team_scratch")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -671,8 +683,16 @@ class SkillManager:
             skill_record = await self._get_skill_record(db, agent_id, skill_class.skill_type)
 
             if not skill_record or not skill_record.is_enabled:
+                team_run_context = (
+                    skill_class.skill_type == "team_scratch"
+                    and message is not None
+                    and getattr(message, "metadata", None)
+                    and message.metadata.get("team_run_id") is not None
+                )
+                if team_run_context:
+                    skill_record = None
                 # BUG-391 fix: For custom skills, check AgentCustomSkill table
-                if skill_class.skill_type.startswith("custom:"):
+                elif skill_class.skill_type.startswith("custom:"):
                     from models import AgentCustomSkill, CustomSkill
                     record = getattr(skill_class, '_custom_skill_record', None)
                     if record:
@@ -710,6 +730,8 @@ class SkillManager:
                         config['comm_depth'] = message.metadata['comm_depth']
                     if 'comm_parent_session_id' in message.metadata:
                         config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
+                    if 'team_run_id' in message.metadata:
+                        config['team_run_id'] = message.metadata['team_run_id']
 
             # Create skill instance (before schema validation so custom skills have self._record)
             skill_instance = self._create_skill_instance(skill_class, db, agent_id)

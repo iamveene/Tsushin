@@ -53,7 +53,6 @@ from models import (  # noqa: E402
     GmailIntegration,
     HubIntegration,
     JiraChannelInstance,
-    ScheduleChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
     UserChannelDefaultAgent,
@@ -84,7 +83,6 @@ def db_session():
             GmailIntegration.__table__,
             EmailChannelInstance.__table__,
             JiraChannelInstance.__table__,
-            ScheduleChannelInstance.__table__,
             GitHubChannelInstance.__table__,
         ],
     )

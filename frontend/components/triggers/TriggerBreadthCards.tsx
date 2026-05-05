@@ -3,19 +3,19 @@
 import { useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
-import { api, type GitHubTrigger, type JiraTrigger, type ScheduleTrigger, type TriggerKind } from '@/lib/client'
+import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type TriggerKind, type WebhookIntegration } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
-import { CalendarDaysIcon, CodeIcon, GitHubIcon, type IconProps } from '@/components/ui/icons'
+import { CodeIcon, EnvelopeIcon, GitHubIcon, WebhookIcon, type IconProps } from '@/components/ui/icons'
 
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'schedule' | 'github'>
-type BreadthTrigger = JiraTrigger | ScheduleTrigger | GitHubTrigger
+type BreadthTriggerKind = Extract<TriggerKind, 'email' | 'webhook' | 'jira' | 'github'>
+type BreadthTrigger = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger
 
 interface Props {
+  emailTriggers: EmailTrigger[]
+  webhookTriggers: WebhookIntegration[]
   jiraTriggers: JiraTrigger[]
-  scheduleTriggers: ScheduleTrigger[]
   githubTriggers: GitHubTrigger[]
   canWrite: boolean
-  onCreate: (kind: BreadthTriggerKind) => void
   onChanged: () => Promise<void> | void
   onError?: (message: string) => void
   onSuccess?: (message: string) => void
@@ -27,11 +27,9 @@ interface GroupConfig<T extends BreadthTrigger> {
   description: string
   emptyTitle: string
   emptyBody: string
-  createLabel: string
   Icon: ComponentType<IconProps>
   iconClass: string
   borderClass: string
-  actionClass: string
   detailBase: string
   items: T[]
 }
@@ -42,6 +40,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function statusClass(trigger: BreadthTrigger): string {
   if (!trigger.is_active || trigger.status === 'paused') return 'bg-gray-500/20 text-gray-300 border-gray-500/50'
+  if ('circuit_breaker_state' in trigger && trigger.circuit_breaker_state === 'open') return 'bg-red-500/20 text-red-300 border-red-500/50'
   if (trigger.status === 'error' || trigger.health_status === 'unhealthy') return 'bg-red-500/20 text-red-300 border-red-500/50'
   if (trigger.health_status === 'healthy') return 'bg-green-500/20 text-green-300 border-green-500/50'
   return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
@@ -49,6 +48,7 @@ function statusClass(trigger: BreadthTrigger): string {
 
 function statusLabel(trigger: BreadthTrigger): string {
   if (!trigger.is_active || trigger.status === 'paused') return 'Paused'
+  if ('circuit_breaker_state' in trigger && trigger.circuit_breaker_state === 'open') return 'Circuit Open'
   if (trigger.status === 'error') return 'Error'
   if (trigger.health_status === 'healthy') return 'Active'
   return trigger.status || 'Unknown'
@@ -67,11 +67,11 @@ function DetailLine({ label, children }: { label: string; children: ReactNode })
 }
 
 export default function TriggerBreadthCards({
+  emailTriggers,
+  webhookTriggers,
   jiraTriggers,
-  scheduleTriggers,
   githubTriggers,
   canWrite,
-  onCreate,
   onChanged,
   onError,
   onSuccess,
@@ -80,32 +80,40 @@ export default function TriggerBreadthCards({
 
   const groups: Array<GroupConfig<BreadthTrigger>> = [
     {
+      kind: 'email',
+      title: 'Email Triggers',
+      description: 'Gmail-backed trigger rows that watch inbox activity and wake agents from matching messages.',
+      emptyTitle: 'No email triggers yet',
+      emptyBody: 'Reuse a connected Gmail account and route matching inbox activity to an agent.',
+      Icon: EnvelopeIcon,
+      iconClass: 'text-red-300',
+      borderClass: 'border-red-700/30',
+      detailBase: '/hub/triggers/email',
+      items: emailTriggers,
+    },
+    {
+      kind: 'webhook',
+      title: 'Webhook Triggers',
+      description: 'Signed external events that can wake agents or continuous flows.',
+      emptyTitle: 'No Webhook Triggers',
+      emptyBody: 'Connect external HTTP systems through the unified trigger launcher.',
+      Icon: WebhookIcon,
+      iconClass: 'text-cyan-300',
+      borderClass: 'border-cyan-700/30',
+      detailBase: '/hub/triggers/webhook',
+      items: webhookTriggers,
+    },
+    {
       kind: 'jira',
       title: 'Jira Triggers',
       description: 'JQL polling for matching issues and service desk handoffs.',
       emptyTitle: 'No Jira triggers',
       emptyBody: 'Watch issues by JQL and route matching issues to an agent.',
-      createLabel: 'Create Jira Trigger',
       Icon: CodeIcon,
       iconClass: 'text-blue-300',
       borderClass: 'border-blue-700/30',
-      actionClass: 'bg-blue-600/20 text-blue-300 border-blue-600/50 hover:bg-blue-600/30',
       detailBase: '/hub/triggers/jira',
       items: jiraTriggers,
-    },
-    {
-      kind: 'schedule',
-      title: 'Schedule Triggers',
-      description: 'Cron-based wakeups with structured payload templates.',
-      emptyTitle: 'No schedule triggers',
-      emptyBody: 'Create recurring wakeups for daily briefs, sweeps, or checks.',
-      createLabel: 'Create Schedule Trigger',
-      Icon: CalendarDaysIcon,
-      iconClass: 'text-amber-300',
-      borderClass: 'border-amber-700/30',
-      actionClass: 'bg-amber-600/20 text-amber-300 border-amber-600/50 hover:bg-amber-600/30',
-      detailBase: '/hub/triggers/schedule',
-      items: scheduleTriggers,
     },
     {
       kind: 'github',
@@ -113,11 +121,9 @@ export default function TriggerBreadthCards({
       description: 'Repository activity from pushes, pull requests, issues, and releases.',
       emptyTitle: 'No GitHub triggers',
       emptyBody: 'Connect a repository and route selected events into wake events.',
-      createLabel: 'Create GitHub Trigger',
       Icon: GitHubIcon,
       iconClass: 'text-violet-300',
       borderClass: 'border-violet-700/30',
-      actionClass: 'bg-violet-600/20 text-violet-300 border-violet-600/50 hover:bg-violet-600/30',
       detailBase: '/hub/triggers/github',
       items: githubTriggers,
     },
@@ -128,10 +134,12 @@ export default function TriggerBreadthCards({
     setUpdatingKey(key)
     try {
       const next = !trigger.is_active
-      if (kind === 'jira') {
+      if (kind === 'email') {
+        await api.updateEmailTrigger(trigger.id, { is_active: next })
+      } else if (kind === 'webhook') {
+        await api.updateWebhookIntegration(trigger.id, { is_active: next })
+      } else if (kind === 'jira') {
         await api.updateJiraTrigger(trigger.id, { is_active: next })
-      } else if (kind === 'schedule') {
-        await api.updateScheduleTrigger(trigger.id, { is_active: next })
       } else {
         await api.updateGitHubTrigger(trigger.id, { is_active: next })
       }
@@ -145,6 +153,26 @@ export default function TriggerBreadthCards({
   }
 
   const renderDetails = (kind: BreadthTriggerKind, trigger: BreadthTrigger) => {
+    if (kind === 'email') {
+      const email = trigger as EmailTrigger
+      return (
+        <>
+          <DetailLine label="Inbox">{email.gmail_account_email || email.gmail_integration_name || 'Gmail inbox'}</DetailLine>
+          <DetailLine label="Search">{email.search_query || 'Inbox default'}</DetailLine>
+          <DetailLine label="Poll">{email.poll_interval_seconds}s</DetailLine>
+        </>
+      )
+    }
+    if (kind === 'webhook') {
+      const webhook = trigger as WebhookIntegration
+      return (
+        <>
+          <DetailLine label="Inbound">{webhook.inbound_url}</DetailLine>
+          <DetailLine label="Callback">{webhook.callback_enabled ? webhook.callback_url || 'Enabled' : 'Disabled'}</DetailLine>
+          <DetailLine label="Rate limit">{webhook.rate_limit_rpm} req/min</DetailLine>
+        </>
+      )
+    }
     if (kind === 'jira') {
       const jira = trigger as JiraTrigger
       return (
@@ -152,19 +180,6 @@ export default function TriggerBreadthCards({
           <DetailLine label="Site">{jira.site_url}</DetailLine>
           <DetailLine label="JQL">{jira.jql}</DetailLine>
           <DetailLine label="Poll">{jira.poll_interval_seconds}s</DetailLine>
-          <DetailLine label="WhatsApp notification">
-            {jira.managed_notification_status?.status || jira.notification_subscription_status || (jira.managed_notification_enabled ? 'active' : 'Not enabled')}
-          </DetailLine>
-        </>
-      )
-    }
-    if (kind === 'schedule') {
-      const schedule = trigger as ScheduleTrigger
-      return (
-        <>
-          <DetailLine label="Cron">{schedule.cron_expression}</DetailLine>
-          <DetailLine label="Timezone">{schedule.timezone}</DetailLine>
-          <DetailLine label="Next fire">{schedule.next_fire_at ? safeRelative(schedule.next_fire_at) : 'Not scheduled'}</DetailLine>
         </>
       )
     }
@@ -191,15 +206,10 @@ export default function TriggerBreadthCards({
                 </h3>
                 <p className="mt-1 text-xs text-tsushin-slate">{group.description}</p>
               </div>
-              {canWrite && (
-                <button
-                  type="button"
-                  onClick={() => onCreate(group.kind)}
-                  className={`rounded px-3 py-1.5 text-xs border ${group.actionClass}`}
-                >
-                  {group.createLabel}
-                </button>
-              )}
+              {/* v0.7.0-fix Phase 9.2: per-section "Create X Trigger" buttons
+                  retired — the top-of-tab "+ Add Trigger" launcher (which
+                  opens the unified wizard with initialKind) is the single
+                  source of trigger creation. */}
             </div>
 
             {group.items.length === 0 ? (
