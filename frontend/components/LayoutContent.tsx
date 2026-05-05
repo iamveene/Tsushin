@@ -124,6 +124,9 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         pathname?.startsWith('/wake-events') ||
         pathname?.startsWith('/continuous-agents')
     }
+    if (href === '/agents') {
+      return pathname?.startsWith('/agents') || pathname?.startsWith('/studio')
+    }
     const prefix = activePrefix || href
     return pathname?.startsWith(prefix)
   }

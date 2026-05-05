@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger, ForeignKeyConstraint, and_
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint, BigInteger, ForeignKeyConstraint, CheckConstraint, and_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
@@ -4564,7 +4564,9 @@ class MessageQueue(Base):
     status = Column(String(20), nullable=False, default="pending", index=True)
     # "pending" | "processing" | "completed" | "failed" | "dead_letter"
 
-    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agent.id"), nullable=True, index=True)
+    team_id = Column(Integer, nullable=True, index=True)
+    team_run_id = Column(Integer, nullable=True, index=True)
     sender_key = Column(String(255), nullable=False)
 
     payload = Column(JSON, nullable=False)
@@ -4584,7 +4586,25 @@ class MessageQueue(Base):
     completed_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "((message_type = 'team_run' AND agent_id IS NULL AND team_id IS NOT NULL AND team_run_id IS NOT NULL) "
+            "OR (message_type != 'team_run' AND agent_id IS NOT NULL))",
+            name="ck_mq_agent_or_team_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_id"],
+            ["agent_team.tenant_id", "agent_team.id"],
+            name="fk_mq_tenant_team",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "team_run_id"],
+            ["agent_team_run.tenant_id", "agent_team_run.id"],
+            name="fk_mq_tenant_team_run",
+            ondelete="CASCADE",
+        ),
         Index("ix_mq_tenant_agent_status", "tenant_id", "agent_id", "status"),
+        Index("ix_mq_tenant_team_status", "tenant_id", "team_id", "status"),
         Index("ix_mq_pending_priority", "status", "priority", "queued_at"),
     )
 

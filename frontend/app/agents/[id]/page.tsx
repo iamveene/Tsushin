@@ -14,7 +14,7 @@ import AgentAdvancedManager from '@/components/AgentAdvancedManager'
 import SharedKnowledgeViewer from '@/components/SharedKnowledgeViewer'
 import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
-  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon, WrenchIcon
+  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, WrenchIcon, UsersIcon
 } from '@/components/ui/icons'
 
 type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge' | 'advanced'
@@ -141,6 +141,11 @@ export default function AgentDetailPage() {
                     ○ Inactive
                   </span>
                 )}
+                {agent.is_team_member && (
+                  <span className="badge badge-team flex items-center gap-1">
+                    <UsersIcon size={12} /> Team
+                  </span>
+                )}
               </div>
               <div className="mt-1 flex flex-wrap gap-4 text-sm text-tsushin-slate">
                 <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
@@ -160,6 +165,29 @@ export default function AgentDetailPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6">
+        {agent.is_team_member && (
+          <div className="mb-6 rounded-xl border border-tsushin-indigo/25 bg-tsushin-indigo/10 px-4 py-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-start gap-3">
+                <UsersIcon size={18} className="mt-0.5 flex-shrink-0 text-tsushin-indigo-glow" />
+                <div>
+                  <h2 className="text-sm font-semibold text-white">Team member agent</h2>
+                  <p className="mt-1 text-sm text-tsushin-slate">
+                    Direct conversations stay separate from team executions, but settings changes here may affect team behavior.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push('/studio/teams')}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-indigo/30 bg-tsushin-indigo/10 px-4 py-2 text-sm font-medium text-tsushin-indigo-glow transition-colors hover:bg-tsushin-indigo/20"
+              >
+                Open Teams
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6">
           <nav className="flex border-b border-tsushin-border">

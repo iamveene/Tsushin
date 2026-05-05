@@ -20,6 +20,10 @@ sys.modules.setdefault("docker", docker_stub)
 
 from models import (  # noqa: E402
     Agent,
+    AgentTeam,
+    AgentTeamMember,
+    AgentTeamRun,
+    AgentTeamTrigger,
     Base,
     BudgetPolicy,
     ChannelEventDedupe,
@@ -40,6 +44,9 @@ from models import (  # noqa: E402
     MessageQueue,
     SentinelConfig,
     SentinelProfile,
+    TeamRunStatus,
+    TeamStatus,
+    TeamTopology,
     WakeEvent,
     WebhookIntegration,
 )
@@ -80,6 +87,11 @@ def db_session():
             ChannelEventDedupe.__table__,
             FlowDefinition.__table__,
             FlowTriggerBinding.__table__,
+            AgentTeam.__table__,
+            AgentTeamMember.__table__,
+            AgentTeamTrigger.__table__,
+            AgentTeamRun.__table__,
+            MessageQueue.__table__,
         ],
     )
     SessionLocal = sessionmaker(bind=engine)
@@ -241,6 +253,54 @@ def _seed_subscription(
     )
     db.add(subscription)
     return subscription
+
+
+def _seed_team_trigger(
+    db,
+    *,
+    tenant_id: str,
+    team_id: int = 801,
+    trigger_id: int = 901,
+    agent_id: int = 201,
+    trigger_kind: str = "webhook",
+    config_json: dict | None = None,
+    team_status: str = TeamStatus.ACTIVE.value,
+    is_enabled: bool = True,
+):
+    team = AgentTeam(
+        id=team_id,
+        tenant_id=tenant_id,
+        name=f"Team {team_id}",
+        goal_text="Handle the trigger as a team.",
+        topology=TeamTopology.LINE.value,
+        status=team_status,
+        coordinator_agent_id=agent_id,
+        max_steps=3,
+        created_by_user_id=1,
+    )
+    db.add(team)
+    db.flush()
+    db.add(
+        AgentTeamMember(
+            tenant_id=tenant_id,
+            team_id=team.id,
+            agent_id=agent_id,
+            execution_order=1,
+        )
+    )
+    trigger = AgentTeamTrigger(
+        id=trigger_id,
+        tenant_id=tenant_id,
+        team_id=team.id,
+        trigger_kind=trigger_kind,
+        config_json=config_json if config_json is not None else {
+            "trigger_instance_id": 401,
+            "event_types": ["message.created"],
+        },
+        is_enabled=is_enabled,
+    )
+    db.add(trigger)
+    return trigger
 
 
 def _service(db, tmp_path: Path):
@@ -548,6 +608,204 @@ def test_dispatch_supports_track_b_trigger_instances(
     assert wake_event.channel_type == trigger_type
     assert wake_event.channel_instance_id == instance_id
     assert db_session.query(ContinuousRun).one().status == "queued"
+
+
+def test_dispatch_creates_team_run_without_default_agent(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=None)
+    _seed_team_trigger(db_session, tenant_id="tenant-a")
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(payload={"raw_event": {"event_type": "approved"}})
+    )
+
+    assert result.status == "dispatched"
+    assert result.matched_agent_id is None
+    assert result.continuous_run_ids == []
+    assert result.team_run_ids == [1]
+    assert result.skipped_team_reasons == []
+    wake_event = db_session.query(WakeEvent).one()
+    team_run = db_session.query(AgentTeamRun).one()
+    assert team_run.status == TeamRunStatus.PENDING.value
+    assert team_run.trigger_event_id == wake_event.id
+    queue_item = db_session.query(MessageQueue).one()
+    assert queue_item.channel == "team"
+    assert queue_item.message_type == "team_run"
+    assert queue_item.agent_id is None
+    assert queue_item.team_id == 801
+    assert queue_item.team_run_id == team_run.id
+    assert queue_item.payload["team_run_id"] == team_run.id
+    assert queue_item.payload["trigger_event_id"] == wake_event.id
+
+
+@pytest.mark.parametrize(
+    ("trigger_type", "instance_id", "event_type", "seed_fn", "filters", "payload"),
+    [
+        (
+            "webhook",
+            401,
+            "message.created",
+            _seed_webhook,
+            {"jsonpath_matchers": [{"path": "$.raw_event.action", "operator": "equals", "value": "opened"}]},
+            {"raw_event": {"action": "opened"}},
+        ),
+        (
+            "jira",
+            701,
+            "jira.issue.updated",
+            _seed_jira,
+            {"jsonpath_matchers": [{"path": "$.issue.fields.status.name", "operator": "equals", "value": "Done"}]},
+            {"issue": {"fields": {"status": {"name": "Done"}}}},
+        ),
+        (
+            "github",
+            901,
+            "github.pull_request",
+            _seed_github,
+            {"jsonpath_matchers": [{"path": "$.raw_event.action", "operator": "equals", "value": "opened"}]},
+            {"raw_event": {"action": "opened"}},
+        ),
+    ],
+)
+def test_dispatch_matches_team_triggers_for_webhook_github_jira(
+    db_session,
+    tmp_path,
+    trigger_type,
+    instance_id,
+    event_type,
+    seed_fn,
+    filters,
+    payload,
+):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    seed_fn(db_session, instance_id=instance_id, tenant_id="tenant-a", created_by=1, default_agent_id=None)
+    _seed_team_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind=trigger_type,
+        config_json={
+            "trigger_instance_id": instance_id,
+            "event_types": [event_type],
+            "filters": filters,
+        },
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type=trigger_type,
+            instance_id=instance_id,
+            event_type=event_type,
+            dedupe_key=f"{trigger_type}-team-1",
+            payload=payload,
+        )
+    )
+
+    assert result.status == "dispatched"
+    assert result.team_run_ids == [1]
+    assert result.continuous_run_ids == []
+    assert db_session.query(WakeEvent).one().channel_type == trigger_type
+    assert db_session.query(AgentTeamRun).one().trigger_event_id == result.wake_event_id
+    assert db_session.query(MessageQueue).one().message_type == "team_run"
+
+
+def test_dispatch_duplicate_does_not_create_second_team_run(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=None)
+    _seed_team_trigger(db_session, tenant_id="tenant-a")
+    db_session.commit()
+
+    first = _service(db_session, tmp_path).dispatch(_input())
+    duplicate = _service(db_session, tmp_path).dispatch(_input())
+
+    assert first.status == "dispatched"
+    assert duplicate.status == "duplicate"
+    assert duplicate.team_run_ids == []
+    assert db_session.query(WakeEvent).count() == 1
+    assert db_session.query(AgentTeamRun).count() == 1
+    assert db_session.query(MessageQueue).count() == 1
+
+
+def test_dispatch_skips_team_trigger_when_filter_mismatches(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201, is_default=True)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_team_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        config_json={
+            "trigger_instance_id": 401,
+            "event_types": ["message.created"],
+            "filters": {
+                "jsonpath_matchers": [{"path": "$.raw_event.action", "operator": "equals", "value": "opened"}]
+            },
+        },
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(_input(payload={"raw_event": {"action": "closed"}}))
+
+    assert result.status == "filtered"
+    assert result.team_run_ids == []
+    assert result.skipped_team_reasons == ["team_trigger:901:filter_mismatch:jsonpath_matcher_0_failed"]
+    assert db_session.query(AgentTeamRun).count() == 0
+    assert db_session.query(WakeEvent).count() == 0
+
+
+def test_dispatch_ignores_cross_tenant_team_trigger(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201, is_default=True)
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_team_trigger(
+        db_session,
+        tenant_id="tenant-b",
+        team_id=802,
+        trigger_id=902,
+        agent_id=202,
+        config_json={"trigger_instance_id": 401, "event_types": ["message.created"]},
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(_input())
+
+    assert result.status == "filtered"
+    assert result.team_run_ids == []
+    assert result.skipped_team_reasons == []
+    assert db_session.query(AgentTeamRun).count() == 0
+    assert db_session.query(WakeEvent).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("team_status", "config_json", "expected_reason"),
+    [
+        (TeamStatus.PAUSED.value, {"trigger_instance_id": 401, "event_types": ["message.created"]}, "team:801:inactive"),
+        (TeamStatus.ACTIVE.value, {"event_types": ["message.created"]}, "team_trigger:901:missing_trigger_instance_id"),
+    ],
+)
+def test_dispatch_team_triggers_fail_closed_for_inactive_team_or_missing_instance(
+    db_session,
+    tmp_path,
+    team_status,
+    config_json,
+    expected_reason,
+):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201, is_default=True)
+    _seed_webhook(db_session, instance_id=401, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    _seed_team_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        config_json=config_json,
+        team_status=team_status,
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(_input())
+
+    assert result.status == "filtered"
+    assert result.team_run_ids == []
+    assert result.skipped_team_reasons == [expected_reason]
+    assert db_session.query(AgentTeamRun).count() == 0
+    assert db_session.query(WakeEvent).count() == 0
 
 
 @pytest.mark.parametrize(

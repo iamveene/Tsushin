@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Release 0.7.0 — Agent Teams Phase 7 frontend foundations (2026-05-05)
+
+**Summary.** Added the first Agent Teams frontend foundation without introducing the Team Wizard or Team Builder. Studio now has a canonical `/studio/teams` Teams surface, the Agents create affordance can route users toward Teams, and team-member agents are visually marked before deeper editing surfaces land.
+
+**Frontend.**
+- Added a Studio Teams tab and `/studio/teams` list page backed by `GET /api/teams`; `/agents/teams` redirects to the canonical Studio route for compatibility.
+- Added a reusable split-button control and replaced the Agents page's standalone create button with Agent/Team creation choices while preserving the existing Agent Wizard path.
+- Extended the frontend API/types for Agent Teams list responses and exposed `is_team_member` / `current_team_id` on `Agent`.
+- Added Team badges and team-membership warnings on agent list, agent detail, and Agent Builder surfaces so operators can see when direct edits may affect team behavior.
+
+### Release 0.7.0 — Agent Teams Phase 6 trigger integration (2026-05-05)
+
+**Summary.** Added backend trigger execution for Agent Teams. Webhook, GitHub, and Jira trigger events can now match tenant-owned team trigger bindings, create a `WakeEvent`, enqueue a `team_run` queue row, and execute the existing line/mesh team orchestrator without requiring a Team Builder UI.
+
+**Backend.**
+- Added Alembic `0084_agent_team_trigger_queue.py` so `message_queue` can carry team-run work with nullable `agent_id`, tenant-scoped `team_id`/`team_run_id`, `message_type='team_run'`, and checks that keep non-team queue rows agent-owned.
+- Extended `MessageQueueService`, `QueueWorker`, and `QueueRouter` with team-run enqueue/claim/dispatch support keyed by `(tenant_id, team_id)` and bounded by `AgentTeam.max_concurrent_runs`.
+- Extended `TriggerDispatchService` to fan one deduped event out to existing ContinuousRuns, bound Flows, and matching Agent Teams. Team-only dispatch now succeeds without a default agent, while existing single-agent and Flow trigger behavior stays intact.
+- Added Teams trigger binding CRUD to `/api/teams/{team_id}/triggers` and `/api/v1/teams/{team_id}/triggers`, reusing `agents.write`. Bindings validate tenant-owned active Webhook, GitHub, or Jira trigger instances and reject Gmail for v0.7.0.
+
+**Tests and smoke.**
+- Shipped the focused Teams API regression file and added focused team-trigger coverage for Webhook/GitHub/Jira matching, duplicate suppression, filters, inactive teams, missing trigger instance IDs, and queued team-run dispatch.
+- Added `backend/dev_tests/run_team_trigger_smoke.py` for deterministic live DB verification of team-trigger enqueue behavior.
+
 ### Release 0.7.0 — Agent Teams Phase 5 CRUD API layer (2026-05-05)
 
 **Summary.** Added the bounded backend HTTP API layer for Agent Teams. This delivery covers tenant-scoped CRUD/member/run endpoints for `/api/teams` and `/api/v1/teams`, manual background-task runs, cancellation, soft archive cleanup, and API response fields needed by later frontend work. Trigger dispatch and frontend Team Builder surfaces remain deferred.

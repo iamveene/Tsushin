@@ -269,12 +269,11 @@ def _run_prefix_smoke(client: TeamsApiSmokeClient, prefix: str) -> None:
         if client.config.skip_run:
             print(f"[{prefix}] manual run skipped by TSUSHIN_SKIP_TEAM_RUN/--skip-run")
         else:
-            print(f"[{prefix}] starting manual run via background task")
+            print(f"[{prefix}] starting manual run via background task using the team goal snapshot")
             run_response = client.request(
                 "POST",
                 f"{prefix}/{team_id}/runs",
                 expected=(200, 201, 202),
-                payload={"input": "Phase 5 API smoke run. Keep the response short."},
             )
             run_id = _extract_id(_json(run_response), "run_id", "id", "team_run_id")
             print(f"[{prefix}] listing runs")

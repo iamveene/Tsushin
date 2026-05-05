@@ -19,13 +19,16 @@ from typing import Any, Literal, Optional
 logger = logging.getLogger(__name__)
 
 from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from channels.trigger_criteria import evaluate_payload_criteria
 from config.feature_flags import flows_trigger_binding_enabled
 from models import (
     Agent,
+    AgentTeam,
+    AgentTeamRun,
+    AgentTeamTrigger,
     ChannelEventDedupe,
     ContinuousAgent,
     ContinuousRun,
@@ -35,6 +38,8 @@ from models import (
     GitHubChannelInstance,
     JiraChannelInstance,
     SentinelConfig,
+    TeamRunStatus,
+    TeamStatus,
     WakeEvent,
     WebhookIntegration,
 )
@@ -90,6 +95,8 @@ class TriggerDispatchResult:
     wake_event_id: Optional[int] = None
     continuous_run_ids: list[int] = field(default_factory=list)
     continuous_subscription_ids: list[int] = field(default_factory=list)
+    team_run_ids: list[int] = field(default_factory=list)
+    skipped_team_reasons: list[str] = field(default_factory=list)
     payload_ref: Optional[str] = None
 
 
@@ -172,6 +179,17 @@ class TriggerDispatchService:
                 reason=block_reason,
             )
 
+        team_matches, skipped_team_reasons = self._matching_team_triggers(
+            tenant_id=tenant_id,
+            trigger_type=trigger_type,
+            instance_id=event.instance_id,
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+
+        agent_id: Optional[int] = None
+        bindings: list[FlowTriggerBinding] = []
+        subscriptions: list[ContinuousSubscription] = []
         agent_result = self._resolve_agent_id(
             tenant_id=tenant_id,
             trigger_type=trigger_type,
@@ -179,23 +197,25 @@ class TriggerDispatchService:
             explicit_agent_id=event.explicit_agent_id,
         )
         if isinstance(agent_result, TriggerDispatchResult):
-            return self._record_terminal_outcome(
-                event=event,
+            if not team_matches:
+                return self._record_terminal_outcome(
+                    event=event,
+                    tenant_id=tenant_id,
+                    trigger_type=trigger_type,
+                    status=TriggerDispatchStatus(agent_result.status),
+                    outcome=agent_result.status,
+                    reason=agent_result.reason,
+                    skipped_team_reasons=skipped_team_reasons,
+                )
+        else:
+            agent_id = agent_result
+            subscriptions = self._matching_subscriptions(
                 tenant_id=tenant_id,
                 trigger_type=trigger_type,
-                status=TriggerDispatchStatus(agent_result.status),
-                outcome=agent_result.status,
-                reason=agent_result.reason,
+                instance_id=event.instance_id,
+                event_type=event.event_type,
+                agent_id=agent_id,
             )
-        agent_id = agent_result
-
-        subscriptions = self._matching_subscriptions(
-            tenant_id=tenant_id,
-            trigger_type=trigger_type,
-            instance_id=event.instance_id,
-            event_type=event.event_type,
-            agent_id=agent_id,
-        )
 
         # v0.7.0 Wave 3 — Triggers↔Flows Unification.
         # If any active flow_trigger_binding for this (kind, instance) has
@@ -203,8 +223,7 @@ class TriggerDispatchService:
         # for this dispatch — drop subscriptions so no ContinuousRun is
         # created. We still proceed to ``_enqueue_bound_flows`` below to
         # produce FlowRuns. Gated by TSN_FLOWS_TRIGGER_BINDING_ENABLED.
-        bindings: list[FlowTriggerBinding] = []
-        if flows_trigger_binding_enabled():
+        if agent_id is not None and flows_trigger_binding_enabled():
             bindings = list_active_bindings_for_trigger(
                 self.db,
                 tenant_id=tenant_id,
@@ -219,7 +238,7 @@ class TriggerDispatchService:
                 )
                 subscriptions = []
 
-        if not subscriptions and not bindings:
+        if not subscriptions and not bindings and not team_matches:
             return self._record_terminal_outcome(
                 event=event,
                 tenant_id=tenant_id,
@@ -228,6 +247,7 @@ class TriggerDispatchService:
                 outcome=TriggerDispatchStatus.FILTERED.value,
                 reason="no_matching_subscription",
                 matched_agent_id=agent_id,
+                skipped_team_reasons=skipped_team_reasons,
             )
 
         dedupe = self._claim_dedupe(
@@ -243,6 +263,7 @@ class TriggerDispatchService:
                 reason="duplicate_event",
                 tenant_id=tenant_id,
                 matched_agent_id=agent_id,
+                skipped_team_reasons=skipped_team_reasons,
             )
 
         payload_ref = self._write_payload_ref(event, tenant_id=tenant_id, trigger_type=trigger_type)
@@ -281,6 +302,26 @@ class TriggerDispatchService:
             run_ids.append(run.id)
             runs_to_enqueue.append((run, subscription, continuous_agent))
 
+        team_run_ids: list[int] = []
+        team_runs_to_enqueue: list[tuple[AgentTeamRun, AgentTeam]] = []
+        for team_trigger in team_matches:
+            team = team_trigger.team
+            team_run = AgentTeamRun(
+                tenant_id=tenant_id,
+                team_id=team.id,
+                status=TeamRunStatus.PENDING.value,
+                trigger_event_id=wake_event.id,
+                goal_text_snapshot=team.goal_text,
+                topology_snapshot=team.topology,
+                total_steps=0,
+                completed_steps=0,
+                failed_steps=0,
+            )
+            self.db.add(team_run)
+            self.db.flush()
+            team_run_ids.append(team_run.id)
+            team_runs_to_enqueue.append((team_run, team))
+
         try:
             self.db.commit()
         except IntegrityError:
@@ -290,6 +331,7 @@ class TriggerDispatchService:
                 reason="duplicate_event",
                 tenant_id=tenant_id,
                 matched_agent_id=agent_id,
+                skipped_team_reasons=skipped_team_reasons,
             )
 
         # v0.7.x Wave 1-A — Trigger Memory Recap (default-off behind
@@ -345,7 +387,7 @@ class TriggerDispatchService:
         # bound-flow fan-out NEVER abort dispatch — the ContinuousRun path
         # is the source of truth for backward compatibility.
         bound_flow_run_ids: list[int] = []
-        if bindings:
+        if bindings and agent_id is not None:
             try:
                 bound_flow_run_ids = self._enqueue_bound_flows(
                     tenant_id=tenant_id,
@@ -403,6 +445,15 @@ class TriggerDispatchService:
             memory_recap=recap,
         )
 
+        self._enqueue_team_runs(
+            tenant_id=tenant_id,
+            trigger_type=trigger_type,
+            wake_event=wake_event,
+            event=event,
+            payload_ref=payload_ref,
+            runs=team_runs_to_enqueue,
+        )
+
         return TriggerDispatchResult(
             status=TriggerDispatchStatus.DISPATCHED.value,
             tenant_id=tenant_id,
@@ -411,8 +462,168 @@ class TriggerDispatchService:
             wake_event_id=wake_event.id,
             continuous_run_ids=run_ids,
             continuous_subscription_ids=[subscription.id for subscription in subscriptions],
+            team_run_ids=team_run_ids,
+            skipped_team_reasons=skipped_team_reasons,
             payload_ref=payload_ref,
         )
+
+    def _matching_team_triggers(
+        self,
+        *,
+        tenant_id: str,
+        trigger_type: str,
+        instance_id: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> tuple[list[AgentTeamTrigger], list[str]]:
+        """Return active tenant-owned Agent Team triggers matching this event.
+
+        Team trigger config is intentionally fail-closed: each row must carry a
+        config_json.trigger_instance_id that matches the dispatch instance.
+        Optional event_types and filters then narrow the match.
+        """
+        if trigger_type not in {"webhook", "github", "jira"}:
+            return [], []
+
+        try:
+            rows = (
+                self.db.query(AgentTeamTrigger)
+                .join(
+                    AgentTeam,
+                    (AgentTeamTrigger.tenant_id == AgentTeam.tenant_id)
+                    & (AgentTeamTrigger.team_id == AgentTeam.id),
+                )
+                .filter(
+                    AgentTeamTrigger.tenant_id == tenant_id,
+                    AgentTeamTrigger.trigger_kind == trigger_type,
+                    AgentTeamTrigger.is_enabled.is_(True),
+                    AgentTeam.tenant_id == tenant_id,
+                )
+                .order_by(AgentTeamTrigger.id.asc())
+                .all()
+            )
+        except OperationalError as exc:
+            message = str(getattr(exc, "orig", exc)).lower()
+            if "no such table" in message and (
+                "agent_team_trigger" in message or "agent_team" in message
+            ):
+                self.db.rollback()
+                logger.warning(
+                    "Team trigger lookup skipped because team trigger tables are unavailable"
+                )
+                return [], ["team_trigger_schema_unavailable"]
+            raise
+
+        matched: list[AgentTeamTrigger] = []
+        skipped: list[str] = []
+        for row in rows:
+            config = row.config_json if isinstance(row.config_json, dict) else {}
+            configured_instance_id = config.get("trigger_instance_id")
+            if configured_instance_id is None:
+                skipped.append(f"team_trigger:{row.id}:missing_trigger_instance_id")
+                continue
+            try:
+                if int(configured_instance_id) != int(instance_id):
+                    skipped.append(f"team_trigger:{row.id}:trigger_instance_mismatch")
+                    continue
+            except (TypeError, ValueError):
+                skipped.append(f"team_trigger:{row.id}:invalid_trigger_instance_id")
+                continue
+
+            team = row.team
+            if team is None or team.tenant_id != tenant_id:
+                skipped.append(f"team_trigger:{row.id}:tenant_mismatch")
+                continue
+            if team.status != TeamStatus.ACTIVE.value:
+                skipped.append(f"team:{team.id}:inactive")
+                continue
+
+            event_types = config.get("event_types")
+            if event_types:
+                if isinstance(event_types, str):
+                    allowed_event_types = {event_types}
+                elif isinstance(event_types, list):
+                    allowed_event_types = {str(item) for item in event_types}
+                else:
+                    skipped.append(f"team_trigger:{row.id}:invalid_event_types")
+                    continue
+                if "*" not in allowed_event_types and event_type not in allowed_event_types:
+                    skipped.append(f"team_trigger:{row.id}:event_type_mismatch")
+                    continue
+
+            filter_config = config.get("filters")
+            if filter_config:
+                criteria = (
+                    filter_config
+                    if isinstance(filter_config, dict) and "filters" in filter_config
+                    else {
+                        "criteria_version": 1,
+                        "filters": filter_config,
+                        "window": {"mode": "since_cursor"},
+                        "ordering": "oldest_first",
+                    }
+                )
+                try:
+                    filter_matched, filter_reason = evaluate_payload_criteria(payload, criteria)
+                except ValueError as exc:
+                    skipped.append(f"team_trigger:{row.id}:invalid_filters:{exc}")
+                    continue
+                if not filter_matched:
+                    skipped.append(f"team_trigger:{row.id}:filter_mismatch:{filter_reason or 'payload'}")
+                    continue
+
+            matched.append(row)
+
+        return matched, skipped
+
+    def _enqueue_team_runs(
+        self,
+        *,
+        tenant_id: str,
+        trigger_type: str,
+        wake_event: WakeEvent,
+        event: TriggerDispatchInput,
+        payload_ref: Optional[str],
+        runs: list[tuple[AgentTeamRun, AgentTeam]],
+    ) -> None:
+        if not runs:
+            return
+        try:
+            from services.message_queue_service import MessageQueueService
+
+            mqs = MessageQueueService(self.db)
+            sender_key_root = event.sender_key or f"{trigger_type}:{event.instance_id}"
+            for team_run, team in runs:
+                mqs.enqueue(
+                    channel="team",
+                    tenant_id=tenant_id,
+                    agent_id=None,
+                    sender_key=f"{sender_key_root}:team:{team.id}:run:{team_run.id}",
+                    payload={
+                        "team_run_id": team_run.id,
+                        "team_id": team.id,
+                        "trigger_event_id": wake_event.id,
+                        "wake_event_id": wake_event.id,
+                        "trigger_kind": trigger_type,
+                        "trigger_instance_id": event.instance_id,
+                        "event_type": event.event_type,
+                        "dedupe_key": event.dedupe_key,
+                        "occurred_at": event.occurred_at.isoformat() + "Z",
+                        "importance": self._normalize_importance(event.importance),
+                        "payload_ref": payload_ref,
+                    },
+                    team_id=team.id,
+                    team_run_id=team_run.id,
+                    message_type="team_run",
+                )
+        except Exception:  # pragma: no cover — queue failure must not abort persisted run audit
+            logger.exception(
+                "Team-run queue enqueue failed for %s/%s wake_event=%s",
+                trigger_type,
+                event.instance_id,
+                wake_event.id,
+            )
+            self.db.rollback()
 
     def _enqueue_continuous_tasks(
         self,
@@ -865,7 +1076,9 @@ class TriggerDispatchService:
         outcome: str,
         reason: Optional[str],
         matched_agent_id: Optional[int] = None,
+        skipped_team_reasons: Optional[list[str]] = None,
     ) -> TriggerDispatchResult:
+        skipped_team_reasons = skipped_team_reasons or []
         dedupe = self._claim_dedupe(
             tenant_id=tenant_id,
             trigger_type=trigger_type,
@@ -879,6 +1092,7 @@ class TriggerDispatchService:
                 reason="duplicate_event",
                 tenant_id=tenant_id,
                 matched_agent_id=matched_agent_id,
+                skipped_team_reasons=skipped_team_reasons,
             )
         self.db.commit()
         return TriggerDispatchResult(
@@ -887,6 +1101,7 @@ class TriggerDispatchService:
             tenant_id=tenant_id,
             matched_agent_id=matched_agent_id,
             dedupe_id=dedupe.id,
+            skipped_team_reasons=skipped_team_reasons,
         )
 
     def _claim_dedupe(

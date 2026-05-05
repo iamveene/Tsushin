@@ -14,6 +14,9 @@ from api.schemas.teams import (
     TeamMemberResponse,
     TeamRunDetail,
     TeamRunStartResponse,
+    TeamTriggerCreate,
+    TeamTriggerResponse,
+    TeamTriggerUpdate,
     TeamUpdate,
     V1TeamListResponse,
     V1TeamRunListResponse,
@@ -161,6 +164,60 @@ async def reorder_members(
 ):
     try:
         return _service(db, caller).reorder_members(team_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.post(
+    "/api/v1/teams/{team_id}/triggers",
+    response_model=TeamTriggerResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE, **VALIDATION_RESPONSE},
+)
+async def create_team_trigger_binding(
+    team_id: int,
+    payload: TeamTriggerCreate,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    try:
+        return _service(db, caller).create_trigger_binding(team_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.put(
+    "/api/v1/teams/{team_id}/triggers/{trigger_id}",
+    response_model=TeamTriggerResponse,
+    responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE, **VALIDATION_RESPONSE},
+)
+async def update_team_trigger_binding(
+    team_id: int,
+    trigger_id: int,
+    payload: TeamTriggerUpdate,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    try:
+        return _service(db, caller).update_trigger_binding(team_id, trigger_id, payload)
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
+@router.delete(
+    "/api/v1/teams/{team_id}/triggers/{trigger_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
+)
+async def delete_team_trigger_binding(
+    team_id: int,
+    trigger_id: int,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.write")),
+):
+    try:
+        _service(db, caller).delete_trigger_binding(team_id, trigger_id)
+        return None
     except AgentTeamApiError as exc:
         _raise_api_error(exc)
 
