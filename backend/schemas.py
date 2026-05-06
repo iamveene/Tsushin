@@ -229,6 +229,12 @@ class FlowStepConfig(BaseModel):
 
     # Notification-specific
     message_template: Optional[str] = None
+    # State-aware message templates. When present, the notification step picks
+    # the template whose key matches the upstream step's notification_state
+    # (e.g. {"new_boleto": "...", "pending_no_barcode": "...", "default": "..."}).
+    # If no key matches, falls back to message_template.
+    message_templates_by_state: Optional[Dict[str, str]] = None
+    notification_templates_by_state: Optional[Dict[str, str]] = None
 
     # Message-specific
     content: Optional[str] = None

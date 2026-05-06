@@ -2773,7 +2773,7 @@ The page uses `MediaRecorder` to capture voice directly in the browser (`page.ts
 - Preferred MIME types (in order): `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg;codecs=opus`, `audio/mp4` (`:502-510`).
 - Audio capabilities are loaded per selected agent (`:484-490`) — determined by the agent's configured `audio_transcript` skill.
 
-Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using one of three routes: explicit OpenAI Whisper, the tenant default ASR instance, or a specific pinned local Speaches/Whisper instance. When the selected local path is unavailable, the skill falls back to OpenAI Whisper. Skill is `execution_mode="special"` (media-triggered).
+Transcription is performed by the `audio_transcript` skill (Source: `backend/agent/skills/audio_transcript.py`) using either explicit OpenAI Whisper or a specific pinned local Speaches/OpenAI-Whisper instance. When the selected local path is unavailable, the skill falls back to OpenAI Whisper and reports both the local-ASR error and fallback error if both fail. Long local ASR calls release any open PostgreSQL transaction before waiting on the provider so long voice notes do not trip the backend idle-in-transaction timeout. Transcript-only responses and transcription failures are delivered through the router's direct skill-output path across normal, active-thread, and active-conversation routes so media-only turns do not fall into empty-message AI processing. Skill is `execution_mode="special"` (media-triggered).
 
 ### 18.3 Document Uploads
 
@@ -3248,9 +3248,12 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 
 | Service | Port range | Manager |
 |---------|------------|---------|
+| Whisper/Speaches ASR | 6400–6499 | `services/whisper_container_manager.py` |
 | Kokoro TTS | 6600–6699 | `services/kokoro_container_manager.py` |
 | Ollama | 6700–6799 | `services/ollama_container_manager.py` |
 | SearXNG | 6500–6599 | `services/searxng_container_manager.py` |
+
+Auto-provisioned ASR containers are tenant-scoped by deterministic name/DNS alias plus Docker labels: `tsushin.service=asr`, `tsushin.tenant=<tenant_id>`, `tsushin.instance_id=<asr_instance.id>`, and `tsushin.lifecycle=auto-provisioned`. Startup reconciliation compares those labels with active `ASRInstance` rows, removes labeled ASR containers with no matching active row, and refuses lifecycle operations when a row points at a container owned by another tenant or instance. Kokoro and Ollama containers follow the same lifecycle label convention and lifecycle/log/status actions also verify `tsushin.tenant` + `tsushin.instance_id` before managing a container.
 
 ### 20.4.1 Atlassian Jira (programmatic + ticket_management skill)
 

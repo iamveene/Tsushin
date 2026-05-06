@@ -424,7 +424,11 @@ def test_financial_templates_expand_to_visible_ui_first_nodes():
             assert "cpf" in vault_field_names
             gate_step = next(step for step in flow.steps if step.type == step_type.GATE)
             assert gate_step.config.gate_conditions == [
-                {"field": "conditions.should_notify", "operator": "==", "value": True, "type": "boolean"},
+                {
+                    "field": "conditions.notification_state",
+                    "operator": "in",
+                    "value": ["new_boleto", "barcode_changed", "pending_no_barcode"],
+                },
             ]
         transform_step = next(step for step in flow.steps if step.type == step_type.DATA_TRANSFORM)
         assert transform_step.config.extraction_rules or transform_step.config.financial_parser_mode
@@ -866,7 +870,74 @@ def test_financial_bill_store_persists_utility_bill_without_hidden_notification(
     assert output["record_store_model"] == "financial_utility_bill"
     assert output["dedupe"]["created"] is True
     assert output["conditions"]["should_notify"] is True
+    assert output["linha_digitavel"].startswith("pvh_")
+    assert output["barcode_delivery_handle"] == output["linha_digitavel"]
+    assert SecretHandleRegistry.resolve(output["linha_digitavel"]) == LONG_BARCODE
     assert LONG_BARCODE not in json.dumps(output, sort_keys=True)
+
+
+def test_notification_delivers_linha_digitavel_but_persists_redacted_message(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
+    from services.password_vault_service import SecretHandleRegistry
+
+    captured = {}
+    linha_digitavel_handle = SecretHandleRegistry.issue(
+        LONG_BARCODE,
+        {"kind": "financial_barcode", "tenant_id": "tenant-a"},
+    )["secret_handle"]
+
+    class FakeMCPSender:
+        async def send_message(self, recipient, message, **kwargs):
+            captured["recipient"] = recipient
+            captured["message"] = message
+            captured["kwargs"] = kwargs
+            return True
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
+    monkeypatch.setattr(
+        handler,
+        "_resolve_mcp_url_and_secret",
+        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
+    )
+    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
+
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=15,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "channel": "whatsapp",
+                        "recipient": "+15551234567",
+                        "message_template": (
+                            "Linha digitavel: {{financial_store.linha_digitavel}} "
+                            "preview {{financial_store.barcode_preview}}"
+                        ),
+                    }
+                ),
+            ),
+            {
+                "financial_store": {
+                    "barcode_preview": "[REDACTED:47:9999]",
+                    "linha_digitavel": linha_digitavel_handle,
+                    "barcode_delivery_handle": linha_digitavel_handle,
+                }
+            },
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=1006),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert output["success"] is True
+    assert captured["recipient"] == "+15551234567"
+    assert LONG_BARCODE in captured["message"]
+    assert "[REDACTED:47:9999]" not in captured["message"]
+    persisted = json.dumps(output, sort_keys=True)
+    assert LONG_BARCODE not in persisted
+    assert "[REDACTED_DIGITS" in persisted
 
 
 def test_financial_bill_store_skips_explicit_no_pending_bill_without_persisting(monkeypatch):
@@ -1256,3 +1327,351 @@ def test_flow_skill_step_redacts_password_vault_tool_output_before_persistence()
     assert output["skill_type"] == "password_vault"
     assert output["status"] == "completed"
     _assert_no_sensitive_values(output)
+
+
+# =============================================================================
+# Bill state classifier — unit tests
+# =============================================================================
+
+def test_classify_utility_bill_state_returns_new_boleto_for_created_record_with_barcode():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=True, barcode_changed=False, has_barcode=True, unpaid=True,
+    )
+    assert state == "new_boleto"
+
+
+def test_classify_utility_bill_state_returns_pending_no_barcode_for_created_record_without_barcode():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=True, barcode_changed=False, has_barcode=False, unpaid=True,
+    )
+    assert state == "pending_no_barcode"
+
+
+def test_classify_utility_bill_state_returns_barcode_changed_when_barcode_updates():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=False, barcode_changed=True, has_barcode=True, unpaid=True,
+    )
+    assert state == "barcode_changed"
+
+
+def test_classify_utility_bill_state_returns_paid_when_bill_is_paid():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=False, barcode_changed=False, has_barcode=True, unpaid=False,
+    )
+    assert state == "paid"
+
+
+def test_classify_utility_bill_state_returns_unchanged_when_existing_record_has_no_change():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=False, barcode_changed=False, has_barcode=True, unpaid=True,
+    )
+    assert state == "unchanged"
+
+
+def test_classify_utility_bill_state_returns_unchanged_for_existing_record_without_barcode():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    state = handler_cls._classify_utility_bill_state(
+        created=False, barcode_changed=False, has_barcode=False, unpaid=True,
+    )
+    assert state == "unchanged"
+
+
+def test_classify_utility_bill_state_default_notify_states_excludes_passive_states():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
+    notify = set(handler_cls.DEFAULT_NOTIFY_STATES)
+    assert notify == {"new_boleto", "barcode_changed", "pending_no_barcode"}
+    # paid, unchanged, no_pending_bills, error must not be on the default notify list
+    assert "paid" not in notify
+    assert "unchanged" not in notify
+    assert "no_pending_bills" not in notify
+    assert "error" not in notify
+
+
+# =============================================================================
+# Bill store integration — state propagation through handler output
+# =============================================================================
+
+def test_financial_bill_store_emits_pending_no_barcode_when_open_bill_has_no_barcode(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
+    import services.financial_automation_service as financial_service
+
+    def fake_upsert(self, extracted, config, *, flow_run_id):
+        return {
+            "record": SimpleNamespace(
+                id=901,
+                automation_key=extracted["automation_key"],
+                provider=extracted["provider"],
+                unit_id=extracted["unit_id"],
+                asset="EDP Casa Paraju",
+                reference_month=extracted.get("reference_month") or "2026-05",
+                due_date=extracted.get("due_date") or "",
+                amount_cents=0,
+                status="pendente",
+                barcode_preview="",
+            ),
+            "created": True,
+            "updated": False,
+            "barcode_changed": False,
+        }
+
+    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fake_upsert)
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=18,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "financial_bill": {
+                            "record_kind": "utility_bill",
+                            "automation_id": "edp_conta_luz_es",
+                            "provider": "edp",
+                            "unit_id": "casa-paraju",
+                            "reference_month": "2026-05",
+                            "status": "pendente",
+                            "amount": "",
+                            "due_date": "",
+                            "barcode": "",
+                        }
+                    }
+                ),
+            ),
+            {},
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=1101),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert output["notification_state"] == "pending_no_barcode"
+    assert output["conditions"]["notification_state"] == "pending_no_barcode"
+    assert output["conditions"]["should_notify"] is True
+    assert output["barcode_detected"] is False
+
+
+def test_financial_bill_store_no_pending_bill_path_emits_no_pending_bills_state(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
+    import services.financial_automation_service as financial_service
+
+    def fail_upsert(*_args, **_kwargs):
+        raise AssertionError("no pending bill runs must not upsert an empty utility bill")
+
+    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fail_upsert)
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=19,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "financial_bill": {
+                            "record_kind": "utility_bill",
+                            "automation_id": "medsenior_samedil_plano_saude_mae",
+                            "provider": "medsenior",
+                            "unit_id": "Plano Saude Mae",
+                            "status": "no_pending_bills",
+                            "barcode": "",
+                            "amount": "",
+                        }
+                    }
+                ),
+            ),
+            {},
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=1102),
+        )
+    )
+
+    assert output["status"] == "skipped"
+    assert output["notification_state"] == "no_pending_bills"
+    assert output["conditions"]["notification_state"] == "no_pending_bills"
+    assert output["conditions"]["should_notify"] is False
+    assert output["conditions"]["no_open_bills"] is True
+
+
+# =============================================================================
+# Notification step — state-aware template selection
+# =============================================================================
+
+def test_notification_step_picks_state_template_matching_upstream_notification_state(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
+
+    captured = {}
+
+    class FakeMCPSender:
+        async def send_message(self, recipient, message, **_kwargs):
+            captured["message"] = message
+            return True
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
+    monkeypatch.setattr(
+        handler, "_resolve_mcp_url_and_secret",
+        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
+    )
+    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
+
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=21,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "channel": "whatsapp",
+                        "recipient": "+15551234567",
+                        "message_template": "Fallback: should not be used",
+                        "message_templates_by_state": {
+                            "new_boleto": "Novo boleto: {{financial_store.asset}}",
+                            "pending_no_barcode": (
+                                "Conta em aberto sem linha digitável: {{financial_store.asset}}"
+                            ),
+                            "no_pending_bills": "Sem boleto pendente: {{financial_store.asset}}",
+                        },
+                    }
+                ),
+            ),
+            {
+                "financial_store": {
+                    "asset": "EDP Casa Paraju",
+                    "notification_state": "pending_no_barcode",
+                }
+            },
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=2001),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert "Conta em aberto sem linha digitável: EDP Casa Paraju" in captured["message"]
+    assert "Fallback" not in captured["message"]
+
+
+def test_notification_step_falls_back_to_message_template_when_state_unknown(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
+
+    captured = {}
+
+    class FakeMCPSender:
+        async def send_message(self, recipient, message, **_kwargs):
+            captured["message"] = message
+            return True
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
+    monkeypatch.setattr(
+        handler, "_resolve_mcp_url_and_secret",
+        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
+    )
+    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
+
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=22,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "channel": "whatsapp",
+                        "recipient": "+15551234567",
+                        "message_template": "Fallback used",
+                        "message_templates_by_state": {
+                            "new_boleto": "Novo boleto",
+                        },
+                    }
+                ),
+            ),
+            {
+                "financial_store": {
+                    "notification_state": "barcode_changed",
+                }
+            },
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=2002),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert captured["message"] == "Fallback used"
+
+
+def test_notification_step_uses_default_key_when_state_unmatched(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
+
+    captured = {}
+
+    class FakeMCPSender:
+        async def send_message(self, recipient, message, **_kwargs):
+            captured["message"] = message
+            return True
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
+    monkeypatch.setattr(
+        handler, "_resolve_mcp_url_and_secret",
+        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
+    )
+    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
+
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=23,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "channel": "whatsapp",
+                        "recipient": "+15551234567",
+                        "message_templates_by_state": {
+                            "new_boleto": "Novo",
+                            "default": "Default branch hit",
+                        },
+                    }
+                ),
+            ),
+            {
+                "financial_store": {
+                    "notification_state": "barcode_changed",
+                }
+            },
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=2003),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert captured["message"] == "Default branch hit"
+
+
+# =============================================================================
+# Gate operator — `in` membership for state-list gating
+# =============================================================================
+
+def test_gate_in_operator_passes_when_state_matches_list_value():
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "GateStepHandler")
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
+    assert handler._evaluate_condition("new_boleto", "in", ["new_boleto", "barcode_changed"], None) is True
+    assert handler._evaluate_condition("paid", "in", ["new_boleto", "barcode_changed"], None) is False
+    assert handler._evaluate_condition("new_boleto", "not_in", ["paid", "unchanged"], None) is True
+    assert handler._evaluate_condition("paid", "not_in", ["paid", "unchanged"], None) is False
+    assert handler._evaluate_condition("anything", "in", "not-a-list", None) is False
+    assert handler._evaluate_condition("anything", "not_in", "not-a-list", None) is True
