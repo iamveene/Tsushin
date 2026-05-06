@@ -177,6 +177,15 @@ The Hub is your integration marketplace. Beyond AI providers, you can connect ex
 
 Two modes: **Playwright** (in-container, no setup needed) or **CDP** (connects to your host Chrome). Configure under **Hub > Integrations**.
 
+#### Password Vault and 1Password
+
+1. Go to **Hub > Tool APIs > Password Vault**.
+2. Add a **1Password** service-account connection, set the default vault and optional item/field allowlists, then use **Test**.
+3. Open an agent's **Skills** tab or the guided Agent Wizard, add **Password Vault**, choose the 1Password connection, and keep only the required capabilities enabled.
+4. In Flows, add a **Password Vault** step or a `password_vault` tool/skill step and select the vault/item/field through the picker. Flow runs persist redacted output, not plaintext secrets.
+
+If **Password Vault** is already attached to an agent, it appears as an active skill card rather than as another option inside **Add Skill**. Use **Configure** on that card to change the provider or capability toggles.
+
 #### TTS Providers (Text-to-Speech)
 
 Three options: **Kokoro** (local, self-hosted), **OpenAI TTS**, or **ElevenLabs**. Configure under **Hub > TTS Providers**, then enable the TTS skill on your agents.
@@ -299,7 +308,7 @@ Skills extend what your agents can do.
 
 ### Built-in Skills
 
-Tsushin ships with 19 built-in skills. Enable or disable them per agent from the **Skills** tab.
+Tsushin ships with 20 built-in skills. Enable or disable them per agent from the **Skills** tab.
 
 | Skill | Mode | What It Does |
 |---|---|---|
@@ -316,6 +325,7 @@ Tsushin ships with 19 built-in skills. Enable or disable them per agent from the
 | **Shell Commands** | Hybrid | Executes shell commands on registered remote hosts. |
 | **Sandboxed Tools** | Passive | Grants access to isolated security tools (nmap, dig, etc.). |
 | **Browser Automation** | Tool | Navigates websites, fills forms, captures screenshots. |
+| **Password Vault** | Tool | Resolves approved vault references through 1Password-backed Hub Tool APIs with redacted outputs and short-lived handles. |
 | **Knowledge Sharing** | Passive | Shares learned facts into a cross-agent memory pool. |
 | **Adaptive Personality** | Passive | Extracts user facts and adapts the persona over time. |
 | **OKG Term Memory** | Hybrid | Stores/recalls structured term memory with MemGuard. |
@@ -638,7 +648,12 @@ Flows let you build multi-step automated workflows.
 | **Slash Command** | Executes a platform slash command. |
 | **Skill** | Runs an agent skill (built-in or custom). |
 | **Summarization** | AI summarization of previous step outputs. |
+| **Password Vault** | Resolves an approved vault reference without placing secrets in prompts. |
 | **Browser Automation** | Navigate, click, fill forms, extract content, screenshot. |
+| **HTTP Request** | Calls an API with editable method, URL, headers, body, and secret references. |
+| **Data Transform** | Extracts and normalizes fields from previous step outputs. |
+| **Financial Record Store** | Persists and dedupes financial records. |
+| **Utility Bill Store** | Utility-bill-specific storage and dedupe alias. |
 
 The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually.
 

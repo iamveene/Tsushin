@@ -7,6 +7,7 @@ import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
   SearchIcon, AlertTriangleIcon, CheckIcon, GitHubIcon,
+  LockIcon,
   IconProps,
 } from '@/components/ui/icons'
 import AddSkillModal from './skills/AddSkillModal'
@@ -25,9 +26,10 @@ const PROVIDER_SKILLS = {
   'web_search': { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
   'ticket_management': { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
   'code_repository': { displayName: 'Code Repository', skillType: 'code_repository', providerKey: 'code_repository' },
+  'password_vault': { displayName: 'Password Vault', skillType: 'password_vault', providerKey: 'password_vault' },
 }
 
-type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository'
+type ProviderKey = 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository' | 'password_vault'
 
 // Ticket Management capability labels (mirrors backend default_config)
 const TICKET_MANAGEMENT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
@@ -66,6 +68,17 @@ const CODE_REPOSITORY_CAPABILITY_LABELS: Record<string, { label: string; descrip
   merge_pull_request: { label: 'Merge pull request', description: 'Merge a PR via merge/squash/rebase (write — off by default)', defaultEnabled: false },
   close_pull_request: { label: 'Close pull request', description: 'Close a PR without merging (write — off by default)', defaultEnabled: false },
   close_issue: { label: 'Close issue', description: 'Close an issue (write — off by default)', defaultEnabled: false },
+}
+
+const PASSWORD_VAULT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
+  list_items: { label: 'List item metadata', description: 'Search or list items inside an allowed vault (read)', defaultEnabled: true },
+  read_item: { label: 'Resolve fields', description: 'Resolve a specific vault field as a redacted output and short-lived handle (sensitive read)', defaultEnabled: true },
+  compose_basic_auth: { label: 'Compose Basic Auth', description: 'Compose an Authorization header from two short-lived secret handles without persisting the value', defaultEnabled: true },
+  read_totp: { label: 'Resolve TOTP', description: 'Resolve one-time passwords as short-lived handles (sensitive read)', defaultEnabled: false },
+  test_connection: { label: 'Test connection', description: 'Validate the connected provider account (read)', defaultEnabled: true },
+  create_item: { label: 'Create item', description: 'Create vault items (write — unsupported by default)', defaultEnabled: false },
+  update_item: { label: 'Update item', description: 'Update vault items (write — unsupported by default)', defaultEnabled: false },
+  delete_item: { label: 'Delete item', description: 'Delete vault items (write — unsupported by default)', defaultEnabled: false },
 }
 
 // Audio sub-skill tabs
@@ -405,6 +418,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [webSearchProviders, setWebSearchProviders] = useState<SkillProvider[]>([])
   const [ticketManagementProviders, setTicketManagementProviders] = useState<SkillProvider[]>([])
   const [codeRepositoryProviders, setCodeRepositoryProviders] = useState<SkillProvider[]>([])
+  const [passwordVaultProviders, setPasswordVaultProviders] = useState<SkillProvider[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [selectedIntegration, setSelectedIntegration] = useState<number | null>(null)
   const [providerLoading, setProviderLoading] = useState(false)
@@ -433,6 +447,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
   const [codeRepositoryCapabilities, setCodeRepositoryCapabilities] = useState<Record<string, boolean>>(
     Object.fromEntries(
       Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
+    )
+  )
+
+  const [passwordVaultCapabilities, setPasswordVaultCapabilities] = useState<Record<string, boolean>>(
+    Object.fromEntries(
+      Object.entries(PASSWORD_VAULT_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
     )
   )
 
@@ -579,15 +599,20 @@ export default function AgentSkillsManager({ agentId }: Props) {
     try {
       const skillDef = availableSkills.find(s => s.skill_type === skillType)
       const defaultConfig = buildDefaultSkillConfig(skillDef)
+      const info = SKILL_DISPLAY_INFO[skillType]
+
+      if (info?.configType === 'provider' && info.providerKey) {
+        setShowAddSkillModal(false)
+        await openProviderConfig(info.providerKey as ProviderKey)
+        return
+      }
+
       await api.updateAgentSkill(agentId, skillType, { is_enabled: true, config: defaultConfig })
       setShowAddSkillModal(false)
       await loadData()
 
       // Open the appropriate config modal
-      const info = SKILL_DISPLAY_INFO[skillType]
-      if (info?.configType === 'provider' && info.providerKey) {
-        openProviderConfig(info.providerKey as ProviderKey)
-      } else if (info?.configType === 'audio') {
+      if (info?.configType === 'audio') {
         openAudioConfig(skillType === 'audio_transcript' ? 'transcript' : 'tts')
       } else if (info?.configType === 'shell') {
         openShellConfig()
@@ -695,6 +720,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setTicketManagementProviders(providers)
       } else if (providerKey === 'code_repository') {
         setCodeRepositoryProviders(providers)
+      } else if (providerKey === 'password_vault') {
+        setPasswordVaultProviders(providers)
       }
 
       // Load current integration for this skill
@@ -708,6 +735,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           : providerKey === 'email' ? 'gmail'
           : providerKey === 'ticket_management' ? 'jira'
           : providerKey === 'code_repository' ? 'github'
+          : providerKey === 'password_vault' ? 'onepassword'
           : 'brave')
 
       if (integration) {
@@ -734,6 +762,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         // Same auto-select-only-integration UX for code_repository (GitHub).
         if (providerKey === 'code_repository') {
+          const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
+          if (defaultProviderEntry?.available_integrations?.length === 1) {
+            setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
+          }
+        }
+        if (providerKey === 'password_vault') {
           const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
           if (defaultProviderEntry?.available_integrations?.length === 1) {
             setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
@@ -777,6 +811,17 @@ export default function AgentSkillsManager({ agentId }: Props) {
           next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
         }
         setCodeRepositoryCapabilities(next)
+      }
+
+      if (providerKey === 'password_vault') {
+        const skillCfg = getSkillConfig(skillType)
+        const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
+        const next: Record<string, boolean> = {}
+        for (const [capKey, meta] of Object.entries(PASSWORD_VAULT_CAPABILITY_LABELS)) {
+          const stored = cfgCaps[capKey]
+          next[capKey] = typeof stored?.enabled === 'boolean' ? stored.enabled : meta.defaultEnabled
+        }
+        setPasswordVaultCapabilities(next)
       }
     } catch (err) {
       console.error('Failed to load providers:', err)
@@ -893,6 +938,35 @@ export default function AgentSkillsManager({ agentId }: Props) {
           ...currentConfig,
           execution_mode: 'tool',
           integration_id: selectedIntegration,
+          capabilities,
+        }
+        await Promise.all([
+          api.updateAgentSkill(agentId, skillType, {
+            is_enabled: true,
+            config: mergedConfig,
+          }),
+          api.updateSkillIntegration(agentId, skillType, {
+            scheduler_provider: null,
+            integration_id: selectedIntegration,
+            config: undefined,
+          }),
+        ])
+      } else if (configuringProvider === 'password_vault') {
+        const currentConfig = getSkillConfig(skillType)
+        const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
+        for (const [capKey, meta] of Object.entries(PASSWORD_VAULT_CAPABILITY_LABELS)) {
+          capabilities[capKey] = {
+            enabled: passwordVaultCapabilities[capKey] ?? meta.defaultEnabled,
+            label: meta.label,
+            description: meta.description,
+          }
+        }
+        const mergedConfig: SkillConfig = {
+          ...currentConfig,
+          execution_mode: 'tool',
+          integration_id: selectedIntegration,
+          provider: selectedProvider,
+          reference_mode: 'vault_reference',
           capabilities,
         }
         await Promise.all([
@@ -1275,6 +1349,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
     const enabled = isSkillEnabled(skillType)
     const integration = getSkillIntegration(skillType)
     const config = getSkillConfig(skillType)
+    const requiresHubIntegration = ['email', 'ticket_management', 'code_repository', 'password_vault'].includes(providerKey)
+    const needsIntegration = enabled && requiresHubIntegration && !integration
 
     // Get provider display name
     let providerDisplay = 'Not configured'
@@ -1308,6 +1384,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
       } else if (providerKey === 'ticket_management') {
         providerDisplay = 'Atlassian Jira'
         integrationDisplay = integration.integration_name || ''
+      } else if (providerKey === 'code_repository') {
+        providerDisplay = 'GitHub'
+        integrationDisplay = integration.integration_name || ''
+      } else if (providerKey === 'password_vault') {
+        providerDisplay = '1Password'
+        integrationDisplay = integration.integration_name || ''
       } else {
         providerDisplay = 'Gmail'
         integrationDisplay = integration.integration_email || ''
@@ -1332,6 +1414,11 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   Active
                 </span>
               )}
+              {needsIntegration && (
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full border border-yellow-500/30 bg-yellow-500/10 text-yellow-300">
+                  Needs connection
+                </span>
+              )}
               {enabled && providerKey === 'web_search' && <SecurityIndicator skillType="web_search" />}
             </div>
             <p className="text-sm text-tsushin-slate">{description}</p>
@@ -1348,6 +1435,13 @@ export default function AgentSkillsManager({ agentId }: Props) {
 
         {enabled && (
           <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
+            {needsIntegration && (
+              <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+                Attach a Hub Tool API connection before this skill can run. {providerKey === 'password_vault' ? (
+                  <a href="/hub?tab=tool-apis" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Tool APIs</a>
+                ) : 'Open the Hub and create the required provider connection.'}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
                 <div className="text-xs text-tsushin-muted mb-1">Provider</div>
@@ -1369,6 +1463,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   }`}>
                     {integration.integration_health === 'connected' ? <span className="inline-flex items-center gap-1"><CheckIcon size={12} /> Connected</span> : <span className="inline-flex items-center gap-1"><AlertTriangleIcon size={12} /> {integration.integration_health}</span>}
                   </div>
+                </div>
+              )}
+              {providerKey === 'password_vault' && (
+                <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                  <div className="text-xs text-tsushin-muted mb-1">Secret handling</div>
+                  <div className="font-medium text-white">Redacted outputs + handles</div>
                 </div>
               )}
             </div>
@@ -1804,6 +1904,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
       { providerKey: 'ticket_management', displayName: 'Ticket Management', skillType: 'ticket_management', icon: WrenchIcon, description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.' },
       { providerKey: 'code_repository', displayName: 'Code Repository', skillType: 'code_repository', icon: GitHubIcon, description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.' },
+      { providerKey: 'password_vault', displayName: 'Password Vault', skillType: 'password_vault', icon: LockIcon, description: 'Resolve explicit password vault references for agents. Today: 1Password via a Hub Tool API connection.' },
     ]
     for (const entry of providerEntries) {
       if (enabledSkillTypes.has(entry.skillType)) {
@@ -1837,6 +1938,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     configuringProvider === 'web_search' ? webSearchProviders :
     configuringProvider === 'ticket_management' ? ticketManagementProviders :
     configuringProvider === 'code_repository' ? codeRepositoryProviders :
+    configuringProvider === 'password_vault' ? passwordVaultProviders :
     []
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
 
@@ -1981,7 +2083,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
                           {/* Show warning if no integrations available */}
                           {provider.requires_integration && provider.available_integrations.length === 0 && (
                             <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-sm text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
-                              <AlertTriangleIcon size={14} /> No accounts connected. Visit the Hub to connect one.
+                              <AlertTriangleIcon size={14} /> No accounts connected.{' '}
+                              {configuringProvider === 'password_vault' ? (
+                                <a href="/hub?tab=tool-apis" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Tool APIs.</a>
+                              ) : (
+                                <span>Visit the Hub to connect one.</span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2241,6 +2348,47 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       </div>
                     </div>
                   )}
+
+                  {/* Capability toggles - Password Vault */}
+                  {configuringProvider === 'password_vault' && !providerLoading && (
+                    <div className="border-t pt-6 border-tsushin-border">
+                      <label className="block text-sm font-medium mb-3">
+                        Capabilities
+                      </label>
+                      <p className="text-xs text-tsushin-muted mb-3">
+                        Agents receive vault references, not raw secrets. Keep value resolution off unless the agent needs to fetch the final secret at runtime.
+                      </p>
+                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
+                        {Object.entries(PASSWORD_VAULT_CAPABILITY_LABELS).map(([capKey, meta]) => (
+                          <div key={capKey} className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              id={`password-vault-cap-${capKey}`}
+                              checked={!!passwordVaultCapabilities[capKey]}
+                              onChange={(e) =>
+                                setPasswordVaultCapabilities(prev => ({ ...prev, [capKey]: e.target.checked }))
+                              }
+                              className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                            />
+                            <div className="flex-1">
+                              <label htmlFor={`password-vault-cap-${capKey}`} className="font-medium text-sm cursor-pointer">
+                                {meta.label}
+                                {!meta.defaultEnabled && (
+                                  <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">sensitive</span>
+                                )}
+                              </label>
+                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {!Object.values(passwordVaultCapabilities).some(Boolean) && (
+                          <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
+                            <AlertTriangleIcon size={12} /> At least one capability must be enabled
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -2260,6 +2408,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                   if (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) return true
                   if (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) return true
                   if (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)) return true
+                  if (configuringProvider === 'password_vault' && !Object.values(passwordVaultCapabilities).some(Boolean)) return true
                   return false
                 })()}
                 className={`px-6 py-2 rounded-lg font-medium transition-colors ${
@@ -2267,7 +2416,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     (configuringProvider === 'scheduler' && selectedProvider === 'google_calendar' && !providerPermissions.read && !providerPermissions.write) ||
                     (configuringProvider === 'ticket_management' && !Object.values(ticketCapabilities).some(Boolean)) ||
                     (configuringProvider === 'email' && !Object.values(emailCapabilities).some(Boolean)) ||
-                    (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)))
+                    (configuringProvider === 'code_repository' && !Object.values(codeRepositoryCapabilities).some(Boolean)) ||
+                    (configuringProvider === 'password_vault' && !Object.values(passwordVaultCapabilities).some(Boolean)))
                     ? 'bg-tsushin-elevated text-tsushin-muted cursor-not-allowed'
                     : 'bg-teal-600 text-white hover:bg-teal-700'
                 }`}

@@ -18,15 +18,16 @@ Supported actions (Phase 35b expansion):
  8. select_option(selector, value)   - Select dropdown option
  9. hover(selector)                  - Hover over element
 10. wait_for(selector, state, timeout_ms) - Wait for element state
-11. go_back()                        - Navigate back in history
-12. go_forward()                     - Navigate forward in history
-13. get_attribute(selector, attribute) - Read element attribute
-14. get_page_url()                   - Get current page URL
-15. type_text(selector, text, delay_ms) - Type text character-by-character
-16. open_tab(url)                    - Open new browser tab (35c)
-17. switch_tab(tab_id)               - Switch active tab (35c)
-18. close_tab(tab_id)                - Close a tab (35c)
-19. list_tabs()                      - List all open tabs (35c)
+11. wait_for_url(url_contains, timeout_ms) - Wait for URL substring
+12. go_back()                        - Navigate back in history
+13. go_forward()                     - Navigate forward in history
+14. get_attribute(selector, attribute) - Read element attribute
+15. get_page_url()                   - Get current page URL
+16. type_text(selector, text, delay_ms) - Type text character-by-character
+17. open_tab(url)                    - Open new browser tab (35c)
+18. switch_tab(tab_id)               - Switch active tab (35c)
+19. close_tab(tab_id)                - Close a tab (35c)
+20. list_tabs()                      - List all open tabs (35c)
 """
 
 from abc import ABC, abstractmethod
@@ -98,7 +99,7 @@ def classify_error(exception: Exception, action: str) -> Tuple[BrowserErrorCode,
     """Map an exception to a structured error code + actionable suggestions."""
     msg = str(exception).lower()
 
-    nav_actions = ("navigate", "go_back", "go_forward")
+    nav_actions = ("navigate", "go_back", "go_forward", "wait_for_url")
     element_actions = ("click", "fill", "hover", "select_option", "type_text", "wait_for", "get_attribute", "extract", "scroll")
 
     if isinstance(exception, SecurityError):
@@ -211,9 +212,20 @@ class BrowserConfig:
     # Session persistence (Phase 35a)
     session_persistence: bool = False
     session_ttl_seconds: int = 300
+    tenant_id: Optional[str] = None
+    browser_session_profile_name: Optional[str] = None
+    browser_session_integration_id: Optional[int] = None
+    storage_state: Optional[Dict[str, Any]] = None
 
     # CDP mode
     cdp_url: str = "http://host.docker.internal:9222"
+
+    def __post_init__(self) -> None:
+        try:
+            timeout_seconds = int(self.timeout_seconds)
+        except (TypeError, ValueError):
+            timeout_seconds = 30
+        self.timeout_seconds = max(1, timeout_seconds)
 
     @classmethod
     def from_integration(cls, integration) -> 'BrowserConfig':
@@ -249,6 +261,8 @@ class BrowserConfig:
             allowed_domains=allowed,
             session_persistence=getattr(integration, 'session_persistence', False),
             session_ttl_seconds=getattr(integration, 'session_ttl_seconds', 300),
+            browser_session_profile_name=getattr(integration, 'session_profile_name', None),
+            browser_session_integration_id=getattr(integration, 'id', None),
             cdp_url=getattr(integration, 'cdp_url', 'http://host.docker.internal:9222'),
         )
 
@@ -461,6 +475,11 @@ class BrowserAutomationProvider(ABC):
         pass
 
     @abstractmethod
+    async def wait_for_url(self, url_contains: str, timeout_ms: Optional[int] = None) -> BrowserResult:
+        """Wait for the current page URL to contain a substring."""
+        pass
+
+    @abstractmethod
     async def go_back(self) -> BrowserResult:
         """Navigate back in browser history."""
         pass
@@ -533,7 +552,7 @@ class BrowserAutomationProvider(ABC):
             'name': cls.provider_name,
             'actions': [
                 'navigate', 'click', 'fill', 'extract', 'screenshot', 'execute_script',
-                'scroll', 'select_option', 'hover', 'wait_for', 'go_back', 'go_forward',
+                'scroll', 'select_option', 'hover', 'wait_for', 'wait_for_url', 'go_back', 'go_forward',
                 'get_attribute', 'get_page_url', 'type_text',
                 'open_tab', 'switch_tab', 'close_tab', 'list_tabs',
             ],

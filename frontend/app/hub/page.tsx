@@ -43,7 +43,7 @@ const TriggerCreationWizard = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration, ASRInstance } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration, ASRInstance, PasswordVaultIntegration, BrowserSessionProfile, BrowserSessionProfileTestResponse } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -67,6 +67,8 @@ import VectorStoreConfigModal from '@/components/vector-stores/VectorStoreConfig
 import MCPServerWizard from '@/components/mcp/MCPServerWizard'
 import OllamaSetupWizard from '@/components/ollama/OllamaSetupWizard'
 import KokoroSetupWizard from '@/components/tts/KokoroSetupWizard'
+import { PasswordVaultIntegrationModal, PasswordVaultIntegrationsPanel, passwordVaultIntegrationName } from '@/components/password-vault/PasswordVaultIntegrationsPanel'
+import { BrowserSessionProfileModal, BrowserSessionProfilesPanel } from '@/components/browser-sessions/BrowserSessionProfilesPanel'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
@@ -284,6 +286,7 @@ const DEVELOPER_TOOLS: { value: string; label: string; Icon: React.FC<IconProps>
 
 const TOOL_APIS: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string }[] = [
   { value: 'jira', label: 'Jira', Icon: CodeIcon, description: 'Atlassian Jira issue search API for JQL-driven triggers', status: 'available' },
+  { value: 'password_vault', label: 'Password Vault', Icon: LockIcon, description: 'Vault-backed secret references for agents and flows; starts with 1Password', status: 'available' },
   { value: 'brave_search', label: 'Brave Search', Icon: SearchIcon, description: 'Privacy-focused web search API', status: 'available' },
   { value: 'searxng', label: 'SearXNG', Icon: GlobeIcon, description: 'Self-hosted open-source metasearch', status: 'available' },
   { value: 'tavily', label: 'Tavily', Icon: GlobeIcon, description: 'AI-focused web search API', status: 'available' },
@@ -1026,6 +1029,19 @@ export default function HubPage() {
   const [githubIntegrationsLoading, setGithubIntegrationsLoading] = useState(false)
   const [editingGithubIntegration, setEditingGithubIntegration] = useState<GitHubIntegration | null>(null)
   const [showGithubIntegrationModal, setShowGithubIntegrationModal] = useState(false)
+  const [passwordVaultIntegrations, setPasswordVaultIntegrations] = useState<PasswordVaultIntegration[]>([])
+  const [passwordVaultIntegrationsLoading, setPasswordVaultIntegrationsLoading] = useState(false)
+  const [editingPasswordVaultIntegration, setEditingPasswordVaultIntegration] = useState<PasswordVaultIntegration | null>(null)
+  const [showPasswordVaultIntegrationModal, setShowPasswordVaultIntegrationModal] = useState(false)
+  const [passwordVaultTestingId, setPasswordVaultTestingId] = useState<number | null>(null)
+  const [passwordVaultTestResults, setPasswordVaultTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
+  const [browserSessionProfiles, setBrowserSessionProfiles] = useState<BrowserSessionProfile[]>([])
+  const [browserSessionProfilesLoading, setBrowserSessionProfilesLoading] = useState(false)
+  const [editingBrowserSessionProfile, setEditingBrowserSessionProfile] = useState<BrowserSessionProfile | null>(null)
+  const [showBrowserSessionProfileModal, setShowBrowserSessionProfileModal] = useState(false)
+  const [browserSessionProfileSaving, setBrowserSessionProfileSaving] = useState(false)
+  const [browserSessionTestingId, setBrowserSessionTestingId] = useState<number | null>(null)
+  const [browserSessionTestResults, setBrowserSessionTestResults] = useState<Record<number, BrowserSessionProfileTestResponse>>({})
 
   // v0.7.0: Guided wizards for the Productivity + Channels tabs. These
   // dispatchers replace the "+ Configure" / per-placeholder-card CTAs with a
@@ -1292,6 +1308,30 @@ export default function HubPage() {
     }
   }
 
+  async function loadPasswordVaultIntegrations() {
+    setPasswordVaultIntegrationsLoading(true)
+    try {
+      const data = await api.listPasswordVaultIntegrations()
+      setPasswordVaultIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load password vault integrations:', err)
+    } finally {
+      setPasswordVaultIntegrationsLoading(false)
+    }
+  }
+
+  async function loadBrowserSessionProfiles() {
+    setBrowserSessionProfilesLoading(true)
+    try {
+      const data = await api.listBrowserSessionProfiles()
+      setBrowserSessionProfiles(data)
+    } catch (err) {
+      console.error('Failed to load browser session profiles:', err)
+    } finally {
+      setBrowserSessionProfilesLoading(false)
+    }
+  }
+
   async function loadGitHubTriggers() {
     try {
       const data = await api.listGitHubTriggers()
@@ -1335,6 +1375,8 @@ export default function HubPage() {
         }
         if (activeTab === 'tool-apis') {
           loadJiraIntegrations()
+          loadPasswordVaultIntegrations()
+          loadBrowserSessionProfiles()
         }
         if (activeTab === 'developer') {
           loadGitHubIntegrations()
@@ -1526,6 +1568,8 @@ export default function HubPage() {
         loadDiscordIntegrations(),  // v0.6.0
         loadEmailTriggers(),
         loadJiraIntegrations(),
+        loadPasswordVaultIntegrations(),
+        loadBrowserSessionProfiles(),
         loadGitHubIntegrations(),  // v0.7.0: GitHub Hub integrations
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         loadBreadthTriggers(),  // v0.7.0: Jira and GitHub triggers
@@ -1534,7 +1578,13 @@ export default function HubPage() {
         loadGoogleCredentials(),
         loadMcpServers(),  // Phase 26: MCP Servers
       ] : []
-      await Promise.all([...baseLoaders, ...tenantLoaders])
+      const globalAdminLoaders = isGlobalAdmin && !hasTenantScope ? [
+        // Password Vault supports global-admin browsing of tenant-owned
+        // integrations, so Hub can render the 1Password card without an
+        // active tenant context.
+        loadPasswordVaultIntegrations(),
+      ] : []
+      await Promise.all([...baseLoaders, ...tenantLoaders, ...globalAdminLoaders])
     } finally {
       setLoading(false)
     }
@@ -2701,6 +2751,250 @@ export default function HubPage() {
     }
   }
 
+  const openAddPasswordVaultIntegrationModal = () => {
+    setEditingPasswordVaultIntegration(null)
+    setShowPasswordVaultIntegrationModal(true)
+  }
+
+  const openEditPasswordVaultIntegrationModal = (integration: PasswordVaultIntegration) => {
+    setEditingPasswordVaultIntegration(integration)
+    setShowPasswordVaultIntegrationModal(true)
+  }
+
+  const savePasswordVaultIntegration = async (draft: {
+    integration_name: string
+    provider: string
+    service_account_token: string
+    account_url: string
+    account_email: string
+    default_vault: string
+    default_vault_id: string
+    allowed_items_text: string
+    allowed_fields_text: string
+    allow_metadata_read: boolean
+    allow_secret_read: boolean
+    allow_totp_read: boolean
+    is_active: boolean
+  }) => {
+    setSaving(true)
+    setError(null)
+    try {
+      const allowedItems = draft.allowed_items_text
+        .split('\n')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      const allowedFields = draft.allowed_fields_text
+        .split('\n')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      if (editingPasswordVaultIntegration) {
+        await api.updatePasswordVaultIntegration(editingPasswordVaultIntegration.id, {
+          integration_name: draft.integration_name.trim(),
+          provider: draft.provider.trim(),
+          service_account_token: draft.service_account_token.trim() || undefined,
+          account_url: draft.account_url.trim() || null,
+          account_email: draft.account_email.trim() || null,
+          default_vault: draft.default_vault.trim() || null,
+          default_vault_name: draft.default_vault.trim() || null,
+          default_vault_id: draft.default_vault_id.trim() || null,
+          allowed_items: allowedItems,
+          allowed_fields: allowedFields,
+          allow_metadata_read: draft.allow_metadata_read,
+          allow_secret_read: draft.allow_secret_read,
+          allow_totp_read: draft.allow_totp_read,
+          is_active: draft.is_active,
+        })
+      } else {
+        await api.createPasswordVaultIntegration({
+          integration_name: draft.integration_name.trim(),
+          provider: draft.provider.trim(),
+          service_account_token: draft.service_account_token.trim(),
+          account_url: draft.account_url.trim() || null,
+          account_email: draft.account_email.trim() || null,
+          default_vault: draft.default_vault.trim() || null,
+          default_vault_name: draft.default_vault.trim() || null,
+          default_vault_id: draft.default_vault_id.trim() || null,
+          allowed_items: allowedItems,
+          allowed_fields: allowedFields,
+          allow_metadata_read: draft.allow_metadata_read,
+          allow_secret_read: draft.allow_secret_read,
+          allow_totp_read: draft.allow_totp_read,
+          is_active: draft.is_active,
+        })
+      }
+      await loadPasswordVaultIntegrations()
+      setShowPasswordVaultIntegrationModal(false)
+      setEditingPasswordVaultIntegration(null)
+      setSuccessMessage(editingPasswordVaultIntegration ? 'Password vault connection updated' : 'Password vault connection added')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save password vault connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deletePasswordVaultIntegration = async (integration: PasswordVaultIntegration) => {
+    if (!confirm(`Remove Password Vault connection "${passwordVaultIntegrationName(integration)}"? Agents and flows attached to it may need another vault connection before they can resolve secrets.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.deletePasswordVaultIntegration(integration.id)
+      await loadPasswordVaultIntegrations()
+      setSuccessMessage('Password vault connection removed')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to remove password vault connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const testPasswordVaultIntegration = async (integration: PasswordVaultIntegration, reference: string) => {
+    setPasswordVaultTestingId(integration.id)
+    setPasswordVaultTestResults((current) => {
+      const next = { ...current }
+      delete next[integration.id]
+      return next
+    })
+    try {
+      const result = await api.testPasswordVaultIntegration(integration.id, {
+        reference: reference.trim() || null,
+      })
+      setPasswordVaultTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: result.success,
+          message: result.success
+            ? result.message || `Connection resolved ${result.vault_count ?? 0} vault(s).`
+            : result.error || result.message || 'Password vault test failed',
+        },
+      }))
+      await loadPasswordVaultIntegrations()
+    } catch (err: unknown) {
+      setPasswordVaultTestResults((current) => ({
+        ...current,
+        [integration.id]: {
+          success: false,
+          message: err instanceof Error ? err.message : 'Failed to test password vault connection',
+        },
+      }))
+    } finally {
+      setPasswordVaultTestingId(null)
+    }
+  }
+
+  const openAddBrowserSessionProfileModal = () => {
+    setEditingBrowserSessionProfile(null)
+    setShowBrowserSessionProfileModal(true)
+  }
+
+  const openEditBrowserSessionProfileModal = (profile: BrowserSessionProfile) => {
+    setEditingBrowserSessionProfile(profile)
+    setShowBrowserSessionProfileModal(true)
+  }
+
+  const saveBrowserSessionProfile = async (draft: {
+    integration_name: string
+    profile_name: string
+    provider_type: string
+    mode: string
+    browser_type: string
+    headless: boolean
+    timeout_seconds: number
+    viewport_width: number
+    viewport_height: number
+    session_ttl_seconds: number
+    cdp_url: string
+    storage_state_json: string
+    clear_storage_state: boolean
+    is_active: boolean
+  }) => {
+    setBrowserSessionProfileSaving(true)
+    setError(null)
+    try {
+      const storageState = draft.storage_state_json.trim()
+        ? JSON.parse(draft.storage_state_json)
+        : undefined
+      const payload = {
+        integration_name: draft.integration_name.trim(),
+        profile_name: draft.profile_name.trim(),
+        provider_type: draft.provider_type || 'playwright',
+        mode: draft.mode || 'container',
+        browser_type: draft.browser_type || 'chromium',
+        headless: draft.headless,
+        timeout_seconds: draft.timeout_seconds,
+        viewport_width: draft.viewport_width,
+        viewport_height: draft.viewport_height,
+        session_ttl_seconds: draft.session_ttl_seconds,
+        cdp_url: draft.cdp_url.trim() || null,
+        storage_state_json: storageState,
+        is_active: draft.is_active,
+      }
+      if (editingBrowserSessionProfile) {
+        await api.updateBrowserSessionProfile(editingBrowserSessionProfile.id, {
+          ...payload,
+          clear_storage_state: draft.clear_storage_state,
+        })
+      } else {
+        await api.createBrowserSessionProfile(payload)
+      }
+      await loadBrowserSessionProfiles()
+      setShowBrowserSessionProfileModal(false)
+      setEditingBrowserSessionProfile(null)
+      setSuccessMessage(editingBrowserSessionProfile ? 'Browser session profile updated' : 'Browser session profile added')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save browser session profile')
+    } finally {
+      setBrowserSessionProfileSaving(false)
+    }
+  }
+
+  const deleteBrowserSessionProfile = async (profile: BrowserSessionProfile) => {
+    if (!confirm(`Disable browser session profile "${profile.profile_name}"? Flow steps that reference it will fall back to a fresh browser context.`)) return
+    setBrowserSessionProfileSaving(true)
+    setError(null)
+    try {
+      await api.deleteBrowserSessionProfile(profile.id)
+      await loadBrowserSessionProfiles()
+      setSuccessMessage('Browser session profile disabled')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to disable browser session profile')
+    } finally {
+      setBrowserSessionProfileSaving(false)
+    }
+  }
+
+  const testBrowserSessionProfile = async (profile: BrowserSessionProfile) => {
+    setBrowserSessionTestingId(profile.id)
+    setBrowserSessionTestResults((current) => {
+      const next = { ...current }
+      delete next[profile.id]
+      return next
+    })
+    try {
+      const result = await api.testBrowserSessionProfile(profile.id, {
+        url: 'https://www.edponline.com.br/para-sua-casa/servicos/selecionar-instalacao',
+      })
+      setBrowserSessionTestResults((current) => ({ ...current, [profile.id]: result }))
+      await loadBrowserSessionProfiles()
+    } catch (err: unknown) {
+      setBrowserSessionTestResults((current) => ({
+        ...current,
+        [profile.id]: {
+          ok: false,
+          status: 'error',
+          details: {},
+          errors: [err instanceof Error ? err.message : 'Failed to test browser session profile'],
+        },
+      }))
+    } finally {
+      setBrowserSessionTestingId(null)
+    }
+  }
+
   const testJiraIntegrationQuery = async (integration: JiraIntegration, jql: string) => {
     setJiraIntegrationTestingId(integration.id)
     setJiraIntegrationTestResults((current) => {
@@ -3785,6 +4079,7 @@ export default function HubPage() {
   )
   const visibleToolApis = TOOL_APIS.filter(tool => {
     if (tool.value === 'jira') return false
+    if (tool.value === 'password_vault') return false
     if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
     return Boolean(getApiKeyForService(tool.value))
   })
@@ -5957,6 +6252,31 @@ export default function HubPage() {
                   onTest={testJiraIntegrationQuery}
                 />
 
+                <PasswordVaultIntegrationsPanel
+                  integrations={passwordVaultIntegrations}
+                  loading={passwordVaultIntegrationsLoading}
+                  testingId={passwordVaultTestingId}
+                  testResults={passwordVaultTestResults}
+                  canWriteHub={canWriteHub}
+                  onAdd={openAddPasswordVaultIntegrationModal}
+                  onEdit={openEditPasswordVaultIntegrationModal}
+                  onDelete={deletePasswordVaultIntegration}
+                  onTest={testPasswordVaultIntegration}
+                />
+
+                <BrowserSessionProfilesPanel
+                  profiles={browserSessionProfiles}
+                  loading={browserSessionProfilesLoading}
+                  saving={browserSessionProfileSaving}
+                  testingId={browserSessionTestingId}
+                  testResults={browserSessionTestResults}
+                  canWriteHub={canWriteHub}
+                  onAdd={openAddBrowserSessionProfileModal}
+                  onEdit={openEditBrowserSessionProfileModal}
+                  onDelete={deleteBrowserSessionProfile}
+                  onTest={testBrowserSessionProfile}
+                />
+
                 {/* SearXNG Per-Tenant Instances (v0.6.0-patch.7) — structure mirrors Kokoro panel */}
                 {searxngInstances.length > 0 && (
                 <div className="card p-5 hover-glow group border-teal-700/30">
@@ -6543,6 +6863,34 @@ export default function HubPage() {
             setEditingGithubIntegration(null)
           }}
           onSave={saveGitHubIntegration}
+        />
+      )}
+
+      {showPasswordVaultIntegrationModal && (
+        <PasswordVaultIntegrationModal
+          key={editingPasswordVaultIntegration?.id ?? 'new'}
+          isOpen={showPasswordVaultIntegrationModal}
+          target={editingPasswordVaultIntegration}
+          saving={saving}
+          onClose={() => {
+            setShowPasswordVaultIntegrationModal(false)
+            setEditingPasswordVaultIntegration(null)
+          }}
+          onSave={savePasswordVaultIntegration}
+        />
+      )}
+
+      {showBrowserSessionProfileModal && (
+        <BrowserSessionProfileModal
+          key={editingBrowserSessionProfile?.id ?? 'new'}
+          isOpen={showBrowserSessionProfileModal}
+          target={editingBrowserSessionProfile}
+          saving={browserSessionProfileSaving}
+          onClose={() => {
+            setShowBrowserSessionProfileModal(false)
+            setEditingBrowserSessionProfile(null)
+          }}
+          onSave={saveBrowserSessionProfile}
         />
       )}
 

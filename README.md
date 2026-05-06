@@ -19,11 +19,11 @@
 ## Feature Highlights
 
 - **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
-- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, and GitHub under Hub → Triggers; scheduled and recurring automation lives in Flows; Jira/GitHub credentials are managed under Hub → Tool APIs.
+- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, and GitHub under Hub → Triggers; scheduled and recurring automation lives in Flows; Jira/GitHub/Password Vault credentials are managed under Hub → Tool APIs.
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
 - **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph).
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas.
-- **19 built-in skills** — audio TTS/transcription, web search, scraping, browser automation, Gmail, flight search, scheduler, knowledge sharing, OKG terms, sandboxed shell/network tools, and more.
+- **20 built-in skills** — audio TTS/transcription, web search, scraping, browser automation, Password Vault, Gmail, flight search, scheduler, knowledge sharing, OKG terms, sandboxed shell/network tools, and more.
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
 - **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
@@ -95,6 +95,7 @@ v0.7.0 separates conversational **Channels** from event **Triggers**. Hub → Ch
 
 - **Unified Trigger Creation Wizard** — one wizard creates Email, Webhook, Jira, and GitHub triggers, selects or creates the required Hub integration, and hands off to the generated or wired flow at `/flows?edit=<auto_flow_id>` so operators configure outputs in the Flow editor.
 - **Triggers ↔ Flows Unification (Waves 1-5)** — every new trigger now mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification chain) in the same transaction. The Flow create path also supports **Triggered** by selecting an existing Email/Gmail, Jira, GitHub, or Webhook Hub trigger, then auto-generating a locked Source step and `flow_trigger_binding`. Source is a trigger-owned entry step, not a manual step type. The dispatcher fans wake events out to bound flows alongside the legacy ContinuousAgent path. All gated by env vars (`TSN_FLOWS_TRIGGER_BINDING_ENABLED`, `TSN_FLOWS_AUTO_GENERATION_ENABLED`, `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY`) for safe staged rollout.
+- **Password Vault foundation + financial workflow migration gates** — Hub → Tool APIs now supports a provider-neutral Password Vault integration with 1Password as the first provider, and setup remains UI-first through Hub pickers rather than hidden env/config edits. Agents can attach the Password Vault skill, and Flows can resolve explicit vault references through visible Flow steps while persisting only redacted outputs. Migrated financial workflows are accepted only when they can be recreated and edited from scratch in the UI with primitive nodes for vault credentials, HTTP/browser automation, extraction/transform, storage/dedupe, gates, and notifications. The `financial_utility_automation` compatibility step can run existing canaries, but it is not sufficient by itself for migrated workflow acceptance.
 - **Variable Reference panel everywhere** — every templated step-config field (skill prompt, conversation objective, agentic gate prompt, slash-command body, gate-fail notification, etc.) gets the live Variable Reference panel with previous-step outputs + per-trigger-kind deep payload paths (Jira `payload.issue.key`, GitHub `payload.pull_request.title`, etc.). Drag-and-drop chips into any field.
 - **Code Repository skill (GitHub)** — 12-action capability-gated skill (read on by default, write off by default) with a reusable encrypted `GitHubIntegration` Hub row and `pull_request` trigger criteria envelope. Same contract as `ticket_management` (Jira) — same `WRITE` badges in the agent UI, same tool-spec gating so the LLM never even sees disabled actions.
 - **Granular Gmail send capability** — `gmail` skill split into `search` / `read_message` (default ON) and `send` / `reply` / `draft` (default OFF). Same capability-gating contract; surfaces a real masked bug where `SkillManager` was ignoring saved per-agent capability config.
@@ -144,6 +145,21 @@ python3 install.py --help
 
 The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation.
 
+### UI-first financial automation setup
+
+New users configure and edit financial automations from the product UI:
+
+1. Go to Hub → Tool APIs → Password Vault and create/test the 1Password service-account connection.
+2. Attach the Password Vault skill from an agent's Skills tab or during the guided Agent Wizard; the UI must select the 1Password connection and capability toggles, not leave an unlinked skill row.
+3. Go to Flows and build the workflow from visible primitives: vault credential, explicit HTTP/API calls or Browser Automation actions, extraction/transform, storage/dedupe, Gate, and Notification. Browser-based automations should be split into editable actions such as navigate, fill username, fill password/TOTP, click submit, wait for selectors/URLs, dismiss modals, run visible extraction scripts, handle CAPTCHA boundaries, and extract records.
+4. Save, manually run the Flow, confirm the local state update, run it a second time to prove dedupe, and validate conditional notification behavior for both notify and skip paths.
+
+Consigaz also requires an explicit Password Vault field named `basic_auth` for the API token bootstrap; it is resolved by a visible vault step and is not stored in the template JSON.
+
+`financial_utility_automation` / `Utility Bill` remains legacy compatibility for existing canaries; migrated workflows must pass the UI recreation/edit/run checklist above.
+
+Current migration status: accepted financial flows use the `Finan | ...` naming convention in Flows. The clean active set is `Finan | Condominio Sao Blas 204 | Boleto`, `Finan | Consigaz | Gas Cond. Sao Blas 204`, `Finan | Medsenior/Samedil | Plano Saude Mae`, `Finan | Cypreste/Superlogica | Aluguel Praia da Costa`, `Finan | EDP | Conta Luz AP Sao Blas 204`, and `Finan | EDP | Conta Luz Casa Paraju`. PMVV is intentionally aborted at the CAPTCHA boundary for this pass and has no active Flow row; DETRAN-ES and B3 are out of scope. Husky stays pending until it passes the same UI recreation, manual run, dedupe, and conditional notification checklist.
+
 For the Parallels Ubuntu VM workflow used in fresh-install audits, you can sync the repo from your Mac with `bash deploy-to-vm.sh`, then SSH to the VM and run `sudo python3 install.py` from `~/tsushin`.
 
 The generated Caddy config and frontend proxy build now target stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps both HTTP and HTTPS browser traffic pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
@@ -188,7 +204,7 @@ The committed baselines live under `frontend/tests/visual/`; private reports, tr
 │  ┌──────────────┐     ┌───────────────┐     ┌─────────────────────┐         │
 │  │     CORE     │     │      HUB      │     │       STUDIO        │         │
 │  │ Agent Engine │     │ AI Providers  │     │ Agents   Personas   │         │
-│  │ 19 Skills    │     │ Comm Channels │     │ Contacts Projects   │         │
+│  │ 20 Skills    │     │ Comm Channels │     │ Contacts Projects   │         │
 │  │ Sentinel     │     │ Tool APIs     │     │ Tone Presets        │         │
 │  └──────┬───────┘     └───────┬───────┘     └─────────────────────┘         │
 │         │                     │                                              │

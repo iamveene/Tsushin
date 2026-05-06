@@ -106,6 +106,7 @@ backend/data/api_keys.json
 **/credentials.json
 **/secrets.json
 **/*_secret*
+!backend/alembic/versions/*_secret*.py
 **/*_key.json
 
 # MCP WhatsApp data (read-only) - CONTAINS SENSITIVE MESSAGE HISTORY
@@ -327,6 +328,7 @@ backend/tests/*
 !backend/tests/test_followup_detector.py
 !backend/tests/test_scratchpad_preservation.py
 !backend/tests/test_agent_update_pydantic.py
+!backend/tests/test_password_vault_contract.py
 !backend/tests/_case_memory_test_helpers.py
 !backend/tests/test_case_memory_disabled_path.py
 !backend/tests/test_case_memory_continuous_indexing.py
@@ -354,6 +356,7 @@ backend/test-api.html
 # Root-level screenshots & dev artifacts
 /*.png
 /output/
+/frontend/output/
 
 # Dev/test scripts, temp files, internal notes (not for remote repo)
 backend/app.py.tmp

@@ -117,6 +117,8 @@ from api.routes_github_triggers import router as github_triggers_router
 from api.routes_wizards import router as wizards_router
 from api.routes_github_inbound import router as github_inbound_router
 from api.routes_github_integrations import router as github_integrations_router
+from api.routes_password_vault_integrations import router as password_vault_integrations_router
+from api.routes_browser_session_profiles import router as browser_session_profiles_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -1408,6 +1410,8 @@ app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers
 app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
 app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
+app.include_router(password_vault_integrations_router)  # Password Vault providers (/api/hub/password-vault-integrations/*)
+app.include_router(browser_session_profiles_router)  # Browser session profiles (/api/hub/browser-session-profiles/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router

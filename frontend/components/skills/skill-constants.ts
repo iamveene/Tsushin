@@ -1,7 +1,7 @@
 import {
   CalendarIcon, MailIcon, SearchIcon, MicrophoneIcon, TerminalIcon,
   WrenchIcon, BotIcon, FileTextIcon, RocketIcon, PlugIcon,
-  GlobeIcon, BrainIcon, GitHubIcon,
+  GlobeIcon, BrainIcon, GitHubIcon, LockIcon,
   IconProps,
 } from '@/components/ui/icons'
 
@@ -16,7 +16,7 @@ export interface SkillDisplayInfo {
   /** Skills that are rendered as part of another composite skill (e.g., audio_tts is part of "Audio") */
   compositeParent?: string
   /** Provider key for provider-based skills */
-  providerKey?: 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository'
+  providerKey?: 'scheduler' | 'email' | 'web_search' | 'ticket_management' | 'code_repository' | 'password_vault'
 }
 
 export const SKILL_CATEGORIES: Record<SkillCategory, { label: string; icon: React.FC<IconProps> }> = {
@@ -169,6 +169,14 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
     icon: GitHubIcon,
     providerKey: 'code_repository',
   },
+  password_vault: {
+    displayName: 'Password Vault',
+    description: 'Resolve approved vault references for agents and flows with redacted outputs. Today: 1Password via Hub Tool APIs.',
+    category: 'automation_tools',
+    configType: 'provider',
+    icon: LockIcon,
+    providerKey: 'password_vault',
+  },
 }
 
 /** Skills that should never be shown (removed from system, or alias for an already-rendered skill).
@@ -177,7 +185,13 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
  * It registers in the backend SkillManager only when TSN_CASE_MEMORY_ENABLED
  * is true and is intentionally not rendered in Studio's skill picker; listing
  * it here keeps the wizard-drift test green regardless of the flag state. */
-export const HIDDEN_SKILLS = new Set<string>(['weather', 'web_scraping', 'scheduler', 'find_similar_past_cases'])
+export const HIDDEN_SKILLS = new Set<string>([
+  'weather',
+  'web_scraping',
+  'scheduler',
+  'find_similar_past_cases',
+  'team_scratch',
+])
 
 /** Skills rendered as a composite group (Audio = TTS + Transcript) */
 export const COMPOSITE_SKILLS: Record<string, { displayName: string; skillTypes: string[]; icon: React.FC<IconProps>; description: string }> = {
@@ -196,11 +210,12 @@ export const PROVIDER_SKILLS: Record<string, { displayName: string; skillType: s
   web_search: { displayName: 'Web Search', skillType: 'web_search', providerKey: 'web_search' },
   ticket_management: { displayName: 'Ticket Management', skillType: 'ticket_management', providerKey: 'ticket_management' },
   code_repository: { displayName: 'Code Repository', skillType: 'code_repository', providerKey: 'code_repository' },
+  password_vault: { displayName: 'Password Vault', skillType: 'password_vault', providerKey: 'password_vault' },
 }
 
 /** Skills handled by special card renderers (not the generic standard card) */
 export const SPECIAL_RENDERED_SKILLS = new Set<string>([
-  'flows', 'gmail', 'web_search', 'ticket_management', 'code_repository',  // Provider skills
+  'flows', 'gmail', 'web_search', 'ticket_management', 'code_repository', 'password_vault',  // Provider skills
   'audio_tts', 'audio_transcript', // Composite audio
   'shell',                          // Dedicated shell card
 ])

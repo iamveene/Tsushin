@@ -164,6 +164,10 @@ class SkillManager:
             from agent.skills.code_repository_skill import CodeRepositorySkill
             self.register_skill(CodeRepositorySkill)
 
+            # v0.7.x: Password Vault — provider-neutral secret references.
+            from agent.skills.password_vault_skill import PasswordVaultSkill
+            self.register_skill(PasswordVaultSkill)
+
             # v0.7.x: Trigger Case Memory — find_similar_past_cases always
             # registered. Per-tenant opt-in is via Agent.vector_store_instance_id
             # and per-trigger TriggerRecapConfig.enabled.

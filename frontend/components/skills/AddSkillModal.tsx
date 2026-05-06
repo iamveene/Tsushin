@@ -19,6 +19,15 @@ interface AddSkillModalProps {
   assignedCustomSkillIds: Set<number>
 }
 
+const PROVIDER_SKILL_HINTS: Record<string, string> = {
+  flows: 'Choose Flows, Google Calendar, or Asana next.',
+  gmail: 'Requires a Hub Gmail connection.',
+  web_search: 'Choose Brave, SearXNG, or Google Search next.',
+  ticket_management: 'Requires a Hub Tool API connection.',
+  code_repository: 'Requires a Hub Tool API connection.',
+  password_vault: 'Requires a Hub Tool API Password Vault provider.',
+}
+
 export default function AddSkillModal({
   isOpen,
   onClose,
@@ -57,9 +66,10 @@ export default function AddSkillModal({
       composite.skillTypes.forEach(st => coveredSkills.add(st))
     }
 
-    // Check provider skills (flows → Scheduler, gmail → Email, web_search → Web Search,
-    // ticket_management → Ticket Management, code_repository → Code Repository)
-    const providerSkillTypes = new Set(['flows', 'gmail', 'web_search', 'ticket_management', 'code_repository'])
+    // Check provider skills (flows -> Scheduler, gmail -> Email, web_search -> Web Search,
+    // ticket_management -> Ticket Management, code_repository -> Code Repository,
+    // password_vault -> Password Vault)
+    const providerSkillTypes = new Set(['flows', 'gmail', 'web_search', 'ticket_management', 'code_repository', 'password_vault'])
 
     for (const skill of availableSkills) {
       if (HIDDEN_SKILLS.has(skill.skill_type)) continue
@@ -228,6 +238,7 @@ export default function AddSkillModal({
                   <div className="grid gap-3 md:grid-cols-2">
                     {filteredSkills.map((skill) => {
                       const Icon = skill.icon
+                      const providerHint = PROVIDER_SKILL_HINTS[skill.skillType]
                       return (
                         <button
                           key={skill.skillType}
@@ -255,9 +266,14 @@ export default function AddSkillModal({
                               <div className="text-xs text-tsushin-muted mt-1 line-clamp-2">
                                 {skill.description}
                               </div>
+                              {providerHint && (
+                                <div className="mt-2 inline-flex max-w-full items-center rounded-full border border-teal-500/25 bg-teal-500/10 px-2 py-0.5 text-[11px] text-teal-200">
+                                  {providerHint}
+                                </div>
+                              )}
                             </div>
                             <span className="text-xs text-teal-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap mt-0.5">
-                              + Add
+                              {providerHint ? '+ Configure' : '+ Add'}
                             </span>
                           </div>
                         </button>

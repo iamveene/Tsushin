@@ -153,6 +153,41 @@ def _make_flow_with_three_message_steps(db_session) -> int:
     return flow.id
 
 
+def _make_flow_with_browser_step(db_session, *, tenant_id: str, agent_id: int) -> int:
+    flow = FlowDefinition(
+        tenant_id=tenant_id,
+        name=f"browser-cleanup-{tenant_id}",
+        description="Flow used to verify run-scoped browser sessions are closed.",
+        execution_method="immediate",
+        flow_type="workflow",
+        is_active=True,
+        version=1,
+    )
+    db_session.add(flow)
+    db_session.commit()
+    db_session.refresh(flow)
+
+    db_session.add(
+        FlowNode(
+            flow_definition_id=flow.id,
+            position=1,
+            type="browser_automation",
+            name="browser_step",
+            agent_id=agent_id,
+            config_json=json.dumps(
+                {
+                    "use_tool_mode": True,
+                    "tool_action": "navigate",
+                    "url": "https://example.com",
+                    "session_persistence": True,
+                }
+            ),
+        )
+    )
+    db_session.commit()
+    return flow.id
+
+
 def _stub_message_handler_to_succeed(engine: FlowEngine):
     """Replace the message handler's execute() with a no-op success returning a 'completed' status."""
 
@@ -236,6 +271,55 @@ def test_completed_steps_equals_steps_successful_in_final_report(db_engine, db_s
 
     # And the run is reported as 'completed' (not completed_with_errors / noop).
     assert flow_run_db.status == "completed"
+
+    engine_db.close()
+
+
+@pytest.mark.parametrize("step_status", ["completed", "failed"])
+def test_flow_closes_run_scoped_browser_sessions(db_engine, db_session, monkeypatch, step_status):
+    """Browser sessions are shared within a run, then closed when the run finishes."""
+    tenant_id = f"tenant-browser-cleanup-{step_status}"
+    agent_id = 42
+    flow_id = _make_flow_with_browser_step(
+        db_session,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+    )
+
+    Session = sessionmaker(bind=db_engine)
+    engine_db = Session()
+    engine = _build_engine(engine_db)
+
+    async def fake_browser_execute(step, input_data, flow_run, step_run):
+        if step_status == "failed":
+            return {"status": "failed", "error": "synthetic browser failure"}
+        return {"status": "completed", "output": "synthetic browser success"}
+
+    engine.handlers.get("browser_automation").execute = fake_browser_execute  # type: ignore[assignment]
+
+    close_calls = []
+
+    class _FakeBrowserSessionManager:
+        async def close_session(self, tenant_key, close_agent_id, sender_key):
+            close_calls.append((tenant_key, close_agent_id, sender_key))
+            return True
+
+    monkeypatch.setattr(
+        "hub.providers.browser_session_manager.BrowserSessionManager.instance",
+        lambda: _FakeBrowserSessionManager(),
+    )
+
+    flow_run = asyncio.run(
+        engine.run_flow(
+            flow_definition_id=flow_id,
+            trigger_context={"unit_test": True},
+            initiator="api",
+            tenant_id=tenant_id,
+        )
+    )
+
+    assert close_calls == [(tenant_id, agent_id, f"flow_{flow_run.id}")]
+    assert flow_run.status == ("failed" if step_status == "failed" else "completed")
 
     engine_db.close()
 
