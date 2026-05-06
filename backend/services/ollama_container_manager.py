@@ -84,6 +84,38 @@ class OllamaContainerManager:
     def __init__(self):
         self.runtime: ContainerRuntime = get_container_runtime()
 
+    def _container_labels(self, container_name: str) -> Dict[str, str]:
+        container = self.runtime.get_container(container_name)
+        try:
+            container.reload()
+        except Exception:
+            pass
+        labels = getattr(container, "labels", None)
+        if labels is None:
+            attrs = getattr(container, "attrs", {}) or {}
+            labels = (attrs.get("Config") or {}).get("Labels") or {}
+        return labels or {}
+
+    def _assert_container_ownership(self, instance) -> None:
+        if not instance.container_name:
+            raise ValueError("No container associated with this instance")
+        labels = self._container_labels(instance.container_name)
+        expected = {
+            "tsushin.service": "ollama",
+            "tsushin.tenant": str(instance.tenant_id),
+            "tsushin.instance_id": str(instance.id),
+        }
+        mismatches = [
+            f"{key}={labels.get(key)!r} expected {value!r}"
+            for key, value in expected.items()
+            if labels.get(key) != value
+        ]
+        if mismatches:
+            raise ValueError(
+                "Refusing to manage Ollama container with mismatched ownership labels: "
+                + "; ".join(mismatches)
+            )
+
     # ------------------------------------------------------------------
     # Port allocation
     # ------------------------------------------------------------------
@@ -235,6 +267,7 @@ class OllamaContainerManager:
                     "tsushin.vendor": "ollama",
                     "tsushin.tenant": tenant_id,
                     "tsushin.instance_id": str(instance_id),
+                    "tsushin.lifecycle": "auto-provisioned",
                 },
                 detach=True,
                 device_requests=device_requests,
@@ -358,6 +391,7 @@ class OllamaContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.start_container(instance.container_name)
         instance.container_status = "running"
         db.commit()
@@ -367,6 +401,7 @@ class OllamaContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.stop_container(instance.container_name)
         instance.container_status = "stopped"
         db.commit()
@@ -376,6 +411,7 @@ class OllamaContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.restart_container(instance.container_name)
         instance.container_status = "running"
         db.commit()
@@ -391,6 +427,10 @@ class OllamaContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
 
         if instance.container_name:
+            try:
+                self._assert_container_ownership(instance)
+            except ContainerNotFoundError:
+                pass
             try:
                 self.runtime.stop_container(instance.container_name, timeout=10)
             except (ContainerNotFoundError, ContainerRuntimeError):
@@ -415,6 +455,9 @@ class OllamaContainerManager:
         instance.container_id = None
         instance.container_port = None
         instance.base_url = None
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Deprovisioned"
+        instance.last_health_check = datetime.utcnow()
         db.commit()
 
     def get_status(
@@ -429,8 +472,9 @@ class OllamaContainerManager:
                 "image": None,
                 "volume": None,
                 "pulled_models": instance.pulled_models or [],
-            }
+        }
         try:
+            self._assert_container_ownership(instance)
             status = self.runtime.get_container_status(instance.container_name)
             if status != instance.container_status:
                 instance.container_status = status
@@ -461,6 +505,7 @@ class OllamaContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             return ""
+        self._assert_container_ownership(instance)
         return self.runtime.get_container_logs(instance.container_name, tail=tail)
 
     # ------------------------------------------------------------------
@@ -568,6 +613,31 @@ def startup_reconcile(db: Optional[Session] = None) -> None:
         except Exception as e:
             logger.warning(f"Ollama startup_reconcile: runtime init failed: {e}")
             return
+
+        stale_deprovisioned_rows = db.query(ProviderInstance).filter(
+            ProviderInstance.vendor == "ollama",
+            ProviderInstance.is_auto_provisioned == True,
+            ProviderInstance.is_active == False,
+            ProviderInstance.container_name.is_(None),
+            ProviderInstance.container_status == "none",
+            ProviderInstance.health_status == "healthy",
+        ).all()
+        stale_deprovisioned_rows = [
+            inst
+            for inst in stale_deprovisioned_rows
+            if getattr(inst, "vendor", None) == "ollama"
+            and getattr(inst, "is_auto_provisioned", False) is True
+            and getattr(inst, "is_active", True) is False
+            and not getattr(inst, "container_name", None)
+            and getattr(inst, "container_status", None) == "none"
+            and getattr(inst, "health_status", None) == "healthy"
+        ]
+        for inst in stale_deprovisioned_rows:
+            inst.health_status = "unknown"
+            inst.health_status_reason = "Deprovisioned"
+            inst.last_health_check = datetime.utcnow()
+        if stale_deprovisioned_rows:
+            db.commit()
 
         rows = db.query(ProviderInstance).filter(
             ProviderInstance.vendor == "ollama",

@@ -19,7 +19,7 @@ import tempfile
 import types
 import wave
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -245,7 +245,8 @@ def test_provider_transcribe_sends_bearer_not_basic():
         auth_username="tsushin",
         _token="bearer-secret-abc123",
     )
-    provider = WhisperASRProvider(instance=instance, db=object(), tenant_id="tenant_test")
+    db = MagicMock()
+    provider = WhisperASRProvider(instance=instance, db=db, tenant_id="tenant_test")
 
     # When the real ``WhisperInstanceService`` is loaded (broader test runs),
     # ``resolve_api_token`` reads ``instance.api_token_encrypted`` and tries
@@ -261,6 +262,7 @@ def test_provider_transcribe_sends_bearer_not_basic():
         response = asyncio.run(provider.transcribe(request))
 
     assert response.success is True
+    db.rollback.assert_called_once()
     captured = _CapturingAsyncClient.captured
     headers = captured["headers"]
 

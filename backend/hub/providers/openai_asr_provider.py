@@ -30,17 +30,33 @@ class OpenAIASRProvider(ASRProvider):
         if not api_key:
             return ASRResponse(success=False, provider=self.provider_name, error="missing_api_key")
 
+        if self.db is not None:
+            try:
+                self.db.rollback()
+            except Exception as rollback_err:
+                self.logger.warning(
+                    "Failed to release DB transaction before OpenAI ASR call: %s",
+                    rollback_err,
+                )
+
         if self._client is None:
             self._client = OpenAI(api_key=api_key)
 
-        with Path(request.audio_path).open("rb") as audio_file:
-            params = {
-                "model": request.model or "whisper-1",
-                "file": audio_file,
-            }
-            if request.language and request.language != "auto":
-                params["language"] = request.language
-            response = self._client.audio.transcriptions.create(**params)
+        try:
+            with Path(request.audio_path).open("rb") as audio_file:
+                params = {
+                    "model": request.model or "whisper-1",
+                    "file": audio_file,
+                }
+                if request.language and request.language != "auto":
+                    params["language"] = request.language
+                response = self._client.audio.transcriptions.create(**params)
+        except Exception as exc:
+            return ASRResponse(
+                success=False,
+                provider=self.provider_name,
+                error=str(exc),
+            )
 
         text = (response.text or "").strip()
         if not text:

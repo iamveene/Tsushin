@@ -34,7 +34,17 @@ class OpenAIWhisperASRProvider(ASRProvider):
         if not self.instance or not self.instance.base_url:
             return ASRResponse(success=False, provider=self.provider_name, error="missing_base_url")
 
+        base_url = self.instance.base_url
+        default_model = self.instance.default_model
         token = WhisperInstanceService.resolve_api_token(self.instance, self.db)
+
+        try:
+            self.db.rollback()
+        except Exception as rollback_err:
+            self.logger.warning(
+                "Failed to release DB transaction before OpenAI Whisper ASR call: %s",
+                rollback_err,
+            )
 
         headers: Dict[str, str] = {}
         if token:
@@ -48,21 +58,28 @@ class OpenAIWhisperASRProvider(ASRProvider):
         if request.language and request.language != "auto":
             params["language"] = request.language
 
-        with Path(request.audio_path).open("rb") as audio_file:
-            files = {
-                "audio_file": (
-                    Path(request.audio_path).name,
-                    audio_file,
-                    "application/octet-stream",
-                )
-            }
-            async with httpx.AsyncClient(timeout=180) as client:
-                response = await client.post(
-                    f"{self.instance.base_url.rstrip('/')}/asr",
-                    headers=headers,
-                    params=params,
-                    files=files,
-                )
+        try:
+            with Path(request.audio_path).open("rb") as audio_file:
+                files = {
+                    "audio_file": (
+                        Path(request.audio_path).name,
+                        audio_file,
+                        "application/octet-stream",
+                    )
+                }
+                async with httpx.AsyncClient(timeout=180) as client:
+                    response = await client.post(
+                        f"{base_url.rstrip('/')}/asr",
+                        headers=headers,
+                        params=params,
+                        files=files,
+                    )
+        except Exception as exc:
+            return ASRResponse(
+                success=False,
+                provider=self.provider_name,
+                error=f"request_error: {exc}",
+            )
 
         if response.status_code != 200:
             return ASRResponse(
@@ -95,7 +112,7 @@ class OpenAIWhisperASRProvider(ASRProvider):
                 error="empty_transcription",
             )
 
-        metadata["model"] = request.model or self.instance.default_model
+        metadata["model"] = request.model or default_model
         return ASRResponse(
             success=True,
             provider=self.provider_name,

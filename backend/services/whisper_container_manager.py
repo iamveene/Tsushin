@@ -15,7 +15,7 @@ import threading
 import time
 import wave
 from datetime import datetime
-from typing import Optional, Set, Dict, Any
+from typing import Optional, Set, Dict, Any, List
 
 import requests
 from sqlalchemy.orm import Session, sessionmaker
@@ -84,6 +84,7 @@ HEALTH_CHECK_TIMEOUT = 180
 HEALTH_CHECK_INTERVAL = 5
 
 _provision_lock = threading.Lock()
+_MANAGED_LIFECYCLE = "auto-provisioned"
 
 
 def _get_container_prefix() -> str:
@@ -107,6 +108,120 @@ def _build_silent_wav_bytes(duration_seconds: float = 1.0) -> bytes:
 class WhisperContainerManager:
     def __init__(self):
         self.runtime: ContainerRuntime = get_container_runtime()
+
+    @staticmethod
+    def _container_name(container: Any) -> str:
+        name = getattr(container, "name", None)
+        if name:
+            return str(name).lstrip("/")
+        attrs = getattr(container, "attrs", None) or {}
+        return str(attrs.get("Name") or "").lstrip("/")
+
+    @staticmethod
+    def _container_id(container: Any) -> str:
+        cid = getattr(container, "id", None)
+        if cid:
+            return str(cid)
+        attrs = getattr(container, "attrs", None) or {}
+        return str(attrs.get("Id") or "")
+
+    @staticmethod
+    def _container_status(container: Any) -> str:
+        try:
+            reload_fn = getattr(container, "reload", None)
+            if callable(reload_fn):
+                reload_fn()
+        except Exception:
+            pass
+        status = getattr(container, "status", None)
+        if status:
+            return str(status)
+        attrs = getattr(container, "attrs", None) or {}
+        state = attrs.get("State") or {}
+        return str(state.get("Status") or "unknown")
+
+    @staticmethod
+    def _container_labels(container: Any) -> Dict[str, str]:
+        labels = getattr(container, "labels", None) or {}
+        if labels:
+            return dict(labels)
+        attrs = getattr(container, "attrs", None) or {}
+        config = attrs.get("Config") or {}
+        return dict(config.get("Labels") or {})
+
+    def _list_managed_containers(self) -> List[Any]:
+        raw = getattr(self.runtime, "raw_client", None)
+        containers = getattr(raw, "containers", None) if raw is not None else None
+        list_fn = getattr(containers, "list", None)
+        if not callable(list_fn):
+            return []
+        try:
+            return list_fn(
+                all=True,
+                filters={
+                    "label": [
+                        "tsushin.service=asr",
+                        f"tsushin.lifecycle={_MANAGED_LIFECYCLE}",
+                    ]
+                },
+            )
+        except TypeError:
+            # Some test doubles only accept a filters kwarg. Falling back keeps
+            # the reconcile path unit-testable without weakening Docker usage.
+            return list_fn(
+                filters={
+                    "label": [
+                        "tsushin.service=asr",
+                        f"tsushin.lifecycle={_MANAGED_LIFECYCLE}",
+                    ]
+                },
+            )
+
+    def _assert_container_ownership(self, instance) -> None:
+        if not instance.container_name:
+            return
+        container = self.runtime.get_container(instance.container_name)
+        labels = self._container_labels(container)
+        expected = {
+            "tsushin.service": "asr",
+            "tsushin.tenant": instance.tenant_id,
+            "tsushin.instance_id": str(instance.id),
+        }
+        mismatches = [
+            f"{key}={labels.get(key)!r}"
+            for key, value in expected.items()
+            if labels.get(key) != value
+        ]
+        if mismatches:
+            raise ValueError(
+                "ASR container ownership mismatch for "
+                f"{instance.container_name}: expected tenant={instance.tenant_id!r} "
+                f"instance_id={instance.id}; got {', '.join(mismatches)}"
+            )
+
+    def _remove_existing_container_for_retry(
+        self,
+        container_name: str,
+        *,
+        tenant_id: str,
+        instance_id: int,
+    ) -> None:
+        try:
+            container = self.runtime.get_container(container_name)
+        except ContainerNotFoundError:
+            return
+
+        labels = self._container_labels(container)
+        if (
+            labels.get("tsushin.service") != "asr"
+            or labels.get("tsushin.tenant") != tenant_id
+            or labels.get("tsushin.instance_id") != str(instance_id)
+        ):
+            raise RuntimeError(
+                "Refusing to replace ASR container with mismatched ownership "
+                f"labels: {container_name}"
+            )
+        self.runtime.remove_container(container_name, force=True)
 
     def _get_used_ports(self, db: Session) -> Set[int]:
         from models import ASRInstance
@@ -191,6 +306,11 @@ class WhisperContainerManager:
         container = None
         try:
             environment = self._build_environment(vendor, token, default_model)
+            self._remove_existing_container_for_retry(
+                container_name,
+                tenant_id=tenant_id_capture,
+                instance_id=instance_id,
+            )
 
             container = self.runtime.create_container(
                 image=image,
@@ -207,7 +327,7 @@ class WhisperContainerManager:
                     "tsushin.vendor": vendor,
                     "tsushin.tenant": tenant_id,
                     "tsushin.instance_id": str(instance_id),
-                    "tsushin.lifecycle": "auto-provisioned",
+                    "tsushin.lifecycle": _MANAGED_LIFECYCLE,
                 },
                 detach=True,
             )
@@ -322,6 +442,7 @@ class WhisperContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.start_container(instance.container_name)
         healthy = self._ensure_authenticated_ready(instance, db)
         instance.container_status = "running" if healthy else "error"
@@ -339,6 +460,7 @@ class WhisperContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.stop_container(instance.container_name)
         instance.container_status = "stopped"
         db.commit()
@@ -348,6 +470,7 @@ class WhisperContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.restart_container(instance.container_name)
         healthy = self._ensure_authenticated_ready(instance, db)
         instance.container_status = "running" if healthy else "error"
@@ -371,6 +494,10 @@ class WhisperContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if instance.container_name:
             try:
+                self._assert_container_ownership(instance)
+            except ContainerNotFoundError:
+                pass
+            try:
                 self.runtime.stop_container(instance.container_name, timeout=10)
             except (ContainerNotFoundError, ContainerRuntimeError):
                 pass
@@ -388,6 +515,9 @@ class WhisperContainerManager:
         instance.container_name = None
         instance.container_id = None
         instance.container_port = None
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Deprovisioned"
+        instance.last_health_check = datetime.utcnow()
         db.commit()
 
     def get_status(self, instance_id: int, tenant_id: str, db: Session) -> Dict[str, Any]:
@@ -395,6 +525,7 @@ class WhisperContainerManager:
         if not instance.container_name:
             return {"status": "none", "container_name": None}
         try:
+            self._assert_container_ownership(instance)
             status = self.runtime.get_container_status(instance.container_name)
             if status != instance.container_status:
                 instance.container_status = status
@@ -409,13 +540,27 @@ class WhisperContainerManager:
             }
         except ContainerNotFoundError:
             instance.container_status = "not_found"
+            instance.health_status = "unavailable"
+            instance.health_status_reason = "Container not found"
+            instance.last_health_check = datetime.utcnow()
             db.commit()
             return {"status": "not_found", "container_name": instance.container_name}
+        except ValueError as e:
+            instance.container_status = "ownership_mismatch"
+            instance.health_status = "unavailable"
+            instance.health_status_reason = str(e)[:500]
+            instance.last_health_check = datetime.utcnow()
+            db.commit()
+            return {
+                "status": "ownership_mismatch",
+                "container_name": instance.container_name,
+            }
 
     def get_logs(self, instance_id: int, tenant_id: str, db: Session, tail: int = 100) -> str:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             return ""
+        self._assert_container_ownership(instance)
         return self.runtime.get_container_logs(instance.container_name, tail=tail)
 
     def _build_environment(self, vendor: str, token: str, default_model: str) -> Dict[str, str]:
@@ -564,6 +709,111 @@ class WhisperContainerManager:
             raise ValueError(f"Instance {instance_id} is not auto-provisioned")
         return instance
 
+    def reconcile_managed_containers(
+        self,
+        db: Session,
+        *,
+        remove_orphans: bool = True,
+    ) -> Dict[str, int]:
+        """Reconcile Docker-managed ASR containers with active tenant DB rows.
+
+        This intentionally uses both immutable identity labels and tenant-scoped
+        rows. A container is considered valid only when labels, row tenant, row
+        id, and row container name agree. Anything labeled as a managed ASR
+        container without a matching active row is removed during startup so
+        failed UI provisions cannot leave dead local Whisper containers behind.
+        """
+        from models import ASRInstance
+
+        stats = {
+            "rows_checked": 0,
+            "rows_updated": 0,
+            "orphan_containers_removed": 0,
+            "orphan_containers_seen": 0,
+        }
+        rows = db.query(ASRInstance).filter(
+            ASRInstance.is_auto_provisioned == True,
+            ASRInstance.is_active == True,
+        ).all()
+        stats["rows_checked"] = len(rows)
+        rows_by_key = {(row.tenant_id, str(row.id)): row for row in rows}
+        seen_row_ids: Set[int] = set()
+
+        for container in self._list_managed_containers():
+            name = self._container_name(container)
+            labels = self._container_labels(container)
+            tenant_id = labels.get("tsushin.tenant")
+            instance_id = labels.get("tsushin.instance_id")
+            row = rows_by_key.get((tenant_id, instance_id))
+            status = self._container_status(container)
+            cid = self._container_id(container)
+
+            if row is None or (row.container_name and row.container_name != name):
+                stats["orphan_containers_seen"] += 1
+                if remove_orphans and name:
+                    try:
+                        self.runtime.remove_container(name, force=True)
+                        stats["orphan_containers_removed"] += 1
+                    except Exception as e:
+                        logger.warning(
+                            "Whisper reconcile could not remove orphan container %s: %s",
+                            name,
+                            e,
+                        )
+                continue
+
+            seen_row_ids.add(row.id)
+            if row.container_status in {"creating", "provisioning"}:
+                continue
+            if not row.container_name and name:
+                row.container_name = name
+                stats["rows_updated"] += 1
+            if row.container_id != cid and cid:
+                row.container_id = cid
+                stats["rows_updated"] += 1
+            if row.container_status != status:
+                row.container_status = status
+                stats["rows_updated"] += 1
+            if status != "running":
+                row.health_status = "unavailable"
+                row.health_status_reason = (
+                    f"Reconciled at startup — container status={status}"
+                )
+                row.last_health_check = datetime.utcnow()
+
+        for row in rows:
+            if row.id in seen_row_ids:
+                continue
+            if row.container_status in {"creating", "provisioning"}:
+                continue
+            if not row.container_name:
+                continue
+            try:
+                self._assert_container_ownership(row)
+                status = self.runtime.get_container_status(row.container_name)
+            except ContainerNotFoundError:
+                status = "not_found"
+            except Exception as e:
+                row.container_status = "ownership_mismatch"
+                row.health_status = "unavailable"
+                row.health_status_reason = str(e)[:500]
+                row.last_health_check = datetime.utcnow()
+                stats["rows_updated"] += 1
+                continue
+            if row.container_status != status:
+                row.container_status = status
+                stats["rows_updated"] += 1
+            if status in {"not_found", "exited", "dead", "removing"}:
+                row.health_status = "unavailable"
+                row.health_status_reason = (
+                    f"Reconciled at startup — container status={status}"
+                )
+                row.last_health_check = datetime.utcnow()
+
+        if stats["rows_updated"] or stats["orphan_containers_removed"]:
+            db.commit()
+        return stats
+
 
 def startup_reconcile(db: Session) -> None:
     from models import ASRInstance
@@ -574,6 +824,43 @@ def startup_reconcile(db: Session) -> None:
         logger.warning("Whisper startup_reconcile: runtime unavailable: %s", e)
         return
     manager = WhisperContainerManager()
+
+    try:
+        stats = manager.reconcile_managed_containers(db, remove_orphans=True)
+        if stats.get("orphan_containers_removed"):
+            logger.warning(
+                "Whisper startup_reconcile removed %d orphan ASR container(s)",
+                stats["orphan_containers_removed"],
+            )
+    except Exception as e:
+        logger.warning("Whisper startup_reconcile managed-container pass failed: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    stale_deprovisioned_rows = db.query(ASRInstance).filter(
+        ASRInstance.is_auto_provisioned == True,
+        ASRInstance.is_active == False,
+        ASRInstance.container_name.is_(None),
+        ASRInstance.container_status == "none",
+        ASRInstance.health_status == "healthy",
+    ).all()
+    stale_deprovisioned_rows = [
+        instance
+        for instance in stale_deprovisioned_rows
+        if getattr(instance, "is_auto_provisioned", False) is True
+        and getattr(instance, "is_active", True) is False
+        and not getattr(instance, "container_name", None)
+        and getattr(instance, "container_status", None) == "none"
+        and getattr(instance, "health_status", None) == "healthy"
+    ]
+    for instance in stale_deprovisioned_rows:
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Deprovisioned"
+        instance.last_health_check = datetime.utcnow()
+    if stale_deprovisioned_rows:
+        db.commit()
 
     rows = db.query(ASRInstance).filter(
         ASRInstance.container_status.in_(["creating", "provisioning"]),

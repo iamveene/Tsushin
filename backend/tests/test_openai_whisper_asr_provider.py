@@ -122,6 +122,7 @@ def test_openai_whisper_provider_posts_to_asr_endpoint():
     assert result.provider == "openai_whisper"
     assert result.metadata.get("language") == "en"
     assert result.metadata.get("model") == "base"
+    db.rollback.assert_called_once()
 
     # Endpoint shape: /asr (not /v1/audio/transcriptions)
     assert capture["url"].endswith("/asr"), (
