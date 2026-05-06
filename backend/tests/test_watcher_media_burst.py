@@ -21,13 +21,13 @@ import pytest
 # Allow tests to import backend modules when run from /app
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mcp_reader.watcher import MCPMessageWatcher  # noqa: E402
+from mcp_reader.watcher import MCPWatcher  # noqa: E402
 
 
-def _make_watcher(callback) -> MCPMessageWatcher:
-    return MCPMessageWatcher(
+def _make_watcher(callback) -> MCPWatcher:
+    return MCPWatcher(
         reader=SimpleNamespace(),
-        filter=SimpleNamespace(),
+        message_filter=SimpleNamespace(),
         on_message_callback=callback,
         whatsapp_conversation_delay_seconds=1.0,
     )
