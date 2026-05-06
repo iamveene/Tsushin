@@ -1442,7 +1442,7 @@ def build_financial_ui_first_workflow(params: Dict[str, Any], tenant_id: str, pr
             "{{financial_store.reference_month}}{{financial_store.period_key}} "
             "{{financial_store.amount_display}} {{financial_store.due_date}} "
             "{{financial_store.bill_status}}{{financial_store.record_status}} "
-            "{{financial_store.barcode_preview}}"
+            "{{financial_store.linha_digitavel}}"
         ),
     ), timeout_seconds=30, description="Conditional notification node. Edit channel/recipient/message in the Flow UI."))
 

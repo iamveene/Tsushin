@@ -696,6 +696,30 @@ class FlowStepHandler:
 class NotificationStepHandler(FlowStepHandler):
     """Handles Notification steps - sends one-way notifications."""
 
+    def _enrich_delivery_only_secrets(self, value: Any, data: Dict[str, Any]) -> Any:
+        """Resolve short-lived delivery handles only for the outbound message body."""
+        if isinstance(value, dict):
+            enriched = {key: self._enrich_delivery_only_secrets(item, data) for key, item in value.items()}
+            linha_digitavel_handle = (
+                enriched.get("linha_digitavel")
+                or enriched.get("linha_digitavel_handle")
+                or enriched.get("barcode_delivery_handle")
+            )
+            if isinstance(linha_digitavel_handle, str) and linha_digitavel_handle.startswith("pvh_"):
+                try:
+                    linha_digitavel = self._resolve_secret_handle_value(linha_digitavel_handle, data or {})
+                except Exception:
+                    linha_digitavel = ""
+                if linha_digitavel:
+                    enriched["linha_digitavel"] = linha_digitavel
+                    enriched["barcode_for_notification"] = linha_digitavel
+                    if str(enriched.get("barcode_preview") or "").startswith("[REDACTED"):
+                        enriched["barcode_preview"] = linha_digitavel
+            return enriched
+        if isinstance(value, list):
+            return [self._enrich_delivery_only_secrets(item, data) for item in value]
+        return value
+
     async def execute(
         self,
         step: FlowNode,
@@ -732,10 +756,12 @@ class NotificationStepHandler(FlowStepHandler):
             "current_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
             "current_date": datetime.utcnow().strftime("%Y-%m-%d"),
         }
+        delivery_data = self._enrich_delivery_only_secrets(enriched_data, enriched_data)
 
         # Variable replacement
-        recipient = self._replace_variables(recipient or "", enriched_data)
-        message = self._replace_variables(message_template, enriched_data)
+        recipient = self._replace_variables(recipient or "", delivery_data)
+        message = self._render_and_resolve_secret_handles(message_template, delivery_data)
+        persisted_message = _redact_for_persistence(message)
 
         if channel == "whatsapp":
             # Resolve contact identifier (e.g., "@alice") to phone number — tenant-scoped (V060-CHN-006)
@@ -762,7 +788,7 @@ class NotificationStepHandler(FlowStepHandler):
                     return {
                         "recipient": recipient,
                         "resolved_recipient": resolved_recipient,
-                        "message_sent": message,
+                        "message_sent": persisted_message,
                         "mcp_url": mcp_url,
                         "success": False,
                         "status": "failed",
@@ -777,11 +803,12 @@ class NotificationStepHandler(FlowStepHandler):
                 return {
                     "recipient": recipient,
                     "resolved_recipient": resolved_recipient,
-                    "message_sent": message,
+                    "message_sent": persisted_message,
                     "mcp_url": mcp_url,
                     "success": success,
                     "status": "completed" if success else "failed",
                     "channel": "whatsapp",
+                    "redacted": persisted_message != message,
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
             except Exception as e:
@@ -828,10 +855,11 @@ class NotificationStepHandler(FlowStepHandler):
                 success = await telegram_sender.send_message(chat_id=chat_id, message=message)
                 return {
                     "recipient": recipient,
-                    "message_sent": message,
+                    "message_sent": persisted_message,
                     "success": success,
                     "status": "completed" if success else "failed",
                     "channel": "telegram",
+                    "redacted": persisted_message != message,
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
             except Exception as e:
@@ -1934,6 +1962,29 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         bill = record_result["record"]
         unpaid = not _is_paid_status(bill.status)
         has_barcode = bool(bill.barcode_preview)
+        raw_barcode = str(
+            normalized.get("barcode")
+            or normalized.get("linha_digitavel")
+            or normalized.get("line")
+            or normalized.get("codigo_barras")
+            or ""
+        ).strip()
+        linha_digitavel_handle = ""
+        if raw_barcode and has_barcode:
+            from services.password_vault_service import SecretHandleRegistry
+
+            linha_digitavel_handle = SecretHandleRegistry.issue(
+                raw_barcode,
+                {
+                    "kind": "financial_barcode",
+                    "record_kind": "utility_bill",
+                    "tenant_id": flow_run.tenant_id,
+                    "flow_run_id": flow_run.id,
+                    "record_id": bill.id,
+                    "automation_key": bill.automation_key,
+                    "provider": bill.provider,
+                },
+            )["secret_handle"]
         changed = bool(record_result["created"] or record_result["barcode_changed"])
         should_notify = bool(changed and has_barcode and unpaid)
         return {
@@ -1954,6 +2005,9 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
             "bill_status": bill.status,
             "barcode_detected": has_barcode,
             "barcode_preview": bill.barcode_preview,
+            "linha_digitavel": linha_digitavel_handle,
+            "linha_digitavel_preview": bill.barcode_preview,
+            "barcode_delivery_handle": linha_digitavel_handle,
             "dedupe": {
                 "dedupe_key": f"utility_bill:{bill.provider}:{bill.unit_id}:{bill.reference_month}",
                 "created": record_result["created"],
