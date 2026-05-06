@@ -15,6 +15,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import Dict, Optional
 from datetime import datetime, timedelta
+import json
 import logging
 import os
 import secrets
@@ -111,17 +112,39 @@ def _enforce_remote_access_gate(request: Request, user: User, db: Session) -> No
     )
 
 
+def _resolve_request_scheme(request: Request) -> str:
+    """
+    Resolve the user-facing scheme. Cloudflare Tunnel terminates TLS at the
+    edge and forwards plain HTTP to the origin proxy, so X-Forwarded-Proto
+    reflects the in-cluster hop (http) rather than the visitor's scheme.
+    Cloudflare injects the visitor's scheme into the ``cf-visitor`` JSON
+    header (e.g. ``{"scheme":"https"}``); honor it before falling back to the
+    proxy header chain.
+    """
+    cf_visitor = request.headers.get("cf-visitor")
+    if cf_visitor:
+        try:
+            parsed = json.loads(cf_visitor)
+            scheme = (parsed or {}).get("scheme")
+            if isinstance(scheme, str) and scheme.strip():
+                return scheme.strip().lower()
+        except (ValueError, TypeError):
+            pass
+    proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+        or ""
+    )
+    return proto.split(",")[0].strip().rstrip(":").lower()
+
+
 def _resolve_request_origin(request: Request, fallback_origin: str) -> str:
     """
     Resolve the user-facing origin for a request, preferring reverse-proxy
     headers so local HTTP and self-signed HTTPS can coexist safely.
     """
     fallback_origin = fallback_origin.rstrip("/")
-    proto = (
-        request.headers.get("x-forwarded-proto")
-        or request.url.scheme
-        or ""
-    )
+    proto = _resolve_request_scheme(request)
     host = (
         request.headers.get("x-forwarded-host")
         or request.headers.get("host")
@@ -129,7 +152,6 @@ def _resolve_request_origin(request: Request, fallback_origin: str) -> str:
         or ""
     )
 
-    proto = proto.split(",")[0].strip().rstrip(":")
     host = host.split(",")[0].strip()
 
     if proto and host:
@@ -177,12 +199,7 @@ def _set_session_cookie(
     """
     use_secure = False
     if request is not None:
-        proto = (
-            request.headers.get("x-forwarded-proto")
-            or request.url.scheme
-            or ""
-        )
-        use_secure = proto.split(",")[0].strip().rstrip(":").lower() == "https"
+        use_secure = _resolve_request_scheme(request) == "https"
     else:
         ssl_mode = os.environ.get("TSN_SSL_MODE", "").lower()
         use_secure = ssl_mode not in ("", "off", "none", "disabled")
