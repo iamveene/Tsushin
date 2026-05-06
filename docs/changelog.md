@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Managed local ASR/TTS container reconciliation (2026-05-06)
+
+- Hardened auto-provisioned Whisper/Speaches reconciliation so startup compares active ASR rows with Docker identity labels (`tsushin.service`, `tsushin.tenant`, `tsushin.instance_id`, `tsushin.lifecycle`) and removes labeled ASR containers that no longer have a matching active tenant row.
+- Added tenant/id ownership checks before ASR start, stop, restart, logs, status, deprovision, and retry replacement operations, preventing a stale or cross-tenant container name from being controlled through the wrong ASR instance.
+- Aligned Kokoro and Ollama auto-provisioning with the same `tsushin.lifecycle=auto-provisioned` label, tenant/id ownership checks for lifecycle/log/status actions, and stale deprovisioned-row cleanup so deleted local services do not keep stale “healthy” state.
+
+### Fixed — WhatsApp audio transcription runtime resilience (2026-05-06)
+
+- Fixed the WhatsApp audio transcription path so long-running local ASR calls release any open PostgreSQL transaction before waiting on Whisper/Speaches, avoiding `idle-in-transaction timeout` disconnects while 1-2 minute voice notes are transcribed.
+- Made the OpenAI Whisper fallback return structured ASR errors instead of raising through the skill, so local-ASR failures and fallback failures are reported together.
+- Changed WhatsApp audio skill failures to return the transcription error directly instead of passing an empty audio body into normal AI processing and triggering the generic safety block.
+- Centralized direct skill-output delivery and applied it to active conversation/thread audio paths, so transcript-only responses and transcription failures do not get swallowed by alternate router branches.
+
 ### Changed — Password Vault UI closeout and agent-wizard linking (2026-05-06)
 
 - Polished the Hub → Tool APIs Password Vault card so the provider-neutral surface explicitly shows the 1Password provider, skill readiness, flow readiness, managed fields, and redacted reference testing.

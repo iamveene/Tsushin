@@ -81,6 +81,56 @@ class _FakeReconcileDB:
         self.rollbacks += 1
 
 
+class _FakeContainer:
+    def __init__(self, name, *, labels=None, status="running", container_id="cid-123"):
+        self.name = name
+        self.labels = labels or {}
+        self.status = status
+        self.id = container_id
+
+    def reload(self):
+        return None
+
+
+class _FakeContainersApi:
+    def __init__(self, containers):
+        self._containers = list(containers)
+        self.calls = []
+
+    def list(self, **kwargs):
+        self.calls.append(kwargs)
+        return list(self._containers)
+
+
+class _FakeManagedRuntime:
+    def __init__(self, containers=None, by_name=None):
+        self.containers_api = _FakeContainersApi(containers or [])
+        self.raw_client = SimpleNamespace(containers=self.containers_api)
+        self.by_name = by_name or {
+            container.name: container for container in (containers or [])
+        }
+        self.removed = []
+        self.started = []
+        self.restarted = []
+
+    def get_container(self, name):
+        if name not in self.by_name:
+            raise Exception(f"Container {name} not found")
+        return self.by_name[name]
+
+    def get_container_status(self, name):
+        return self.by_name[name].status
+
+    def remove_container(self, name, force=False):
+        self.removed.append((name, force))
+
+    def start_container(self, name):
+        self.started.append(name)
+
+    def restart_container(self, name):
+        self.restarted.append(name)
+
+
 import pytest
 
 
@@ -136,16 +186,25 @@ def test_wait_for_health_relies_on_authenticated_probe_not_public_health():
 
 def test_start_container_waits_for_authenticated_warm_up_before_running():
     mgr = WhisperContainerManager.__new__(WhisperContainerManager)
-    mgr.runtime = SimpleNamespace(start_container=lambda name: None)
     db = _FakeDB([])
     instance = SimpleNamespace(
         id=42,
+        tenant_id="tenant-1",
         container_name="tsushin-whisper-42",
         container_status="stopped",
         health_status="unavailable",
         health_status_reason=None,
         last_health_check=None,
     )
+    container = _FakeContainer(
+        instance.container_name,
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.tenant": "tenant-1",
+            "tsushin.instance_id": "42",
+        },
+    )
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
 
     with patch.object(mgr, "_get_instance", return_value=instance), patch.object(
         mgr, "_ensure_authenticated_ready", return_value=False
@@ -158,21 +217,31 @@ def test_start_container_waits_for_authenticated_warm_up_before_running():
     assert "authenticated warm-up failed" in instance.health_status_reason
     assert instance.last_health_check is not None
     assert db.commits == 1
+    assert mgr.runtime.started == [instance.container_name]
     mock_ready.assert_called_once_with(instance, db)
 
 
 def test_restart_container_waits_for_authenticated_warm_up_before_running():
     mgr = WhisperContainerManager.__new__(WhisperContainerManager)
-    mgr.runtime = SimpleNamespace(restart_container=lambda name: None)
     db = _FakeDB([])
     instance = SimpleNamespace(
         id=43,
+        tenant_id="tenant-1",
         container_name="tsushin-whisper-43",
         container_status="running",
         health_status="healthy",
         health_status_reason=None,
         last_health_check=None,
     )
+    container = _FakeContainer(
+        instance.container_name,
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.tenant": "tenant-1",
+            "tsushin.instance_id": "43",
+        },
+    )
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
 
     with patch.object(mgr, "_get_instance", return_value=instance), patch.object(
         mgr, "_ensure_authenticated_ready", return_value=True
@@ -185,6 +254,7 @@ def test_restart_container_waits_for_authenticated_warm_up_before_running():
     assert "authenticated warm-up" in instance.health_status_reason
     assert instance.last_health_check is not None
     assert db.commits == 1
+    assert mgr.runtime.restarted == [instance.container_name]
     mock_ready.assert_called_once_with(instance, db)
 
 
@@ -216,3 +286,88 @@ def test_startup_reconcile_requires_authenticated_warm_up():
     assert instance.last_health_check is not None
     assert db.commits == 1
     mock_ready.assert_called_once()
+
+
+def test_reconcile_removes_orphan_managed_asr_container():
+    container = _FakeContainer(
+        "tsushin-whisper-dead-99",
+        status="exited",
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.lifecycle": "auto-provisioned",
+            "tsushin.tenant": "tenant-missing",
+            "tsushin.instance_id": "99",
+        },
+    )
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
+    db = _FakeReconcileDB([])
+
+    stats = mgr.reconcile_managed_containers(db)
+
+    assert stats["orphan_containers_seen"] == 1
+    assert stats["orphan_containers_removed"] == 1
+    assert mgr.runtime.removed == [("tsushin-whisper-dead-99", True)]
+    assert db.commits == 1
+    assert mgr.runtime.containers_api.calls[0]["all"] is True
+
+
+def test_reconcile_marks_row_unavailable_on_container_ownership_mismatch():
+    row = SimpleNamespace(
+        id=7,
+        tenant_id="tenant-a",
+        container_name="tsushin-whisper-a-7",
+        container_id="cid-a",
+        container_status="running",
+        health_status="healthy",
+        health_status_reason=None,
+        last_health_check=None,
+        is_active=True,
+    )
+    foreign_container = _FakeContainer(
+        "tsushin-whisper-a-7",
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.lifecycle": "auto-provisioned",
+            "tsushin.tenant": "tenant-b",
+            "tsushin.instance_id": "7",
+        },
+    )
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    mgr.runtime = _FakeManagedRuntime(containers=[], by_name={row.container_name: foreign_container})
+    db = _FakeReconcileDB([row])
+
+    stats = mgr.reconcile_managed_containers(db)
+
+    assert stats["rows_updated"] == 1
+    assert row.container_status == "ownership_mismatch"
+    assert row.health_status == "unavailable"
+    assert "ownership mismatch" in row.health_status_reason
+    assert row.last_health_check is not None
+    assert db.commits == 1
+
+
+def test_retry_refuses_to_replace_foreign_container_name():
+    foreign_container = _FakeContainer(
+        "tsushin-whisper-a-7",
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.lifecycle": "auto-provisioned",
+            "tsushin.tenant": "tenant-b",
+            "tsushin.instance_id": "7",
+        },
+    )
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    mgr.runtime = _FakeManagedRuntime(
+        containers=[foreign_container],
+        by_name={foreign_container.name: foreign_container},
+    )
+
+    with pytest.raises(RuntimeError, match="mismatched ownership"):
+        mgr._remove_existing_container_for_retry(
+            foreign_container.name,
+            tenant_id="tenant-a",
+            instance_id=7,
+        )
+
+    assert mgr.runtime.removed == []

@@ -68,6 +68,38 @@ class KokoroContainerManager:
     def __init__(self):
         self.runtime: ContainerRuntime = get_container_runtime()
 
+    def _container_labels(self, container_name: str) -> Dict[str, str]:
+        container = self.runtime.get_container(container_name)
+        try:
+            container.reload()
+        except Exception:
+            pass
+        labels = getattr(container, "labels", None)
+        if labels is None:
+            attrs = getattr(container, "attrs", {}) or {}
+            labels = (attrs.get("Config") or {}).get("Labels") or {}
+        return labels or {}
+
+    def _assert_container_ownership(self, instance) -> None:
+        if not instance.container_name:
+            raise ValueError("No container associated with this instance")
+        labels = self._container_labels(instance.container_name)
+        expected = {
+            "tsushin.service": "tts",
+            "tsushin.tenant": str(instance.tenant_id),
+            "tsushin.instance_id": str(instance.id),
+        }
+        mismatches = [
+            f"{key}={labels.get(key)!r} expected {value!r}"
+            for key, value in expected.items()
+            if labels.get(key) != value
+        ]
+        if mismatches:
+            raise ValueError(
+                "Refusing to manage Kokoro container with mismatched ownership labels: "
+                + "; ".join(mismatches)
+            )
+
     # --- Port allocation ---
 
     def _get_used_ports(self, db: Session) -> Set[int]:
@@ -181,6 +213,7 @@ class KokoroContainerManager:
                     "tsushin.vendor": vendor,
                     "tsushin.tenant": tenant_id,
                     "tsushin.instance_id": str(instance.id),
+                    "tsushin.lifecycle": "auto-provisioned",
                 },
                 detach=True,
             )
@@ -290,6 +323,7 @@ class KokoroContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.start_container(instance.container_name)
         instance.container_status = "running"
         db.commit()
@@ -299,6 +333,7 @@ class KokoroContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.stop_container(instance.container_name)
         instance.container_status = "stopped"
         db.commit()
@@ -308,6 +343,7 @@ class KokoroContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             raise ValueError("No container associated with this instance")
+        self._assert_container_ownership(instance)
         self.runtime.restart_container(instance.container_name)
         instance.container_status = "running"
         db.commit()
@@ -323,6 +359,10 @@ class KokoroContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
 
         if instance.container_name:
+            try:
+                self._assert_container_ownership(instance)
+            except ContainerNotFoundError:
+                pass
             try:
                 self.runtime.stop_container(instance.container_name, timeout=10)
             except (ContainerNotFoundError, ContainerRuntimeError):
@@ -344,6 +384,9 @@ class KokoroContainerManager:
         instance.container_name = None
         instance.container_id = None
         instance.container_port = None
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Deprovisioned"
+        instance.last_health_check = datetime.utcnow()
         db.commit()
 
     def get_status(self, instance_id: int, tenant_id: str, db: Session) -> Dict[str, Any]:
@@ -351,6 +394,7 @@ class KokoroContainerManager:
         if not instance.container_name:
             return {"status": "none", "container_name": None}
         try:
+            self._assert_container_ownership(instance)
             status = self.runtime.get_container_status(instance.container_name)
             if status != instance.container_status:
                 instance.container_status = status
@@ -377,6 +421,7 @@ class KokoroContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             return ""
+        self._assert_container_ownership(instance)
         return self.runtime.get_container_logs(instance.container_name, tail=tail)
 
     # --- Health checking ---
@@ -433,6 +478,29 @@ def startup_reconcile(db: Session) -> None:
     except Exception as e:
         logger.warning(f"Kokoro startup_reconcile: runtime unavailable: {e}")
         return
+
+    stale_deprovisioned_rows = db.query(TTSInstance).filter(
+        TTSInstance.is_auto_provisioned == True,
+        TTSInstance.is_active == False,
+        TTSInstance.container_name.is_(None),
+        TTSInstance.container_status == "none",
+        TTSInstance.health_status == "healthy",
+    ).all()
+    stale_deprovisioned_rows = [
+        instance
+        for instance in stale_deprovisioned_rows
+        if getattr(instance, "is_auto_provisioned", False) is True
+        and getattr(instance, "is_active", True) is False
+        and not getattr(instance, "container_name", None)
+        and getattr(instance, "container_status", None) == "none"
+        and getattr(instance, "health_status", None) == "healthy"
+    ]
+    for instance in stale_deprovisioned_rows:
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Deprovisioned"
+        instance.last_health_check = datetime.utcnow()
+    if stale_deprovisioned_rows:
+        db.commit()
 
     rows = db.query(TTSInstance).filter(
         TTSInstance.container_status == "creating",

@@ -258,6 +258,55 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
         os.remove(audio_path)
 
 
+def test_audio_transcript_reports_local_and_openai_failures_together():
+    _ensure_real_whisper_instance_service()
+    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    try:
+        skill = AudioTranscriptSkill()
+        skill.set_db_session(object())
+        failing_local = ASRResponse(success=False, provider="openai_whisper", error="local_timeout")
+        failing_openai = ASRResponse(success=False, provider="openai", error="invalid_api_key")
+        asr_instance = SimpleNamespace(
+            id=7,
+            is_active=True,
+            vendor="openai_whisper",
+            default_model="base",
+        )
+
+        with patch(
+            "services.whisper_instance_service.WhisperInstanceService.get_instance",
+            return_value=asr_instance,
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
+            return_value=_FakeProvider(failing_local),
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider",
+            return_value=_FakeProvider(failing_openai),
+        ), patch(
+            "agent.skills.audio_transcript.get_api_key",
+            return_value="sk-test",
+        ):
+            result = asyncio.run(
+                skill.process(
+                    _make_message(audio_path),
+                    {
+                        "tenant_id": "tenant-alpha",
+                        "asr_mode": "instance",
+                        "asr_instance_id": 7,
+                        "model": "base",
+                        "response_mode": "transcript_only",
+                    },
+                )
+            )
+
+        assert result.success is False
+        assert "Local ASR instance (7): local_timeout" in result.output
+        assert "OpenAI fallback: invalid_api_key" in result.output
+    finally:
+        os.remove(audio_path)
+
+
 # NOTE: tests covering the retired tenant_default ASR mode were removed when
 # the tenant-level ASR default concept was rolled back. The replacement
 # behavior — collapsing stale ``asr_mode='tenant_default'`` rows to OpenAI —
