@@ -33,6 +33,11 @@ import {
   type CustomTool,
   type EditableStepData,
   type FlowStepConfig,
+  type FlowHeaderConfig,
+  type FlowSecretReferenceConfig,
+  type BrowserSelectorConfig,
+  type DataExtractionRuleConfig,
+  type DataParserRuleConfig,
   type TriggerKind,
   flowNodeToEditable,
   editableToUpdatePayload,
@@ -42,6 +47,7 @@ import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
 import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
+import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
 import {
   MessageIcon,
   BellIcon,
@@ -67,12 +73,14 @@ import {
   SlackIcon,
   DiscordIcon,
   WebhookIcon,
+  LockIcon,
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
   ShieldCheckIcon,
   CodeIcon,
   GitHubIcon,
+  DatabaseIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
@@ -114,7 +122,7 @@ const TRIGGER_KIND_OPTIONS: { value: TriggerKind; label: string; description: st
   { value: 'webhook', label: 'Webhook', description: 'Inbound webhook payloads', Icon: WebhookIcon },
 ]
 
-const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
+const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string; legacy?: boolean }[] = [
   // v0.7.0 Wave 2: 'source' step is locked at position 1, max 1 per flow.
   // The dropdown filters this out when a source step already exists; the
   // step row hides Delete + reorder buttons when type === 'source'.
@@ -123,6 +131,13 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'message', label: 'Message', Icon: EnvelopeIcon, description: 'Send a single message' },
   { value: 'notification', label: 'Notification', Icon: BellIcon, description: 'Send a notification' },
   { value: 'tool', label: 'Tool', Icon: WrenchIcon, description: 'Execute a tool or action' },
+  { value: 'password_vault', label: 'Password Vault', Icon: LockIcon, description: 'Resolve a stored vault reference programmatically' },
+  { value: 'browser_automation', label: 'Browser Automation', Icon: GlobeIcon, description: 'Open a site and perform explicit browser actions' },
+  { value: 'http_request', label: 'HTTP Request', Icon: CodeIcon, description: 'Call an API with editable URL, method, headers, body, and secrets' },
+  { value: 'data_transform', label: 'Data Transform', Icon: ClipboardIcon, description: 'Extract and normalize fields from prior step output' },
+  { value: 'financial_record_store', label: 'Financial Record Store', Icon: DatabaseIcon, description: 'Persist and dedupe financial records by kind' },
+  { value: 'financial_bill_store', label: 'Utility Bill Store', Icon: DatabaseIcon, description: 'Utility-specific alias for bill storage and dedupe' },
+  { value: 'financial_utility_automation', label: 'Legacy Utility Bill', Icon: FileTextIcon, description: 'Legacy/compat opaque utility automation', legacy: true },
   { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
@@ -141,11 +156,15 @@ function hasUnboundSourceStep(steps?: Array<{ type?: string; config?: Record<str
 
 function getAddableStepTypes(
   steps: Array<{ type?: string }>,
-  allowSourceStep: boolean
+  allowSourceStep: boolean,
+  includeLegacy = false
 ): typeof STEP_TYPES {
   return STEP_TYPES.filter((type) => (
-    type.value !== 'source'
-    || (allowSourceStep && !steps.some((s) => s.type === 'source'))
+    (includeLegacy || !type.legacy)
+    && (
+      type.value !== 'source'
+      || (allowSourceStep && !steps.some((s) => s.type === 'source'))
+    )
   ))
 }
 
@@ -300,10 +319,1661 @@ const AVAILABLE_SKILLS: { value: string; label: string; Icon: React.FC<IconProps
   { value: 'scheduler', label: 'Scheduler', Icon: CalendarIcon, description: 'Manage calendar events and reminders' },
   { value: 'scheduler_query', label: 'Scheduler Query', Icon: CalendarDaysIcon, description: 'Query calendar events' },
   { value: 'gmail', label: 'Gmail', Icon: MailIcon, description: 'Send and manage emails' },
+  { value: 'password_vault', label: 'Password Vault', Icon: LockIcon, description: 'Resolve a stored password vault reference without placing secrets in the flow' },
   { value: 'knowledge_sharing', label: 'Knowledge Sharing', Icon: BookOpenIcon, description: 'Share knowledge base content' },
   { value: 'flows', label: 'Flows', Icon: RefreshIcon, description: 'Trigger and manage flows' },
   { value: 'automation', label: 'Automation', Icon: LightningIcon, description: 'Execute automation tasks' },
 ]
+
+function passwordVaultReferenceToToolArguments(next: PasswordVaultReferenceValue): Record<string, any> {
+  const integrationId = next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null
+  const vault = next.password_vault_vault_id || next.password_vault_vault_name || null
+  const itemRef = next.password_vault_item_id || next.password_vault_item_title || null
+  const fieldName = next.password_vault_field_name || null
+  return {
+    password_vault_integration_id: integrationId,
+    password_vault_provider: next.password_vault_provider || null,
+    password_vault_vault_id: next.password_vault_vault_id || null,
+    password_vault_vault_name: next.password_vault_vault_name || null,
+    password_vault_item_id: next.password_vault_item_id || null,
+    password_vault_item_title: next.password_vault_item_title || null,
+    password_vault_field_name: fieldName,
+    password_vault_reference: next.password_vault_reference || null,
+    action: fieldName ? 'read_item' : itemRef ? 'list_items' : 'test_connection',
+    integration_id: integrationId,
+    vault,
+    item_id: next.password_vault_item_id || null,
+    item_ref: itemRef,
+    field_name: fieldName,
+    reference: next.password_vault_reference || null,
+  }
+}
+
+function passwordVaultReferenceFromToolArguments(args: Record<string, any> | undefined | null): PasswordVaultReferenceValue {
+  const source = args || {}
+  const hasExplicitVaultId = Boolean(source.password_vault_vault_id || source.vault_id)
+  const hasExplicitItemId = Boolean(source.password_vault_item_id || source.item_id)
+  return {
+    password_vault_integration_id: source.password_vault_integration_id ?? source.integration_id ?? null,
+    password_vault_provider: source.password_vault_provider ?? null,
+    password_vault_vault_id: source.password_vault_vault_id ?? source.vault_id ?? null,
+    password_vault_vault_name: source.password_vault_vault_name ?? (!hasExplicitVaultId ? source.vault : null) ?? null,
+    password_vault_item_id: source.password_vault_item_id ?? source.item_id ?? null,
+    password_vault_item_title: source.password_vault_item_title ?? (!hasExplicitItemId ? source.item_ref : null) ?? null,
+    password_vault_field_name: source.password_vault_field_name ?? source.field_name ?? null,
+    password_vault_reference: source.password_vault_reference ?? source.reference ?? null,
+  }
+}
+
+const PASSWORD_VAULT_ACTION_OPTIONS = [
+  { value: 'read_item', label: 'Read field' },
+  { value: 'read_totp', label: 'Read TOTP' },
+  { value: 'compose_basic_auth', label: 'Compose Basic Auth' },
+  { value: 'list_items', label: 'List items' },
+  { value: 'test_connection', label: 'Test connection' },
+]
+
+function PasswordVaultStepConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const action = current.action || (current.field_name ? 'read_item' : 'test_connection')
+  const isCompose = action === 'compose_basic_auth'
+
+  function setAction(nextAction: string) {
+    if (nextAction === 'compose_basic_auth') {
+      onChange({
+        action: nextAction,
+        username_handle: current.username_handle || '{{vault_username.secret_handle}}',
+        password_handle: current.password_handle || '{{vault_password.secret_handle}}',
+        scheme: current.scheme || 'Basic',
+      })
+    } else {
+      onChange({ action: nextAction })
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Operation</label>
+        <select
+          value={action}
+          onChange={(event) => setAction(event.target.value)}
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+        >
+          {PASSWORD_VAULT_ACTION_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {isCompose ? (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Username handle</label>
+              <TemplateInput
+                value={current.username_handle || ''}
+                onValueChange={(value) => onChange({ username_handle: value })}
+                placeholder="{{vault_username.secret_handle}}"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                allSteps={allSteps}
+                currentStepPosition={currentStepPosition}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Password or customer-code handle</label>
+              <TemplateInput
+                value={current.password_handle || ''}
+                onValueChange={(value) => onChange({ password_handle: value })}
+                placeholder="{{vault_password.secret_handle}}"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                allSteps={allSteps}
+                currentStepPosition={currentStepPosition}
+              />
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Scheme</label>
+              <select
+                value={current.scheme || 'Basic'}
+                onChange={(event) => onChange({ scheme: event.target.value })}
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              >
+                <option value="Basic">Basic</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                Output Alias
+                <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
+              </label>
+              <CursorSafeInput
+                type="text"
+                value={current.output_alias || ''}
+                onValueChange={(value) => onChange({ output_alias: value })}
+                placeholder="e.g. vault_basic_auth"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <PasswordVaultReferencePicker
+            value={passwordVaultReferenceFromToolArguments(current)}
+            onChange={(next) => onChange({
+              ...next,
+              ...passwordVaultReferenceToToolArguments(next),
+              action,
+            })}
+            compact
+          />
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              Output Alias (optional)
+              <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
+            </label>
+            <CursorSafeInput
+              type="text"
+              value={current.output_alias || ''}
+              onValueChange={(value) => onChange({ output_alias: value })}
+              placeholder="e.g. vault_secret"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+type FinancialUtilityTemplateKey =
+  | 'moderna_condominio_sao_blas_204'
+  | 'consigaz_sao_blas_204'
+  | 'medsenior_samedil_plano_saude_mae'
+
+const FINANCIAL_UTILITY_TEMPLATES: Record<FinancialUtilityTemplateKey, {
+  label: string
+  vaultField: string
+  config: Partial<FlowStepConfig>
+}> = {
+  moderna_condominio_sao_blas_204: {
+    label: 'Cond. São Blas 204 - Boleto Condomínio',
+    vaultField: 'password',
+    config: {
+      financial_provider: 'moderna',
+      financial_unit_id: '0204',
+      financial_asset: 'AP Ed. San Blass',
+      financial_address: 'Rua Piratininga 111, Praia da Costa, Vila Velha',
+      financial_username_field: 'username',
+      financial_password_field: 'password',
+      financial_browser_timeout_ms: 30000,
+    },
+  },
+  consigaz_sao_blas_204: {
+    label: 'Consigaz - Gas Cond. Sao Blas 204',
+    vaultField: 'username',
+    config: {
+      financial_provider: 'consigaz',
+      financial_unit_id: 'AP0204',
+      financial_asset: 'AP Ed. San Blass',
+      financial_address: 'R PIRATININGA, 111 AP0204',
+      financial_customer_code: '1051548',
+      financial_delivery_location: 'PADRAO',
+      financial_username_field: 'username',
+      financial_password_field: 'Codigo_Client',
+      financial_browser_timeout_ms: 30000,
+    },
+  },
+  medsenior_samedil_plano_saude_mae: {
+    label: 'Medsenior / Samedil - Plano Saude Mae',
+    vaultField: 'password',
+    config: {
+      financial_provider: 'medsenior',
+      financial_unit_id: 'Plano Saude Mae',
+      financial_asset: 'Plano Saude Mae',
+      financial_address: 'Medsenior / Samedil',
+      financial_username_field: 'username',
+      financial_password_field: 'password',
+      financial_browser_timeout_ms: 30000,
+    },
+  },
+}
+
+function getFinancialTemplate(template?: string | null) {
+  return FINANCIAL_UTILITY_TEMPLATES[(template as FinancialUtilityTemplateKey) || 'moderna_condominio_sao_blas_204']
+    || FINANCIAL_UTILITY_TEMPLATES.moderna_condominio_sao_blas_204
+}
+
+const HTTP_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+
+const BROWSER_ACTION_OPTIONS = [
+  { value: 'navigate', label: 'Navigate' },
+  { value: 'extract', label: 'Extract data' },
+  { value: 'click', label: 'Click' },
+  { value: 'fill', label: 'Fill form' },
+  { value: 'type_text', label: 'Type text' },
+  { value: 'wait_for', label: 'Wait for selector' },
+  { value: 'wait_for_url', label: 'Wait for URL' },
+  { value: 'dismiss_modal', label: 'Dismiss modal' },
+  { value: 'solve_captcha', label: 'Solve CAPTCHA' },
+  { value: 'execute_script', label: 'Execute script' },
+  { value: 'screenshot', label: 'Screenshot' },
+  { value: 'scroll', label: 'Scroll' },
+  { value: 'select_option', label: 'Select option' },
+  { value: 'hover', label: 'Hover' },
+  { value: 'get_attribute', label: 'Get attribute' },
+  { value: 'get_page_url', label: 'Get page URL' },
+  { value: 'go_back', label: 'Go back' },
+  { value: 'go_forward', label: 'Go forward' },
+  { value: 'open_tab', label: 'Open tab' },
+  { value: 'switch_tab', label: 'Switch tab' },
+  { value: 'close_tab', label: 'Close tab' },
+  { value: 'list_tabs', label: 'List tabs' },
+]
+
+const DATA_TRANSFORM_MODE_OPTIONS = [
+  { value: 'extract_fields', label: 'Extract fields' },
+  { value: 'parse_table', label: 'Parse table' },
+  { value: 'normalize_record', label: 'Normalize record' },
+  { value: 'filter_records', label: 'Filter records' },
+  { value: 'financial_parser', label: 'Financial parser' },
+  { value: 'record_mapping', label: 'Record mapping' },
+]
+
+const FINANCIAL_PARSER_MODE_OPTIONS = [
+  { value: '', label: 'None / generic rules' },
+  { value: 'consigaz_utility_bill', label: 'Consigaz utility bill' },
+  { value: 'medsenior_utility_bill', label: 'Medsenior utility bill' },
+]
+
+const FINANCIAL_RECORD_KIND_OPTIONS = [
+  { value: 'utility_bill', label: 'Utility bill' },
+  { value: 'tax_obligation', label: 'Tax obligation' },
+  { value: 'income_transfer', label: 'Income transfer' },
+  { value: 'investment_snapshot', label: 'Investment snapshot' },
+]
+
+function normalizeHeaderRows(value: FlowStepConfig['headers'] | FlowHeaderConfig[] | undefined): FlowHeaderConfig[] {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
+  }
+  return []
+}
+
+function coerceToolArgumentValue(key: string, value: string): string | number | boolean {
+  const normalized = key.trim()
+  if (['timeout_ms', 'x', 'y', 'delay_ms'].includes(normalized)) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : value
+  }
+  if (normalized === 'full_page') {
+    if (value.toLowerCase() === 'true') return true
+    if (value.toLowerCase() === 'false') return false
+  }
+  return value
+}
+
+function rowsToToolArguments(rows: FlowHeaderConfig[]): Record<string, any> {
+  return rows.reduce<Record<string, any>>((acc, row) => {
+    const key = (row.key || '').trim()
+    if (!key) return acc
+    acc[key] = coerceToolArgumentValue(key, row.value || '')
+    return acc
+  }, {})
+}
+
+function normalizeStringMapRows(value: Record<string, any> | undefined | null): FlowHeaderConfig[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
+}
+
+function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
+  return rows.reduce<Record<string, string>>((acc, row) => {
+    const key = (row.key || '').trim()
+    if (!key) return acc
+    acc[key] = row.value || ''
+    return acc
+  }, {})
+}
+
+function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
+  if (stepType === 'financial_utility_automation') {
+    const templateKey: FinancialUtilityTemplateKey = 'moderna_condominio_sao_blas_204'
+    const template = getFinancialTemplate(templateKey)
+    return {
+      financial_automation_template: templateKey,
+      ...template.config,
+      financial_password_vault_field_name: template.vaultField,
+    }
+  }
+  if (stepType === 'browser_automation') {
+    return {
+      mode: 'container',
+      provider_type: 'playwright',
+      timeout_seconds: 30,
+      use_tool_mode: true,
+      tool_action: 'navigate',
+      tool_arguments: {},
+      selectors: [],
+      browser_secret_references: [],
+      session_persistence: true,
+      session_ttl_seconds: 300,
+      browser_session_profile_name: '',
+    }
+  }
+  if (stepType === 'http_request') {
+    return {
+      method: 'GET',
+      http_method: 'GET',
+      headers: [],
+      http_headers: [],
+      secret_references: [],
+      http_secret_references: [],
+    }
+  }
+  if (stepType === 'data_transform') {
+    return {
+      transform_mode: 'extract_fields',
+      extraction_rules: [],
+      parser_rules: [],
+    }
+  }
+  if (stepType === 'financial_record_store' || stepType === 'financial_bill_store') {
+    return {
+      record_kind: 'utility_bill',
+      financial_record_dedupe_key: '{{provider}}:{{unit_id}}:{{reference_month}}',
+      financial_record_key_fields: 'provider, unit_id, reference_month',
+    }
+  }
+  if (stepType === 'password_vault') {
+    return { action: 'read_item' }
+  }
+  if (['message', 'notification', 'conversation'].includes(stepType)) {
+    return { channel: 'whatsapp' }
+  }
+  return {}
+}
+
+function financialVaultValueFromConfig(config: FlowStepConfig | undefined | null): PasswordVaultReferenceValue {
+  const source = config || {}
+  const template = getFinancialTemplate(source.financial_automation_template)
+  return {
+    password_vault_integration_id: source.financial_password_vault_integration_id ?? null,
+    password_vault_provider: source.financial_password_vault_provider ?? null,
+    password_vault_vault_id: source.financial_password_vault_vault_id ?? null,
+    password_vault_vault_name: source.financial_password_vault_vault_name ?? null,
+    password_vault_item_id: source.financial_password_vault_item_id ?? null,
+    password_vault_item_title: source.financial_password_vault_item_title ?? null,
+    password_vault_field_name: source.financial_password_vault_field_name ?? template.vaultField,
+    password_vault_reference: source.financial_password_vault_reference ?? null,
+  }
+}
+
+function financialVaultValueToConfig(next: PasswordVaultReferenceValue, defaultField = 'password'): Partial<FlowStepConfig> {
+  return {
+    financial_password_vault_integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+    financial_password_vault_provider: next.password_vault_provider || null,
+    financial_password_vault_vault_id: next.password_vault_vault_id || null,
+    financial_password_vault_vault_name: next.password_vault_vault_name || null,
+    financial_password_vault_item_id: next.password_vault_item_id || null,
+    financial_password_vault_item_title: next.password_vault_item_title || null,
+    financial_password_vault_field_name: next.password_vault_field_name || defaultField,
+    financial_password_vault_reference: next.password_vault_reference || null,
+  }
+}
+
+function FinancialUtilityAutomationConfigPanel({
+  config,
+  agents,
+  onChange,
+}: {
+  config: FlowStepConfig | undefined
+  agents: Agent[]
+  onChange: (update: Partial<FlowStepConfig>) => void
+}) {
+  const current = config || {}
+  const notifyEnabled = Boolean(current.financial_notification_enabled)
+  const selectedTemplateId = (current.financial_automation_template || 'moderna_condominio_sao_blas_204') as FinancialUtilityTemplateKey
+  const selectedTemplate = getFinancialTemplate(selectedTemplateId)
+  const isConsigaz = selectedTemplateId === 'consigaz_sao_blas_204'
+  const isMedsenior = selectedTemplateId === 'medsenior_samedil_plano_saude_mae'
+  const templateDefaults = selectedTemplate.config
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">Automation template</label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => {
+                const nextTemplate = e.target.value as FinancialUtilityTemplateKey
+                const defaults = getFinancialTemplate(nextTemplate)
+                onChange({
+                  financial_automation_template: nextTemplate,
+                  ...defaults.config,
+                  financial_password_vault_field_name: defaults.vaultField,
+                })
+              }}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              {Object.entries(FINANCIAL_UTILITY_TEMPLATES).map(([value, template]) => (
+                <option key={value} value={value}>{template.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
+            <input
+              type="text"
+              value={current.financial_provider || templateDefaults.financial_provider || ''}
+              onChange={(e) => onChange({ financial_provider: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">Unit</label>
+            <input
+              type="text"
+              value={current.financial_unit_id || templateDefaults.financial_unit_id || ''}
+              onChange={(e) => onChange({ financial_unit_id: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">Asset</label>
+            <input
+              type="text"
+              value={current.financial_asset || templateDefaults.financial_asset || ''}
+              onChange={(e) => onChange({ financial_asset: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">Address</label>
+            <input
+              type="text"
+              value={current.financial_address || templateDefaults.financial_address || ''}
+              onChange={(e) => onChange({ financial_address: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          {isConsigaz && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Customer code</label>
+                <input
+                  type="text"
+                  value={current.financial_customer_code || templateDefaults.financial_customer_code || ''}
+                  onChange={(e) => onChange({ financial_customer_code: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">Delivery location</label>
+                <input
+                  type="text"
+                  value={current.financial_delivery_location || templateDefaults.financial_delivery_location || ''}
+                  onChange={(e) => onChange({ financial_delivery_location: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <PasswordVaultReferencePicker
+        value={financialVaultValueFromConfig(current)}
+        onChange={(next) => onChange({
+          ...financialVaultValueToConfig(next, selectedTemplate.vaultField),
+          financial_username_field: current.financial_username_field || templateDefaults.financial_username_field || 'email',
+          financial_password_field: current.financial_password_field || templateDefaults.financial_password_field || 'password',
+        })}
+        compact
+      />
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">{isConsigaz ? 'CPF/CNPJ field' : isMedsenior ? 'CPF field' : 'Username field'}</label>
+          <input
+            type="text"
+            value={current.financial_username_field || templateDefaults.financial_username_field || 'email'}
+            onChange={(e) => onChange({ financial_username_field: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">{isConsigaz ? 'Customer code field' : 'Password field'}</label>
+          <input
+            type="text"
+            value={current.financial_password_field || templateDefaults.financial_password_field || 'password'}
+            onChange={(e) => onChange({ financial_password_field: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser timeout ms</label>
+          <input
+            type="number"
+            min={5000}
+            value={current.financial_browser_timeout_ms || templateDefaults.financial_browser_timeout_ms || 30000}
+            onChange={(e) => onChange({ financial_browser_timeout_ms: Number(e.target.value) || 30000 })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <label className="flex items-center gap-2 text-sm text-slate-200">
+          <input
+            type="checkbox"
+            checked={notifyEnabled}
+            onChange={(e) => onChange({ financial_notification_enabled: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-700 text-cyan-500"
+          />
+          Create Scheduler notification when a new unpaid boleto is detected
+        </label>
+        {notifyEnabled && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
+              <input
+                type="text"
+                value={current.financial_notification_recipient || ''}
+                onChange={(e) => onChange({ financial_notification_recipient: e.target.value })}
+                placeholder="@Vini or +5527999999999"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm placeholder:text-slate-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Notification agent</label>
+              <select
+                value={current.financial_notification_agent_id || ''}
+                onChange={(e) => onChange({ financial_notification_agent_id: e.target.value ? Number(e.target.value) : undefined })}
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              >
+                <option value="">Use default</option>
+                {agents.map(agent => (
+                  <option key={agent.id} value={agent.id}>{agent.contact_name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BrowserAutomationConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const selectors = (current.selectors || []) as BrowserSelectorConfig[]
+  const secretReferences = (current.browser_secret_references || []) as FlowSecretReferenceConfig[]
+  const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
+
+  function updateSelector(index: number, update: BrowserSelectorConfig) {
+    const next = selectors.map((selector, selectorIndex) => selectorIndex === index ? { ...selector, ...update } : selector)
+    onChange({ selectors: next })
+  }
+
+  function updateSecretReference(index: number, update: FlowSecretReferenceConfig) {
+    const next = secretReferences.map((ref, refIndex) => refIndex === index ? { ...ref, ...update } : ref)
+    onChange({ browser_secret_references: next })
+  }
+
+  function setToolArgumentRows(next: FlowHeaderConfig[]) {
+    onChange({ tool_arguments: rowsToToolArguments(next) })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Tool action</label>
+          <select
+            value={current.tool_action || 'navigate'}
+            onChange={(e) => onChange({
+              tool_action: e.target.value,
+              use_tool_mode: true,
+              tool_arguments: { ...(current.tool_arguments || {}), action: e.target.value },
+            })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {BROWSER_ACTION_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+          <TemplateInput
+            value={current.url || ''}
+            onValueChange={(value) => onChange({ url: value })}
+            placeholder="https://portal.example.com/login"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Prompt</label>
+        <TemplateTextarea
+          value={current.prompt || ''}
+          onValueChange={(value) => onChange({ prompt: value })}
+          rows={3}
+          placeholder="Describe the browser task. Keep credentials as references, not literal secrets."
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Mode</label>
+          <select
+            value={current.mode || 'container'}
+            onChange={(e) => onChange({ mode: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            <option value="container">Container</option>
+            <option value="host">Host</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
+          <CursorSafeInput
+            type="text"
+            value={current.provider_type || 'playwright'}
+            onValueChange={(value) => onChange({ provider_type: value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Timeout seconds</label>
+          <input
+            type="number"
+            min={5}
+            value={current.timeout_seconds || 30}
+            onChange={(e) => onChange({ timeout_seconds: Number(e.target.value) || 30 })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2">
+          <span className="text-sm font-medium text-slate-300">Persist browser session</span>
+          <input
+            type="checkbox"
+            checked={current.session_persistence !== false}
+            onChange={(e) => onChange({ session_persistence: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Session TTL seconds</label>
+          <input
+            type="number"
+            min={0}
+            value={current.session_ttl_seconds ?? 300}
+            onChange={(e) => onChange({ session_ttl_seconds: Number(e.target.value) || 0 })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser session profile</label>
+          <CursorSafeInput
+            type="text"
+            value={current.browser_session_profile_name || ''}
+            onValueChange={(value) => onChange({ browser_session_profile_name: value })}
+            placeholder="edp"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+          <p className="mt-1 text-xs text-slate-500">Named profile from Hub &gt; Tool APIs. Leave blank for a fresh isolated context.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser profile integration ID</label>
+          <input
+            type="number"
+            min={0}
+            value={current.browser_session_integration_id ?? ''}
+            onChange={(e) => onChange({ browser_session_integration_id: e.target.value ? Number(e.target.value) : null })}
+            placeholder="optional"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 md:col-span-2">
+          <span>
+            <span className="block text-sm font-medium text-slate-300">Optional browser action</span>
+            <span className="block text-xs text-slate-500">Use with step behavior “Continue” to mark expected portal/login misses as skipped.</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={current.optional === true || current.treat_failure_as_skipped === true}
+            onChange={(e) => onChange({ optional: e.target.checked, treat_failure_as_skipped: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Selectors and actions</label>
+          <button
+            type="button"
+            onClick={() => onChange({ selectors: [...selectors, { name: '', action: 'extract', selector: '', value: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add selector
+          </button>
+        </div>
+        {selectors.length === 0 ? (
+          <p className="text-xs text-slate-500">No selectors yet. Add explicit selectors when the action needs click, fill, or extract targets.</p>
+        ) : (
+          <div className="space-y-2">
+            {selectors.map((selector, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_120px_1.4fr_1fr_1.4fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={selector.name || ''}
+                  onValueChange={(value) => updateSelector(index, { name: value })}
+                  placeholder="field name"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <select
+                  value={selector.action || 'extract'}
+                  onChange={(e) => updateSelector(index, { action: e.target.value })}
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  {BROWSER_ACTION_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <CursorSafeInput
+                  type="text"
+                  value={selector.selector || ''}
+                  onValueChange={(value) => updateSelector(index, { selector: value })}
+                  placeholder="CSS selector"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={selector.value || ''}
+                  onValueChange={(value) => updateSelector(index, { value })}
+                  placeholder="value"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={selector.fallback_selector || ''}
+                  onValueChange={(value) => updateSelector(index, { fallback_selector: value })}
+                  placeholder="fallback selector"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => onChange({ selectors: selectors.filter((_, selectorIndex) => selectorIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Tool arguments</label>
+          <button
+            type="button"
+            onClick={() => setToolArgumentRows([...toolArgumentRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add argument
+          </button>
+        </div>
+        {toolArgumentRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No extra arguments configured. Use this for script, timeout_ms, url_contains, state, attribute, wait_until, tab_id, fallback_selector, or fallback_script.</p>
+        ) : (
+          <div className="space-y-2">
+            {toolArgumentRows.map((argument, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={argument.key || ''}
+                  onValueChange={(value) => {
+                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setToolArgumentRows(next)
+                  }}
+                  placeholder="script"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateTextarea
+                  value={argument.value || ''}
+                  onValueChange={(value) => {
+                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setToolArgumentRows(next)
+                  }}
+                  rows={(argument.key || '').trim() === 'script' ? 5 : 1}
+                  placeholder="Argument value or {{previous_step.field}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-y font-mono"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setToolArgumentRows(toolArgumentRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SecretReferenceRows
+        references={secretReferences}
+        onAdd={() => onChange({ browser_secret_references: [...secretReferences, { target: '', key: '', reference: '' }] })}
+        onChange={updateSecretReference}
+        onRemove={(index) => onChange({ browser_secret_references: secretReferences.filter((_, refIndex) => refIndex !== index) })}
+      />
+    </div>
+  )
+}
+
+function HttpRequestConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const headers = normalizeHeaderRows(current.http_headers || current.headers)
+  const secretReferences = (current.http_secret_references || current.secret_references || []) as FlowSecretReferenceConfig[]
+  const method = current.http_method || current.method || 'GET'
+  const url = current.http_url || current.url || ''
+  const body = current.http_body || current.body || ''
+
+  function setHeaders(next: FlowHeaderConfig[]) {
+    onChange({ headers: next, http_headers: next })
+  }
+
+  function setSecretReferences(next: FlowSecretReferenceConfig[]) {
+    onChange({ secret_references: next, http_secret_references: next })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-[160px_1fr]">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Method</label>
+          <select
+            value={method}
+            onChange={(e) => onChange({ method: e.target.value, http_method: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {HTTP_METHOD_OPTIONS.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+          <TemplateInput
+            value={url}
+            onValueChange={(value) => onChange({ url: value, http_url: value })}
+            placeholder="https://api.example.com/bills"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Headers</label>
+          <button
+            type="button"
+            onClick={() => setHeaders([...headers, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add header
+          </button>
+        </div>
+        {headers.length === 0 ? (
+          <p className="text-xs text-slate-500">No headers configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {headers.map((header, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={header.key || ''}
+                  onValueChange={(value) => {
+                    const next = headers.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setHeaders(next)
+                  }}
+                  placeholder="Header"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={header.value || ''}
+                  onValueChange={(value) => {
+                    const next = headers.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setHeaders(next)
+                  }}
+                  placeholder="Value or {{step_N.field}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setHeaders(headers.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Body</label>
+        <TemplateTextarea
+          value={body}
+          onValueChange={(value) => onChange({ body: value, http_body: value })}
+          rows={5}
+          placeholder='{"amount": "{{step_2.amount}}"}'
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <SecretReferenceRows
+        references={secretReferences}
+        onAdd={() => setSecretReferences([...secretReferences, { target: '', key: '', reference: '' }])}
+        onChange={(index, update) => {
+          const next = secretReferences.map((ref, refIndex) => refIndex === index ? { ...ref, ...update } : ref)
+          setSecretReferences(next)
+        }}
+        onRemove={(index) => setSecretReferences(secretReferences.filter((_, refIndex) => refIndex !== index))}
+      />
+    </div>
+  )
+}
+
+function DataTransformConfigPanel({
+  config,
+  allSteps,
+  currentStepPosition,
+  onChange,
+}: {
+  config: FlowStepConfig | undefined
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+  onChange: (update: Partial<FlowStepConfig>) => void
+}) {
+  const current = config || {}
+  const extractionRules = (current.extraction_rules || []) as DataExtractionRuleConfig[]
+  const parserRules = (current.parser_rules || []) as DataParserRuleConfig[]
+  const sourceStepRows = normalizeStringMapRows(current.source_steps)
+  const rawHandleRows = normalizeStringMapRows(current.raw_response_handles)
+  const recordMappingRows = normalizeStringMapRows(current.record_mapping)
+  const recordKind = current.record_kind || 'utility_bill'
+
+  function setSourceStepRows(next: FlowHeaderConfig[]) {
+    onChange({ source_steps: rowsToStringMap(next) })
+  }
+
+  function setRawHandleRows(next: FlowHeaderConfig[]) {
+    onChange({ raw_response_handles: rowsToStringMap(next) })
+  }
+
+  function setRecordMappingRows(next: FlowHeaderConfig[]) {
+    onChange({ record_mapping: rowsToStringMap(next) })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source step</label>
+          <TemplateInput
+            value={current.source_step || ''}
+            onValueChange={(value) => onChange({ source_step: value })}
+            placeholder="step_1 or browser_fetch"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Transform mode</label>
+          <select
+            value={current.transform_mode || 'extract_fields'}
+            onChange={(e) => onChange({ transform_mode: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {DATA_TRANSFORM_MODE_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source path</label>
+          <CursorSafeInput
+            type="text"
+            value={current.source_path || current.json_path || ''}
+            onValueChange={(value) => onChange({ source_path: value, json_path: value })}
+            placeholder="json.data.rows[0] or metadata.result"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Financial parser</label>
+          <select
+            value={current.financial_parser_mode || ''}
+            onChange={(event) => {
+              const value = event.target.value
+              onChange({
+                financial_parser_mode: value || null,
+                transform_mode: value ? 'financial_parser' : (current.transform_mode || 'extract_fields'),
+              })
+            }}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {FINANCIAL_PARSER_MODE_OPTIONS.map(option => (
+              <option key={option.value || 'none'} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Named source steps</label>
+          <button
+            type="button"
+            onClick={() => setSourceStepRows([...sourceStepRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add source
+          </button>
+        </div>
+        {sourceStepRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No named source steps configured. Use this when a transform combines more than one previous step.</p>
+        ) : (
+          <div className="space-y-2">
+            {sourceStepRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = sourceStepRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setSourceStepRows(next)
+                  }}
+                  placeholder="boleto, nota, rows"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = sourceStepRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setSourceStepRows(next)
+                  }}
+                  placeholder="previous step name or {{step.output}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setSourceStepRows(sourceStepRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-4">
+        <label className="text-sm font-medium text-slate-300">Financial record metadata</label>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Record kind</label>
+            <select
+              value={recordKind}
+              onChange={(event) => onChange({ record_kind: event.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              {FINANCIAL_RECORD_KIND_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+              <option value="generic">Generic</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Provider</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_provider || ''}
+              onValueChange={(value) => onChange({ financial_provider: value })}
+              placeholder="consigaz, moderna, edp"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Automation key</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_automation_key || ''}
+              onValueChange={(value) => onChange({ financial_automation_key: value })}
+              placeholder="cond_sao_blas_204_boleto_condominio"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Unit</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_unit_id || ''}
+              onValueChange={(value) => onChange({ financial_unit_id: value })}
+              placeholder="0204, CPF, plate, installation"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Asset</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_asset || ''}
+              onValueChange={(value) => onChange({ financial_asset: value })}
+              placeholder="AP Ed. San Blass"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Address / issuer context</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_address || ''}
+              onValueChange={(value) => onChange({ financial_address: value })}
+              placeholder="Provider address or issuer context"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={current.emit_raw_bill_handle ?? recordKind === 'utility_bill'}
+              onChange={(event) => onChange({ emit_raw_bill_handle: event.target.checked })}
+              className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
+            />
+            Emit raw bill handle
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={current.emit_financial_record_handle ?? true}
+              onChange={(event) => onChange({ emit_financial_record_handle: event.target.checked })}
+              className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
+            />
+            Emit financial record handle
+          </label>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Record mapping</label>
+          <button
+            type="button"
+            onClick={() => setRecordMappingRows([...recordMappingRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add mapping
+          </button>
+        </div>
+        {recordMappingRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No mapping configured. Extraction rules will be used directly.</p>
+        ) : (
+          <div className="space-y-2">
+            {recordMappingRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = recordMappingRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setRecordMappingRows(next)
+                  }}
+                  placeholder="reference_month"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = recordMappingRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setRecordMappingRows(next)
+                  }}
+                  placeholder="{{extract_due_date.metadata.text}} or literal"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setRecordMappingRows(recordMappingRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Raw response handles</label>
+          <button
+            type="button"
+            onClick={() => setRawHandleRows([...rawHandleRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add handle
+          </button>
+        </div>
+        {rawHandleRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No direct raw handles configured. Most UI-authored flows should reference source steps instead.</p>
+        ) : (
+          <div className="space-y-2">
+            {rawHandleRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = rawHandleRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setRawHandleRows(next)
+                  }}
+                  placeholder="boleto_json"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = rawHandleRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setRawHandleRows(next)
+                  }}
+                  placeholder="{{fetch_boletos.raw_response_handle}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setRawHandleRows(rawHandleRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Extraction rules</label>
+          <button
+            type="button"
+            onClick={() => onChange({ extraction_rules: [...extractionRules, { target: '', source_step: '', path: '', value: '', pattern: '', default: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add rule
+          </button>
+        </div>
+        {extractionRules.length === 0 ? (
+          <p className="text-xs text-slate-500">No extraction rules configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {extractionRules.map((rule, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_1.25fr_1.25fr_1fr_1fr_auto]">
+                {([
+                  ['target', 'target/field'],
+                  ['source_step', 'source step'],
+                  ['path', 'path/selector'],
+                  ['value', 'literal value'],
+                  ['pattern', 'pattern'],
+                  ['default', 'default'],
+                ] as const).map(([key, placeholder]) => (
+                  <CursorSafeInput
+                    key={key}
+                    type="text"
+                    value={
+                      key === 'target'
+                        ? (rule.target || rule.field || '')
+                        : key === 'source_step'
+                          ? (rule.source_step || rule.source || '')
+                          : key === 'path'
+                            ? (rule.path || rule.json_path || rule.selector || '')
+                            : String(rule[key] ?? '')
+                    }
+                    onValueChange={(value) => {
+                      const next = extractionRules.map((item, itemIndex) => {
+                        if (itemIndex !== index) return item
+                        if (key === 'target') return { ...item, target: value, field: value }
+                        if (key === 'source_step') return { ...item, source_step: value, source: value }
+                        if (key === 'path') return { ...item, path: value, selector: value }
+                        return { ...item, [key]: value }
+                      })
+                      onChange({ extraction_rules: next })
+                    }}
+                    placeholder={placeholder}
+                    className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onChange({ extraction_rules: extractionRules.filter((_, itemIndex) => itemIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Parser rules</label>
+          <button
+            type="button"
+            onClick={() => onChange({ parser_rules: [...parserRules, { field: '', parser: 'text', options: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add parser
+          </button>
+        </div>
+        {parserRules.length === 0 ? (
+          <p className="text-xs text-slate-500">No parser rules configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {parserRules.map((rule, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_2fr_auto]">
+                {(['field', 'parser', 'options'] as const).map(key => (
+                  <CursorSafeInput
+                    key={key}
+                    type="text"
+                    value={rule[key] || ''}
+                    onValueChange={(value) => {
+                      const next = parserRules.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item)
+                      onChange({ parser_rules: next })
+                    }}
+                    placeholder={key}
+                    className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onChange({ parser_rules: parserRules.filter((_, itemIndex) => itemIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FinancialRecordStoreConfigPanel({
+  config,
+  onChange,
+  isUtilityAlias = false,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  isUtilityAlias?: boolean
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const recordKind = isUtilityAlias ? 'utility_bill' : (current.record_kind || 'utility_bill')
+  const sourceStep = current.financial_record_source_step || current.financial_source_step || current.source_step || ''
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source step</label>
+          <TemplateInput
+            value={sourceStep}
+            onValueChange={(value) => onChange({
+              source_step: value,
+              financial_record_source_step: value,
+              financial_source_step: value,
+            })}
+            placeholder="step_2 or normalized_record"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Record kind</label>
+          <select
+            value={recordKind}
+            disabled={isUtilityAlias}
+            onChange={(e) => onChange({ record_kind: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none disabled:opacity-60"
+          >
+            {FINANCIAL_RECORD_KIND_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          {isUtilityAlias && (
+            <p className="text-xs text-slate-500 mt-1">Utility Bill Store is an alias for Financial Record Store with utility_bill kind.</p>
+          )}
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Automation key</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_automation_key || current.financial_automation_template || ''}
+            onValueChange={(value) => onChange({ financial_automation_key: value })}
+            placeholder="consigaz_gas_cond_sao_blas_204"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_provider || ''}
+            onValueChange={(value) => onChange({ financial_provider: value })}
+            placeholder="provider slug"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Unit</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_unit_id || ''}
+            onValueChange={(value) => onChange({ financial_unit_id: value })}
+            placeholder="unit, account, CPF, CNPJ, or asset id"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Asset</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_asset || ''}
+            onValueChange={(value) => onChange({ financial_asset: value })}
+            placeholder="AP 204, vehicle plate, broker account, etc."
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Dedupe key</label>
+        <TemplateInput
+          value={current.financial_record_dedupe_key || ''}
+          onValueChange={(value) => onChange({ financial_record_dedupe_key: value })}
+          placeholder="{{provider}}:{{unit_id}}:{{reference_month}}"
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Dedupe fields</label>
+        <CursorSafeInput
+          type="text"
+          value={current.financial_record_key_fields || ''}
+          onValueChange={(value) => onChange({ financial_record_key_fields: value })}
+          placeholder="provider, unit_id, reference_month"
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Record payload mapping</label>
+        <TemplateTextarea
+          value={current.financial_record_payload || ''}
+          onValueChange={(value) => onChange({ financial_record_payload: value })}
+          rows={4}
+          placeholder='{"amount_cents": "{{step_2.amount_cents}}", "due_date": "{{step_2.due_date}}"}'
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+    </div>
+  )
+}
+
+function SecretReferenceRows({
+  references,
+  onAdd,
+  onChange,
+  onRemove,
+}: {
+  references: FlowSecretReferenceConfig[]
+  onAdd: () => void
+  onChange: (index: number, update: FlowSecretReferenceConfig) => void
+  onRemove: (index: number) => void
+}) {
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium text-slate-300">Secret references</label>
+        <button type="button" onClick={onAdd} className="text-xs text-cyan-400 hover:text-cyan-300">
+          + Add secret
+        </button>
+      </div>
+      {references.length === 0 ? (
+        <p className="text-xs text-slate-500">No secret references configured. Use references instead of literal credentials.</p>
+      ) : (
+        <div className="space-y-2">
+          {references.map((ref, index) => (
+            <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_2fr_auto]">
+              <CursorSafeInput
+                type="text"
+                value={ref.target || ''}
+                onValueChange={(value) => onChange(index, { target: value })}
+                placeholder="target e.g. header.Authorization"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <CursorSafeInput
+                type="text"
+                value={ref.key || ''}
+                onValueChange={(value) => onChange(index, { key: value })}
+                placeholder="field key"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <CursorSafeInput
+                type="text"
+                value={ref.reference || ''}
+                onValueChange={(value) => onChange(index, { reference: value })}
+                placeholder="vault/reference/path"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => onRemove(index)}
+                className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 type SortField = 'id' | 'name' | 'flow_type' | 'is_active' | 'node_count' | 'execution_method' | 'updated_at' | 'last_executed_at'
 type SortDirection = 'asc' | 'desc'
@@ -1536,6 +3206,7 @@ function StatusBadge({ status }: { status: string }) {
     pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
     running: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
     completed: 'bg-green-500/20 text-green-400 border-green-500/30',
+    skipped: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
     failed: 'bg-red-500/20 text-red-400 border-red-500/30',
     cancelled: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
   }
@@ -2340,7 +4011,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       name: `Step ${steps.length + 1}`,
       type: stepType,
       position: steps.length + 1,
-      config: ['message', 'notification', 'conversation'].includes(stepType) ? { channel: 'whatsapp' } : {},
+      config: defaultConfigForStepType(stepType),
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
     }
@@ -2542,6 +4213,30 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
               )
             })}
           </div>
+          {getAddableStepTypes(steps, allowSourceStep, true).some(type => type.legacy) && (
+            <div className="mt-5 pt-4 border-t border-slate-700/60">
+              <div className="text-xs uppercase tracking-wide text-slate-500 mb-3">Legacy / compat</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {getAddableStepTypes(steps, allowSourceStep, true).filter(type => type.legacy).map(type => {
+                  const StepIcon = type.Icon
+                  return (
+                    <button
+                      key={type.value}
+                      type="button"
+                      onClick={(event) => handleStepTypeClick(event, type.value)}
+                      className="p-4 rounded-lg border border-amber-500/20 hover:border-amber-500/50 hover:bg-amber-500/5 text-center transition-all text-slate-300 hover:text-amber-300"
+                    >
+                      <div className="flex justify-center">
+                        <StepIcon size={24} />
+                      </div>
+                      <div className="text-sm text-white mt-2">{type.label}</div>
+                      <div className="text-xs text-slate-500 mt-1">{type.description}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <button
@@ -2828,6 +4523,79 @@ function ToolParameterForm({
 
 // ==================== STEP CONFIG FORM ====================
 
+function StepBehaviorControls({
+  step,
+  onChange,
+}: {
+  step: Pick<CreateFlowStepData | EditableStepData, 'timeout_seconds' | 'retry_on_failure' | 'max_retries' | 'retry_delay_seconds' | 'on_failure'>
+  onChange: (update: Partial<CreateFlowStepData | EditableStepData>) => void
+}) {
+  const retryEnabled = step.retry_on_failure === true
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+      <label className="text-sm font-medium text-slate-300">Step behavior</label>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Timeout seconds</label>
+          <input
+            type="number"
+            min={1}
+            value={step.timeout_seconds ?? ''}
+            onChange={(e) => onChange({ timeout_seconds: e.target.value ? Number(e.target.value) : undefined })}
+            placeholder="30"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">On failure</label>
+          <select
+            value={step.on_failure || ''}
+            onChange={(e) => onChange({ on_failure: e.target.value || undefined })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            <option value="">Stop flow</option>
+            <option value="continue">Continue</option>
+            <option value="skip">Skip remaining</option>
+          </select>
+        </div>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2">
+          <span className="text-sm font-medium text-slate-300">Retry</span>
+          <input
+            type="checkbox"
+            checked={retryEnabled}
+            onChange={(e) => onChange({ retry_on_failure: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+      </div>
+      {retryEnabled && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Max retries</label>
+            <input
+              type="number"
+              min={1}
+              value={step.max_retries ?? 1}
+              onChange={(e) => onChange({ max_retries: Number(e.target.value) || 1 })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Retry delay seconds</label>
+            <input
+              type="number"
+              min={0}
+              value={step.retry_delay_seconds ?? 5}
+              onChange={(e) => onChange({ retry_delay_seconds: Number(e.target.value) || 0 })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, allSteps, flushCallbacksRef, stepIndex }: {
   step: CreateFlowStepData
   agents: Agent[]
@@ -2924,6 +4692,12 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
     }))
   }
 
+  function updateConfigMany(values: Record<string, any>) {
+    debouncedSave(prev => ({
+      config: { ...step.config, ...prev.config, ...values }
+    }))
+  }
+
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
 
@@ -2948,6 +4722,11 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      <StepBehaviorControls
+        step={currentStep}
+        onChange={(update) => debouncedSave(update as Partial<CreateFlowStepData>)}
+      />
 
       {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
       {step.type === 'source' && (
@@ -3045,9 +4824,11 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
           </label>
           <TemplateTextarea
             value={step.type === 'notification'
-              ? (currentConfig?.content || '')
+              ? (currentConfig?.message_template || currentConfig?.content || '')
               : (currentConfig?.message_template || '')}
-            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
+            onValueChange={(v) => step.type === 'notification'
+              ? updateConfigMany({ message_template: v, content: v })
+              : updateConfig('message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
@@ -3175,6 +4956,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 <>
                   <option value="google_search">Google Search</option>
                   <option value="send_message">Send Message</option>
+                  <option value="password_vault">Password Vault</option>
                 </>
               ) : (
                 <>
@@ -3206,6 +4988,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
             onChange={(params) => updateConfig('tool_parameters', params)}
             onCommandChange={(cmdId) => updateConfig('command_id', cmdId)}
           />
+
+          {(currentConfig?.tool_type || 'built_in') === 'built_in' && currentConfig?.tool_name === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_parameters)}
+              onChange={(next) => updateConfig('tool_parameters', passwordVaultReferenceToToolArguments(next))}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -3303,6 +5093,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               </p>
             </div>
           )}
+          {currentConfig?.skill_type === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_arguments || currentConfig)}
+              onChange={(next) => updateConfigMany({
+                ...next,
+                use_tool_mode: true,
+                tool_arguments: passwordVaultReferenceToToolArguments(next),
+                skill_config: {
+                  ...(currentConfig?.skill_config || {}),
+                  integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+                  provider: next.password_vault_provider || 'onepassword',
+                },
+              })}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -3323,6 +5129,60 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
             </p>
           </div>
         </>
+      )}
+
+      {step.type === 'password_vault' && (
+        <PasswordVaultStepConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'financial_utility_automation' && (
+        <FinancialUtilityAutomationConfigPanel
+          config={currentConfig}
+          agents={agents}
+          onChange={(next) => updateConfigMany(next)}
+        />
+      )}
+
+      {step.type === 'browser_automation' && (
+        <BrowserAutomationConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'http_request' && (
+        <HttpRequestConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'data_transform' && (
+        <DataTransformConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+        <FinancialRecordStoreConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          isUtilityAlias={step.type === 'financial_bill_store'}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
       )}
 
       {/* Summarization Settings */}
@@ -3851,7 +5711,7 @@ function EditableStepBuilder({
       name: `Step ${newPosition}`,
       type: stepType,
       position: newPosition,
-      config: ['message', 'notification', 'conversation'].includes(stepType) ? { channel: 'whatsapp' } : {},
+      config: defaultConfigForStepType(stepType),
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
       _saving: true,
@@ -4149,6 +6009,7 @@ function EditableStepBuilder({
               return (
                 <button
                   key={type.value}
+                  type="button"
                   onClick={() => addStep(type.value)}
                   className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
                              text-center transition-all text-slate-300 hover:text-cyan-400"
@@ -4162,8 +6023,33 @@ function EditableStepBuilder({
               )
             })}
           </div>
+          {getAddableStepTypes(steps, false, true).some(type => type.legacy) && (
+            <div className="mt-5 pt-4 border-t border-slate-700/60">
+              <div className="text-xs uppercase tracking-wide text-slate-500 mb-3">Legacy / compat</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {getAddableStepTypes(steps, false, true).filter(type => type.legacy).map(type => {
+                  const StepIcon = type.Icon
+                  return (
+                    <button
+                      key={type.value}
+                      type="button"
+                      onClick={() => addStep(type.value)}
+                      className="p-4 rounded-lg border border-amber-500/20 hover:border-amber-500/50 hover:bg-amber-500/5 text-center transition-all text-slate-300 hover:text-amber-300"
+                    >
+                      <div className="flex justify-center">
+                        <StepIcon size={24} />
+                      </div>
+                      <div className="text-sm text-white mt-2">{type.label}</div>
+                      <div className="text-xs text-slate-500 mt-1">{type.description}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           {steps.length > 0 && (
             <button
+              type="button"
               onClick={() => setShowAddStep(false)}
               className="mt-4 text-sm text-slate-400 hover:text-white"
             >
@@ -4285,6 +6171,12 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
     }))
   }
 
+  function updateConfigMany(values: Record<string, any>) {
+    debouncedSave(prev => ({
+      config: { ...step.config, ...prev.config, ...values }
+    }))
+  }
+
   // Get current value considering local changes
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
@@ -4310,6 +6202,11 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                      focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
         />
       </div>
+
+      <StepBehaviorControls
+        step={currentStep}
+        onChange={(update) => debouncedSave(update as Partial<EditableStepData>)}
+      />
 
       {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
       {step.type === 'source' && (
@@ -4407,9 +6304,11 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           </label>
           <TemplateTextarea
             value={step.type === 'notification'
-              ? (currentConfig?.content || '')
+              ? (currentConfig?.message_template || currentConfig?.content || '')
               : (currentConfig?.message_template || '')}
-            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
+            onValueChange={(v) => step.type === 'notification'
+              ? updateConfigMany({ message_template: v, content: v })
+              : updateConfig('message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
@@ -4533,6 +6432,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 <>
                   <option value="google_search">Google Search</option>
                   <option value="send_message">Send Message</option>
+                  <option value="password_vault">Password Vault</option>
                 </>
               ) : (
                 customTools.length === 0 ? (
@@ -4557,6 +6457,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             onChange={(params) => updateConfig('tool_parameters', params)}
             onCommandChange={(cmdId) => updateConfig('command_id', cmdId)}
           />
+
+          {(currentConfig?.tool_type || 'built_in') === 'built_in' && currentConfig?.tool_name === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_parameters)}
+              onChange={(next) => updateConfig('tool_parameters', passwordVaultReferenceToToolArguments(next))}
+              compact
+            />
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
@@ -4650,6 +6558,22 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </p>
             </div>
           )}
+          {currentConfig?.skill_type === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_arguments || currentConfig)}
+              onChange={(next) => updateConfigMany({
+                ...next,
+                use_tool_mode: true,
+                tool_arguments: passwordVaultReferenceToToolArguments(next),
+                skill_config: {
+                  ...(currentConfig?.skill_config || {}),
+                  integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+                  provider: next.password_vault_provider || 'onepassword',
+                },
+              })}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -4670,6 +6594,60 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             </p>
           </div>
         </>
+      )}
+
+      {step.type === 'password_vault' && (
+        <PasswordVaultStepConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'financial_utility_automation' && (
+        <FinancialUtilityAutomationConfigPanel
+          config={currentConfig}
+          agents={agents}
+          onChange={(next) => updateConfigMany(next)}
+        />
+      )}
+
+      {step.type === 'browser_automation' && (
+        <BrowserAutomationConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'http_request' && (
+        <HttpRequestConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'data_transform' && (
+        <DataTransformConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+        <FinancialRecordStoreConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          isUtilityAlias={step.type === 'financial_bill_store'}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
       )}
 
       {/* Summarization Settings */}

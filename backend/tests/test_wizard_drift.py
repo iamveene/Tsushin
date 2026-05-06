@@ -43,6 +43,7 @@ WIZARD_HIDDEN_SKILLS: Set[str] = {
     "flows",
     "agent_communication",
     "scheduler",
+    "team_scratch",
 }
 
 # TTS provider IDs registered at startup in TTSProviderRegistry.initialize_providers().

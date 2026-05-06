@@ -25,6 +25,7 @@ from models import (
     GoogleFlightsIntegration,
     JiraIntegration,
     GitHubIntegration,
+    PasswordVaultIntegration,
     Agent,
 )
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -752,6 +753,45 @@ async def get_available_providers(
                 "providers": providers,
             }
 
+        elif skill_type == 'password_vault':
+            providers = []
+
+            vaults = db.query(PasswordVaultIntegration)\
+                .join(HubIntegration, HubIntegration.id == PasswordVaultIntegration.id)\
+                .filter(PasswordVaultIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
+                .all()
+
+            vault_integrations = [
+                {
+                    "integration_id": vault.id,
+                    "name": vault.name or vault.display_name or f"Password Vault #{vault.id}",
+                    "provider": vault.provider or "onepassword",
+                    "provider_mode": "programmatic",
+                    "default_vault": vault.default_vault,
+                    "default_vault_id": vault.default_vault_id,
+                    "allow_metadata_read": bool(vault.allow_metadata_read),
+                    "allow_secret_read": bool(vault.allow_secret_read),
+                    "allow_totp_read": bool(vault.allow_totp_read),
+                    "health_status": vault.health_status,
+                }
+                for vault in vaults
+            ]
+
+            providers.append({
+                "provider_type": "onepassword",
+                "provider_name": "1Password",
+                "description": "Resolve approved vault item metadata, fields, and TOTP codes through 1Password service accounts.",
+                "requires_integration": True,
+                "available_integrations": vault_integrations,
+                "is_default": True,
+            })
+
+            return {
+                "skill_type": skill_type,
+                "providers": providers,
+            }
+
         elif skill_type == 'web_search':
             # Web Search providers
             from hub.providers import SearchProviderRegistry
@@ -782,7 +822,7 @@ async def get_available_providers(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search, ticket_management, code_repository"
+                detail=f"Unknown skill type: {skill_type}. Supported: scheduler, flows, email, gmail, flight_search, web_search, ticket_management, code_repository, password_vault"
             )
 
     except HTTPException:

@@ -18,6 +18,8 @@ import logging
 import asyncio
 import hashlib
 import re
+import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
@@ -34,6 +36,173 @@ logger = logging.getLogger(__name__)
 
 # Default timeout per step (seconds)
 DEFAULT_STEP_TIMEOUT = 300
+
+_SECRET_HANDLE_PATTERN = re.compile(r"\bpvh_[A-Za-z0-9_-]+\b")
+_LONG_DIGITISH_PATTERN = re.compile(r"(?<!\d)(?:\d[\s.\-]*){24,}\d(?!\d)")
+_SENSITIVE_KEY_MARKERS = (
+    "api_key",
+    "authorization",
+    "barcode",
+    "codigo_barras",
+    "codigo-barras",
+    "codigobarras",
+    "cookie",
+    "credential",
+    "linhadigitavel",
+    "linha_digitavel",
+    "linha-digitavel",
+    "password",
+    "secret",
+    "set-cookie",
+    "token",
+)
+
+
+def _redacted_digit_sequence(value: str) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits:
+        return "[REDACTED_DIGITS]"
+    suffix = digits[-4:] if len(digits) >= 4 else "****"
+    return f"[REDACTED_DIGITS:{len(digits)}:{suffix}]"
+
+
+def _redact_sensitive_string(value: str) -> str:
+    rendered = _SECRET_HANDLE_PATTERN.sub("[REDACTED_HANDLE]", str(value or ""))
+    rendered = _LONG_DIGITISH_PATTERN.sub(lambda match: _redacted_digit_sequence(match.group(0)), rendered)
+    if rendered.strip().lower().startswith("op://"):
+        return "[REDACTED]"
+    return rendered
+
+
+def _redact_url(value: str) -> str:
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    raw = str(value or "")
+    try:
+        parts = urlsplit(raw)
+        if not parts.query:
+            return _redact_sensitive_string(raw)
+        redacted_query = []
+        for key, item in parse_qsl(parts.query, keep_blank_values=True):
+            redacted_query.append((key, "[REDACTED]" if _is_sensitive_key(key) else _redact_sensitive_string(item)))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(redacted_query), parts.fragment))
+    except Exception:
+        return _redact_sensitive_string(raw)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    lowered = str(key or "").strip().lower()
+    return any(marker in lowered for marker in _SENSITIVE_KEY_MARKERS)
+
+
+def _redact_for_persistence(payload: Any) -> Any:
+    """Redact secrets, handles, and long boleto/barcode-like digit strings."""
+    if isinstance(payload, dict):
+        redacted: Dict[str, Any] = {}
+        for key, value in payload.items():
+            if _is_sensitive_key(key):
+                if isinstance(value, str) and re.search(r"\d", value):
+                    redacted[key] = _redacted_digit_sequence(value)
+                else:
+                    redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = _redact_for_persistence(value)
+        return redacted
+    if isinstance(payload, list):
+        return [_redact_for_persistence(item) for item in payload]
+    if isinstance(payload, tuple):
+        return tuple(_redact_for_persistence(item) for item in payload)
+    if isinstance(payload, str):
+        return _redact_sensitive_string(payload)
+    return payload
+
+
+def _json_preview(payload: Any, limit: int = 2000) -> str:
+    try:
+        rendered = json.dumps(_redact_for_persistence(payload), ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        rendered = str(_redact_for_persistence(str(payload)))
+    if len(rendered) > limit:
+        return rendered[:limit] + "...[truncated]"
+    return rendered
+
+
+def _safe_json_loads(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return raw
+
+
+def _first_present(mapping: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+
+class FlowDataHandleRegistry:
+    """In-process TTL handles for raw data passed between Flow steps."""
+
+    _handles: Dict[str, Dict[str, Any]] = {}
+    _ttl_seconds = 900
+
+    @classmethod
+    def issue(cls, value: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        cls._prune()
+        handle = "fdh_" + secrets.token_urlsafe(24)
+        expires_at = time.time() + cls._ttl_seconds
+        cls._handles[handle] = {
+            "value": value,
+            "metadata": metadata or {},
+            "expires_at": expires_at,
+        }
+        return {
+            "data_handle": handle,
+            "expires_at": datetime.utcfromtimestamp(expires_at).isoformat() + "Z",
+            "ttl_seconds": cls._ttl_seconds,
+        }
+
+    @classmethod
+    def resolve(cls, handle: str) -> Any:
+        cls._prune()
+        entry = cls._handles.get(str(handle or ""))
+        if not entry:
+            raise ValueError("data_handle_not_found_or_expired")
+        return entry["value"]
+
+    @classmethod
+    def _prune(cls) -> None:
+        now = time.time()
+        for key in [key for key, item in cls._handles.items() if item["expires_at"] <= now]:
+            cls._handles.pop(key, None)
+
+
+def _get_path_value(document: Any, path: Optional[str]) -> Any:
+    if not path:
+        return document
+    current = document
+    for raw_part in str(path).strip().split("."):
+        if raw_part == "":
+            continue
+        match = re.match(r"^([^\[]+)(?:\[(\d+)\])?$", raw_part)
+        if not match:
+            return None
+        part, index = match.group(1), match.group(2)
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+        if index is not None:
+            if not isinstance(current, list):
+                return None
+            idx = int(index)
+            if idx >= len(current):
+                return None
+            current = current[idx]
+    return current
 
 
 class FlowValidationError(Exception):
@@ -229,6 +398,196 @@ class FlowStepHandler:
         """
         parser = TemplateParser(data)
         return parser.render(template)
+
+    def _load_config(self, step: FlowNode) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
+        return config or {}
+
+    def _render_templates(self, value: Any, data: Dict[str, Any]) -> Any:
+        if isinstance(value, str):
+            return self._replace_variables(value, data or {})
+        if isinstance(value, list):
+            return [self._render_templates(item, data) for item in value]
+        if isinstance(value, dict):
+            return {key: self._render_templates(item, data) for key, item in value.items()}
+        return value
+
+    def _find_password_vault_context_for_handle(self, handle: str, data: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(data, dict):
+            if data.get("secret_handle") == handle and data.get("integration_id") and data.get("item_ref") and data.get("field_name"):
+                return data
+            for item in data.values():
+                found = self._find_password_vault_context_for_handle(handle, item)
+                if found:
+                    return found
+        elif isinstance(data, list):
+            for item in data:
+                found = self._find_password_vault_context_for_handle(handle, item)
+                if found:
+                    return found
+        return None
+
+    def _tenant_id_from_step_context(self, data: Dict[str, Any]) -> Optional[str]:
+        flow_context = (data or {}).get("flow") if isinstance(data, dict) else None
+        if isinstance(flow_context, dict):
+            tenant_id = flow_context.get("tenant_id")
+            if tenant_id:
+                return str(tenant_id)
+            run_id = flow_context.get("id")
+            if run_id:
+                try:
+                    run = self.db.query(FlowRun).filter(FlowRun.id == int(run_id)).first()
+                    if run and run.tenant_id:
+                        return str(run.tenant_id)
+                except Exception:
+                    return None
+        return None
+
+    def _resolve_secret_handle_value(self, handle: str, data: Dict[str, Any]) -> str:
+        """Resolve an in-memory handle, falling back to its vault reference in context."""
+        from services.password_vault_service import PasswordVaultError, PasswordVaultService, SecretHandleRegistry
+
+        try:
+            return SecretHandleRegistry.resolve(str(handle))
+        except PasswordVaultError as exc:
+            if str(exc) != "secret_handle_not_found_or_expired":
+                raise
+
+        context_row = self._find_password_vault_context_for_handle(str(handle), data or {})
+        tenant_id = self._tenant_id_from_step_context(data or {})
+        if not context_row or not tenant_id:
+            raise PasswordVaultError("secret_handle_not_found_or_expired")
+
+        service = PasswordVaultService(self.db, tenant_id=tenant_id)
+        integration = service.load_integration(int(context_row["integration_id"]), require_active=True)
+        return service.resolve_field_value(
+            integration,
+            item_ref=str(context_row.get("item_ref") or context_row.get("item_id") or ""),
+            field_name=str(context_row.get("field_name") or ""),
+            vault=context_row.get("vault"),
+        )
+
+    def _render_and_resolve_secret_handles(self, value: Any, data: Dict[str, Any]) -> Any:
+        """Render templates, then replace pvh_ handles with trusted raw values."""
+
+        if isinstance(value, str):
+            rendered = self._replace_variables(value, data or {})
+            matches = list(_SECRET_HANDLE_PATTERN.finditer(rendered))
+            if not matches:
+                return rendered
+            if len(matches) == 1 and matches[0].group(0) == rendered.strip():
+                return self._resolve_secret_handle_value(matches[0].group(0), data or {})
+            resolved = rendered
+            for match in matches:
+                handle = match.group(0)
+                resolved = resolved.replace(handle, self._resolve_secret_handle_value(handle, data or {}))
+            return resolved
+        if isinstance(value, list):
+            return [self._render_and_resolve_secret_handles(item, data) for item in value]
+        if isinstance(value, dict):
+            return {key: self._render_and_resolve_secret_handles(item, data) for key, item in value.items()}
+        return value
+
+    def _resolve_secret_handle_payload(self, handle: str) -> Any:
+        from services.password_vault_service import SecretHandleRegistry
+
+        if not handle or not str(handle).startswith("pvh_"):
+            raise ValueError("raw_handle_required")
+        return _safe_json_loads(SecretHandleRegistry.resolve(str(handle)))
+
+    def _payload_from_response_envelope(self, payload: Any) -> Any:
+        if isinstance(payload, dict) and ("body" in payload or "json" in payload or "status_code" in payload):
+            if payload.get("json") is not None:
+                return payload.get("json")
+            body = payload.get("body")
+            return _safe_json_loads(body)
+        return payload
+
+    def _resolve_step_reference(self, reference: Any, input_data: Dict[str, Any]) -> Any:
+        if reference is None:
+            return None
+        if isinstance(reference, int):
+            return (input_data or {}).get("steps", {}).get(reference)
+        ref = str(reference).strip()
+        if not ref:
+            return None
+        data = input_data or {}
+        if ref in data:
+            return data[ref]
+        normalized = ref.replace(" ", "_").replace("-", "_").lower()
+        if normalized in data:
+            return data[normalized]
+        if ref.isdigit():
+            return data.get("steps", {}).get(int(ref))
+        return None
+
+    def _extract_json_path(self, payload: Any, path: Optional[str]) -> Any:
+        if not path:
+            return payload
+        current = payload
+        raw_path = str(path).strip()
+        if raw_path in ("$", "."):
+            return current
+        if raw_path.startswith("$."):
+            raw_path = raw_path[2:]
+        elif raw_path.startswith("$"):
+            raw_path = raw_path[1:].lstrip(".")
+        tokens = [token for token in raw_path.split(".") if token != ""]
+        for token in tokens:
+            parts = re.findall(r"([^\[\]]+)|\[(\d+)\]", token)
+            if not parts and token:
+                parts = [(token, "")]
+            for key, index in parts:
+                if isinstance(current, str) and current.strip().startswith(("{", "[")):
+                    current = _safe_json_loads(current)
+                if key:
+                    if not isinstance(current, dict):
+                        return None
+                    current = current.get(key)
+                if index:
+                    if isinstance(current, str) and current.strip().startswith(("{", "[")):
+                        current = _safe_json_loads(current)
+                    if not isinstance(current, list):
+                        return None
+                    idx = int(index)
+                    if idx >= len(current):
+                        return None
+                    current = current[idx]
+        return current
+
+    def _resolve_transform_source(self, selector: Any, input_data: Dict[str, Any]) -> Any:
+        """Resolve a pvh_ handle, source-step reference, or selector dict."""
+        if selector is None:
+            return None
+        if isinstance(selector, dict):
+            handle = selector.get("raw_response_handle") or selector.get("raw_browser_result_handle") or selector.get("handle") or selector.get("financial_record_handle")
+            source = selector.get("source_step") or selector.get("step")
+            path = selector.get("path") or selector.get("json_path") or selector.get("source_path")
+            payload = None
+            if handle:
+                payload = self._payload_from_response_envelope(self._resolve_secret_handle_payload(str(handle)))
+            elif source:
+                payload = self._resolve_transform_source(source, input_data)
+            elif "value" in selector:
+                payload = selector.get("value")
+            if path:
+                payload = self._extract_json_path(payload, path)
+            return payload
+        if isinstance(selector, str) and selector.strip().startswith("pvh_"):
+            return self._payload_from_response_envelope(self._resolve_secret_handle_payload(selector.strip()))
+        step_data = self._resolve_step_reference(selector, input_data)
+        if isinstance(step_data, dict):
+            handle = (
+                step_data.get("raw_response_handle")
+                or step_data.get("raw_browser_result_handle")
+                or step_data.get("raw_bill_handle")
+                or step_data.get("financial_record_handle")
+                or step_data.get("financial_bill_handle")
+            )
+            if handle:
+                return self._payload_from_response_envelope(self._resolve_secret_handle_payload(str(handle)))
+            return step_data.get("output", step_data)
+        return step_data
 
     def _resolve_contact_to_phone(self, identifier: str, tenant_id: Optional[str] = None) -> Optional[str]:
         """
@@ -835,6 +1194,18 @@ class ToolStepHandler(FlowStepHandler):
                     "status": "completed"
                 }
 
+            elif tool_id in {"password_vault", "password_vault.resolve", "password_vault_operation"}:
+                service_result = await PasswordVaultStepHandler(
+                    self.db,
+                    self.mcp_sender,
+                    self.token_tracker,
+                ).execute_config(parameters, tenant_id=tenant_id)
+                return {
+                    "tool_used": tool_id,
+                    "tool_type": "built_in",
+                    **service_result,
+                }
+
             elif tool_id == "web_scraping":
                 # Deprecated: web_scraping replaced by browser_automation skill
                 return {
@@ -855,6 +1226,805 @@ class ToolStepHandler(FlowStepHandler):
                 "status": "failed",
                 "error": str(e)
             }
+
+
+class PasswordVaultStepHandler(FlowStepHandler):
+    """Programmatic Password Vault step with redacted persisted output."""
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
+        config = config or {}
+        resolved_config: Dict[str, Any] = {}
+        for key, value in config.items():
+            if isinstance(value, str):
+                resolved_config[key] = self._replace_variables(value, input_data or {})
+            else:
+                resolved_config[key] = value
+        if (resolved_config.get("action") or "").strip() == "compose_basic_auth":
+            username_handle = str(resolved_config.get("username_handle") or resolved_config.get("username_secret_handle") or "")
+            password_handle = str(resolved_config.get("password_handle") or resolved_config.get("password_secret_handle") or "")
+            if _SECRET_HANDLE_PATTERN.fullmatch(username_handle.strip()):
+                resolved_config["username_value"] = self._resolve_secret_handle_value(username_handle.strip(), input_data or {})
+            if _SECRET_HANDLE_PATTERN.fullmatch(password_handle.strip()):
+                resolved_config["password_value"] = self._resolve_secret_handle_value(password_handle.strip(), input_data or {})
+        tenant_id = flow_run.tenant_id if flow_run else None
+        return await self.execute_config(resolved_config, tenant_id=tenant_id)
+
+    async def execute_config(self, config: Dict[str, Any], tenant_id: Optional[str]) -> Dict[str, Any]:
+        from services.password_vault_service import PasswordVaultError, PasswordVaultService, redact_payload
+
+        if not tenant_id:
+            raise ValueError("Password Vault step requires tenant context")
+        action = (config.get("action") or "read_item").strip()
+        service = PasswordVaultService(self.db, tenant_id=tenant_id)
+        integration = None
+        if action != "compose_basic_auth":
+            integration_id = config.get("integration_id")
+            if not integration_id:
+                raise ValueError("Password Vault step requires integration_id")
+            integration = service.load_integration(int(integration_id), require_active=True)
+
+        try:
+            if action == "compose_basic_auth":
+                if config.get("username_value") is not None and config.get("password_value") is not None:
+                    result = service.compose_basic_auth_values(
+                        username=str(config.get("username_value") or ""),
+                        password=str(config.get("password_value") or ""),
+                        scheme=config.get("scheme") or "Basic",
+                    )
+                else:
+                    result = service.compose_basic_auth(
+                        username_handle=config.get("username_handle") or config.get("username_secret_handle"),
+                        password_handle=config.get("password_handle") or config.get("password_secret_handle"),
+                        scheme=config.get("scheme") or "Basic",
+                    )
+            elif action == "test_connection":
+                result = service.test_connection(integration)
+            elif action == "list_items":
+                result = {
+                    "success": True,
+                    "provider": integration.provider,
+                    "items": service.list_items(integration, vault=config.get("vault")),
+                    "redacted": True,
+                }
+            elif action == "read_totp":
+                result = service.read_totp(
+                    integration,
+                    item_ref=config.get("item_ref") or config.get("item_id"),
+                    vault=config.get("vault"),
+                )
+            else:
+                field_name = config.get("field_name")
+                if field_name:
+                    result = service.read_field(
+                        integration,
+                        item_ref=config.get("item_ref") or config.get("item_id"),
+                        field_name=field_name,
+                        vault=config.get("vault"),
+                    )
+                else:
+                    raise PasswordVaultError("field_name_required_for_read_item")
+        except PasswordVaultError as exc:
+            return {
+                "status": "failed",
+                "success": False,
+                "error": str(exc),
+                "redacted": True,
+            }
+
+        safe = redact_payload(result)
+        safe["status"] = "completed" if safe.get("success", True) else "failed"
+        safe["redacted"] = True
+        return safe
+
+
+class FinancialUtilityAutomationStepHandler(FlowStepHandler):
+    """Programmatic financial utility automation step."""
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
+        config = config or {}
+        resolved_config: Dict[str, Any] = {}
+        for key, value in config.items():
+            if isinstance(value, str):
+                resolved_config[key] = self._replace_variables(value, input_data or {})
+            else:
+                resolved_config[key] = value
+
+        tenant_id = flow_run.tenant_id if flow_run else None
+        if not tenant_id:
+            raise ValueError("Financial utility automation requires tenant context")
+
+        from services.financial_automation_service import FinancialAutomationService
+
+        try:
+            service = FinancialAutomationService(self.db, tenant_id=tenant_id)
+            template = (resolved_config.get("financial_automation_template") or "moderna_condominio_sao_blas_204").strip()
+            if template == "moderna_condominio_sao_blas_204":
+                return await service.run_moderna_condominio(resolved_config, flow_run_id=flow_run.id if flow_run else None)
+            if template == "consigaz_sao_blas_204":
+                return await service.run_consigaz_sao_blas(resolved_config, flow_run_id=flow_run.id if flow_run else None)
+            if template == "medsenior_samedil_plano_saude_mae":
+                return await service.run_medsenior_samedil(resolved_config, flow_run_id=flow_run.id if flow_run else None)
+            return {
+                "status": "failed",
+                "success": False,
+                "error": f"Unsupported financial automation template: {template}",
+                "redacted": True,
+            }
+        except Exception as exc:
+            logger.error("Financial utility automation failed: %s", exc, exc_info=True)
+            return {
+                "status": "failed",
+                "success": False,
+                "error": str(exc),
+                "redacted": True,
+            }
+
+
+class HttpRequestStepHandler(FlowStepHandler):
+    """UI-authored HTTP request primitive with handle-based raw handoff."""
+
+    ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+    @staticmethod
+    def _normalize_kv_pairs(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return {str(key): val for key, val in value.items() if str(key).strip()}
+        if isinstance(value, list):
+            pairs: Dict[str, Any] = {}
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key") or item.get("name")
+                if key:
+                    pairs[str(key)] = item.get("value", "")
+            return pairs
+        return {}
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        if not (flow_run and flow_run.tenant_id):
+            raise ValueError("HTTP request step requires tenant context")
+
+        config = self._load_config(step)
+        method = str(_first_present(config, "http_method", "method") or "GET").strip().upper()
+        if method not in self.ALLOWED_METHODS:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        url = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_url", "url") or "",
+            input_data or {},
+        )
+        if not str(url).strip():
+            raise ValueError("HTTP request step requires http_url")
+
+        headers = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_headers", "headers") or {},
+            input_data or {},
+        )
+        query = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_query", "http_query_params", "query", "params") or {},
+            input_data or {},
+        )
+        json_payload = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_json", "http_json_body", "json"),
+            input_data or {},
+        )
+        form_payload = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_form", "http_form_fields", "form"),
+            input_data or {},
+        )
+        body_payload = self._render_and_resolve_secret_handles(
+            _first_present(config, "http_body", "http_raw_body", "body"),
+            input_data or {},
+        )
+
+        timeout = float(_first_present(config, "http_timeout_seconds", "timeout_seconds") or min(step.timeout_seconds or DEFAULT_STEP_TIMEOUT, 30))
+        timeout = max(1.0, min(timeout, float(step.timeout_seconds or DEFAULT_STEP_TIMEOUT)))
+        capture_raw_response = bool(_first_present(config, "http_capture_raw_response", "capture_raw_response") is not False)
+        fail_on_http_error = bool(config.get("fail_on_http_error", True))
+
+        request_kwargs: Dict[str, Any] = {
+            "headers": self._normalize_kv_pairs(headers),
+            "params": self._normalize_kv_pairs(query),
+        }
+        if json_payload is not None:
+            request_kwargs["json"] = json_payload
+        elif form_payload is not None:
+            request_kwargs["data"] = self._normalize_kv_pairs(form_payload)
+        elif body_payload is not None:
+            request_kwargs["content"] = body_payload if isinstance(body_payload, (str, bytes)) else json.dumps(body_payload)
+
+        import httpx
+
+        started_at = datetime.utcnow()
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(method, str(url), **request_kwargs)
+
+        response_text = response.text or ""
+        response_json = None
+        content_type = response.headers.get("content-type", "")
+        if "json" in content_type.lower() or response_text.lstrip().startswith(("{", "[")):
+            parsed = _safe_json_loads(response_text)
+            if not isinstance(parsed, str):
+                response_json = parsed
+
+        raw_response_handle = None
+        if capture_raw_response:
+            from services.password_vault_service import SecretHandleRegistry
+
+            raw_envelope = {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "body": response_text,
+                "json": response_json,
+                "url": str(response.url),
+                "method": method,
+            }
+            raw_response_handle = SecretHandleRegistry.issue(
+                json.dumps(raw_envelope, ensure_ascii=False),
+                {
+                    "kind": "http_response",
+                    "tenant_id": flow_run.tenant_id,
+                    "flow_run_id": flow_run.id,
+                    "step_id": step.id,
+                    "status_code": response.status_code,
+                },
+            )["secret_handle"]
+
+        success = 200 <= response.status_code < 400
+        output: Dict[str, Any] = {
+            "status": "completed" if (success or not fail_on_http_error) else "failed",
+            "success": success,
+            "tool_used": "http_request",
+            "method": method,
+            "url_preview": _redact_url(str(response.url)),
+            "status_code": response.status_code,
+            "content_type": content_type,
+            "headers_preview": _redact_for_persistence(dict(response.headers)),
+            "response_preview": {
+                "json": _redact_for_persistence(response_json) if response_json is not None else None,
+                "body": _json_preview(response_json if response_json is not None else response_text),
+                "body_truncated": len(response_text) > 2000,
+            },
+            "raw_response_handle": raw_response_handle,
+            "redacted": True,
+            "requested_at": started_at.isoformat() + "Z",
+            "completed_at": datetime.utcnow().isoformat() + "Z",
+        }
+        if not success and fail_on_http_error:
+            output["error"] = f"http_status_{response.status_code}"
+        return output
+
+
+class DataTransformStepHandler(FlowStepHandler):
+    """Deterministic extraction and financial-parser primitive."""
+
+    def _default_source_payload(self, config: Dict[str, Any], input_data: Dict[str, Any]) -> Any:
+        handle = _first_present(config, "raw_response_handle", "financial_record_handle", "financial_bill_handle")
+        if handle:
+            return self._resolve_transform_source(str(handle), input_data)
+        source_step = config.get("source_step")
+        if source_step:
+            return self._resolve_transform_source(source_step, input_data)
+        return (input_data or {}).get("previous_step", {}).get("output") if isinstance((input_data or {}).get("previous_step"), dict) else input_data
+
+    def _named_source(self, config: Dict[str, Any], input_data: Dict[str, Any], names: List[str]) -> Any:
+        handles = config.get("raw_response_handles") if isinstance(config.get("raw_response_handles"), dict) else {}
+        source_steps = config.get("source_steps") if isinstance(config.get("source_steps"), dict) else {}
+        for name in names:
+            if handles.get(name):
+                return self._resolve_transform_source(handles[name], input_data)
+            if source_steps.get(name) is not None:
+                return self._resolve_transform_source(source_steps[name], input_data)
+            handle_key = f"{name}_raw_response_handle"
+            source_key = f"{name}_source_step"
+            if config.get(handle_key):
+                return self._resolve_transform_source(config[handle_key], input_data)
+            if config.get(source_key):
+                return self._resolve_transform_source(config[source_key], input_data)
+        return None
+
+    def _apply_extraction_rules(self, rules: Any, default_payload: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        if not rules:
+            return {}
+        extracted: Dict[str, Any] = {}
+        if isinstance(rules, dict):
+            iterable = [
+                {"target": target, **(rule if isinstance(rule, dict) else {"path": rule})}
+                for target, rule in rules.items()
+            ]
+        elif isinstance(rules, list):
+            iterable = rules
+        else:
+            raise ValueError("extraction_rules must be a mapping or list")
+
+        for index, rule in enumerate(iterable):
+            if not isinstance(rule, dict):
+                raise ValueError("each extraction rule must be an object")
+            target = rule.get("target") or rule.get("field") or rule.get("name") or f"value_{index + 1}"
+            if "value" in rule:
+                extracted[str(target)] = self._render_templates(rule.get("value"), input_data or {})
+                continue
+            source_ref = rule.get("source_step") or rule.get("raw_response_handle")
+            source_label = str(rule.get("source") or "").strip().lower()
+            if source_ref:
+                payload = self._resolve_transform_source(source_ref, input_data)
+            elif source_label and source_label not in {"body", "json", "output", "source", "default"}:
+                payload = self._resolve_transform_source(rule.get("source"), input_data)
+            else:
+                payload = default_payload
+            path = rule.get("path") or rule.get("json_path") or rule.get("selector")
+            value = self._extract_json_path(payload, path)
+            pattern = rule.get("pattern")
+            if pattern and isinstance(value, str):
+                match = re.search(str(pattern), value, flags=re.IGNORECASE | re.MULTILINE)
+                if match:
+                    value = match.group(1) if match.groups() else match.group(0)
+            if rule.get("default") is not None and value in (None, ""):
+                value = rule.get("default")
+            extracted[str(target)] = value
+        return extracted
+
+    def _select_unpaid_bill(self, bills: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        from services.financial_automation_service import _is_paid_status
+
+        return next((bill for bill in bills if not _is_paid_status(bill.get("status"))), None) or (bills[-1] if bills else None)
+
+    def _issue_financial_record_handle(
+        self,
+        *,
+        record_kind: str,
+        payload: Dict[str, Any],
+        flow_run: FlowRun,
+        step: FlowNode,
+    ) -> str:
+        from services.password_vault_service import SecretHandleRegistry
+
+        return SecretHandleRegistry.issue(
+            json.dumps(payload, ensure_ascii=False),
+            {
+                "kind": "financial_record",
+                "record_kind": record_kind,
+                "tenant_id": flow_run.tenant_id,
+                "flow_run_id": flow_run.id,
+                "step_id": step.id,
+            },
+        )["secret_handle"]
+
+    def _parse_consigaz_bill(self, config: Dict[str, Any], input_data: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+        from services.financial_automation_service import FinancialAutomationService, _digits_only, _is_paid_status, _parse_brl_cents
+
+        default_payload = self._default_source_payload(config, input_data)
+        boleto_json = self._named_source(config, input_data, ["boleto_json", "boleto", "consigaz_boleto_json", "consigaz_boleto"])
+        nota_json = self._named_source(config, input_data, ["nota_json", "nota", "consigaz_nota_json", "consigaz_nota"])
+        if isinstance(default_payload, dict):
+            boleto_json = boleto_json or default_payload.get("boleto_json") or default_payload.get("boleto")
+            nota_json = nota_json or default_payload.get("nota_json") or default_payload.get("nota")
+        service = FinancialAutomationService(self.db, tenant_id=tenant_id)
+        bills = service._normalize_consigaz_bills(
+            boleto_json if isinstance(boleto_json, dict) else {},
+            nota_json if isinstance(nota_json, dict) else {},
+        )
+        selected = self._select_unpaid_bill(bills)
+        if not selected:
+            return {
+                "record_kind": "utility_bill",
+                "automation_key": service.CONSIGAZ_AUTOMATION_ID,
+                "provider": service.CONSIGAZ_PROVIDER,
+                "unit_id": str(config.get("financial_unit_id") or "AP0204"),
+                "asset": str(config.get("financial_asset") or "AP Ed. San Blass"),
+                "address": str(config.get("financial_address") or "R PIRATININGA, 111 AP0204"),
+                "reference_month": datetime.utcnow().strftime("%Y-%m"),
+                "no_open_bills": True,
+                "status": "no_pending_bills",
+                "all_bills_count": 0,
+            }
+        return {
+            "record_kind": "utility_bill",
+            "automation_key": service.CONSIGAZ_AUTOMATION_ID,
+            "provider": service.CONSIGAZ_PROVIDER,
+            "unit_id": str(config.get("financial_unit_id") or "AP0204"),
+            "asset": str(config.get("financial_asset") or "AP Ed. San Blass"),
+            "address": str(config.get("financial_address") or "R PIRATININGA, 111 AP0204"),
+            "bill_id": selected.get("bill_id"),
+            "reference_month": selected.get("reference_month"),
+            "due_date": selected.get("due_date"),
+            "amount": selected.get("amount"),
+            "amount_cents": _parse_brl_cents(selected.get("amount")),
+            "status": selected.get("status"),
+            "barcode": _digits_only(selected.get("barcode")),
+            "issuer": selected.get("issuer") or service.CONSIGAZ_ISSUER,
+            "all_bills_count": len(bills),
+            "unpaid": not _is_paid_status(selected.get("status")),
+        }
+
+    def _parse_medsenior_bill(self, config: Dict[str, Any], input_data: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+        from services.financial_automation_service import FinancialAutomationService, _digits_only, _is_paid_status, _parse_brl_cents
+
+        rows_payload = self._named_source(config, input_data, ["rows", "medsenior_rows", "list_json"])
+        copy_map_payload = self._named_source(config, input_data, ["copy_map", "barcodes", "medsenior_copy_map"])
+        default_payload = self._default_source_payload(config, input_data)
+        rows_payload = rows_payload if rows_payload is not None else default_payload
+        if isinstance(rows_payload, dict):
+            rows = rows_payload.get("rows") or rows_payload.get("data") or []
+            embedded_copy_map = rows_payload.get("copy_map") if isinstance(rows_payload.get("copy_map"), dict) else {}
+        else:
+            rows = rows_payload if isinstance(rows_payload, list) else []
+            embedded_copy_map = {}
+        copy_map = copy_map_payload if isinstance(copy_map_payload, dict) else embedded_copy_map
+        service = FinancialAutomationService(self.db, tenant_id=tenant_id)
+        bills = service._normalize_medsenior_bills(rows, copy_map)
+        selected = self._select_unpaid_bill(bills)
+        if not selected:
+            return {
+                "record_kind": "utility_bill",
+                "automation_key": service.MEDSENIOR_AUTOMATION_ID,
+                "provider": service.MEDSENIOR_PROVIDER,
+                "unit_id": str(config.get("financial_unit_id") or "Plano Saude Mae"),
+                "asset": str(config.get("financial_asset") or "Plano Saude Mae"),
+                "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
+                "reference_month": datetime.utcnow().strftime("%Y-%m"),
+                "no_open_bills": True,
+                "status": "no_pending_bills",
+                "all_bills_count": 0,
+            }
+        return {
+            "record_kind": "utility_bill",
+            "automation_key": service.MEDSENIOR_AUTOMATION_ID,
+            "provider": service.MEDSENIOR_PROVIDER,
+            "unit_id": str(config.get("financial_unit_id") or "Plano Saude Mae"),
+            "asset": str(config.get("financial_asset") or "Plano Saude Mae"),
+            "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
+            "bill_id": selected.get("bill_id"),
+            "reference_month": selected.get("reference_month"),
+            "due_date": selected.get("due_date"),
+            "amount": selected.get("amount"),
+            "amount_cents": _parse_brl_cents(selected.get("amount")),
+            "status": selected.get("status"),
+            "barcode": _digits_only(selected.get("barcode")),
+            "issuer": selected.get("issuer") or service.MEDSENIOR_ISSUER,
+            "all_bills_count": len(bills),
+            "unpaid": not _is_paid_status(selected.get("status")),
+        }
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        if not (flow_run and flow_run.tenant_id):
+            raise ValueError("Data transform step requires tenant context")
+
+        config = self._render_templates(self._load_config(step), input_data or {})
+        parser_mode = str(config.get("financial_parser_mode") or "").strip()
+        transform_mode = str(config.get("transform_mode") or ("financial_parser" if parser_mode else "json_path")).strip()
+
+        if parser_mode == "consigaz_utility_bill":
+            record_kind = "utility_bill"
+            normalized = self._parse_consigaz_bill(config, input_data or {}, flow_run.tenant_id)
+        elif parser_mode == "medsenior_utility_bill":
+            record_kind = "utility_bill"
+            normalized = self._parse_medsenior_bill(config, input_data or {}, flow_run.tenant_id)
+        else:
+            source_payload = self._default_source_payload(config, input_data or {})
+            if config.get("source_path"):
+                source_payload = self._extract_json_path(source_payload, config.get("source_path"))
+            if config.get("extraction_rules"):
+                normalized = self._apply_extraction_rules(config.get("extraction_rules"), source_payload, input_data or {})
+            elif config.get("json_path"):
+                normalized = {"value": self._extract_json_path(source_payload, config.get("json_path"))}
+            else:
+                normalized = source_payload if isinstance(source_payload, dict) else {"value": source_payload}
+            record_kind = str(config.get("record_kind") or normalized.get("record_kind") or "generic").strip()
+
+        raw_bill_handle = None
+        financial_record_handle = None
+        if isinstance(normalized, dict):
+            if record_kind == "utility_bill" and config.get("emit_raw_bill_handle", True) is not False:
+                raw_bill_handle = self._issue_financial_record_handle(
+                    record_kind="utility_bill",
+                    payload=normalized,
+                    flow_run=flow_run,
+                    step=step,
+                )
+                financial_record_handle = raw_bill_handle
+            elif config.get("emit_financial_record_handle", bool(config.get("record_kind"))):
+                financial_record_handle = self._issue_financial_record_handle(
+                    record_kind=record_kind,
+                    payload=normalized,
+                    flow_run=flow_run,
+                    step=step,
+                )
+
+        conditions = {
+            "record_kind": record_kind,
+            "has_record": bool(normalized),
+            "has_barcode": bool(isinstance(normalized, dict) and normalized.get("barcode")),
+            "unpaid": bool(isinstance(normalized, dict) and normalized.get("unpaid")),
+            "should_store": bool(normalized),
+        }
+        return {
+            "status": "completed",
+            "success": True,
+            "tool_used": "data_transform",
+            "transform_mode": transform_mode,
+            "financial_parser_mode": parser_mode or None,
+            "record_kind": record_kind,
+            "data_preview": _redact_for_persistence(normalized),
+            "raw_bill_handle": raw_bill_handle,
+            "financial_record_handle": financial_record_handle,
+            "conditions": conditions,
+            "redacted": True,
+            "transformed_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+
+class FinancialRecordStoreStepHandler(FlowStepHandler):
+    """Generic financial record storage contract.
+
+    Utility bills keep their boleto-specific projection; other record kinds use
+    the generic financial_automation_record table so PMVV/DETRAN/Husky/B3 can
+    expose explicit storage/dedupe nodes before richer domain projections exist.
+    """
+
+    default_record_kind: Optional[str] = None
+
+    def _resolve_record_payload(self, config: Dict[str, Any], input_data: Dict[str, Any], record_kind: str) -> Optional[Dict[str, Any]]:
+        direct = config.get("financial_bill") if record_kind == "utility_bill" else None
+        direct = direct or config.get("financial_record")
+        if isinstance(direct, dict):
+            return direct
+
+        handle = (
+            config.get("financial_bill_handle")
+            or config.get("financial_record_handle")
+            or config.get("raw_bill_handle")
+        )
+        if handle:
+            payload = self._resolve_transform_source(str(handle), input_data)
+            return payload if isinstance(payload, dict) else None
+
+        source_step = (
+            config.get("financial_bill_source_step")
+            or config.get("financial_bill_source")
+            or config.get("financial_record_source_step")
+            or config.get("financial_source_step")
+            or config.get("source_step")
+        )
+        payload = self._resolve_transform_source(source_step, input_data) if source_step else None
+        if payload is None and isinstance((input_data or {}).get("previous_step"), dict):
+            previous = (input_data or {}).get("previous_step") or {}
+            for key in ("raw_bill_handle", "financial_record_handle", "financial_bill_handle"):
+                if previous.get(key):
+                    payload = self._resolve_transform_source(previous[key], input_data)
+                    break
+        if isinstance(payload, dict):
+            if isinstance(payload.get("normalized_bill"), dict):
+                return payload["normalized_bill"]
+            if isinstance(payload.get("bill"), dict):
+                return payload["bill"]
+            if isinstance(payload.get("record"), dict):
+                return payload["record"]
+            return payload
+        return None
+
+    def _dedupe_key(self, record_kind: str, record: Optional[Dict[str, Any]], config: Dict[str, Any]) -> str:
+        if config.get("financial_dedupe_key") or config.get("financial_record_dedupe_key"):
+            return str(config.get("financial_dedupe_key") or config.get("financial_record_dedupe_key"))
+        record = record or {}
+        provider = record.get("provider") or config.get("financial_provider") or "unknown"
+        unit_id = record.get("unit_id") or config.get("financial_unit_id") or "unknown"
+        reference = (
+            record.get("reference_month")
+            or record.get("due_date")
+            or record.get("period")
+            or record.get("date")
+            or "unknown"
+        )
+        return f"{record_kind}:{provider}:{unit_id}:{reference}"
+
+    def _utility_bill_no_record_result(self, record: Dict[str, Any], config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        status = str(record.get("status") or record.get("bill_status") or "").strip().lower()
+        explicit_empty = status in {"no_pending_bills", "no_open_bills", "sem_boletos", "sem_boleto", "none"}
+        explicit_empty = explicit_empty or record.get("no_open_bills") is True
+        if not explicit_empty:
+            return None
+
+        period_key = str(record.get("period_key") or "").strip().lower()
+        has_reference = any(record.get(key) for key in ("reference_month", "month", "due_date"))
+        has_reference = has_reference or bool(period_key and period_key not in {"latest", "unknown", "none", "no_open_bill"})
+        has_amount = any(record.get(key) for key in ("amount", "amount_cents", "value", "valor"))
+        has_barcode = any(record.get(key) for key in ("barcode", "linha_digitavel", "line", "codigo_barras"))
+        if has_reference or has_amount or has_barcode:
+            return None
+
+        provider = str(record.get("provider") or config.get("financial_provider") or "unknown")
+        unit_id = str(record.get("unit_id") or config.get("financial_unit_id") or "unknown")
+        automation_key = str(
+            record.get("automation_key")
+            or record.get("automation_id")
+            or config.get("financial_automation_key")
+            or config.get("financial_automation_id")
+            or ""
+        )
+        return {
+            "status": "skipped",
+            "success": True,
+            "tool_used": "financial_record_store",
+            "record_kind": "utility_bill",
+            "record_store_model": "financial_utility_bill",
+            "reason": "no_financial_bill_detected",
+            "automation_key": automation_key,
+            "provider": provider,
+            "unit_id": unit_id,
+            "dedupe": {
+                "dedupe_key": f"utility_bill:{provider}:{unit_id}:no_open_bill",
+                "created": False,
+                "updated": False,
+                "barcode_changed": False,
+                "record_id": None,
+            },
+            "conditions": {
+                "record_kind": "utility_bill",
+                "created": False,
+                "updated": False,
+                "changed": False,
+                "barcode_changed": False,
+                "has_barcode": False,
+                "unpaid": False,
+                "should_notify": False,
+                "should_gate": False,
+                "no_open_bills": True,
+            },
+            "redacted": True,
+            "stored_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+    def _store_utility_bill(
+        self,
+        *,
+        record: Dict[str, Any],
+        config: Dict[str, Any],
+        flow_run: FlowRun,
+    ) -> Dict[str, Any]:
+        from services.financial_automation_service import (
+            FinancialAutomationService,
+            _format_brl,
+            _is_paid_status,
+            _parse_brl_cents,
+        )
+
+        normalized = dict(record)
+        if normalized.get("amount_cents") is None and normalized.get("amount") is not None:
+            normalized["amount_cents"] = _parse_brl_cents(normalized.get("amount"))
+
+        service = FinancialAutomationService(self.db, tenant_id=flow_run.tenant_id)
+        record_result = service._upsert_bill(normalized, config, flow_run_id=flow_run.id)
+        bill = record_result["record"]
+        unpaid = not _is_paid_status(bill.status)
+        has_barcode = bool(bill.barcode_preview)
+        changed = bool(record_result["created"] or record_result["barcode_changed"])
+        should_notify = bool(changed and has_barcode and unpaid)
+        return {
+            "status": "completed",
+            "success": True,
+            "tool_used": "financial_record_store",
+            "record_kind": "utility_bill",
+            "record_store_model": "financial_utility_bill",
+            "record_id": bill.id,
+            "automation_key": bill.automation_key,
+            "provider": bill.provider,
+            "unit_id": bill.unit_id,
+            "asset": bill.asset,
+            "reference_month": bill.reference_month,
+            "due_date": bill.due_date,
+            "amount_cents": bill.amount_cents,
+            "amount_display": _format_brl(bill.amount_cents),
+            "bill_status": bill.status,
+            "barcode_detected": has_barcode,
+            "barcode_preview": bill.barcode_preview,
+            "dedupe": {
+                "dedupe_key": f"utility_bill:{bill.provider}:{bill.unit_id}:{bill.reference_month}",
+                "created": record_result["created"],
+                "updated": record_result["updated"],
+                "barcode_changed": record_result["barcode_changed"],
+                "record_id": bill.id,
+            },
+            "conditions": {
+                "record_kind": "utility_bill",
+                "created": record_result["created"],
+                "updated": record_result["updated"],
+                "changed": changed,
+                "barcode_changed": record_result["barcode_changed"],
+                "has_barcode": has_barcode,
+                "unpaid": unpaid,
+                "should_notify": should_notify,
+                "should_gate": should_notify,
+                "no_open_bills": bool(normalized.get("no_open_bills")),
+            },
+            "redacted": True,
+            "stored_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        if not (flow_run and flow_run.tenant_id):
+            raise ValueError("Financial record store step requires tenant context")
+
+        config = self._render_templates(self._load_config(step), input_data or {})
+        record_kind = str(
+            config.get("record_kind")
+            or config.get("financial_record_kind")
+            or self.default_record_kind
+            or "utility_bill"
+        ).strip()
+        record = self._resolve_record_payload(config, input_data or {}, record_kind)
+
+        if not isinstance(record, dict) or not record:
+            return {
+                "status": "failed",
+                "success": False,
+                "error": "financial_record_payload_required",
+                "record_kind": record_kind,
+                "dedupe": {
+                    "dedupe_key": self._dedupe_key(record_kind, record, config),
+                    "created": False,
+                    "updated": False,
+                    "record_id": None,
+                },
+                "conditions": {
+                    "record_kind": record_kind,
+                    "created": False,
+                    "updated": False,
+                    "changed": False,
+                    "should_notify": False,
+                    "should_gate": False,
+                },
+                "redacted": True,
+            }
+        if record_kind == "utility_bill":
+            no_record_result = self._utility_bill_no_record_result(record, config)
+            if no_record_result is not None:
+                return no_record_result
+            return self._store_utility_bill(record=record, config=config, flow_run=flow_run)
+
+        from services.financial_automation_service import FinancialAutomationService
+
+        record = {**record, "record_kind": record_kind}
+        service = FinancialAutomationService(self.db, tenant_id=flow_run.tenant_id)
+        return service.store_financial_record(record, config, flow_run_id=flow_run.id)
+
+
+class FinancialBillStoreStepHandler(FinancialRecordStoreStepHandler):
+    """Utility-bill convenience alias for the generic financial record store."""
+
+    default_record_kind = "utility_bill"
 
 
 class SlashCommandStepHandler(FlowStepHandler):
@@ -1119,6 +2289,9 @@ class SkillStepHandler(FlowStepHandler):
                 "executed_at": datetime.utcnow().isoformat() + "Z",
                 "execution_mode": actual_execution_mode
             }
+            if skill_type == "password_vault":
+                from services.password_vault_service import redact_payload
+                out = redact_payload(out)
             if not result.success:
                 metadata_err = None
                 if isinstance(result.metadata, dict):
@@ -2059,8 +3232,9 @@ class GateStepHandler(FlowStepHandler):
                     result["fail_action_taken"] = "notify_failed"
         else:
             result["fail_action_taken"] = "skip"
+            result["skip_remaining_steps"] = True
 
-        result["status"] = "failed"
+        result["status"] = "skipped" if gate_on_fail == "skip" else "failed"
         return result
 
     def _resolve_source_data(self, gate_source_step, input_data):
@@ -2578,6 +3752,76 @@ class BrowserAutomationStepHandler(FlowStepHandler):
     }
     """
 
+    def _selector_for_action(self, selectors: Any, action: str) -> Dict[str, Any]:
+        if not isinstance(selectors, list):
+            return {}
+        normalized_action = (action or "").strip().lower()
+        for row in selectors:
+            if isinstance(row, dict) and str(row.get("action") or "").strip().lower() == normalized_action:
+                return row
+        for row in selectors:
+            if isinstance(row, dict):
+                return row
+        return {}
+
+    def _timeout_seconds(self, config: Dict[str, Any], step: FlowNode) -> int:
+        raw_timeout = config.get("timeout_seconds")
+        if raw_timeout is None:
+            raw_timeout = step.timeout_seconds if step and step.timeout_seconds else 30
+        try:
+            timeout = int(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = 30
+        return max(1, timeout)
+
+    def _apply_browser_secret_references(self, arguments: Dict[str, Any], references: Any, input_data: Dict[str, Any]) -> None:
+        """Allow UI-authored secret rows to target explicit browser tool arguments."""
+        if not isinstance(references, list):
+            return
+        for ref in references:
+            if not isinstance(ref, dict):
+                continue
+            reference = ref.get("reference")
+            if reference is None:
+                continue
+            target = str(ref.get("target") or ref.get("key") or "").strip()
+            if not target:
+                continue
+            value = self._render_and_resolve_secret_handles(reference, input_data or {})
+            if target.startswith("tool_arguments."):
+                target = target.split(".", 1)[1]
+            arguments[target] = value
+
+    def _build_tool_arguments(
+        self,
+        config: Dict[str, Any],
+        input_data: Dict[str, Any],
+        tool_action: str,
+        url: str,
+    ) -> Dict[str, Any]:
+        raw_arguments = config.get("tool_arguments") if isinstance(config.get("tool_arguments"), dict) else {}
+        arguments = self._render_and_resolve_secret_handles(raw_arguments, input_data or {})
+        arguments.pop("action", None)
+
+        if url and tool_action in {"navigate", "open_tab"} and not arguments.get("url"):
+            arguments["url"] = url
+
+        selector_row = self._selector_for_action(config.get("selectors"), tool_action)
+        if selector_row:
+            selector = self._render_and_resolve_secret_handles(selector_row.get("selector") or "", input_data or {})
+            value = self._render_and_resolve_secret_handles(selector_row.get("value") or "", input_data or {})
+            if selector and not arguments.get("selector") and tool_action != "navigate":
+                arguments["selector"] = selector
+            if value and not arguments.get("value") and tool_action in {"fill", "type_text", "select_option"}:
+                arguments["value"] = value
+            for key in ("script", "state", "timeout_ms", "url_contains", "attribute", "full_page", "wait_until", "x", "y", "delay_ms", "tab_id", "fallback_selector", "fallback_script"):
+                if selector_row.get(key) is not None and arguments.get(key) is None:
+                    arguments[key] = self._render_and_resolve_secret_handles(selector_row.get(key), input_data or {})
+
+        self._apply_browser_secret_references(arguments, config.get("browser_secret_references"), input_data or {})
+        arguments["mode"] = config.get("mode", "container")
+        return arguments
+
     async def execute(
         self,
         step: FlowNode,
@@ -2608,35 +3852,33 @@ class BrowserAutomationStepHandler(FlowStepHandler):
         from agent.skills.browser_automation_skill import BrowserAutomationSkill
         from agent.skills.base import InboundMessage
 
-        config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
-
-        # Handle None config gracefully
-        if not config:
-            config = {}
+        config = self._load_config(step)
 
         # Resolve template variables in prompt and URL
         prompt_template = config.get("prompt", "")
         url = config.get("url", "")
 
         prompt = self._replace_variables(prompt_template, input_data)
-        url = self._replace_variables(url, input_data)
+        url = self._render_and_resolve_secret_handles(url, input_data or {})
+        use_tool_mode = config.get("use_tool_mode", False)
+        tool_action = config.get("tool_action")  # e.g., "navigate", "screenshot", etc.
 
         # Get tenant_id from flow_run
         tenant_id = flow_run.tenant_id if flow_run else None
 
         # Build the command (prefer prompt, fallback to URL navigation)
-        command = prompt if prompt else f"navigate to {url}" if url else ""
+        command = prompt if prompt else f"navigate to {url}" if url else f"{tool_action} via browser" if (use_tool_mode and tool_action) else ""
 
         if not command:
             return {
                 "status": "failed",
                 "output": "No prompt or URL specified for browser automation",
-                "error": "Missing configuration: either 'prompt' or 'url' required",
+                "error": "Missing configuration: prompt, URL, or explicit tool action required",
                 "screenshot_paths": [],
                 "actions_executed": 0
             }
 
-        logger.info(f"Executing browser automation: {command[:100]}...")
+        logger.info(f"Executing browser automation: {_redact_sensitive_string(command)[:100]}...")
 
         try:
             # Create skill instance with db and token_tracker
@@ -2654,32 +3896,28 @@ class BrowserAutomationStepHandler(FlowStepHandler):
                 timestamp=datetime.utcnow(),
                 channel="flow"  # Skills-as-Tools: browser automation step
             )
+            setattr(message, "tenant_id", tenant_id)
+            setattr(message, "agent_id", getattr(step, "agent_id", None) or 0)
 
             # Build skill config from step config
             skill_config = {
                 "mode": config.get("mode", "container"),
                 "provider_type": config.get("provider_type", "playwright"),
-                "timeout_seconds": config.get("timeout_seconds", 30),
+                "timeout_seconds": self._timeout_seconds(config, step),
                 "allowed_user_keys": config.get("allowed_user_keys", []),
                 "keywords": ["browser", "navigate", "screenshot", "click", "fill", "extract"],
-                "use_ai_fallback": True
+                "use_ai_fallback": True,
+                "session_persistence": config.get("session_persistence", True),
+                "session_ttl_seconds": config.get("session_ttl_seconds", 300),
+                "browser_session_profile_name": config.get("browser_session_profile_name") or config.get("session_profile_name"),
+                "browser_session_integration_id": config.get("browser_session_integration_id"),
             }
 
             # Phase 4 Skills-as-Tools: Check if step config requests tool mode execution
-            use_tool_mode = config.get("use_tool_mode", False)
-            tool_action = config.get("tool_action")  # e.g., "navigate", "screenshot", etc.
-            tool_arguments = config.get("tool_arguments", {})
-
             if use_tool_mode and tool_action and skill.is_tool_enabled(skill_config):
                 # Execute via tool mode with explicit action and arguments
-                arguments = {
-                    "action": tool_action,
-                    **tool_arguments,
-                    "mode": config.get("mode", "container")
-                }
-                # Add URL to arguments if specified
-                if url and tool_action == "navigate":
-                    arguments["url"] = url
+                arguments = self._build_tool_arguments(config, input_data or {}, tool_action, url)
+                arguments = {"action": tool_action, **arguments}
                 logger.info(f"BrowserAutomationStepHandler: Using execute_tool() with action='{tool_action}'")
                 result = await skill.execute_tool(arguments, message, skill_config)
                 execution_mode = "tool"
@@ -2688,17 +3926,44 @@ class BrowserAutomationStepHandler(FlowStepHandler):
                 result = await skill.process(message, skill_config)
                 execution_mode = "legacy"
 
+            result_metadata = result.metadata or {}
+            raw_browser_result_handle = None
+            if result.success:
+                try:
+                    from services.password_vault_service import SecretHandleRegistry
+
+                    raw_browser_result_handle = SecretHandleRegistry.issue(
+                        json.dumps({
+                            "output": result.output,
+                            "metadata": result_metadata,
+                            "media_paths": result.media_paths or [],
+                        }, ensure_ascii=False),
+                        {
+                            "kind": "browser_result",
+                            "tenant_id": tenant_id,
+                            "flow_run_id": flow_run.id if flow_run else None,
+                            "step_id": step.id,
+                            "action": tool_action if execution_mode == "tool" else "prompt",
+                        },
+                    )["secret_handle"]
+                except Exception as handle_exc:
+                    logger.warning(f"Could not issue browser raw-result handle: {handle_exc}")
+
             return {
                 "status": "completed" if result.success else "failed",
-                "output": result.output,
-                "screenshot_paths": result.media_paths or result.metadata.get("screenshot_paths", []),
-                "actions_executed": result.metadata.get("actions_executed", 1 if result.success else 0),
-                "actions_succeeded": result.metadata.get("actions_succeeded", 1 if result.success else 0),
-                "provider": result.metadata.get("provider"),
-                "mode": result.metadata.get("mode"),
-                "error": result.metadata.get("error") if not result.success else None,
+                "output": _redact_sensitive_string(result.output or ""),
+                "screenshot_paths": result.media_paths or result_metadata.get("screenshot_paths", []),
+                "actions_executed": result_metadata.get("actions_executed", 1 if result.success else 0),
+                "actions_succeeded": result_metadata.get("actions_succeeded", 1 if result.success else 0),
+                "metadata_preview": _redact_for_persistence(result_metadata),
+                "provider": result_metadata.get("provider"),
+                "mode": result_metadata.get("mode"),
+                "error": result_metadata.get("error") if not result.success else None,
                 "executed_at": datetime.utcnow().isoformat() + "Z",
-                "execution_mode": execution_mode
+                "execution_mode": execution_mode,
+                "tool_action": tool_action if execution_mode == "tool" else None,
+                "raw_browser_result_handle": raw_browser_result_handle,
+                "redacted": True,
             }
 
         except Exception as e:
@@ -2751,6 +4016,12 @@ class FlowEngine:
             "summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Agentic summarization
             "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
+            "password_vault": PasswordVaultStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: secret references
+            "financial_utility_automation": FinancialUtilityAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: boleto/utility playbooks
+            "http_request": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: UI-authored HTTP primitive
+            "data_transform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: deterministic extraction primitive
+            "financial_record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: generic financial storage primitive
+            "financial_bill_store": FinancialBillStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: utility bill storage alias
             "source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: Triggers↔Flows source entry node
             # Legacy types (backward compatibility)
             "Source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: legacy casing alias
@@ -2763,6 +4034,11 @@ class FlowEngine:
             "Summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Legacy casing
             "Gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Gate: Legacy casing
             "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Legacy casing
+            "FinancialUtilityAutomation": FinancialUtilityAutomationStepHandler(db, self.mcp_sender, self.token_tracker),
+            "HttpRequest": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),
+            "DataTransform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),
+            "FinancialRecordStore": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),
+            "FinancialBillStore": FinancialBillStoreStepHandler(db, self.mcp_sender, self.token_tracker),
             "AgentNode": ConversationStepHandler(db, self.mcp_sender, self.token_tracker),  # BUG-495: alias for agent-based conversation node
         }
 
@@ -2810,6 +4086,51 @@ class FlowEngine:
 
         return len(stale_runs)
 
+    async def _cleanup_flow_browser_sessions(
+        self,
+        flow_run: Optional[FlowRun],
+        steps: Optional[List[FlowNode]] = None,
+    ) -> int:
+        """Close browser sessions that were scoped to a single flow run."""
+        if not flow_run or not steps:
+            return 0
+
+        browser_steps = [
+            step for step in steps
+            if step.type in ("browser_automation", "BrowserAutomation")
+        ]
+        if not browser_steps:
+            return 0
+
+        try:
+            from hub.providers.browser_session_manager import BrowserSessionManager
+        except Exception as exc:
+            logger.warning(f"Could not import BrowserSessionManager for flow cleanup: {exc}")
+            return 0
+
+        tenant_key = str(flow_run.tenant_id) if flow_run.tenant_id else ""
+        sender_key = f"flow_{flow_run.id}"
+        agent_ids = {
+            int(getattr(step, "agent_id", None) or 0)
+            for step in browser_steps
+        }
+        manager = BrowserSessionManager.instance()
+        closed = 0
+
+        for agent_id in agent_ids:
+            try:
+                if await manager.close_session(tenant_key, agent_id, sender_key):
+                    closed += 1
+            except Exception as exc:
+                logger.warning(
+                    "Error closing browser session for flow run "
+                    f"{flow_run.id} agent {agent_id}: {exc}"
+                )
+
+        if closed:
+            logger.info(f"Closed {closed} browser session(s) for flow run {flow_run.id}")
+        return closed
+
     def _build_step_context(
         self,
         flow_run: FlowRun,
@@ -2839,6 +4160,7 @@ class FlowEngine:
             "flow": {
                 "id": flow_run.id,
                 "flow_definition_id": flow_run.flow_definition_id,
+                "tenant_id": flow_run.tenant_id,
                 "trigger_context": trigger_context or {},
                 "status": flow_run.status,
                 "initiator": flow_run.initiator,
@@ -3154,6 +4476,9 @@ class FlowEngine:
                     )
                     step_run.error_text = str(fallback_text)[:4000]
                     logger.warning(f"Step {step.id} ({step.type}) reported failure: {step_run.error_text}")
+                elif isinstance(output, dict) and output.get("status") == "skipped":
+                    step_run.status = "skipped"
+                    logger.info(f"Step {step.id} ({step.type}) skipped in {step_run.execution_time_ms}ms")
                 else:
                     step_run.status = "completed"
                     logger.info(f"Step {step.id} ({step.type}) completed in {step_run.execution_time_ms}ms")
@@ -3182,10 +4507,27 @@ class FlowEngine:
                 return step_run
 
             except Exception as e:
+                # Handlers that perform their own writes can leave the shared
+                # SQLAlchemy session in a failed transaction state (for example
+                # after a DB constraint error). Roll back before recording the
+                # step failure, otherwise the commit below can fail too and the
+                # parent FlowRun may remain stuck in "running".
+                try:
+                    self.db.rollback()
+                except Exception as rollback_err:
+                    logger.warning(f"Step {step.id} rollback before failure recording failed: {rollback_err}")
+                try:
+                    step_run = self.db.merge(step_run)
+                except Exception:
+                    pass
                 step_run.status = "failed"
                 step_run.completed_at = datetime.utcnow()
                 step_run.error_text = str(e)
-                self.db.commit()
+                try:
+                    self.db.commit()
+                except Exception as commit_err:
+                    logger.error(f"Failed to persist step {step.id} failure state: {commit_err}")
+                    self.db.rollback()
 
                 if step.retry_on_failure and retry_count < max_retries:
                     retry_count += 1
@@ -3210,7 +4552,8 @@ class FlowEngine:
             "completed_at": flow_run.completed_at.isoformat() if flow_run.completed_at else None,
             "duration_ms": int((flow_run.completed_at - flow_run.started_at).total_seconds() * 1000) if flow_run.completed_at and flow_run.started_at else None,
             "steps_executed": len(step_runs),
-            "steps_successful": sum(1 for sr in step_runs if sr.status == "completed"),
+            "steps_successful": sum(1 for sr in step_runs if sr.status in ("completed", "skipped")),
+            "steps_skipped": sum(1 for sr in step_runs if sr.status == "skipped"),
             "steps_failed": sum(1 for sr in step_runs if sr.status == "failed"),
             "total_execution_time_ms": sum(sr.execution_time_ms or 0 for sr in step_runs),
             "total_tokens": self._aggregate_tokens(step_runs),
@@ -3433,11 +4776,74 @@ class FlowEngine:
                     logger.info(f"Step {step.position} was cancelled, stopping flow")
                     # flow_run.status was already set to "cancelled" by the API
                     break
+                elif step_run.status == "skipped":
+                    local_completed_steps += 1
+                    should_skip_remaining = False
+                    try:
+                        step_output = json.loads(step_run.output_json or "{}")
+                        should_skip_remaining = bool(step_output.get("skip_remaining_steps"))
+                    except Exception:
+                        should_skip_remaining = False
+                    if should_skip_remaining:
+                        logger.info(f"Step {step.position} skipped remaining steps")
+                        skipped_at = datetime.utcnow()
+                        remaining_steps = [candidate for candidate in steps if candidate.position > step.position]
+                        for remaining_step in remaining_steps:
+                            remaining_step_run = FlowNodeRun(
+                                flow_run_id=flow_run.id,
+                                flow_node_id=remaining_step.id,
+                                status="skipped",
+                                started_at=skipped_at,
+                                completed_at=skipped_at,
+                                input_json=json.dumps({
+                                    "skipped_by_step": step.id,
+                                    "skipped_by_step_position": step.position,
+                                    "reason": "upstream gate requested skip_remaining_steps",
+                                }),
+                                output_json=json.dumps({
+                                    "status": "skipped",
+                                    "skipped_by_step": step.id,
+                                    "skipped_by_step_position": step.position,
+                                    "reason": "upstream gate requested skip_remaining_steps",
+                                }),
+                                execution_time_ms=0,
+                                tool_used=remaining_step.type,
+                            )
+                            self.db.add(remaining_step_run)
+                            completed_step_runs.append(remaining_step_run)
+                            local_completed_steps += 1
+                        self.db.commit()
+                        break
                 elif step_run.status == "failed":
                     # Check on_failure action
                     if step.on_failure == "continue":
-                        logger.warning(f"Step {step.position} failed but continuing (on_failure=continue)")
-                        local_failed_steps += 1
+                        try:
+                            step_config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+                        except Exception:
+                            step_config = {}
+                        if step_config.get("optional") or step_config.get("treat_failure_as_skipped"):
+                            original_error = step_run.error_text
+                            try:
+                                step_output = json.loads(step_run.output_json) if step_run.output_json else {}
+                            except Exception:
+                                step_output = {}
+                            if not isinstance(step_output, dict):
+                                step_output = {}
+                            step_output.update({
+                                "status": "skipped",
+                                "success": True,
+                                "reason": "optional_step_failed",
+                                "skipped_error": original_error,
+                            })
+                            step_run.status = "skipped"
+                            step_run.output_json = json.dumps(step_output)
+                            step_run.error_text = None
+                            self.db.commit()
+                            logger.info(f"Step {step.position} failed but was marked skipped (optional on_failure=continue)")
+                            local_completed_steps += 1
+                        else:
+                            logger.warning(f"Step {step.position} failed but continuing (on_failure=continue)")
+                            local_failed_steps += 1
                     elif step.on_failure == "skip":
                         logger.warning(f"Step {step.position} failed, skipping remaining steps")
                         break
@@ -3506,6 +4912,7 @@ class FlowEngine:
                 self.db.commit()
                 self.db.refresh(flow_run)
 
+            await self._cleanup_flow_browser_sessions(flow_run, steps)
             logger.info(f"Flow run {flow_run.id} completed with status: {flow_run.status}")
             return flow_run
 
@@ -3529,6 +4936,7 @@ class FlowEngine:
                     self.db.refresh(flow_run)
                 except Exception as retry_err:
                     logger.error(f"Flow finalization retry also failed: {retry_err}")
+            await self._cleanup_flow_browser_sessions(flow_run, steps)
             return flow_run
 
 

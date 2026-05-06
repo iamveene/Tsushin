@@ -892,9 +892,11 @@ def get_run_steps(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        step_runs = db.query(FlowNodeRun).filter(
+        step_runs = db.query(FlowNodeRun).join(
+            FlowNode, FlowNode.id == FlowNodeRun.flow_node_id
+        ).filter(
             FlowNodeRun.flow_run_id == run_id
-        ).all()
+        ).order_by(FlowNode.position.asc(), FlowNodeRun.id.asc()).all()
 
         return step_runs
 
@@ -1230,6 +1232,11 @@ def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any
             if spec.max is not None and iv > spec.max:
                 iv = spec.max
             cleaned[key] = iv
+        if spec.type == "password_vault_integration":
+            try:
+                cleaned[key] = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"Parameter '{key}' must be a Password Vault connection")
         # Select / channel — validate against options whitelist
         if spec.type in ("select", "channel") and spec.options:
             allowed = [str(o.get("value")) for o in spec.options]
@@ -1244,7 +1251,7 @@ def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any
     return cleaned
 
 
-def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
+def _validate_tenant_refs(db: Session, tenant_id: Optional[str], flow_create) -> None:
     """Verify every agent_id / persona_id / sandboxed tool referenced by the
     generated FlowCreate belongs to the caller's tenant. Prevents cross-tenant
     resource leak through wizard-generated flows.
@@ -1291,20 +1298,108 @@ def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
             _check_tool(step.config.tool_name)
 
 
-def _check_required_credentials(db: Session, tenant_id: str, required: List[str]) -> List[str]:
+def _resolve_template_tenant_id(db: Session, ctx: TenantContext, params: Dict[str, Any]) -> Optional[str]:
+    """Resolve the tenant that should own a UI-instantiated template.
+
+    Tenant users always operate inside their own tenant. Global admins do not
+    have a tenant on the session, so UI-first templates infer the tenant from
+    tenant-scoped resources the user selected in the wizard (agent and/or
+    Password Vault integration). All selected resources must agree.
+    """
+    effective_tenant_id = ctx.tenant_id
+    candidate_tenants: List[str] = []
+
+    def _add_candidate(label: str, tenant_id: Optional[str]) -> None:
+        nonlocal effective_tenant_id
+        if tenant_id is None:
+            return
+        if effective_tenant_id and tenant_id != effective_tenant_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} belongs to tenant {tenant_id}, not {effective_tenant_id}",
+            )
+        if not ctx.can_access_resource(tenant_id):
+            raise HTTPException(status_code=422, detail=f"{label} not found in this tenant")
+        candidate_tenants.append(tenant_id)
+
+    agent_id = params.get("agent_id")
+    if agent_id not in (None, ""):
+        try:
+            agent_id_int = int(agent_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Parameter 'agent_id' must be a number")
+        row = db.query(Agent.tenant_id).filter(Agent.id == agent_id_int).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Agent {agent_id_int} not found")
+        _add_candidate(f"Agent {agent_id_int}", row[0])
+
+    vault_integration_id = params.get("password_vault_integration_id")
+    if vault_integration_id not in (None, ""):
+        from models import PasswordVaultIntegration
+
+        try:
+            vault_integration_id_int = int(vault_integration_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Parameter 'password_vault_integration_id' must be a number")
+        row = db.query(PasswordVaultIntegration.tenant_id).filter(
+            PasswordVaultIntegration.id == vault_integration_id_int,
+            PasswordVaultIntegration.type == "password_vault",
+            PasswordVaultIntegration.is_active == True,  # noqa: E712
+        ).first()
+        if not row:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Password Vault integration {vault_integration_id_int} not found",
+            )
+        _add_candidate(f"Password Vault integration {vault_integration_id_int}", row[0])
+
+    unique_candidates = {tenant_id for tenant_id in candidate_tenants if tenant_id}
+    if len(unique_candidates) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Selected template resources belong to different tenants",
+        )
+    if effective_tenant_id is None and unique_candidates:
+        effective_tenant_id = unique_candidates.pop()
+    return effective_tenant_id
+
+
+def _check_required_credentials(
+    db: Session,
+    tenant_id: Optional[str],
+    required: List[str],
+    params: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """BUG-627: pre-flight check that every required credential declared by a
     template is configured for the tenant. Returns the list of missing
     credentials (empty list means all present).
 
-    Credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
-    'google_calendar'. System-wide keys (tenant_id IS NULL) satisfy the
-    requirement too, so a shared Gmail credential works for any tenant.
+    Most credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
+    'google_calendar'. Provider-shaped Hub integrations such as Password
+    Vault/1Password are checked against their own tenant-scoped integration
+    rows so UI-created financial templates can depend on them without a seed.
     """
     if not required:
         return []
-    from models import ApiKey
+    from models import ApiKey, PasswordVaultIntegration
     missing: List[str] = []
+    params = params or {}
     for service in required:
+        normalized = str(service or "").strip().lower()
+        if normalized in {"password_vault", "onepassword", "1password"}:
+            query = db.query(PasswordVaultIntegration.id).filter(
+                PasswordVaultIntegration.tenant_id == tenant_id,
+                PasswordVaultIntegration.type == "password_vault",
+                PasswordVaultIntegration.is_active == True,  # noqa: E712
+            )
+            integration_id = params.get("password_vault_integration_id")
+            if integration_id not in (None, ""):
+                query = query.filter(PasswordVaultIntegration.id == int(integration_id))
+            row = query.first()
+            if not row:
+                missing.append(service)
+            continue
+
         row = db.query(ApiKey.id).filter(
             ApiKey.service == service,
             ApiKey.is_active == True,  # noqa: E712
@@ -1343,7 +1438,8 @@ def instantiate_flow_template(
     # or when the tenant plans to configure credentials later), we still let
     # the instantiate through, but the default is strict.
     skip_cred_check = bool((req.params or {}).get("skip_credential_check")) if hasattr(req, "params") else False
-    missing = _check_required_credentials(db, tenant_context.tenant_id, tmpl.required_credentials)
+    effective_tenant_id = _resolve_template_tenant_id(db, tenant_context, cleaned_params)
+    missing = _check_required_credentials(db, effective_tenant_id, tmpl.required_credentials, cleaned_params)
     if missing and not skip_cred_check:
         raise HTTPException(
             status_code=400,
@@ -1360,7 +1456,7 @@ def instantiate_flow_template(
 
     # 2. Run builder
     try:
-        flow_create = tmpl.build(cleaned_params, tenant_context.tenant_id)
+        flow_create = tmpl.build(cleaned_params, effective_tenant_id)
     except KeyError as e:
         raise HTTPException(status_code=422, detail=f"Missing required parameter: {e}")
     except (ValueError, TypeError) as e:
@@ -1392,13 +1488,13 @@ def instantiate_flow_template(
         )
 
     # 3. Enforce multi-tenant isolation on every referenced resource
-    _validate_tenant_refs(db, tenant_context.tenant_id, flow_create)
+    _validate_tenant_refs(db, effective_tenant_id, flow_create)
 
     try:
         db_flow = FlowDefinition(
             name=flow_create.name,
             description=flow_create.description,
-            tenant_id=tenant_context.tenant_id,
+            tenant_id=effective_tenant_id,
             execution_method=flow_create.execution_method.value,
             scheduled_at=flow_create.scheduled_at,
             recurrence_rule=flow_create.recurrence_rule.model_dump() if flow_create.recurrence_rule else None,
@@ -1438,7 +1534,7 @@ def instantiate_flow_template(
             db.commit()
 
         log_tenant_event(
-            db, tenant_context.tenant_id, tenant_context.user.id,
+            db, effective_tenant_id, tenant_context.user.id,
             TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id),
             {"name": db_flow.name, "template_id": template_id}, request,
         )
@@ -1562,6 +1658,36 @@ def get_tool_metadata(
                                 "name": "query",
                                 "required": True,
                                 "description": "Search query text"
+                            }
+                        ]
+                    }]
+                },
+                "password_vault": {
+                    "id": "password_vault",
+                    "name": "Password Vault",
+                    "commands": [{
+                        "id": "resolve",
+                        "name": "resolve",
+                        "parameters": [
+                            {
+                                "name": "integration_id",
+                                "required": True,
+                                "description": "Password Vault integration id"
+                            },
+                            {
+                                "name": "item_ref",
+                                "required": True,
+                                "description": "Vault item title or id"
+                            },
+                            {
+                                "name": "field_name",
+                                "required": True,
+                                "description": "Field label/id/purpose to resolve"
+                            },
+                            {
+                                "name": "vault",
+                                "required": False,
+                                "description": "Optional vault override"
                             }
                         ]
                     }]

@@ -1414,6 +1414,63 @@ export interface HubIntegration {
   can_draft?: boolean | null
 }
 
+export interface BrowserSessionProfile {
+  id: number
+  tenant_id: string
+  integration_name: string
+  name: string
+  profile_name: string
+  provider_type: string
+  mode: string
+  browser_type: string
+  headless: boolean
+  timeout_seconds: number
+  viewport_width: number
+  viewport_height: number
+  session_persistence: boolean
+  session_ttl_seconds: number
+  cdp_url?: string | null
+  is_active: boolean
+  health_status?: string | null
+  health_status_reason?: string | null
+  has_storage_state: boolean
+  storage_state_imported_at?: string | null
+  storage_state_summary: {
+    cookie_count?: number
+    origin_count?: number
+    domains?: string[]
+  }
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface BrowserSessionProfileCreateRequest {
+  integration_name: string
+  profile_name: string
+  provider_type?: string
+  mode?: string
+  browser_type?: string
+  headless?: boolean
+  timeout_seconds?: number
+  viewport_width?: number
+  viewport_height?: number
+  session_ttl_seconds?: number
+  cdp_url?: string | null
+  storage_state_json?: any
+  is_active?: boolean
+}
+
+export interface BrowserSessionProfileUpdateRequest extends Partial<BrowserSessionProfileCreateRequest> {
+  clear_storage_state?: boolean
+}
+
+export interface BrowserSessionProfileTestResponse {
+  ok: boolean
+  status: string
+  details: Record<string, any>
+  errors: string[]
+}
+
 export interface ConversationDetails {
   sender_key: string
   working_memory: Array<{ role: string; content: string; timestamp: string }>
@@ -1450,6 +1507,13 @@ export interface SkillProviderIntegration {
   name: string
   email?: string
   workspace?: string
+  provider?: string
+  provider_mode?: string
+  default_vault?: string
+  default_vault_id?: string
+  allow_metadata_read?: boolean
+  allow_secret_read?: boolean
+  allow_totp_read?: boolean
   health_status: string
 }
 
@@ -1985,6 +2049,137 @@ export interface GitHubIntegrationUpdateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
+}
+
+export type PasswordVaultProviderType = 'onepassword'
+
+export interface PasswordVaultIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  provider: PasswordVaultProviderType | string
+  provider_label?: string | null
+  account_url?: string | null
+  account_email?: string | null
+  token_preview?: string | null
+  service_account_token_preview?: string | null
+  default_vault?: string | null
+  default_vault_id?: string | null
+  default_vault_name?: string | null
+  allowed_items?: string[]
+  allowed_fields?: string[]
+  allow_secret_read?: boolean
+  allow_totp_read?: boolean
+  allow_metadata_read?: boolean
+  is_active: boolean
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  vault_count?: number | null
+  item_count?: number | null
+  skill_attached_count?: number | null
+  flow_reference_count?: number | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface PasswordVaultIntegrationCreateRequest {
+  integration_name: string
+  provider: PasswordVaultProviderType | string
+  service_account_token: string
+  account_url?: string | null
+  account_email?: string | null
+  default_vault?: string | null
+  default_vault_name?: string | null
+  default_vault_id?: string | null
+  allowed_items?: string[]
+  allowed_fields?: string[]
+  allow_secret_read?: boolean
+  allow_totp_read?: boolean
+  allow_metadata_read?: boolean
+  is_active?: boolean
+}
+
+export interface PasswordVaultIntegrationUpdateRequest {
+  integration_name?: string
+  provider?: PasswordVaultProviderType | string
+  service_account_token?: string | null
+  account_url?: string | null
+  account_email?: string | null
+  default_vault?: string | null
+  default_vault_name?: string | null
+  default_vault_id?: string | null
+  allowed_items?: string[]
+  allowed_fields?: string[]
+  allow_secret_read?: boolean
+  allow_totp_read?: boolean
+  allow_metadata_read?: boolean
+  is_active?: boolean
+}
+
+export interface PasswordVaultSecretOverride {
+  id: number
+  tenant_id: string
+  integration_id: number
+  vault?: string | null
+  item_ref: string
+  field_name: string
+  field_type: string
+  value_preview: string
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface PasswordVaultSecretOverrideRequest {
+  vault?: string | null
+  item_ref: string
+  field_name: string
+  field_type?: string
+  value: string
+}
+
+export interface PasswordVaultTestResponse {
+  success: boolean
+  message?: string | null
+  error?: string | null
+  vault_count?: number | null
+  item_count?: number | null
+  reference?: string | null
+}
+
+export interface PasswordVaultVault {
+  id: string
+  name: string
+  description?: string | null
+  item_count?: number | null
+}
+
+export interface PasswordVaultItemField {
+  id?: string | null
+  name?: string | null
+  label?: string | null
+  type?: string | null
+}
+
+export interface PasswordVaultItem {
+  id: string
+  title: string
+  category?: string | null
+  vault_id?: string | null
+  fields?: PasswordVaultItemField[]
+}
+
+export interface PasswordVaultItemTestRequest {
+  vault?: string | null
+  vault_id?: string | null
+  item_ref?: string | null
+  item_id?: string | null
+  field_name?: string | null
+  reference?: string | null
+  mode?: 'metadata' | 'field' | 'totp'
 }
 
 // v0.7.0: PR Submitted criteria envelope — matches the backend canonical
@@ -2559,7 +2754,7 @@ export interface SchedulerStats {
 export interface FlowTemplateParamSpec {
   key: string
   label: string
-  type: 'text' | 'number' | 'select' | 'time' | 'contact' | 'agent' | 'channel' | 'textarea' | 'toggle' | 'tool' | 'persona'
+  type: 'text' | 'number' | 'select' | 'time' | 'contact' | 'agent' | 'channel' | 'textarea' | 'toggle' | 'tool' | 'persona' | 'password_vault_integration'
   required: boolean
   default: any
   options: Array<{ value: any; label: string }> | null
@@ -2577,6 +2772,11 @@ export interface FlowTemplateSummary {
   highlights: string[]
   required_credentials: string[]
   params_schema: FlowTemplateParamSpec[]
+  preview_steps?: Array<{
+    position: number
+    type: string
+    name: string
+  }> | null
 }
 
 export interface FlowDefinition {
@@ -2665,12 +2865,64 @@ export interface ConversationThread {
 export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword' | 'triggered'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store' | 'financial_utility_automation'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
 // Summarization prompt mode options
 export type SummarizationPromptMode = 'append' | 'replace'
+
+export interface FlowHeaderConfig {
+  key?: string
+  value?: string
+}
+
+export interface FlowSecretReferenceConfig {
+  target?: string
+  key?: string
+  reference?: string
+}
+
+export interface BrowserSelectorConfig {
+  name?: string
+  action?: string
+  selector?: string
+  fallback_selector?: string
+  value?: string
+  script?: string
+  state?: string
+  timeout_ms?: number | string
+  url_contains?: string
+  attribute?: string
+  full_page?: boolean | string
+  wait_until?: string
+  x?: number | string
+  y?: number | string
+  delay_ms?: number | string
+  tab_id?: string
+  fallback_script?: string
+}
+
+export interface DataExtractionRuleConfig {
+  target?: string
+  field?: string
+  source_step?: string
+  source?: string
+  path?: string
+  json_path?: string
+  selector?: string
+  pattern?: string
+  value?: string
+  default?: string
+}
+
+export interface DataParserRuleConfig {
+  field?: string
+  parser?: string
+  options?: string
+}
+
+export type FinancialRecordKind = 'utility_bill' | 'tax_obligation' | 'income_transfer' | 'investment_snapshot'
 
 export interface FlowStepConfig {
   channel?: 'whatsapp' | 'telegram' | 'slack' | 'discord'
@@ -2704,11 +2956,90 @@ export interface FlowStepConfig {
   // Pre-existing fields the editor already touches but were never typed.
   // Hoisted into the interface so future edits stay type-checked.
   output_alias?: string
+  action?: string
+  integration_id?: number | null
+  vault?: string | null
+  item_ref?: string | null
+  item_id?: string | null
+  field_name?: string | null
+  username_handle?: string | null
+  password_handle?: string | null
+  scheme?: string | null
   tool_type?: 'built_in' | 'custom' | string
   tool_id?: string
   command_id?: string
   skill_type?: string
   prompt?: string
+  // Browser automation primitive config
+  url?: string
+  mode?: string
+  provider_type?: string
+  timeout_seconds?: number
+  use_tool_mode?: boolean
+  tool_action?: string
+  tool_arguments?: Record<string, any>
+  selectors?: BrowserSelectorConfig[]
+  browser_secret_references?: FlowSecretReferenceConfig[]
+  session_persistence?: boolean
+  session_ttl_seconds?: number
+  browser_session_profile_name?: string
+  browser_session_integration_id?: number | null
+  optional?: boolean
+  treat_failure_as_skipped?: boolean
+  // HTTP request primitive config
+  method?: string
+  headers?: FlowHeaderConfig[] | Record<string, any>
+  body?: string
+  secret_references?: FlowSecretReferenceConfig[]
+  http_url?: string
+  http_method?: string
+  http_headers?: FlowHeaderConfig[]
+  http_body?: string
+  http_secret_references?: FlowSecretReferenceConfig[]
+  // Data transform primitive config
+  transform_mode?: string
+  financial_parser_mode?: string | null
+  source_steps?: Record<string, string>
+  raw_response_handle?: string
+  raw_response_handles?: Record<string, string>
+  source_path?: string
+  json_path?: string
+  extraction_rules?: DataExtractionRuleConfig[]
+  parser_rules?: DataParserRuleConfig[]
+  record_mapping?: Record<string, any>
+  emit_raw_bill_handle?: boolean
+  emit_financial_record_handle?: boolean
+  // Financial bill store primitive config
+  record_kind?: FinancialRecordKind | string
+  financial_record_source_step?: string
+  financial_record_dedupe_key?: string
+  financial_record_key_fields?: string
+  financial_record_payload?: string
+  financial_source_step?: string
+  financial_automation_key?: string
+  financial_bill_source?: string
+  // Financial utility automation step config
+  financial_automation_template?: string
+  financial_provider?: string
+  financial_unit_id?: string
+  financial_asset?: string
+  financial_address?: string
+  financial_customer_code?: string
+  financial_delivery_location?: string
+  financial_username_field?: string
+  financial_password_field?: string
+  financial_browser_timeout_ms?: number
+  financial_notification_enabled?: boolean
+  financial_notification_recipient?: string
+  financial_notification_agent_id?: number
+  financial_password_vault_integration_id?: number | null
+  financial_password_vault_provider?: string | null
+  financial_password_vault_vault_id?: string | null
+  financial_password_vault_vault_name?: string | null
+  financial_password_vault_item_id?: string | null
+  financial_password_vault_item_title?: string | null
+  financial_password_vault_field_name?: string | null
+  financial_password_vault_reference?: string | null
 }
 
 export interface CreateFlowStepData {
@@ -5714,6 +6045,47 @@ export const api = {
     return res.json()
   },
 
+  async listBrowserSessionProfiles(): Promise<BrowserSessionProfile[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/browser-session-profiles`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch browser session profiles')
+    return res.json()
+  },
+
+  async createBrowserSessionProfile(data: BrowserSessionProfileCreateRequest): Promise<BrowserSessionProfile> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/browser-session-profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create browser session profile')
+    return res.json()
+  },
+
+  async updateBrowserSessionProfile(id: number, data: BrowserSessionProfileUpdateRequest): Promise<BrowserSessionProfile> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/browser-session-profiles/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update browser session profile')
+    return res.json()
+  },
+
+  async deleteBrowserSessionProfile(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/browser-session-profiles/${id}`, { method: 'DELETE' })
+    if (!res.ok) await handleApiError(res, 'Failed to delete browser session profile')
+  },
+
+  async testBrowserSessionProfile(id: number, data: { url?: string | null } = {}): Promise<BrowserSessionProfileTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/browser-session-profiles/${id}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test browser session profile')
+    return res.json()
+  },
+
   async getTTSProviderVoices(providerName: string): Promise<TTSVoice[]> {
     const res = await authenticatedFetch(`${API_URL}/api/tts-providers/${providerName}/voices`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch TTS provider voices')
@@ -6340,6 +6712,12 @@ export const api = {
   async listFlowTemplates(): Promise<FlowTemplateSummary[]> {
     const res = await authenticatedFetch(`${API_URL}/api/flows/templates`)
     if (!res.ok) await handleApiError(res, 'Failed to load flow templates')
+    return res.json()
+  },
+
+  async getFlowTemplate(templateId: string): Promise<FlowTemplateSummary> {
+    const res = await authenticatedFetch(`${API_URL}/api/flows/templates/${templateId}`)
+    if (!res.ok) await handleApiError(res, 'Failed to load flow template')
     return res.json()
   },
 
@@ -7185,6 +7563,110 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
+  },
+
+  // Password Vault Integrations (Hub-side). Initial provider: 1Password.
+  async listPasswordVaultIntegrations(): Promise<PasswordVaultIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch password vault integrations')
+    return res.json()
+  },
+
+  async createPasswordVaultIntegration(data: PasswordVaultIntegrationCreateRequest): Promise<PasswordVaultIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create password vault integration')
+    return res.json()
+  },
+
+  async updatePasswordVaultIntegration(id: number, data: PasswordVaultIntegrationUpdateRequest): Promise<PasswordVaultIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update password vault integration')
+    return res.json()
+  },
+
+  async deletePasswordVaultIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete password vault integration')
+  },
+
+  async testPasswordVaultIntegration(id: number, data: { reference?: string | null } = {}): Promise<PasswordVaultTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${id}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test password vault integration')
+    return res.json()
+  },
+
+  async listPasswordVaultVaults(integrationId: number): Promise<PasswordVaultVault[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/vaults`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch password vault vaults')
+    const data = await res.json()
+    return Array.isArray(data) ? data : data.vaults || []
+  },
+
+  async listPasswordVaultItems(integrationId: number, vaultId?: string | null): Promise<PasswordVaultItem[]> {
+    const params = new URLSearchParams()
+    if (vaultId) params.set('vault', vaultId)
+    const query = params.toString()
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/items${query ? `?${query}` : ''}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch password vault items')
+    const data = await res.json()
+    return Array.isArray(data) ? data : data.items || []
+  },
+
+  async testPasswordVaultItem(integrationId: number, data: PasswordVaultItemTestRequest): Promise<PasswordVaultTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/item-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test password vault item')
+    return res.json()
+  },
+
+  async listPasswordVaultSecretOverrides(integrationId: number): Promise<PasswordVaultSecretOverride[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/secret-overrides`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch managed password vault fields')
+    return res.json()
+  },
+
+  async createPasswordVaultSecretOverride(integrationId: number, data: PasswordVaultSecretOverrideRequest): Promise<PasswordVaultSecretOverride> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/secret-overrides`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to save managed password vault field')
+    return res.json()
+  },
+
+  async updatePasswordVaultSecretOverride(integrationId: number, secretId: number, data: Partial<PasswordVaultSecretOverrideRequest>): Promise<PasswordVaultSecretOverride> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/secret-overrides/${secretId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update managed password vault field')
+    return res.json()
+  },
+
+  async deletePasswordVaultSecretOverride(integrationId: number, secretId: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/password-vault-integrations/${integrationId}/secret-overrides/${secretId}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete managed password vault field')
   },
 
   // PR Submitted criteria evaluator. Posts the criteria + an optional sample
