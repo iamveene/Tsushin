@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Password Vault UI closeout and agent-wizard linking (2026-05-06)
+
+- Polished the Hub → Tool APIs Password Vault card so the provider-neutral surface explicitly shows the 1Password provider, skill readiness, flow readiness, managed fields, and redacted reference testing.
+- Tightened the agent skill UX: the Add Skill modal now flags provider-backed prerequisites, the Password Vault skill card surfaces missing Hub connections, and the provider modal links directly back to Hub Tool APIs when no 1Password connection exists.
+- Updated the guided Agent Wizard so selecting `Password Vault` is UI-complete: it loads tenant 1Password connections, requires/selects a connection, exposes read/TOTP/basic-auth capability toggles, persists the skill config, and creates the `AgentSkillIntegration` link during agent creation.
+- Added the missing `compose_basic_auth` capability toggle to the Password Vault skill UI so Consigaz-style bootstrap headers stay explicit and capability-gated instead of hidden in backend config.
+- Cleaned the financial Flow list after UI migration QA: accepted rows now use the `Finan | ...` naming convention, duplicate `QA UI Recreate ...` rows were removed, and PMVV has no active Flow row while it remains aborted.
+- PMVV remains aborted by request because its CAPTCHA boundary consumed the validation budget; status and handoff notes live in `.private/financial-automation-migration/pmvv-aborted-2026-05-06.md`.
+- Fixed the Agent detail custom-skill assignment route so global admins can open Studio → Manage Agent → Skills without a spurious `/api/agents/{id}/custom-skills` 404 while preserving tenant scoping for regular users.
+- Fixed the Hub → Tool APIs Password Vault endpoints so global admins can see and operate existing tenant-scoped 1Password connections in the UI, while tenant users still see only their own vault integrations.
+
+### Changed — Financial workflow migration acceptance (2026-05-05)
+
+- Clarified that Password Vault and 1Password setup remains UI-first through Hub → Tool APIs and Flow/Skill pickers.
+- Documented migrated financial workflow acceptance around visible primitive Flow nodes: vault credential, HTTP/browser automation, extraction/transform, storage/dedupe, gate, and notification.
+- Marked `financial_utility_automation` / `Utility Bill` as legacy compatibility for existing canaries, not sufficient by itself for migrated workflow acceptance.
+- Added the validation gate for each workflow: UI recreation/edit, manual run, local state update, dedupe proof on a second run, and conditional notification notify/skip validation.
+
+### Added — Password Vault provider foundation (2026-05-05)
+
+- Added a tenant-scoped `PasswordVaultIntegration` Hub provider table (Alembic `0086`) with encrypted service-account tokens, provider-neutral fields, default vault metadata, item/field allowlists, and read/TOTP/metadata permission toggles. The backend image now includes the official `op` CLI binary via the `1password/op:2` Docker stage so 1Password service-account flows work inside the container.
+- Added `Password Vault` as a first-class tool-only skill backed by 1Password. Agents can bind the Hub integration from the Skills UI, choose capability toggles, and receive a filtered `password_vault_operation` tool spec. Secret outputs are redacted and trusted executors receive only short-lived handles.
+- Added Hub > Tool APIs UI for creating, editing, testing, and deleting Password Vault connections, plus Flow editor support for both a programmatic `Password Vault` step and a `password_vault` built-in Tool step. The same picker can also configure a Password Vault skill step in tool mode.
+- Added `/api/hub/password-vault-integrations` CRUD/test/list-vault/list-item/reference-test routes and `/api/skill-providers/password_vault` provider listing. All reads and writes require tenant context and Hub permissions, and tests assert provider listing, capability gating, redaction, and flow persistence safety.
+- Added UI-first financial Flow primitives: explicit `HTTP Request`, `Data Transform`, `Financial Record Store`, and `Utility Bill Store` nodes, plus Browser Automation action fields that preserve editable action/selector/value/tool-argument configuration. Runtime outputs are redacted and raw browser/API payloads are passed through short-lived handles when a downstream transform needs them.
+- Added a first catalog of seven UI-first financial workflow templates for Cond. São Blas, Consigaz, Medsenior/Samedil, Cypreste/Superlógica, EDP, PMVV, and Husky. DETRAN-ES and B3 were intentionally removed from the active migration scope for this round. These templates import the corresponding Finan playbook actions into visible nodes rather than `financial_utility_automation`, including wait-for-selector, wait-for-URL, dismiss-modal, execute-script, TOTP, and explicit CAPTCHA-boundary steps where present. They are UI recreation assets and per-workflow validation targets, not proof that each provider migration is accepted.
+- Moved provider bootstrap secrets such as Consigaz `basic_auth` into visible Password Vault steps so imported playbook templates do not persist raw provider credentials.
+- Kept `financial_utility_automation` as a legacy compatibility handler for existing canary flows only. Opaque single-step financial flows must not be counted as migrated or accepted.
+- Validated only the `Consigaz - Gas Cond. Sao Blas 204` canary end to end so far: recreated through the UI as a 16-step visible Flow, edited through the UI panels, run manually, persisted a redacted utility-bill record, proved dedupe on a second run, and recorded the unchanged-bill Gate/Notification path as explicit skipped nodes in run `#45366`.
+
 ### Release 0.7.0 — Agent Teams Phase 10 Watcher Team Runs (2026-05-05)
 
 **Summary.** Added the Agent Teams Watcher observability slice. Operators now have a tenant-wide, read-only Team Runs surface for listing, filtering, live-monitoring, and drilling into team executions without leaving Watcher.

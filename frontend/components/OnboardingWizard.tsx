@@ -354,7 +354,7 @@ export default function OnboardingWizard() {
       highlightFeatures: [
         'Create custom agents',
         'Configure agent personalities (Personas)',
-        'Assign skills and tools',
+        'Assign skills and tools, including provider-backed skills such as Password Vault',
         'Set trigger conditions'
       ],
       actionButton: {
@@ -370,6 +370,7 @@ export default function OnboardingWizard() {
       highlightFeatures: [
         'System AI auto-configured from your setup provider',
         'Add multiple AI providers for failover',
+        'Tool APIs for Jira, GitHub, and Password Vault providers such as 1Password',
         'Google OAuth for Gmail & Calendar (optional)',
         'Encrypted API key storage'
       ],
@@ -400,7 +401,8 @@ export default function OnboardingWizard() {
       targetSelector: 'a[href="/flows"]',
       content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code — mix LLM-powered (agentic) steps with deterministic (programmatic) steps and conditional gates (hybrid).',
       highlightFeatures: [
-        'Visual flow builder with 12 step types across three families: agentic (conversation, skill, summarization), programmatic (message, notification, tool, slash_command), hybrid (gate, browser_automation, source, subflow)',
+        'Visual flow builder with agentic, programmatic, and hybrid step families, including conversation, skill, notification, tool, password vault, browser automation, transform, storage, gate, source, and subflow nodes',
+        'Password Vault, browser automation, transform, storage/dedupe, gate, and notification nodes can be edited from scratch for UI-first financial workflows',
         'Five built-in templates ready to instantiate: Daily Email Digest, Weekly Calendar Summary, New Contact Welcome, Jira Weekly Triage, GitHub Release Notes',
         'NEW in v0.7.0: source step lock — flows bound to a trigger always start from a position-1 source node carrying the wake event payload; downstream steps reference {{source.payload.*}} and prior step outputs via Jinja2',
         'NEW in v0.7.0: system-managed auto-flows generated from every trigger — a Webhook/Email/Jira/GitHub trigger spawns a 4-node flow (source → gate → conversation → notification) with the is_system_owned flag, kept in sync with the trigger',

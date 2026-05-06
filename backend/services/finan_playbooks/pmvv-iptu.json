@@ -1,0 +1,142 @@
+{
+  "name": "PMVV - IPTU Vila Velha",
+  "version": "3.2.0",
+  "type": "tax_iptu",
+  "provider": "pmvv",
+  "portal": {
+    "url": "https://tributacao.vilavelha.es.gov.br",
+    "login_url": "https://tributacao.vilavelha.es.gov.br/tbw/loginWeb.jsp?execobj=ServicosWebSite&tab=tabPesqImovel",
+    "credentials_ref": "IPTU San Blas"
+  },
+  "units": [
+    {
+      "id": "san-blas",
+      "asset": "San Blas",
+      "active": true
+    }
+  ],
+  "max_unit_retries": 3,
+  "run_timeout": 600000,
+  "unit_step_range": [1, 9],
+  "steps": [
+    {
+      "id": 1,
+      "action": "navigate",
+      "url": "https://tributacao.vilavelha.es.gov.br/tbw/loginWeb.jsp?execobj=ServicosWebSite&tab=tabPesqImovel",
+      "description": "Navegar para Pesquisa de Debito Imobiliario da PMVV"
+    },
+    {
+      "id": 2,
+      "action": "wait_selector",
+      "selector": "input#i20inscricao, input[name='i20inscricao']",
+      "timeout": 15000,
+      "description": "Aguardar carregamento do formulario de consulta IPTU"
+    },
+    {
+      "id": 3,
+      "action": "fill",
+      "selector": "input#i20inscricao",
+      "value": "{{credentials.inscricao}}",
+      "description": "Preencher inscricao do imovel"
+    },
+    {
+      "id": 4,
+      "action": "fill",
+      "selector": "input#i20cnpj",
+      "value": "{{credentials.cpf}}",
+      "description": "Preencher CPF do proprietario"
+    },
+    {
+      "id": 5,
+      "action": "solve_captcha",
+      "selector": "img[src*='getCaptcha'], img[src*='captcha']",
+      "input_selector": "input#i20captchafield, input[name='i20captchafield'], input[name*='captcha' i], input[id*='captcha' i]",
+      "submit_selector": "button#i20btnConsultar, button[name='i20btnConsultar'], button:has-text('Consultar')",
+      "solver_provider": "ollama",
+      "ollama_model": "gemma4:latest",
+      "captcha_length": 5,
+      "max_attempts": 3,
+      "post_submit_wait_ms": 5000,
+      "success_selector": "#i20panelresultos",
+      "error_text_regex": "incorreto|nao confere|não confere|captcha invalido|captcha inválido|inválido|invalido",
+      "timeout": 90000,
+      "description": "Resolver CAPTCHA + submeter formulario (solve_captcha lida com submit e retry interno)"
+    },
+    {
+      "id": 6,
+      "action": "extract",
+      "selector": "body",
+      "description": "Extrair dados de IPTU e taxas do imovel (tipo, valor, vencimento, status)",
+      "timeout": 15000,
+      "fields": {
+        "year": {
+          "selector": "body",
+          "extract": "javascript",
+          "script": "(() => { const rows = document.querySelectorAll('table tr'); for (const row of rows) { const cells = Array.from(row.querySelectorAll('td')); if (cells.length > 3 && cells[1]?.textContent?.trim() === 'IPTU') { return cells[2]?.textContent?.trim() || ''; } } return ''; })()"
+        },
+        "total_amount": {
+          "selector": "body",
+          "extract": "javascript",
+          "script": "(() => { const t = document.body.innerText; const m = t.match(/Total\\s+dos\\s+d[eé]bitos[\\s\\S]*?([\\d.,]+)\\s*$/m); if (m) return m[1]; const rows = document.querySelectorAll('table tr'); let total = 0; for (const row of rows) { const cells = Array.from(row.querySelectorAll('td')); if (cells.length > 9 && cells[1]?.textContent?.trim() === 'IPTU') { const v = cells[9]?.textContent?.trim()?.replace('.','').replace(',','.'); if (v) total += parseFloat(v); } } return total > 0 ? total.toFixed(2) : ''; })()"
+        },
+        "installments_json": {
+          "selector": "body",
+          "extract": "javascript",
+          "script": "(() => { const rows = document.querySelectorAll('table tr'); const result = []; for (const row of rows) { const cells = Array.from(row.querySelectorAll('td')); if (cells.length < 10) continue; const lancamento = cells[1]?.textContent?.trim(); const exerc = cells[2]?.textContent?.trim(); const original = cells[3]?.textContent?.trim(); const dueDate = cells[4]?.textContent?.trim() || ''; const total = cells[9]?.textContent?.trim(); if (!lancamento || !exerc || !total || lancamento === 'Carregando') continue; if (exerc.match(/^\\d{4}$/)) { const amount = parseFloat(total.replace('.','').replace(',','.')); result.push({ number: lancamento + ' ' + exerc, amount: total.replace('.','').replace(',','.'), due_date: dueDate.match(/\\d{2}\\/\\d{2}\\/\\d{4}/) ? dueDate : '', barcode: '', status: amount > 0 ? 'pendente' : 'pago', year: exerc, type: lancamento, original: original }); } } return result.length > 0 ? JSON.stringify(result) : ''; })()"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "action": "click",
+      "selector": "a:has-text('Emitir DAM'), button:has-text('Emitir DAM'), a:has-text('Gerar Guia'), button:has-text('Gerar Guia'), a:has-text('Emitir'), input[value*='Emitir'], a:has-text('2ª Via'), a[href*='dam'], a[href*='guia']",
+      "timeout": 5000,
+      "optional": true,
+      "description": "Clicar em 'Emitir DAM' ou 'Gerar Guia' para obter codigo de barras (se disponivel)"
+    },
+    {
+      "id": 8,
+      "action": "wait_selector",
+      "selector": ".linha-digitavel, .barcode, .codigo-barras, [class*='barcode'], .modal.show, [class*='dam'], [class*='guia']",
+      "timeout": 8000,
+      "optional": true,
+      "description": "Aguardar carregamento da guia/DAM com codigo de barras"
+    },
+    {
+      "id": 9,
+      "action": "extract",
+      "selector": "body",
+      "description": "Extrair codigo de barras da guia de recolhimento (DAM/Guia IPTU)",
+      "timeout": 10000,
+      "fields": {
+        "barcode": {
+          "selector": "body",
+          "extract": "javascript",
+          "script": "(() => { const text = document.body.innerText || ''; const formatted = text.match(/(\\d{5}\\.\\d{5}\\s*\\d{5}\\.\\d{6}\\s*\\d{5}\\.\\d{6}\\s*\\d\\s*\\d{14})/); if (formatted) return formatted[1].replace(/[\\s.]/g, ''); const tributario = text.match(/(\\d{11,12}[\\s.-]?\\d{11,12}[\\s.-]?\\d{11,12}[\\s.-]?\\d{11,12})/); if (tributario) return tributario[1].replace(/[\\s.-]/g, ''); const numeric = text.match(/\\b(\\d{44,48})\\b/); if (numeric) return numeric[1]; const el = document.querySelector('.linha-digitavel, .barcode, .codigo-barras, [class*=\"barcode\"], [class*=\"linha-digitavel\"]'); if (el) { const elText = el.textContent || ''; const m = elText.match(/[\\d.\\s-]{44,60}/); if (m) return m[0].replace(/[\\s.-]/g, ''); } return ''; })()"
+        }
+      }
+    }
+  ],
+  "output": {
+    "per_unit": {
+      "unit_id": "{{unit.id}}",
+      "asset": "{{unit.asset}}",
+      "year": "{{extract.year}}",
+      "total_amount": "{{extract.total_amount}}",
+      "installments_json": "{{extract.installments_json}}",
+      "barcode": "{{extract.barcode}}"
+    }
+  },
+  "notes": [
+    "Pesquisa de Debito Imobiliario na PMVV (tributacao.vilavelha.es.gov.br)",
+    "Nao requer login — apenas inscricao + CPF do proprietario + CAPTCHA de imagem",
+    "Dados vem do 1Password (IPTU San Blas): campos inscricao e cpf",
+    "solve_captcha resolve CAPTCHA + submete formulario + verifica erro + retenta internamente",
+    "max_unit_retries=3 recarrega pagina inteira se CAPTCHA falha apos todas as tentativas",
+    "run_timeout=600000 (10min) overrides default 5min to accommodate CAPTCHA retries",
+    "Resultado: tabela Lancamentos com colunas Lancamento|Exerc|Original|Vencimento|...|Total",
+    "Step 6 extrai tipo, ano, valor original, vencimento, valor total, e status de cada lancamento",
+    "Steps 7-9: tentam emitir DAM/Guia e extrair codigo de barras (optional, portal pode nao ter)",
+    "Exercicios atrasados (2024, 2025) aparecem com juros e multa acumulados"
+  ]
+}

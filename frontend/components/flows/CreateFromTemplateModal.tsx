@@ -22,7 +22,9 @@ import {
   type CustomTool,
   type FlowTemplateSummary,
   type FlowTemplateParamSpec,
+  type PasswordVaultIntegration,
 } from '@/lib/client'
+import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
 
 type Step = 'pick' | 'params' | 'preview'
 
@@ -102,9 +104,10 @@ interface ParamInputProps {
   contacts: Contact[]
   personas: Persona[]
   customTools: CustomTool[]
+  passwordVaultIntegrations: PasswordVaultIntegration[]
 }
 
-function ParamInput({ spec, value, onChange, agents, contacts, personas, customTools }: ParamInputProps) {
+function ParamInput({ spec, value, onChange, agents, contacts, personas, customTools, passwordVaultIntegrations }: ParamInputProps) {
   const common = 'w-full px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-white text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none'
   const v = value ?? spec.default ?? ''
 
@@ -162,6 +165,18 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
           ))}
         </select>
       )
+    case 'password_vault_integration':
+      return (
+        <select value={String(v || '')} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)} className={common}>
+          <option value="">— select a Password Vault connection —</option>
+          {passwordVaultIntegrations.filter(i => i.is_active).map(i => (
+            <option key={i.id} value={String(i.id)}>
+              {i.integration_name || i.name || `Password Vault #${i.id}`}
+              {i.default_vault_name ? ` · ${i.default_vault_name}` : ''}
+            </option>
+          ))}
+        </select>
+      )
     case 'contact':
       return (
         <div className="flex gap-2">
@@ -197,6 +212,8 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
 export default function CreateFromTemplateModal({ agents, contacts, personas, customTools, onClose, onSuccess }: Props) {
   const [step, setStep] = useState<Step>('pick')
   const [templates, setTemplates] = useState<FlowTemplateSummary[]>([])
+  const [templateDetailsById, setTemplateDetailsById] = useState<Record<string, FlowTemplateSummary>>({})
+  const [passwordVaultIntegrations, setPasswordVaultIntegrations] = useState<PasswordVaultIntegration[]>([])
   const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [selected, setSelected] = useState<FlowTemplateSummary | null>(null)
   const [params, setParams] = useState<Record<string, any>>({})
@@ -211,15 +228,44 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
     return () => { cancelled = true }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    api.listPasswordVaultIntegrations()
+      .then(rows => { if (!cancelled) setPasswordVaultIntegrations(rows) })
+      .catch(() => { if (!cancelled) setPasswordVaultIntegrations([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!selected || templateDetailsById[selected.id]) return
+    let cancelled = false
+    api.getFlowTemplate(selected.id)
+      .then(detail => {
+        if (!cancelled) {
+          setTemplateDetailsById(current => ({ ...current, [selected.id]: detail }))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTemplateDetailsById(current => ({ ...current, [selected.id]: selected }))
+        }
+      })
+    return () => { cancelled = true }
+  }, [selected, templateDetailsById])
+
   // Initialize params with defaults when a template is picked
   useEffect(() => {
     if (!selected) return
     const init: Record<string, any> = {}
     for (const p of selected.params_schema) {
-      if (p.default !== null && p.default !== undefined) init[p.key] = p.default
+      if (p.type === 'password_vault_integration' && passwordVaultIntegrations.length === 1) {
+        init[p.key] = passwordVaultIntegrations[0].id
+      } else if (p.default !== null && p.default !== undefined) {
+        init[p.key] = p.default
+      }
     }
     setParams(init)
-  }, [selected])
+  }, [selected, passwordVaultIntegrations])
 
   const requiredMissing = useMemo(() => {
     if (!selected) return []
@@ -231,6 +277,32 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
       })
       .map(p => p.label)
   }, [selected, params])
+
+  const selectedDetail = selected ? (templateDetailsById[selected.id] || selected) : null
+  const previewSteps = selectedDetail?.preview_steps || []
+  const usesPasswordVault = Boolean(selected?.params_schema.some(p => p.type === 'password_vault_integration'))
+  const paramsForDisplay = selected?.params_schema.filter(spec => (
+    !usesPasswordVault || !['password_vault_integration_id', 'vault', 'vault_item_ref'].includes(spec.key)
+  )) || []
+  const wizardVaultValue: PasswordVaultReferenceValue = {
+    password_vault_integration_id: params.password_vault_integration_id ?? null,
+    password_vault_provider: passwordVaultIntegrations.find(i => i.id === Number(params.password_vault_integration_id))?.provider || null,
+    password_vault_vault_id: null,
+    password_vault_vault_name: params.vault || null,
+    password_vault_item_id: null,
+    password_vault_item_title: params.vault_item_ref || null,
+    password_vault_field_name: null,
+    password_vault_reference: null,
+  }
+
+  function updateWizardVaultReference(next: PasswordVaultReferenceValue) {
+    setParams(prev => ({
+      ...prev,
+      password_vault_integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+      vault: next.password_vault_vault_name || next.password_vault_vault_id || prev.vault || 'FinanApp',
+      vault_item_ref: next.password_vault_item_title || next.password_vault_item_id || prev.vault_item_ref || '',
+    }))
+  }
 
   async function handleCreate() {
     if (!selected) return
@@ -346,7 +418,21 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                 </div>
               </div>
 
-              {selected.params_schema.map(spec => (
+              {usesPasswordVault && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                    Password Vault item
+                    <span className="text-teal-400 ml-1">*</span>
+                  </label>
+                  <PasswordVaultReferencePicker
+                    value={wizardVaultValue}
+                    onChange={updateWizardVaultReference}
+                    compact
+                  />
+                </div>
+              )}
+
+              {paramsForDisplay.map(spec => (
                 <div key={spec.key}>
                   <label className="block text-sm font-medium text-slate-300 mb-1.5">
                     {spec.label}
@@ -360,6 +446,7 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                     contacts={contacts}
                     personas={personas}
                     customTools={customTools}
+                    passwordVaultIntegrations={passwordVaultIntegrations}
                   />
                   {spec.help && <p className="mt-1 text-xs text-slate-500">{spec.help}</p>}
                 </div>
@@ -380,6 +467,21 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                 </div>
               </div>
 
+              {previewSteps.length > 0 && (
+                <div>
+                  <h4 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Visible step graph</h4>
+                  <div className="rounded-lg bg-slate-900/40 border border-slate-700/50 divide-y divide-slate-800">
+                    {previewSteps.map(previewStep => (
+                      <div key={`${previewStep.position}-${previewStep.name}`} className="grid grid-cols-[3rem_1fr_10rem] gap-3 px-3 py-2 text-sm">
+                        <span className="font-mono text-slate-500">#{previewStep.position}</span>
+                        <span className="min-w-0 break-words text-slate-200">{previewStep.name}</span>
+                        <span className="min-w-0 break-words text-right font-mono text-xs text-teal-300">{previewStep.type}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <h4 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Configuration</h4>
                 <div className="rounded-lg bg-slate-900/40 border border-slate-700/50 divide-y divide-slate-800">
@@ -398,6 +500,12 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                     if (spec.type === 'persona' && v) {
                       const p = personas.find(p => p.id === Number(v))
                       if (p) display = p.name
+                    }
+                    if (spec.type === 'password_vault_integration' && v) {
+                      const integration = passwordVaultIntegrations.find(i => i.id === Number(v))
+                      if (integration) {
+                        display = integration.integration_name || integration.name || `Password Vault #${integration.id}`
+                      }
                     }
                     return (
                       <div key={spec.key} className="px-3 py-2 flex items-start justify-between gap-4 text-sm">

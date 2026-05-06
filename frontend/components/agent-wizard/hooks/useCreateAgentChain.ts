@@ -37,6 +37,8 @@ interface TranscriptSkillPayload {
   asr_instance_id?: number
 }
 
+const PROVIDER_SKILLS_WITH_INTEGRATION = new Set(['password_vault'])
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
@@ -229,6 +231,13 @@ export function useCreateAgentChain() {
         // Audio skills are handled via the audio chain below (with TTS binding).
         if (skillType === 'audio_tts' || skillType === 'audio_transcript' || skillType === 'audio_response') continue
         await api.updateAgentSkill(newAgentId, skillType, { is_enabled: true, config: cfg.config || {} })
+        if (PROVIDER_SKILLS_WITH_INTEGRATION.has(skillType) && cfg.config?.integration_id) {
+          await api.updateSkillIntegration(newAgentId, skillType, {
+            integration_id: Number(cfg.config.integration_id),
+            scheduler_provider: null,
+            config: undefined,
+          })
+        }
       }
     } catch (e) {
       wiz.setProgress({ status: 'error', failedStep: 'skills', message: errorMessage(e, 'Agent created, but attaching a built-in skill failed.') })

@@ -2022,6 +2022,92 @@ class FlowNodeRun(Base):
     )
 
 
+class FinancialUtilityBill(Base):
+    """
+    Tenant-scoped bill state produced by financial automation flows.
+
+    Sensitive boleto barcodes stay encrypted; flow outputs and UI summaries use
+    redacted previews only. The unique key mirrors the Finan playbook dedupe
+    contract so repeated automation runs update the same bill row.
+    """
+    __tablename__ = "financial_utility_bill"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    automation_key = Column(String(100), nullable=False, index=True)
+    provider = Column(String(50), nullable=False)
+    unit_id = Column(String(100), nullable=False)
+    asset = Column(String(255), nullable=True)
+    address = Column(Text, nullable=True)
+    reference_month = Column(String(7), nullable=False)  # MM/YYYY
+    due_date = Column(String(10), nullable=True)  # DD/MM/YYYY
+    amount_cents = Column(BigInteger, nullable=True)
+    currency = Column(String(3), nullable=False, default="BRL")
+    status = Column(String(100), nullable=True)
+    barcode_encrypted = Column(Text, nullable=True)
+    barcode_preview = Column(String(64), nullable=True)
+    raw_payload_json = Column(Text, nullable=True)
+    last_flow_run_id = Column(Integer, nullable=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "unit_id",
+            "reference_month",
+            name="uq_financial_utility_bill_dedupe",
+        ),
+        Index("idx_financial_utility_bill_tenant_provider", "tenant_id", "provider"),
+        Index("idx_financial_utility_bill_due_date", "tenant_id", "due_date"),
+    )
+
+
+class FinancialAutomationRecord(Base):
+    """
+    Generic tenant-scoped financial automation state.
+
+    Utility bills have a dedicated projection above for boleto-specific fields,
+    but PMVV/DETRAN/Husky/B3 need the same Flow-level storage/dedupe contract
+    before each provider gets richer product-specific projections. Store only
+    redacted, UI-safe payloads here; raw secrets, tokens, barcodes, and card
+    details must stay in provider-specific encrypted columns or short-lived
+    in-process handles.
+    """
+    __tablename__ = "financial_automation_record"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    record_type = Column(String(50), nullable=False, index=True)
+    automation_key = Column(String(100), nullable=False, index=True)
+    provider = Column(String(50), nullable=False, index=True)
+    subject_key = Column(String(255), nullable=False)
+    period_key = Column(String(64), nullable=False)
+    external_id = Column(String(255), nullable=True)
+    dedupe_key = Column(String(512), nullable=False)
+    title = Column(String(255), nullable=True)
+    status = Column(String(100), nullable=True)
+    amount_cents = Column(BigInteger, nullable=True)
+    currency = Column(String(3), nullable=True)
+    due_date = Column(String(10), nullable=True)
+    occurred_on = Column(String(10), nullable=True)
+    redacted_payload_json = Column(Text, nullable=True)
+    sensitive_payload_encrypted = Column(Text, nullable=True)
+    last_flow_run_id = Column(Integer, nullable=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "dedupe_key", name="uq_financial_automation_record_dedupe"),
+        Index("idx_financial_automation_record_tenant_type", "tenant_id", "record_type"),
+        Index("idx_financial_automation_record_provider", "tenant_id", "provider"),
+        Index("idx_financial_automation_record_period", "tenant_id", "period_key"),
+    )
+
+
 class ConversationThread(Base):
     """
     Phase 8.0: Unified Flow Architecture - Conversation Thread
@@ -2275,6 +2361,75 @@ class GitHubIntegration(HubIntegration):
     __table_args__ = (
         Index("idx_github_integration_provider", "provider"),
         Index("idx_github_integration_default_owner", "default_owner"),
+    )
+
+
+class PasswordVaultIntegration(HubIntegration):
+    """
+    Password Vault provider integration.
+
+    1Password is the first provider. The provider/auth columns are intentionally
+    generic so future vaults can plug into the same agent skill and flow nodes.
+    """
+    __tablename__ = "password_vault_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    provider = Column(String(32), nullable=False, server_default="onepassword")
+    auth_method = Column(String(32), nullable=False, server_default="service_account")
+    token_encrypted = Column(Text, nullable=True)
+    token_preview = Column(String(32), nullable=True)
+    account_url = Column(String(500), nullable=True)
+    account_email = Column(String(255), nullable=True)
+    default_vault = Column(String(200), nullable=True)
+    default_vault_id = Column(String(128), nullable=True)
+    allowed_items_json = Column(Text, nullable=True)
+    allowed_fields_json = Column(Text, nullable=True)
+    allow_secret_read = Column(Boolean, nullable=False, default=False, server_default="false")
+    allow_totp_read = Column(Boolean, nullable=False, default=False, server_default="false")
+    allow_metadata_read = Column(Boolean, nullable=False, default=True, server_default="true")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'password_vault',
+    }
+
+    __table_args__ = (
+        Index("idx_password_vault_integration_provider", "provider"),
+        Index("idx_password_vault_integration_default_vault", "default_vault"),
+    )
+
+
+class PasswordVaultSecretOverride(Base):
+    """
+    Tenant-managed secret field attached to a Password Vault integration.
+
+    This covers provider read-only cases, while still giving users a UI-first
+    way to define vault/item/field secrets consumed through the same Password
+    Vault flow node contract.
+    """
+    __tablename__ = "password_vault_secret_override"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), nullable=False, index=True)
+    integration_id = Column(Integer, ForeignKey("password_vault_integration.id", ondelete="CASCADE"), nullable=False, index=True)
+    vault = Column(String(200), nullable=True)
+    item_ref = Column(String(300), nullable=False)
+    field_name = Column(String(200), nullable=False)
+    field_type = Column(String(32), nullable=False, default="CONCEALED", server_default="CONCEALED")
+    value_encrypted = Column(Text, nullable=False)
+    value_preview = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "integration_id",
+            "vault",
+            "item_ref",
+            "field_name",
+            name="uq_password_vault_secret_override_field",
+        ),
+        Index("idx_password_vault_secret_override_lookup", "tenant_id", "integration_id", "item_ref", "field_name"),
     )
 
 
@@ -4383,6 +4538,10 @@ class BrowserAutomationIntegration(HubIntegration):
     # Session persistence (Phase 35a)
     session_persistence = Column(Boolean, default=False)
     session_ttl_seconds = Column(Integer, default=300)  # 5-minute idle timeout
+    session_profile_name = Column(String(120), nullable=True)
+    storage_state_encrypted = Column(Text, nullable=True)
+    storage_state_imported_at = Column(DateTime, nullable=True)
+    storage_state_summary_json = Column(Text, nullable=True)
 
     # CDP mode
     cdp_url = Column(String(255), nullable=True, default="http://host.docker.internal:9222")

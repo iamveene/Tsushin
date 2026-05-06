@@ -1019,8 +1019,9 @@ Step graph (text agents skip step 4):
 2. `POST /api/agents` with minimal payload (contact_id, system_prompt, persona_id / tone_preset_id, model_provider, model_name).
 3. `PUT /api/agents/{id}` with extended config (memory_size, memory_isolation_mode, enable_semantic_search, enabled_channels, vector_store_instance_id, vector_store_mode).
 4. Per-skill fan-out: `PUT /api/agents/{id}/skills/{type}` sequentially.
-5. Custom skills: `POST /api/agents/{id}/custom-skills` per selected id.
-6. Audio (audio/hybrid only): Kokoro → `POST /api/tts-instances`, poll `GET /api/tts-instances/{id}/container-status`, then `POST /api/tts-instances/{id}/assign-to-agent`. OpenAI/ElevenLabs → `PUT /api/agents/{id}/skills/audio_tts` with provider config only.
+5. Provider-backed skill links: when the guided wizard configures a provider-backed built-in skill such as `password_vault`, it also writes the `AgentSkillIntegration` row so the new agent is runnable without backend-only follow-up.
+6. Custom skills: `POST /api/agents/{id}/custom-skills` per selected id.
+7. Audio (audio/hybrid only): Kokoro → `POST /api/tts-instances`, poll `GET /api/tts-instances/{id}/container-status`, then `POST /api/tts-instances/{id}/assign-to-agent`. OpenAI/ElevenLabs → `PUT /api/agents/{id}/skills/audio_tts` with provider config only.
 
 **Partial-failure handling.** If any stage after step 2 fails, the agent row is preserved; the Progress step surfaces the failing stage and links to `/agents/{id}` in Studio rather than cascading a rollback delete.
 
@@ -1209,6 +1210,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
 | `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
 | `code_repository` | Code Repository | tool | Search/read/act on a connected source-control system. v0.7.0 ships GitHub (programmatic). 12 actions; read on by default (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`); write off by default (`create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`) — same capability-gating contract as `ticket_management` and the v0.7.0 granular Gmail send/reply/draft | `code_repository_skill.py` |
+| `password_vault` | Password Vault | tool | Resolve explicit vault references for agents and flows without exposing raw secret values. v0.7.x ships 1Password service-account support through Hub → Tool APIs and returns redacted metadata plus short-lived secret handles for trusted executors | `password_vault_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
@@ -1239,7 +1241,7 @@ The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-
 
 #### 9.2.1 Capability-Gated Skills (v0.7.0)
 
-Three v0.7.0 skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
+Four v0.7.x skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub), `password_vault` (1Password), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
 
 1. **Single-tool, multi-action.** Each skill exposes ONE MCP/LLM tool (`ticket_operation`, `repository_operation`, `gmail_operation`) whose first argument is an `action` enum. Read actions are on by default; write actions ship implemented but disabled by default per agent.
 2. **Tool-spec gating, not runtime gating.** Disabled actions are filtered out of the per-agent OpenAI / Anthropic tool schema sent to the LLM. The LLM literally cannot propose a disabled action — it doesn't appear in its tool list. A defense-in-depth check inside `execute_tool` remains as a fallback for direct API callers.
@@ -1250,6 +1252,7 @@ Three v0.7.0 skills follow a shared **capability-gating** contract — `ticket_m
 |---|---|---|---|
 | `ticket_management` (Jira) | `search`, `read`, `read_comments` | `update`, `add_comment`, `transition` | `jira_skill.py` |
 | `code_repository` (GitHub) | `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue` | `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue` | `code_repository_skill.py` |
+| `password_vault` (1Password) | `list_items`, `read_item`, `compose_basic_auth`, `test_connection` | `read_totp` sensitive read is off by default; `create_item`, `update_item`, and `delete_item` are reserved/off | `password_vault_skill.py` |
 | `gmail` | `search`, `read_message` | `send`, `reply`, `draft` (`draft` additionally requires the Gmail token's OAuth scope to include `gmail.compose`, `gmail.modify`, or `mail.google.com/`) | `gmail_skill.py` |
 
 Operators toggle capabilities in the per-skill modal on the agent's Skills tab. Disabling a capability that the agent currently has access to takes effect on the next tool-spec rebuild (every chat turn) — there's no cache to bust.
@@ -1868,6 +1871,8 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22). |
 | `summarization` | `SummarizationStepHandler` | AI summarization. Supports `thread_id`, `source_step`, or inline `text`/`content` in `config_json`. |
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
+| `password_vault` | `PasswordVaultStepHandler` | Programmatic vault reference resolution. Requires a tenant-scoped Hub Password Vault integration and stores only redacted output/handles in flow-run persistence. |
+| `financial_utility_automation` | `FinancialUtilityAutomationStepHandler` | Legacy/compatibility handler for existing financial boleto canaries. It can run the shipped templates, but it is not sufficient for migrated workflow acceptance; accepted migrations must be recreated from visible primitive Flow nodes. |
 | `source` | `SourceStepHandler` | Trigger-owned entry step for triggered flows. It is auto-generated from the selected Hub trigger, locked at position 1, and not manually addable. |
 | `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat. |
 | `AgentNode` | `ConversationStepHandler` alias | Alias accepted for compatibility (same config as `conversation`). |
@@ -1917,6 +1922,66 @@ The flow editor surfaces a collapsible **Variable Reference** panel under every 
 - The panel also lists helper functions, conditional examples, and flow-context variables — each is also drag-and-drop.
 
 The panel is wired into every templatable free-text field: notification text, message template, conversation objective + initial prompt, skill prompt, summarization custom prompt, slash-command body, agentic gate prompt, and the gate-fail notification recipient + message. Sources: `frontend/components/flows/StepVariablePanel.tsx`, `frontend/components/flows/TemplateTextarea.tsx`, `frontend/components/flows/TemplateInput.tsx`, `frontend/lib/stepOutputVariables.ts`.
+
+#### Password Vault references
+
+Password Vault and 1Password setup is UI-first. Operators create and test the 1Password service-account connection from Hub → Tool APIs → Password Vault, then select allowed vault/item/field references through Flow or Skill pickers. Financial workflows must not depend on hidden environment variables, backend-only config, or opaque inline secrets.
+
+Flows can resolve Password Vault references through three UI-created paths:
+
+- **Programmatic step:** add a `Password Vault` step. The reference picker writes `integration_id`, `vault`, `item_ref`, `field_name`, and `action` into `config_json`; `PasswordVaultStepHandler` executes it directly.
+- **Built-in Tool step:** add a Tool step, choose built-in `password_vault`, and use the same reference picker. The Tool handler routes to the same backend execution path.
+- **Agentic Skill step:** add a Skill step, choose `Password Vault`, and select a reference. The editor sets `use_tool_mode=true` plus `tool_arguments` so the agent skill calls `password_vault_operation` without asking an LLM to infer secret parameters.
+
+The persisted Flow output is always redacted. Field/TOTP reads require the selected Hub Password Vault integration to allow those reads; otherwise the step fails closed with an explicit error. Notification nodes can use the redacted status/metadata for conditional messages without embedding plaintext secrets.
+
+#### Financial utility automation steps
+
+The Flow editor now exposes UI-first primitives for financial migrations: `Password Vault`, `Browser Automation`, `HTTP Request`, `Data Transform`, `Financial Record Store`, `Utility Bill Store`, `Gate`, and `Notification`. The old `financial_utility_automation` / `Utility Bill` handler still exists only for legacy canary compatibility and must not be used as the acceptance target for migrated workflows.
+
+v0.7.x ships an initial financial template catalog that expands into visible nodes, not a hidden automation wrapper:
+
+| Template | Provider | Default subject | Required visible primitive shape |
+|---|---|---|---|
+| `Cond. São Blas 204 - Boleto Condomínio` | Moderna/Superlógica | `0204` | vault username/password -> browser navigate/fill/fill/click/navigate/extract -> transform -> utility bill store -> gate -> notification |
+| `Consigaz - Gas Cond. Sao Blas 204` | Consigaz | `AP0204` | vault CPF/customer code/basic_auth -> browser context API/extraction action nodes -> transform -> utility bill store -> gate -> notification |
+| `Medsenior / Samedil - Plano Saude Mae` | Medsenior/Samedil | `Plano Saude Mae` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
+| `Cypreste Superlogica - Aluguel AP Praia da Costa` | Cypreste/Superlógica | `cypreste-001` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
+| `EDP - Conta de Luz ES` | EDP | `edp-multi-unit` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
+| `PMVV - IPTU Vila Velha` | PMVV | `sao_blas_property` | vault inscription/CPF -> browser action nodes -> transform -> financial record store -> gate -> notification |
+| `Husky - Transferencias Recebidas` | Husky | `husky-account` | vault username/password/TOTP -> browser action nodes -> transform -> financial record store -> gate -> notification |
+
+Financial templates import the corresponding Finan playbook steps into visible Flow nodes instead of wrapping them in one hidden runner. Browser work is split into editable actions such as navigate, fill, click, wait for selector, wait for URL, dismiss modal, execute script, solve CAPTCHA boundary, and extract. Provider bootstrap secrets such as Consigaz `basic_auth` are separate Password Vault steps, not literals inside template JSON. CAPTCHA steps are explicit and must be backed by a configured solver/manual-agentic handoff before scheduled execution can be accepted for PMVV-style providers.
+
+Storage primitives persist tenant-scoped state only. Utility bills upsert `financial_utility_bill` rows keyed by `(tenant_id, provider, unit_id, reference_month)` with encrypted boleto/barcode data; generic records upsert `financial_automation_record` rows keyed by a deterministic dedupe key. Flow outputs expose redacted previews and notification conditions, while raw browser/API payloads are passed through short-lived handles for trusted downstream parsing.
+
+`financial_utility_automation` is therefore compatibility, not the migration target. A migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
+
+1. Vault credential: a Password Vault step or built-in `password_vault` Tool step that selects the 1Password reference through the picker.
+2. HTTP/browser automation: explicit `HTTP Request` nodes or Browser Automation action nodes that sign in or fetch the source page/API using the vault output.
+3. Extraction/transform: a visible `Data Transform` step that parses the fetched payload/page into amount, due date, payer/unit, status, reference period, and barcode metadata.
+4. Storage/dedupe: a visible `Utility Bill Store` or `Financial Record Store` step that writes local tenant-scoped state and uses a deterministic key such as provider, unit, and reference period to suppress duplicates.
+5. Gate: a visible Gate step that decides whether the bill is new/changed/unpaid and notification-worthy.
+6. Notification: a visible Notification step that emits only redacted metadata and only when the Gate permits delivery.
+
+Acceptance for each migrated financial workflow requires all of the following evidence:
+
+1. UI recreation from scratch in Flows, with each primitive node editable and saved through the UI.
+2. A manual run from the Flow list/editor.
+3. Local state update after the first run.
+4. A second manual run against the same bill proving dedupe/no duplicate state or duplicate notification.
+5. Conditional notification validation for both paths: notify when a new or changed unpaid bill is detected with delivery configured, and skip when unchanged, paid/quitado, or missing a valid recipient.
+
+Current validation status: accepted financial flows use clean `Finan | ...` names and keep one active row per migrated workflow/unit. The active set is `Finan | Condominio Sao Blas 204 | Boleto` (`#171`, 24 visible nodes, 2 completed runs), `Finan | Consigaz | Gas Cond. Sao Blas 204` (`#172`, 16 visible nodes, 3 completed runs), `Finan | Medsenior/Samedil | Plano Saude Mae` (`#174`, 22 visible nodes, 2 completed runs), `Finan | Cypreste/Superlogica | Aluguel Praia da Costa` (`#177`, 28 visible nodes, 2 completed runs), `Finan | EDP | Conta Luz AP Sao Blas 204` (`#186`, 24 visible nodes, 2 completed runs), and `Finan | EDP | Conta Luz Casa Paraju` (`#187`, 24 visible nodes, 2 completed runs). The old `QA UI Recreate ...` rows were force-deleted after the clean rows were validated in the Flow list. PMVV is aborted for this pass at its explicit CAPTCHA boundary, with handoff notes kept in `.private/financial-automation-migration/pmvv-aborted-2026-05-06.md`; DETRAN-ES and B3 are out of scope. Husky remains pending until it passes the same UI recreation, run, dedupe, and notification validation.
+
+New-user runbook:
+
+1. Open Hub → Tool APIs → Password Vault, add the 1Password service-account connection, set vault/item/field allowlists as needed, enable only the required runtime permissions, and use Test before saving.
+2. Attach the Password Vault skill to any agent that will resolve secrets agentically; select the same Hub integration and capability toggles from the Skills UI or from the guided Agent Wizard's Skills step.
+3. Open Flows → New Flow, choose the desired execution method, and add the primitive nodes in this order: vault credential, HTTP/browser automation, extraction/transform, storage/dedupe, Gate, Notification.
+4. Use the Variable Reference panel to pass only redacted or derived values between nodes; do not paste plaintext secrets or full boleto barcodes into prompts or notification templates.
+5. Save, manually run, inspect the run modal and local state, then run again to prove dedupe.
+6. Edit the workflow from the Flow editor when credentials, selectors, extraction fields, storage keys, gates, or notification recipients change.
 
 #### Trigger-generated flow badge
 
@@ -3259,6 +3324,43 @@ GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongs
 Same tool-spec gating contract as `ticket_management` and the v0.7.0 granular Gmail capabilities — see §9.2.1 for the four design properties.
 
 **Trigger criteria envelope** (used by the GitHub trigger wizard, §14.3): `{criteria_version: 1, event: 'pull_request', actions: ['opened', 'reopened', ...], filters: {branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering: 'oldest_first'}`. The evaluator at `backend/channels/github/criteria.py` returns `(matched, reason)` for every rejection path so the dry-run "Test against sample payload" surface in the wizard's Criteria step (and on the existing trigger detail Criteria tab) can show why a sample PR was filtered out.
+
+### 20.4.3 Password Vault (1Password provider)
+
+**Sources:** `backend/api/routes_password_vault_integrations.py`, `backend/services/password_vault_service.py`, `backend/agent/skills/password_vault_skill.py`, `backend/flows/flow_engine.py`, `frontend/components/password-vault/*`, `frontend/app/hub/page.tsx`.
+
+Password Vault is a provider-neutral Hub Tool API integration. v0.7.x ships 1Password as the first provider, using a service account token stored encrypted with the API-key encryption key. The backend runtime image includes the official `op` CLI binary from the `1password/op:2` Docker image.
+
+Operational setup is UI-first: tenants add, test, edit, and rotate 1Password service-account connections from Hub → Tool APIs → Password Vault. New financial workflows should reference this connection through Flow/Skill pickers and visible primitive Flow nodes, not through hidden backend config or opaque automation-only steps.
+
+Global admins can browse and operate existing tenant-scoped Password Vault connections from the same Hub card. Regular tenant users are filtered to their own tenant, and new connection creation still requires a concrete tenant context so vault secrets are never created as unscoped global resources.
+
+**Hub UI:** Hub → Tool APIs → Password Vault. The modal asks for:
+
+| Field | Required | Notes |
+|---|---|---|
+| Connection name | yes | Tenant-facing name such as `FinanApp Service Account`. |
+| Provider | yes | `1Password` today; the storage model reserves provider/auth fields for future vaults. |
+| Service account token | yes on create | Stored encrypted; API responses expose only `service_account_token_preview`. |
+| Account URL / email | optional | Non-secret hints for operators. |
+| Default vault / vault ID | optional | Used by agents/flows when a step does not pick a vault explicitly. |
+| Allowed item IDs/titles and field names | optional | Empty means no extra allowlist restriction beyond the service-account token permissions. |
+| Runtime permissions | yes | Metadata read defaults on; field and TOTP resolution are explicit opt-ins. |
+
+**Routes:**
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/hub/password-vault-integrations` | Tenant-scoped list; tokens are never returned. |
+| `POST /api/hub/password-vault-integrations` | Create encrypted 1Password connection. Accepts UI aliases such as `service_account_token` and `default_vault_name`. |
+| `PATCH /api/hub/password-vault-integrations/{id}` | Edit metadata, rotate token, permission toggles, and allowlists. |
+| `DELETE /api/hub/password-vault-integrations/{id}` | Refuses deletion while linked to `AgentSkillIntegration(skill_type='password_vault')`. |
+| `POST /api/hub/password-vault-integrations/{id}/test` | Runs `op vault list` with the stored service-account token and updates health. |
+| `GET /api/hub/password-vault-integrations/{id}/vaults` | Lists vault metadata. Requires metadata-read permission. |
+| `GET /api/hub/password-vault-integrations/{id}/items?vault=...` | Lists item metadata for a vault. |
+| `POST /api/hub/password-vault-integrations/{id}/item-test` | Tests an item, field, TOTP, or `op://vault/item/field` reference. Returns redacted output. |
+
+Agents bind this integration through Studio → Agent → Skills → Password Vault. Flow authors can also use the programmatic Password Vault step or built-in `password_vault` tool step; see §13.4. For financial workflow migrations, that visible vault credential step is required before downstream HTTP/browser automation, extraction/transform, storage/dedupe, gate, and notification steps.
 
 ### 20.5 Browser Automation (Playwright, CDP)
 

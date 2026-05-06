@@ -234,7 +234,7 @@ class CDPProvider(PlaywrightProvider):
             "mode": "cdp",
             "actions": [
                 "navigate", "click", "fill", "extract", "screenshot", "execute_script",
-                "scroll", "select_option", "hover", "wait_for", "go_back", "go_forward",
+                "scroll", "select_option", "hover", "wait_for", "wait_for_url", "go_back", "go_forward",
                 "get_attribute", "get_page_url", "type_text",
                 "open_tab", "switch_tab", "close_tab", "list_tabs",
             ],
