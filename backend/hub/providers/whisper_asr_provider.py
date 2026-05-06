@@ -64,10 +64,11 @@ class WhisperASRProvider(ASRProvider):
                         data=data,
                     )
         except Exception as exc:
+            detail = str(exc) or repr(exc) or "no exception detail"
             return ASRResponse(
                 success=False,
                 provider=self.provider_name,
-                error=f"request_error: {exc}",
+                error=f"request_error: {type(exc).__name__}: {detail}",
             )
 
         if response.status_code != 200:
