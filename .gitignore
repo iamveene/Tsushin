@@ -68,17 +68,26 @@ ops/.pids/
 .claude/
 .cursor/
 # Internal/never-push files (bug tracker, playbooks, agent/roadmap notes)
-CLAUDE.md
-AGENTS.md
-BUGS.md
-ROADMAP.md
+# Patterns use ** to match at ANY depth — narrow root-only patterns previously
+# leaked subdirectory files (e.g., docs/qa/.../BUGS_FOUND.md, wave_*_bugs.md).
+**/CLAUDE.md
+**/AGENTS.md
+**/BUGS.md
+**/BUGS_*.md
+**/BUGS-*.md
+**/ROADMAP.md
+**/ROADMAP_*.md
+**/wave_*_bugs.md
+**/wave_*_bugs_*.md
+**/*_bugs.md
+**/*_BUGS.md
 deployment-test-playbook.md
 DEPLOYMENT-TEST-PLAYBOOK.md
 PLAYBOOK.md
+**/*-playbook.md
+**/*_playbook.md
 /deployment-*.md
 /internal-*.md
-/*-playbook.md
-/*_playbook.md
 *.swp
 *.swo
 *~
