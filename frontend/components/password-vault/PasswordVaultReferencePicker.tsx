@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { api, type PasswordVaultIntegration, type PasswordVaultItem, type PasswordVaultSecretOverride, type PasswordVaultVault } from '@/lib/client'
 import { AlertTriangleIcon, CheckIcon, LockIcon } from '@/components/ui/icons'
 
@@ -50,6 +50,7 @@ export default function PasswordVaultReferencePicker({
   const [error, setError] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [testing, setTesting] = useState(false)
+  const pickerId = useId()
 
   const selectedIntegration = useMemo(
     () => integrations.find((integration) => integration.id === Number(value.password_vault_integration_id)) || null,
@@ -253,8 +254,9 @@ export default function PasswordVaultReferencePicker({
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Connection</label>
+            <label htmlFor={`${pickerId}-connection`} className="mb-1.5 block text-xs font-medium text-slate-300">Connection</label>
             <select
+              id={`${pickerId}-connection`}
               value={value.password_vault_integration_id || ''}
               onChange={(event) => {
                 const integration = integrations.find((item) => item.id === Number(event.target.value))
@@ -279,8 +281,9 @@ export default function PasswordVaultReferencePicker({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Vault</label>
+            <label htmlFor={`${pickerId}-vault`} className="mb-1.5 block text-xs font-medium text-slate-300">Vault</label>
             <select
+              id={`${pickerId}-vault`}
               value={vaultSelectValue}
               disabled={!selectedIntegration || loadingVaults}
               onChange={(event) => {
@@ -308,8 +311,9 @@ export default function PasswordVaultReferencePicker({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Item</label>
+            <label htmlFor={`${pickerId}-item`} className="mb-1.5 block text-xs font-medium text-slate-300">Item</label>
             <select
+              id={`${pickerId}-item`}
               value={itemSelectValue}
               disabled={!canPickItem || loadingItems}
               onChange={(event) => {
@@ -335,9 +339,10 @@ export default function PasswordVaultReferencePicker({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-300">Field</label>
+            <label htmlFor={`${pickerId}-field`} className="mb-1.5 block text-xs font-medium text-slate-300">Field</label>
             {selectedFieldOptions.length > 0 ? (
               <select
+                id={`${pickerId}-field`}
                 value={value.password_vault_field_name || ''}
                 disabled={!canEditField}
                 onChange={(event) => updateReference({
@@ -355,6 +360,7 @@ export default function PasswordVaultReferencePicker({
               </select>
             ) : (
               <input
+                id={`${pickerId}-field`}
                 type="text"
                 value={value.password_vault_field_name || ''}
                 disabled={!canEditField}
