@@ -696,6 +696,49 @@ class FlowStepHandler:
 class NotificationStepHandler(FlowStepHandler):
     """Handles Notification steps - sends one-way notifications."""
 
+    @staticmethod
+    def _resolve_notification_state(data: Dict[str, Any]) -> str:
+        """Locate the most recent step's notification_state, scanning common conventions."""
+        if not isinstance(data, dict):
+            return ""
+        direct = data.get("notification_state")
+        if isinstance(direct, str) and direct:
+            return direct
+        prev = data.get("previous_step")
+        if isinstance(prev, dict):
+            state = prev.get("notification_state")
+            if isinstance(state, str) and state:
+                return state
+            conditions = prev.get("conditions")
+            if isinstance(conditions, dict):
+                state = conditions.get("notification_state")
+                if isinstance(state, str) and state:
+                    return state
+        for value in data.values():
+            if isinstance(value, dict):
+                state = value.get("notification_state")
+                if isinstance(state, str) and state:
+                    return state
+                conditions = value.get("conditions")
+                if isinstance(conditions, dict):
+                    state = conditions.get("notification_state")
+                    if isinstance(state, str) and state:
+                        return state
+        return ""
+
+    def _select_message_template(self, config: Dict[str, Any], data: Dict[str, Any]) -> str:
+        templates_by_state = config.get("message_templates_by_state") or config.get("notification_templates_by_state")
+        if isinstance(templates_by_state, dict) and templates_by_state:
+            state = self._resolve_notification_state(data)
+            if state:
+                state_template = templates_by_state.get(state)
+                if isinstance(state_template, str) and state_template.strip():
+                    return state_template
+            default_template = templates_by_state.get("default") or templates_by_state.get("_default")
+            if isinstance(default_template, str) and default_template.strip():
+                return default_template
+        return config.get("message_template") or config.get("content") or ""
+
     def _enrich_delivery_only_secrets(self, value: Any, data: Dict[str, Any]) -> Any:
         """Resolve short-lived delivery handles only for the outbound message body."""
         if isinstance(value, dict):
@@ -748,14 +791,13 @@ class NotificationStepHandler(FlowStepHandler):
             if recipients_list and len(recipients_list) > 0:
                 recipient = recipients_list[0]  # Take first recipient for single notification
 
-        message_template = config.get("message_template") or config.get("content") or ""
-
         # Add current timestamp to context for template rendering
         enriched_data = {
             **input_data,
             "current_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
             "current_date": datetime.utcnow().strftime("%Y-%m-%d"),
         }
+        message_template = self._select_message_template(config, enriched_data)
         delivery_data = self._enrich_delivery_only_secrets(enriched_data, enriched_data)
 
         # Variable replacement
@@ -1872,6 +1914,36 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         )
         return f"{record_kind}:{provider}:{unit_id}:{reference}"
 
+    DEFAULT_NOTIFY_STATES = ("new_boleto", "barcode_changed", "pending_no_barcode")
+    NOTIFICATION_STATES = (
+        "new_boleto",
+        "barcode_changed",
+        "pending_no_barcode",
+        "no_pending_bills",
+        "paid",
+        "unchanged",
+        "error",
+    )
+
+    @staticmethod
+    def _classify_utility_bill_state(
+        *,
+        created: bool,
+        barcode_changed: bool,
+        has_barcode: bool,
+        unpaid: bool,
+    ) -> str:
+        if not unpaid:
+            return "paid"
+        if created:
+            # A brand-new record always wins over barcode_changed: _upsert_bill
+            # sets barcode_changed=True for first-time inserts because the prior
+            # barcode_preview is None, but semantically that's a new_boleto.
+            return "new_boleto" if has_barcode else "pending_no_barcode"
+        if barcode_changed and has_barcode:
+            return "barcode_changed"
+        return "unchanged"
+
     def _utility_bill_no_record_result(self, record: Dict[str, Any], config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         status = str(record.get("status") or record.get("bill_status") or "").strip().lower()
         explicit_empty = status in {"no_pending_bills", "no_open_bills", "sem_boletos", "sem_boleto", "none"}
@@ -1896,6 +1968,18 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
             or config.get("financial_automation_id")
             or ""
         )
+        reference_month = str(
+            record.get("reference_month")
+            or record.get("month")
+            or record.get("period_key")
+            or ""
+        ).strip()
+        asset = str(
+            record.get("asset")
+            or record.get("title")
+            or config.get("financial_asset")
+            or ""
+        ).strip()
         return {
             "status": "skipped",
             "success": True,
@@ -1903,9 +1987,12 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
             "record_kind": "utility_bill",
             "record_store_model": "financial_utility_bill",
             "reason": "no_financial_bill_detected",
+            "notification_state": "no_pending_bills",
             "automation_key": automation_key,
             "provider": provider,
             "unit_id": unit_id,
+            "asset": asset,
+            "reference_month": reference_month,
             "dedupe": {
                 "dedupe_key": f"utility_bill:{provider}:{unit_id}:no_open_bill",
                 "created": False,
@@ -1924,6 +2011,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
                 "should_notify": False,
                 "should_gate": False,
                 "no_open_bills": True,
+                "notification_state": "no_pending_bills",
             },
             "redacted": True,
             "stored_at": datetime.utcnow().isoformat() + "Z",
@@ -1985,8 +2073,16 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
                     "provider": bill.provider,
                 },
             )["secret_handle"]
-        changed = bool(record_result["created"] or record_result["barcode_changed"])
-        should_notify = bool(changed and has_barcode and unpaid)
+        created = bool(record_result.get("created"))
+        barcode_changed = bool(record_result.get("barcode_changed"))
+        changed = bool(created or barcode_changed)
+        notification_state = self._classify_utility_bill_state(
+            created=created,
+            barcode_changed=barcode_changed,
+            has_barcode=has_barcode,
+            unpaid=unpaid,
+        )
+        should_notify = notification_state in self.DEFAULT_NOTIFY_STATES
         return {
             "status": "completed",
             "success": True,
@@ -2008,6 +2104,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
             "linha_digitavel": linha_digitavel_handle,
             "linha_digitavel_preview": bill.barcode_preview,
             "barcode_delivery_handle": linha_digitavel_handle,
+            "notification_state": notification_state,
             "dedupe": {
                 "dedupe_key": f"utility_bill:{bill.provider}:{bill.unit_id}:{bill.reference_month}",
                 "created": record_result["created"],
@@ -2026,6 +2123,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
                 "should_notify": should_notify,
                 "should_gate": should_notify,
                 "no_open_bills": bool(normalized.get("no_open_bills")),
+                "notification_state": notification_state,
             },
             "redacted": True,
             "stored_at": datetime.utcnow().isoformat() + "Z",
@@ -2056,6 +2154,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
                 "success": False,
                 "error": "financial_record_payload_required",
                 "record_kind": record_kind,
+                "notification_state": "error",
                 "dedupe": {
                     "dedupe_key": self._dedupe_key(record_kind, record, config),
                     "created": False,
@@ -2069,6 +2168,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
                     "changed": False,
                     "should_notify": False,
                     "should_gate": False,
+                    "notification_state": "error",
                 },
                 "redacted": True,
             }
@@ -3441,6 +3541,18 @@ class GateStepHandler(FlowStepHandler):
                 return str(actual or "").lower().startswith(str(expected).lower())
             if operator == "ends_with":
                 return str(actual or "").lower().endswith(str(expected).lower())
+
+            # Membership in a list (used for state-set gating, e.g. notification_state)
+            if operator == "in":
+                if not isinstance(expected, (list, tuple, set)):
+                    return False
+                actual_str = str(actual or "")
+                return any(str(item or "") == actual_str for item in expected)
+            if operator == "not_in":
+                if not isinstance(expected, (list, tuple, set)):
+                    return True
+                actual_str = str(actual or "")
+                return all(str(item or "") != actual_str for item in expected)
 
             # Numeric comparisons
             if value_type == "number" or operator in (">", ">=", "<", "<="):

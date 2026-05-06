@@ -1417,12 +1417,18 @@ def build_financial_ui_first_workflow(params: Dict[str, Any], tenant_id: str, pr
     ), timeout_seconds=30, description="Persist local state and dedupe. No hidden browser/API/notification work happens here."))
     position += 1
 
-    gate_conditions = [{"field": "conditions.should_notify", "operator": "==", "value": True, "type": "boolean"}]
-    if profile.get("notify_on") == "changed_unpaid":
-        gate_conditions = [
-            {"field": "conditions.changed", "operator": "==", "value": True, "type": "boolean"},
-            {"field": "conditions.unpaid", "operator": "==", "value": True, "type": "boolean"},
-        ]
+    notify_states = profile.get("notify_states") or [
+        "new_boleto",
+        "barcode_changed",
+        "pending_no_barcode",
+    ]
+    gate_conditions = [
+        {
+            "field": "conditions.notification_state",
+            "operator": "in",
+            "value": list(notify_states),
+        }
+    ]
 
     steps.append(_step(position, StepType.GATE, "new_record_gate", FlowStepConfig(
         gate_mode="programmatic",
@@ -1430,21 +1436,59 @@ def build_financial_ui_first_workflow(params: Dict[str, Any], tenant_id: str, pr
         gate_conditions=gate_conditions,
         gate_logic="all",
         gate_on_fail="skip",
-    ), on_failure="skip", timeout_seconds=10, description="Pass only when storage detects a new/changed notifiable financial record."))
+    ), on_failure="skip", timeout_seconds=10, description=(
+        "Pass only when storage detects a notifiable state. Default states: new_boleto, "
+        "barcode_changed, pending_no_barcode. Edit the value list to opt into "
+        "no_pending_bills, paid, unchanged, or error if you want."
+    )))
     position += 1
+
+    profile_name = profile["name"]
+    templates_by_state = profile.get("message_templates_by_state") or {
+        "new_boleto": (
+            f"Novo boleto detectado em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}} "
+            "vence {{financial_store.due_date}} no valor {{financial_store.amount_display}}. "
+            "Linha digitável: {{financial_store.linha_digitavel}}"
+        ),
+        "barcode_changed": (
+            f"Atualização de boleto em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}. "
+            "Nova linha digitável: {{financial_store.linha_digitavel}} "
+            "(valor {{financial_store.amount_display}}, vence {{financial_store.due_date}})"
+        ),
+        "pending_no_barcode": (
+            f"Conta em aberto em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}} "
+            "ainda sem linha digitável disponível no portal. Acesse manualmente para regularizar."
+        ),
+        "no_pending_bills": (
+            f"Sem boleto pendente em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}"
+        ),
+        "default": (
+            f"Atualização financeira em {profile_name}: "
+            "{{financial_store.notification_state}} - {{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}"
+        ),
+    }
+    fallback_template = templates_by_state.get("new_boleto") or templates_by_state.get("default") or ""
 
     steps.append(_step(position, StepType.NOTIFICATION, "notify_financial_event", FlowStepConfig(
         channel=channel,
         recipient=recipient,
-        message_template=(
-            f"Novo evento financeiro detectado em {profile['name']}: "
-            "{{financial_store.title}}{{financial_store.asset}} "
-            "{{financial_store.reference_month}}{{financial_store.period_key}} "
-            "{{financial_store.amount_display}} {{financial_store.due_date}} "
-            "{{financial_store.bill_status}}{{financial_store.record_status}} "
-            "{{financial_store.linha_digitavel}}"
-        ),
-    ), timeout_seconds=30, description="Conditional notification node. Edit channel/recipient/message in the Flow UI."))
+        message_template=fallback_template,
+        message_templates_by_state=templates_by_state,
+    ), timeout_seconds=30, description=(
+        "State-aware notification. The message_templates_by_state dict maps the "
+        "upstream notification_state (new_boleto, barcode_changed, pending_no_barcode, "
+        "no_pending_bills, paid, unchanged, error) to a template. message_template is "
+        "the fallback when no state-keyed template matches."
+    )))
 
     return FlowCreate(
         name=params.get("name") or profile["name"],

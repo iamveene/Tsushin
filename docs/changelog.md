@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Financial flow notifications: state-aware classifier, gate, and templates (2026-05-06)
+
+- Reworked `FinancialBillStoreStepHandler` to emit a `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `no_pending_bills`, `paid`, `unchanged`, `error`) at top level and inside `conditions`. Previous `should_notify` boolean kept for backward compatibility but now derived from the rich state (`new_boleto | barcode_changed | pending_no_barcode` notify by default).
+- Updated `GateStepHandler` to support `in` / `not_in` operators on list values so flows can route on a configurable set of states.
+- Added `message_templates_by_state` config to `NotificationStepHandler`: when present, the handler picks the template whose key matches the upstream `notification_state` (with `default` and `message_template` fallbacks). Existing single-template flows continue to work unchanged.
+- Updated the seeded financial flow templates (Cond. São Blas, Consigaz, Medsenior/Samedil, Cypreste/Superlogica, EDP) to use the new state-aware gate and per-state messages. New templates ship with friendly defaults for "new boleto", "barcode changed", "open bill without linha digitável", and "no pending bill" states.
+- Added `backend/scripts/upgrade_financial_flow_state_gates.py` (idempotent, dry-run aware) that rewrites existing seeded financial flow gates to the `notification_state in [...]` shape and adds `message_templates_by_state` to their notification step. Verified end-to-end on the live tenant: EDP flow with `pending_no_barcode` state now delivers a friendly message to the tester MCP without the temporary QA override.
+- Added 13 unit and integration tests covering all 7 state branches, the `in`/`not_in` gate operators, and state-template selection (including default-key fallback and unknown-state fallback).
+
+### Fixed — Surface ASR provider exception type when request fails (2026-05-06)
+
+- `OpenAIWhisperASRProvider` and `WhisperASRProvider` now log `request_error: <type>: <detail>` so empty `str(exc)` cases (e.g. `httpx.RemoteProtocolError`) no longer surface as silent `request_error: ` entries in flow runs and bot replies.
+
 ### Fixed — Managed local ASR/TTS container reconciliation (2026-05-06)
 
 - Hardened auto-provisioned Whisper/Speaches reconciliation so startup compares active ASR rows with Docker identity labels (`tsushin.service`, `tsushin.tenant`, `tsushin.instance_id`, `tsushin.lifecycle`) and removes labeled ASR containers that no longer have a matching active tenant row.
