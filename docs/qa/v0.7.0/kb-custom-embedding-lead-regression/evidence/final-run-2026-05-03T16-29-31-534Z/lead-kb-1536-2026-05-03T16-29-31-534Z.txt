@@ -1,6 +1,0 @@
-Lead KB regression sample for Gemini Embedding 2 with 1536 dimensions.
-The owner is Selene Vega.
-The secret phrase is LEAD-1536-QUARTZ.
-The support queue is argent-lane.
-The review date is 2026-05-03.
-The vector storage target is the external auto-provisioned Qdrant store named gemini-1536.
