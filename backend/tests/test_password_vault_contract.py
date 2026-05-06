@@ -866,7 +866,74 @@ def test_financial_bill_store_persists_utility_bill_without_hidden_notification(
     assert output["record_store_model"] == "financial_utility_bill"
     assert output["dedupe"]["created"] is True
     assert output["conditions"]["should_notify"] is True
+    assert output["linha_digitavel"].startswith("pvh_")
+    assert output["barcode_delivery_handle"] == output["linha_digitavel"]
+    assert SecretHandleRegistry.resolve(output["linha_digitavel"]) == LONG_BARCODE
     assert LONG_BARCODE not in json.dumps(output, sort_keys=True)
+
+
+def test_notification_delivers_linha_digitavel_but_persists_redacted_message(monkeypatch):
+    flow_module = _import_any("flows.flow_engine")
+    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
+    from services.password_vault_service import SecretHandleRegistry
+
+    captured = {}
+    linha_digitavel_handle = SecretHandleRegistry.issue(
+        LONG_BARCODE,
+        {"kind": "financial_barcode", "tenant_id": "tenant-a"},
+    )["secret_handle"]
+
+    class FakeMCPSender:
+        async def send_message(self, recipient, message, **kwargs):
+            captured["recipient"] = recipient
+            captured["message"] = message
+            captured["kwargs"] = kwargs
+            return True
+
+    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
+    monkeypatch.setattr(
+        handler,
+        "_resolve_mcp_url_and_secret",
+        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
+    )
+    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
+
+    output = asyncio.run(
+        handler.execute(
+            SimpleNamespace(
+                id=15,
+                timeout_seconds=30,
+                config_json=json.dumps(
+                    {
+                        "channel": "whatsapp",
+                        "recipient": "+15551234567",
+                        "message_template": (
+                            "Linha digitavel: {{financial_store.linha_digitavel}} "
+                            "preview {{financial_store.barcode_preview}}"
+                        ),
+                    }
+                ),
+            ),
+            {
+                "financial_store": {
+                    "barcode_preview": "[REDACTED:47:9999]",
+                    "linha_digitavel": linha_digitavel_handle,
+                    "barcode_delivery_handle": linha_digitavel_handle,
+                }
+            },
+            SimpleNamespace(id=99, tenant_id="tenant-a"),
+            SimpleNamespace(id=1006),
+        )
+    )
+
+    assert output["status"] == "completed"
+    assert output["success"] is True
+    assert captured["recipient"] == "+15551234567"
+    assert LONG_BARCODE in captured["message"]
+    assert "[REDACTED:47:9999]" not in captured["message"]
+    persisted = json.dumps(output, sort_keys=True)
+    assert LONG_BARCODE not in persisted
+    assert "[REDACTED_DIGITS" in persisted
 
 
 def test_financial_bill_store_skips_explicit_no_pending_bill_without_persisting(monkeypatch):
