@@ -56,7 +56,9 @@ class WhisperASRProvider(ASRProvider):
                 data = {"model": model}
                 if request.language and request.language != "auto":
                     data["language"] = request.language
-                async with httpx.AsyncClient(timeout=120) as client:
+                # 600s timeout: even Speaches/faster-whisper can queue requests
+                # under CPU bursts. See openai_whisper_asr_provider for context.
+                async with httpx.AsyncClient(timeout=600) as client:
                     response = await client.post(
                         f"{base_url.rstrip('/')}/v1/audio/transcriptions",
                         headers=headers,

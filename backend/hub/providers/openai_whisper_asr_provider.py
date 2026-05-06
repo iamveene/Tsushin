@@ -67,7 +67,12 @@ class OpenAIWhisperASRProvider(ASRProvider):
                         "application/octet-stream",
                     )
                 }
-                async with httpx.AsyncClient(timeout=180) as client:
+                # 600s timeout: onerahmet/openai-whisper-asr-webservice serializes
+                # requests on CPU, so 7 audios in burst can queue ~5 min before
+                # the last one even starts processing. Bumping to 10 min covers
+                # realistic CPU bursts; on GPU the request still returns in
+                # seconds so the higher ceiling is harmless.
+                async with httpx.AsyncClient(timeout=600) as client:
                     response = await client.post(
                         f"{base_url.rstrip('/')}/asr",
                         headers=headers,
