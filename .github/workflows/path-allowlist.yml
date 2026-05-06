@@ -1,0 +1,56 @@
+name: Path Allowlist
+
+# Enforces .github/path-allowlist.txt — the positive list of files allowed in
+# the public repo. Any tracked path outside the allowlist fails CI.
+#
+# This is the SERVER-SIDE guard against internal files (CLAUDE.md, BUGS.md,
+# QA evidence, audit reports, dev test scripts, .private/ leakage) being
+# pushed publicly. It runs on every push and PR, and is intended to be a
+# REQUIRED status check on protected branches (main, develop).
+#
+# Setting up the required status check (one-time, in the GitHub UI):
+#   Settings -> Branches -> Branch protection rule for `main` (and `develop`)
+#     -> Require status checks to pass before merging
+#     -> Add: "Path Allowlist / enforce-path-allowlist"
+#
+# Adding a new public-facing path? Add a pattern to .github/path-allowlist.txt
+# in the same change. The diff makes the addition reviewable.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  enforce-path-allowlist:
+    name: enforce-path-allowlist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # No submodules / no LFS — we only need the tracked path list.
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run path allowlist check
+        run: python3 scripts/check-path-allowlist.py
+
+      - name: Run name-based internal-file guard (defense in depth)
+        run: |
+          # Reuses the local pre-commit hook script. Even if the allowlist
+          # accidentally drifts, this catches CLAUDE.md / BUGS.md / etc.
+          # explicitly by name.
+          changed_files=$(git ls-files)
+          if [ -z "$changed_files" ]; then
+            echo "No tracked files (unexpected)."
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          ./scripts/check-no-internal-files.sh $changed_files

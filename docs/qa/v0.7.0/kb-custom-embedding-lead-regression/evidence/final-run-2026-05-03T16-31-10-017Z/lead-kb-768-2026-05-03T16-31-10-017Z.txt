@@ -1,6 +1,0 @@
-Lead KB regression sample for Gemini Embedding 2 with 768 dimensions.
-The owner is Ilya Moreno.
-The secret phrase is LEAD-768-CEDAR.
-The support queue is verdant-bridge.
-The review date is 2026-05-03.
-The vector storage target is the external auto-provisioned Qdrant store named gemini-1536.
