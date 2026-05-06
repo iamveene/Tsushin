@@ -354,11 +354,18 @@ def test_financial_templates_expand_to_visible_ui_first_nodes():
     ]
 
     template_ids = {template.id for template in templates}
-    assert len(templates) == 6
+    assert template_ids == {
+        "financial_cond_sao_blas_boleto",
+        "financial_consigaz_sao_blas",
+        "financial_medsenior_samedil_mae",
+        "financial_cypreste_superlogica",
+        "financial_edp_es",
+    }
     assert "financial_detran_es_ipva" not in template_ids
     assert "financial_b3_investidor" not in template_ids
     assert "financial_pmvv_iptu" not in template_ids
-    assert "financial_husky_transfers" in template_ids
+    assert "financial_husky_transfers" not in template_ids
+    assert templates_module.FINANCIAL_PROFILES["husky_transfers"]["template_enabled"] is False
     for template in templates:
         flow = template.build(
             {

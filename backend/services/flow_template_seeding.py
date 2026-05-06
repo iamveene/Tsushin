@@ -739,6 +739,9 @@ FINANCIAL_PROFILES: Dict[str, Dict[str, Any]] = {
     "husky_transfers": {
         "name": "Husky - Transferencias Recebidas",
         "description": "Visible-step transfer ingestion workflow with explicit TOTP/vault node.",
+        # Kept private until the Husky workflow has the same UI recreation,
+        # manual-run, dedupe, and notification evidence as the accepted flows.
+        "template_enabled": False,
         "record_kind": "income_transfer",
         "provider": "husky",
         "automation_id": "husky_transferencias_recebidas",
