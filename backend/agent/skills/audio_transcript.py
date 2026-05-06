@@ -143,7 +143,9 @@ class AudioTranscriptSkill(BaseSkill):
 
             # ASR resolution (per-agent, no tenant-level default):
             # 1. ``asr_mode='instance'`` + ``asr_instance_id`` → pinned local instance
-            #    (speaches or openai_whisper).
+            #    (speaches or openai_whisper). **No silent fallback to OpenAI**:
+            #    if the operator picked a local instance, a failure is surfaced
+            #    as-is so privacy/cost expectations are respected.
             # 2. ``asr_mode='openai'`` (or no instance pinned) → OpenAI Whisper API.
             # The legacy ``tenant_default`` mode was retired with the
             # ``Tenant.default_asr_instance_id`` column; existing rows still
@@ -154,7 +156,8 @@ class AudioTranscriptSkill(BaseSkill):
             resolved_asr_instance_id = asr_instance_id
             resolved_asr_instance = None
             instance_error: Optional[str] = None
-            if tenant_id and db and asr_mode == "instance" and asr_instance_id:
+            instance_path_chosen = bool(asr_mode == "instance" and asr_instance_id)
+            if tenant_id and db and instance_path_chosen:
                 try:
                     from services.whisper_instance_service import WhisperInstanceService
 
@@ -197,7 +200,7 @@ class AudioTranscriptSkill(BaseSkill):
                         else:
                             instance_error = response.error
                             logger.warning(
-                                "ASR instance %s transcription failed, falling back to OpenAI: %s",
+                                "ASR instance %s transcription failed: %s",
                                 resolved_asr_instance_id,
                                 response.error,
                             )
@@ -208,17 +211,39 @@ class AudioTranscriptSkill(BaseSkill):
                             f"vendor={getattr(resolved_asr_instance, 'vendor', None)})"
                         )
                         logger.warning(
-                            "ASR instance %s unavailable, falling back to OpenAI: %s",
+                            "ASR instance %s unavailable: %s",
                             resolved_asr_instance_id,
                             instance_error,
                         )
                 except Exception as asr_err:
-                    instance_error = str(asr_err)
+                    instance_error = str(asr_err) or repr(asr_err)
                     logger.warning(
-                        "ASR instance %s path failed, falling back to OpenAI: %s",
+                        "ASR instance %s path failed: %s",
                         resolved_asr_instance_id,
                         asr_err,
                     )
+
+            # No silent fallback: if the operator pinned a local instance and
+            # it failed (or returned empty), surface that error directly. Only
+            # call the OpenAI Whisper provider when the operator explicitly
+            # chose openai mode (or did not pin a local instance).
+            if not transcript and instance_path_chosen:
+                return SkillResult(
+                    success=False,
+                    output=(
+                        f"❌ Transcription failed.\n"
+                        f"• Local ASR instance ({resolved_asr_instance_id}): {instance_error or 'unknown error'}\n"
+                        f"(no OpenAI fallback — instance pinned by config)"
+                    ),
+                    metadata={
+                        "error": instance_error or "local_asr_failed",
+                        "instance_error": instance_error,
+                        "asr_instance_id": resolved_asr_instance_id,
+                        "audio_path": audio_path,
+                        "provider": "local_asr",
+                        "fallback_attempted": False,
+                    },
+                )
 
             if not transcript:
                 api_key = None
