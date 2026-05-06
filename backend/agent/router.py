@@ -880,6 +880,61 @@ class AgentRouter:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
             return False
 
+    async def _send_skill_output_directly(
+        self,
+        *,
+        recipient: str,
+        message: Dict,
+        agent_id: int,
+        skill_output: str,
+        skill_media_paths: Optional[List[str]] = None,
+        context_label: str = "skill response",
+    ) -> bool:
+        """
+        Send a skill-owned response without routing an empty/media-only message
+        into normal AI processing. This is used by the regular path and by
+        active conversation/thread paths so media skill failures surface
+        consistently instead of becoming silent empty-message turns.
+        """
+        channel = message.get("channel", "whatsapp")
+
+        if skill_media_paths:
+            self.logger.info(f"{context_label}: sending {len(skill_media_paths)} media file(s)")
+            for media_path in skill_media_paths:
+                media_success = await self._send_message(
+                    recipient=recipient,
+                    message_text="",
+                    channel=channel,
+                    agent_id=agent_id,
+                    media_path=media_path,
+                )
+                if media_success:
+                    self.logger.info(f"{context_label}: media sent to {channel}: {media_path}")
+                else:
+                    self.logger.error(f"{context_label}: failed to send media to {channel}: {media_path}")
+
+                try:
+                    await asyncio.sleep(3)
+                    if os.path.exists(media_path):
+                        os.unlink(media_path)
+                        self.logger.info(f"{context_label}: cleaned up temporary media file: {media_path}")
+                except Exception as cleanup_error:
+                    self.logger.warning(f"{context_label}: failed to clean up media file: {cleanup_error}")
+
+        success = await self._send_message(
+            recipient=recipient,
+            message_text=skill_output,
+            channel=channel,
+            agent_id=agent_id,
+        )
+
+        if success:
+            self.logger.info(f"{context_label}: response sent to {channel}: {recipient}")
+        else:
+            self.logger.error(f"{context_label}: failed to send response to {channel}: {recipient}")
+
+        return success
+
     def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
         """
         Phase 0 (WhatsApp MCP UI Fixes): Check if MCP instance is connected before sending
@@ -1943,7 +1998,25 @@ class AgentRouter:
             # Process audio transcription if needed
             if thread_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation thread, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, _ = await self._process_with_skills(thread_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths = await self._process_with_skills(thread_agent_id, message)
+                if skip_ai and skill_output:
+                    await self._send_skill_output_directly(
+                        recipient=active_thread.recipient,
+                        message=message,
+                        agent_id=thread_agent_id,
+                        skill_output=skill_output,
+                        skill_media_paths=skill_media_paths,
+                        context_label="[THREAD SKILL]",
+                    )
+                    if thread_tenant_id:
+                        emit_agent_processing_async(
+                            tenant_id=thread_tenant_id,
+                            agent_id=thread_agent_id,
+                            status="end",
+                            sender_key=sender_key,
+                            channel=message.get("channel", "whatsapp")
+                        )
+                    return
                 if processed_text != message_text:
                     self.logger.info(f"[SUCCESS] Audio transcribed for thread: {len(processed_text)} chars")
                     message_text = processed_text
@@ -2020,7 +2093,26 @@ class AgentRouter:
             # IMPORTANT: Process audio transcription BEFORE sending to conversation handler
             if conversation_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, _ = await self._process_with_skills(conversation_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths = await self._process_with_skills(conversation_agent_id, message)
+                if skip_ai and skill_output:
+                    recipient = message.get("chat_id") or sender
+                    await self._send_skill_output_directly(
+                        recipient=recipient,
+                        message=message,
+                        agent_id=conversation_agent_id,
+                        skill_output=skill_output,
+                        skill_media_paths=skill_media_paths,
+                        context_label="[CONVERSATION SKILL]",
+                    )
+                    if conv_tenant_id:
+                        emit_agent_processing_async(
+                            tenant_id=conv_tenant_id,
+                            agent_id=conversation_agent_id,
+                            status="end",
+                            sender_key=sender_key,
+                            channel=message.get("channel", "whatsapp")
+                        )
+                    return
                 if processed_text != message_text:
                     self.logger.info(f"[SUCCESS] Audio transcribed for conversation: {len(processed_text)} chars")
                     message_text = processed_text
@@ -2152,45 +2244,14 @@ class AgentRouter:
         if skip_ai and skill_output:
             self.logger.info("Skill requested to skip AI processing, sending output directly")
             recipient = message.get("chat_id") or message.get("sender")
-            channel = message.get("channel", "whatsapp")
-
-            # Phase 14.5: Send skill media files (screenshots, images) if available
-            if skill_media_paths:
-                self.logger.info(f"Skill produced {len(skill_media_paths)} media files to send")
-                for media_path in skill_media_paths:
-                    media_success = await self._send_message(
-                        recipient=recipient,
-                        message_text="",  # Empty caption for image
-                        channel=channel,
-                        agent_id=agent_id,
-                        media_path=media_path
-                    )
-                    if media_success:
-                        self.logger.info(f"Media sent to {channel}: {media_path}")
-                    else:
-                        self.logger.error(f"Failed to send media to {channel}: {media_path}")
-
-                    # Cleanup temporary file after sending (with delay for upload)
-                    try:
-                        await asyncio.sleep(3)  # Wait for upload to complete
-                        if os.path.exists(media_path):
-                            os.unlink(media_path)
-                            self.logger.info(f"Cleaned up temporary media file: {media_path}")
-                    except Exception as cleanup_error:
-                        self.logger.warning(f"Failed to clean up media file: {cleanup_error}")
-
-            # Phase 10.1.1: Use channel-aware sending for skill responses
-            success = await self._send_message(
+            await self._send_skill_output_directly(
                 recipient=recipient,
-                message_text=skill_output,
-                channel=channel,
-                agent_id=agent_id
+                message=message,
+                agent_id=agent_id,
+                skill_output=skill_output,
+                skill_media_paths=skill_media_paths,
+                context_label="[SKILL]",
             )
-
-            if success:
-                self.logger.info(f"Response sent to {channel}: {recipient}")
-            else:
-                self.logger.error(f"Failed to send skill response to {channel}: {recipient}")
 
             # Note: We don't save agent_run here since no AI processing occurred
             # The skill handled everything
@@ -4320,6 +4381,15 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
             elif skill_result and not skill_result.success:
                 self.logger.warning(f"[ERROR] Skill processing failed: {skill_result.output}")
+                if media_type and self.media_downloader.is_audio_message(media_type):
+                    skill_type = skill_result.metadata.get("skill_type") if skill_result.metadata else None
+                    return (
+                        message_body,
+                        True,
+                        skill_result.output or "❌ Audio transcription failed.",
+                        skill_type,
+                        skill_result.media_paths,
+                    )
 
             # No skill handled it or processing failed, return original
             return (message_body, False, None, None, None)
