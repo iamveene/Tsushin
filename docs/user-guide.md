@@ -186,6 +186,8 @@ Two modes: **Playwright** (in-container, no setup needed) or **CDP** (connects t
 
 If **Password Vault** is already attached to an agent, it appears as an active skill card rather than as another option inside **Add Skill**. Use **Configure** on that card to change the provider or capability toggles.
 
+For migrated financial automations, use **Flows > From Template** when a supported provider is available. Templates expand into ordinary editable steps rather than a hidden runner: Password Vault, Browser Automation or HTTP Request, Data Transform, Store/Dedupe, Gate, and Notification. The wizard keeps technical overrides in **Advanced options** by default, so most users only choose the vault reference, agent, channel, and recipient before previewing the visible step graph.
+
 #### TTS Providers (Text-to-Speech)
 
 Three options: **Kokoro** (local, self-hosted), **OpenAI TTS**, or **ElevenLabs**. Configure under **Hub > TTS Providers**, then enable the TTS skill on your agents.
@@ -656,6 +658,8 @@ Flows let you build multi-step automated workflows.
 | **Utility Bill Store** | Utility-bill-specific storage and dedupe alias. |
 
 The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually.
+
+Financial templates should remain editable like any other Flow. Open a browser step to adjust URL/action/selectors, add a **Skill** or **Summarization** step for agentic reasoning, and end with a conditional **Notification** fed by a previous storage/gate output.
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 

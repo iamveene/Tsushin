@@ -354,9 +354,11 @@ def test_financial_templates_expand_to_visible_ui_first_nodes():
     ]
 
     template_ids = {template.id for template in templates}
-    assert len(templates) == 7
+    assert len(templates) == 6
     assert "financial_detran_es_ipva" not in template_ids
     assert "financial_b3_investidor" not in template_ids
+    assert "financial_pmvv_iptu" not in template_ids
+    assert "financial_husky_transfers" in template_ids
     for template in templates:
         flow = template.build(
             {
@@ -417,16 +419,6 @@ def test_financial_templates_expand_to_visible_ui_first_nodes():
             assert gate_step.config.gate_conditions == [
                 {"field": "conditions.should_notify", "operator": "==", "value": True, "type": "boolean"},
             ]
-        if template.id == "financial_pmvv_iptu":
-            captcha_step = next(step for step in browser_steps if step.config.tool_action == "solve_captcha")
-            assert captcha_step.timeout_seconds >= 90
-            assert captcha_step.config.tool_arguments["solver_provider"] == "ollama"
-            assert captcha_step.config.tool_arguments["ollama_model"] == "gemma4:latest"
-            assert captcha_step.config.tool_arguments["input_selector"]
-            assert captcha_step.config.tool_arguments["submit_selector"]
-            assert captcha_step.config.tool_arguments["success_selector"] == "#i20panelresultos"
-            assert captcha_step.config.tool_arguments["captcha_length"] == 5
-
         transform_step = next(step for step in flow.steps if step.type == step_type.DATA_TRANSFORM)
         assert transform_step.config.extraction_rules or transform_step.config.financial_parser_mode
 
