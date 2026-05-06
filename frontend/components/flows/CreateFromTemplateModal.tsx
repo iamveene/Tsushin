@@ -44,6 +44,13 @@ const CATEGORY_BADGES: Record<string, { label: string; className: string }> = {
   on_demand: { label: 'On-Demand', className: 'bg-sky-500/10 text-sky-400 border-sky-500/30' },
 }
 
+const ADVANCED_TEMPLATE_PARAM_KEYS = new Set([
+  'browser_session_profile_name',
+  'unit_id',
+  'asset',
+  'timezone',
+])
+
 function IconBadge({ icon }: { icon: string }) {
   // Map template icon keys to simple SVG glyphs (matches cockpit aesthetic)
   const paths: Record<string, string> = {
@@ -51,6 +58,8 @@ function IconBadge({ icon }: { icon: string }) {
     calendar: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
     wand: 'M15 4V2m0 14v-2M8 9h2M20 9h2M17.8 11.8L19 13M15 9h0M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5',
     eye: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z',
+    browser: 'M3.75 5.25h16.5a1.5 1.5 0 011.5 1.5v10.5a1.5 1.5 0 01-1.5 1.5H3.75a1.5 1.5 0 01-1.5-1.5V6.75a1.5 1.5 0 011.5-1.5z M2.25 8.25h19.5 M5.25 6.75h.01 M7.5 6.75h.01',
+    vault: 'M7.5 10.5V8.25a4.5 4.5 0 119 0v2.25 M6.75 10.5h10.5a1.5 1.5 0 011.5 1.5v6.75a1.5 1.5 0 01-1.5 1.5H6.75a1.5 1.5 0 01-1.5-1.5V12a1.5 1.5 0 011.5-1.5z M12 14.25v2.25',
     sparkles: 'M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z',
   }
   const d = paths[icon] || paths.wand
@@ -100,6 +109,7 @@ interface ParamInputProps {
   spec: FlowTemplateParamSpec
   value: any
   onChange: (v: any) => void
+  inputId?: string
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
@@ -107,19 +117,19 @@ interface ParamInputProps {
   passwordVaultIntegrations: PasswordVaultIntegration[]
 }
 
-function ParamInput({ spec, value, onChange, agents, contacts, personas, customTools, passwordVaultIntegrations }: ParamInputProps) {
+function ParamInput({ spec, value, onChange, inputId, agents, contacts, personas, customTools, passwordVaultIntegrations }: ParamInputProps) {
   const common = 'w-full px-3 py-2 bg-slate-900/60 border border-slate-700 rounded-lg text-white text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none'
   const v = value ?? spec.default ?? ''
 
   switch (spec.type) {
     case 'text':
-      return <input type="text" value={v} onChange={e => onChange(e.target.value)} className={common} placeholder={spec.help || ''} />
+      return <input id={inputId} type="text" value={v} onChange={e => onChange(e.target.value)} className={common} placeholder={spec.help || ''} />
     case 'textarea':
-      return <textarea value={v} onChange={e => onChange(e.target.value)} rows={3} className={common + ' font-mono resize-y'} placeholder={spec.help || ''} />
+      return <textarea id={inputId} value={v} onChange={e => onChange(e.target.value)} rows={3} className={common + ' font-mono resize-y'} placeholder={spec.help || ''} />
     case 'number':
-      return <input type="number" value={v} onChange={e => onChange(Number(e.target.value) || 0)} min={spec.min ?? undefined} max={spec.max ?? undefined} className={common} />
+      return <input id={inputId} type="number" value={v} onChange={e => onChange(Number(e.target.value) || 0)} min={spec.min ?? undefined} max={spec.max ?? undefined} className={common} />
     case 'time':
-      return <input type="time" value={v} onChange={e => onChange(e.target.value)} className={common} />
+      return <input id={inputId} type="time" value={v} onChange={e => onChange(e.target.value)} className={common} />
     case 'toggle':
       return (
         <label className="inline-flex items-center gap-2 cursor-pointer">
@@ -129,7 +139,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'select':
       return (
-        <select value={String(v)} onChange={e => {
+        <select id={inputId} value={String(v)} onChange={e => {
           const opt = spec.options?.find(o => String(o.value) === e.target.value)
           onChange(opt ? opt.value : e.target.value)
         }} className={common}>
@@ -141,7 +151,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'channel':
       return (
-        <select value={String(v)} onChange={e => onChange(e.target.value)} className={common}>
+        <select id={inputId} value={String(v)} onChange={e => onChange(e.target.value)} className={common}>
           {(spec.options || []).map(opt => (
             <option key={String(opt.value)} value={String(opt.value)}>{opt.label}</option>
           ))}
@@ -149,7 +159,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'agent':
       return (
-        <select value={String(v)} onChange={e => onChange(Number(e.target.value))} className={common}>
+        <select id={inputId} value={String(v)} onChange={e => onChange(Number(e.target.value))} className={common}>
           <option value="">— select an agent —</option>
           {agents.map(a => (
             <option key={a.id} value={String(a.id)}>{a.contact_name || `Agent #${a.id}`}</option>
@@ -158,7 +168,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'persona':
       return (
-        <select value={String(v || '')} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)} className={common}>
+        <select id={inputId} value={String(v || '')} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)} className={common}>
           <option value="">— default persona —</option>
           {personas.map(p => (
             <option key={p.id} value={String(p.id)}>{p.name}</option>
@@ -167,7 +177,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'password_vault_integration':
       return (
-        <select value={String(v || '')} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)} className={common}>
+        <select id={inputId} value={String(v || '')} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)} className={common}>
           <option value="">— select a Password Vault connection —</option>
           {passwordVaultIntegrations.filter(i => i.is_active).map(i => (
             <option key={i.id} value={String(i.id)}>
@@ -180,9 +190,9 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
     case 'contact':
       return (
         <div className="flex gap-2">
-          <input type="text" value={v} onChange={e => onChange(e.target.value)} className={common} placeholder="Phone or @mention" />
+          <input id={inputId} type="text" value={v} onChange={e => onChange(e.target.value)} className={common} placeholder="Phone or @mention" />
           {contacts.length > 0 && (
-            <select value="" onChange={e => e.target.value && onChange(e.target.value)} className={common + ' max-w-xs'}>
+            <select aria-label="Saved contact picker" value="" onChange={e => e.target.value && onChange(e.target.value)} className={common + ' max-w-xs'}>
               <option value="">— pick contact —</option>
               {contacts.slice(0, 100).map(c => (
                 <option key={c.id} value={c.phone_number || c.friendly_name}>{c.friendly_name} ({c.phone_number || 'no phone'})</option>
@@ -193,7 +203,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
       )
     case 'tool':
       return (
-        <select value={String(v || '')} onChange={e => onChange(e.target.value)} className={common}>
+        <select id={inputId} value={String(v || '')} onChange={e => onChange(e.target.value)} className={common}>
           <option value="">— select a tool —</option>
           {customTools.filter(t => t.is_enabled).map(t => (
             <option key={t.id} value={t.name}>{t.name}</option>
@@ -201,7 +211,7 @@ function ParamInput({ spec, value, onChange, agents, contacts, personas, customT
         </select>
       )
     default:
-      return <input type="text" value={v} onChange={e => onChange(e.target.value)} className={common} />
+      return <input id={inputId} type="text" value={v} onChange={e => onChange(e.target.value)} className={common} />
   }
 }
 
@@ -219,6 +229,7 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
   const [params, setParams] = useState<Record<string, any>>({})
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -265,6 +276,7 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
       }
     }
     setParams(init)
+    setShowAdvancedParams(false)
   }, [selected, passwordVaultIntegrations])
 
   const requiredMissing = useMemo(() => {
@@ -284,6 +296,8 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
   const paramsForDisplay = selected?.params_schema.filter(spec => (
     !usesPasswordVault || !['password_vault_integration_id', 'vault', 'vault_item_ref'].includes(spec.key)
   )) || []
+  const primaryParamsForDisplay = paramsForDisplay.filter(spec => !ADVANCED_TEMPLATE_PARAM_KEYS.has(spec.key))
+  const advancedParamsForDisplay = paramsForDisplay.filter(spec => ADVANCED_TEMPLATE_PARAM_KEYS.has(spec.key))
   const wizardVaultValue: PasswordVaultReferenceValue = {
     password_vault_integration_id: params.password_vault_integration_id ?? null,
     password_vault_provider: passwordVaultIntegrations.find(i => i.id === Number(params.password_vault_integration_id))?.provider || null,
@@ -432,9 +446,9 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                 </div>
               )}
 
-              {paramsForDisplay.map(spec => (
+              {primaryParamsForDisplay.map(spec => (
                 <div key={spec.key}>
-                  <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                  <label htmlFor={`flow-template-param-${spec.key}`} className="block text-sm font-medium text-slate-300 mb-1.5">
                     {spec.label}
                     {spec.required && <span className="text-teal-400 ml-1">*</span>}
                   </label>
@@ -442,6 +456,7 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                     spec={spec}
                     value={params[spec.key]}
                     onChange={v => setParams(prev => ({ ...prev, [spec.key]: v }))}
+                    inputId={`flow-template-param-${spec.key}`}
                     agents={agents}
                     contacts={contacts}
                     personas={personas}
@@ -451,6 +466,43 @@ export default function CreateFromTemplateModal({ agents, contacts, personas, cu
                   {spec.help && <p className="mt-1 text-xs text-slate-500">{spec.help}</p>}
                 </div>
               ))}
+
+              {advancedParamsForDisplay.length > 0 && (
+                <div className="rounded-lg border border-slate-700/70 bg-slate-900/30">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedParams(value => !value)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-slate-300 hover:text-white"
+                  >
+                    <span>Advanced options</span>
+                    <span className="text-xs text-slate-500">{showAdvancedParams ? 'Hide' : 'Show'}</span>
+                  </button>
+                  {showAdvancedParams && (
+                    <div className="space-y-4 border-t border-slate-700/70 p-3">
+                      {advancedParamsForDisplay.map(spec => (
+                        <div key={spec.key}>
+                          <label htmlFor={`flow-template-param-${spec.key}`} className="block text-sm font-medium text-slate-300 mb-1.5">
+                            {spec.label}
+                            {spec.required && <span className="text-teal-400 ml-1">*</span>}
+                          </label>
+                          <ParamInput
+                            spec={spec}
+                            value={params[spec.key]}
+                            onChange={v => setParams(prev => ({ ...prev, [spec.key]: v }))}
+                            inputId={`flow-template-param-${spec.key}`}
+                            agents={agents}
+                            contacts={contacts}
+                            personas={personas}
+                            customTools={customTools}
+                            passwordVaultIntegrations={passwordVaultIntegrations}
+                          />
+                          {spec.help && <p className="mt-1 text-xs text-slate-500">{spec.help}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

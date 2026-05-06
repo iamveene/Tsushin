@@ -719,6 +719,10 @@ FINANCIAL_PROFILES: Dict[str, Dict[str, Any]] = {
     "pmvv_iptu": {
         "name": "PMVV - IPTU Vila Velha",
         "description": "Visible-step municipal tax workflow with CAPTCHA/manual-run boundary.",
+        # PMVV is intentionally kept as a private profile/playbook draft, but
+        # not exposed in the UI template catalog: the portal CAPTCHA made this
+        # migration explicitly aborted for the current delivery scope.
+        "template_enabled": False,
         "record_kind": "tax_obligation",
         "provider": "pmvv",
         "automation_id": "pmvv_iptu_vila_velha",
@@ -1692,6 +1696,7 @@ FLOW_TEMPLATES: List[FlowTemplate] = [
             build=_make_financial_builder(profile_key),
         )
         for profile_key, profile in FINANCIAL_PROFILES.items()
+        if profile.get("template_enabled", True)
     ],
 ]
 

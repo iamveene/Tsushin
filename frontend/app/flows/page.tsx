@@ -954,8 +954,9 @@ function BrowserAutomationConfigPanel({
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Tool action</label>
+          <label htmlFor="browser-step-tool-action" className="block text-sm font-medium text-slate-300 mb-1.5">Tool action</label>
           <select
+            id="browser-step-tool-action"
             value={current.tool_action || 'navigate'}
             onChange={(e) => onChange({
               tool_action: e.target.value,
@@ -970,8 +971,9 @@ function BrowserAutomationConfigPanel({
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+          <label htmlFor="browser-step-url" className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
           <TemplateInput
+            id="browser-step-url"
             value={current.url || ''}
             onValueChange={(value) => onChange({ url: value })}
             placeholder="https://portal.example.com/login"

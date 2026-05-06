@@ -1918,6 +1918,16 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         normalized = dict(record)
         if normalized.get("amount_cents") is None and normalized.get("amount") is not None:
             normalized["amount_cents"] = _parse_brl_cents(normalized.get("amount"))
+        automation_key = str(
+            normalized.get("automation_key")
+            or normalized.get("automation_id")
+            or config.get("financial_automation_key")
+            or config.get("financial_automation_id")
+            or ""
+        )
+        if automation_key:
+            normalized.setdefault("automation_key", automation_key)
+            normalized.setdefault("automation_id", automation_key)
 
         service = FinancialAutomationService(self.db, tenant_id=flow_run.tenant_id)
         record_result = service._upsert_bill(normalized, config, flow_run_id=flow_run.id)
