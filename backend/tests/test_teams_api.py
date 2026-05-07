@@ -53,6 +53,7 @@ from api.routes_teams import (  # noqa: E402
     archive_team,
     cancel_team_run,
     create_team,
+    delete_team_permanently,
     get_team,
     get_team_run,
     list_teams,
@@ -296,7 +297,7 @@ def test_legacy_and_v1_team_crud_list_and_detail(db_session):
     assert listed["items"][0]["id"] == created["id"]
 
     detail = _run(get_team(created["id"], ctx=_ctx(db_session), current_user=_user()))
-    assert detail["tools"]["sandboxed_tool_ids"] == []
+    assert "tools" not in detail
     assert detail["triggers"] == []
 
     v1 = _run(
@@ -579,6 +580,118 @@ def test_archive_refuses_active_run_and_restores_membership(db_session):
     assert archived.status == TeamStatus.ARCHIVED.value
     assert db_session.query(AgentTeamMember).filter(AgentTeamMember.team_id == team["id"]).count() == 0
     assert db_session.get(Agent, agents[0].id).is_team_member is False
+
+
+def test_permanent_delete_refuses_non_archived_team(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [_create_agent(db_session, tenant_id="tenant-a", name="A")]
+    team = _run(_create_active_team(db_session, agents))
+
+    with pytest.raises(HTTPException) as exc:
+        _run(delete_team_permanently(team["id"], ctx=_ctx(db_session), current_user=_user()))
+    assert exc.value.status_code == 409
+    assert db_session.get(AgentTeam, team["id"]) is not None
+
+
+def test_permanent_delete_archived_team_cascades(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [
+        _create_agent(db_session, tenant_id="tenant-a", name="A"),
+        _create_agent(db_session, tenant_id="tenant-a", name="B"),
+    ]
+    team = _run(_create_active_team(db_session, agents))
+    webhook = _create_webhook_trigger(db_session, trigger_id=901)
+    db_session.commit()
+    binding = _run(
+        create_team_trigger_binding(
+            team["id"],
+            payload=TeamTriggerCreate(
+                trigger_kind="webhook",
+                trigger_instance_id=webhook.id,
+                event_types=["payload.received"],
+            ),
+            ctx=_ctx(db_session),
+            current_user=_user(),
+        )
+    )
+    run = AgentTeamRun(
+        tenant_id="tenant-a",
+        team_id=team["id"],
+        status=TeamRunStatus.COMPLETED.value,
+        goal_text_snapshot="Goal",
+        topology_snapshot=TeamTopology.LINE.value,
+    )
+    db_session.add(run)
+    db_session.flush()
+    member = db_session.query(AgentTeamMember).filter(AgentTeamMember.team_id == team["id"]).first()
+    db_session.add(
+        AgentTeamMemberRun(
+            tenant_id="tenant-a",
+            team_run_id=run.id,
+            agent_team_member_id=member.id,
+            agent_id=agents[0].id,
+            step_index=1,
+            status=TeamMemberRunStatus.COMPLETED.value,
+        )
+    )
+    db_session.commit()
+    run_id = run.id
+
+    _run(archive_team(team["id"], ctx=_ctx(db_session), current_user=_user()))
+    _run(delete_team_permanently(team["id"], ctx=_ctx(db_session), current_user=_user()))
+
+    assert db_session.get(AgentTeam, team["id"]) is None
+    assert db_session.get(AgentTeamTrigger, binding["id"]) is None
+    assert db_session.get(AgentTeamRun, run_id) is None
+    assert db_session.query(AgentTeamMemberRun).filter(AgentTeamMemberRun.team_run_id == run_id).count() == 0
+    assert db_session.query(AgentTeamMember).filter(AgentTeamMember.team_id == team["id"]).count() == 0
+    for agent in agents:
+        refreshed = db_session.get(Agent, agent.id)
+        assert refreshed.current_team_id is None
+
+
+def test_permanent_delete_clears_lingering_members(db_session):
+    _create_tenant(db_session, "tenant-a")
+    agents = [_create_agent(db_session, tenant_id="tenant-a", name="A")]
+    team = _run(_create_active_team(db_session, agents))
+    _run(archive_team(team["id"], ctx=_ctx(db_session), current_user=_user()))
+
+    stray_agent = _create_agent(db_session, tenant_id="tenant-a", name="Stray")
+    db_session.add(
+        AgentTeamMember(
+            tenant_id="tenant-a",
+            team_id=team["id"],
+            agent_id=stray_agent.id,
+            role=TeamMemberRole.MEMBER.value,
+            execution_order=1,
+        )
+    )
+    db_session.commit()
+    assert db_session.query(AgentTeamMember).filter(AgentTeamMember.team_id == team["id"]).count() == 1
+
+    _run(delete_team_permanently(team["id"], ctx=_ctx(db_session), current_user=_user()))
+
+    assert db_session.get(AgentTeam, team["id"]) is None
+    assert db_session.query(AgentTeamMember).filter(AgentTeamMember.team_id == team["id"]).count() == 0
+
+
+def test_permanent_delete_tenant_isolation(db_session):
+    _create_tenant(db_session, "tenant-a")
+    _create_tenant(db_session, "tenant-b")
+    agents = [_create_agent(db_session, tenant_id="tenant-a", name="A")]
+    team = _run(_create_active_team(db_session, agents))
+    _run(archive_team(team["id"], ctx=_ctx(db_session), current_user=_user()))
+
+    with pytest.raises(HTTPException) as exc:
+        _run(
+            delete_team_permanently(
+                team["id"],
+                ctx=_ctx(db_session, tenant_id="tenant-b", user_id=2),
+                current_user=_user(tenant_id="tenant-b", user_id=2),
+            )
+        )
+    assert exc.value.status_code == 404
+    assert db_session.get(AgentTeam, team["id"]) is not None
 
 
 def test_run_precreate_cancel_and_detail_timeline(db_session):

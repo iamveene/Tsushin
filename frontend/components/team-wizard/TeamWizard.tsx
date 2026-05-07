@@ -15,11 +15,10 @@ import {
   TrashIcon,
   UsersIcon,
   WebhookIcon,
-  WrenchIcon,
 } from '@/components/ui/icons'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import { useTeamWizard } from '@/contexts/TeamWizardContext'
-import { api, type Agent, type GitHubTrigger, type JiraTrigger, type SandboxedTool, type WebhookIntegration } from '@/lib/client'
+import { api, type Agent, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import {
   TEAM_TEMPLATE_PRESETS,
   type TeamTemplateId,
@@ -53,12 +52,6 @@ const STEP_META: Record<TeamWizardStep, { label: string; description: string; ti
     description: 'Agents',
     title: 'Members',
     body: 'Choose the agents that will participate in team runs.',
-  },
-  tools: {
-    label: 'Tools',
-    description: 'Pool',
-    title: 'Tool pool',
-    body: 'Select sandboxed tools available to the team.',
   },
   triggers: {
     label: 'Triggers',
@@ -98,10 +91,6 @@ function formatLabel(value: string) {
 
 function agentLabel(agent: Agent | undefined, fallbackId: number) {
   return agent?.contact_name || `Agent #${fallbackId}`
-}
-
-function toolLabel(tool: SandboxedTool | undefined, fallbackId: number) {
-  return tool?.name || `Tool #${fallbackId}`
 }
 
 function triggerKindLabel(kind: TeamTriggerDraftKind) {
@@ -203,7 +192,6 @@ export default function TeamWizard() {
     removeMember,
     patchMember,
     reorderMember,
-    setTools,
     addTrigger,
     removeTrigger,
     patchTrigger,
@@ -215,7 +203,6 @@ export default function TeamWizard() {
   const draft = state.draft
 
   const [agents, setAgents] = useState<Agent[]>([])
-  const [tools, setToolOptions] = useState<SandboxedTool[]>([])
   const [triggerOptions, setTriggerOptions] = useState<TriggerOption[]>([])
   const [loadingResources, setLoadingResources] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -235,12 +222,8 @@ export default function TeamWizard() {
     setLoadingResources(true)
     setLoadError(null)
     try {
-      const [agentRows, toolRows] = await Promise.all([
-        api.getAgents(true),
-        api.getSandboxedTools(),
-      ])
+      const agentRows = await api.getAgents(true)
       setAgents(agentRows)
-      setToolOptions(toolRows.filter((tool) => tool.is_enabled))
 
       const [webhookRows, githubRows, jiraRows] = await Promise.all([
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
@@ -277,7 +260,6 @@ export default function TeamWizard() {
 
   const selectedAgentIds = useMemo(() => new Set(draft.members.map((member) => member.agent_id)), [draft.members])
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
-  const toolById = useMemo(() => new Map(tools.map((tool) => [tool.id, tool])), [tools])
   const triggerByKey = useMemo(() => new Map(triggerOptions.map((option) => [triggerOptionKey(option), option])), [triggerOptions])
 
   const availableAgents = useMemo(
@@ -318,7 +300,6 @@ export default function TeamWizard() {
     max_steps: teamDraft.max_steps,
     max_total_tokens: teamDraft.max_total_tokens,
     max_concurrent_runs: teamDraft.max_concurrent_runs,
-    tools: { sandboxed_tool_ids: teamDraft.sandboxed_tool_ids },
     members: teamDraft.members.map((member) => ({
       agent_id: member.agent_id,
       execution_order: member.execution_order,
@@ -482,8 +463,6 @@ export default function TeamWizard() {
             openAgentWizard={() => agentWizard.openWizard()}
           />
         )
-      case 'tools':
-        return <ToolsStep draft={draft} tools={tools} toolById={toolById} setTools={setTools} />
       case 'triggers':
         return (
           <TriggersStep
@@ -501,7 +480,6 @@ export default function TeamWizard() {
           <ReviewStep
             draft={draft}
             agents={agentById}
-            tools={toolById}
           />
         )
       case 'create':
@@ -509,7 +487,6 @@ export default function TeamWizard() {
           <CreateStep
             draft={draft}
             agents={agentById}
-            tools={toolById}
             createTeam={createTeam}
             isCreating={isCreating}
           />
@@ -790,70 +767,6 @@ function MembersStep({
   )
 }
 
-function ToolsStep({
-  draft,
-  tools,
-  toolById,
-  setTools,
-}: {
-  draft: TeamWizardDraft
-  tools: SandboxedTool[]
-  toolById: Map<number, SandboxedTool>
-  setTools: (toolIds: number[]) => void
-}) {
-  const toggleTool = (toolId: number) => {
-    const selected = new Set(draft.sandboxed_tool_ids)
-    if (selected.has(toolId)) {
-      selected.delete(toolId)
-    } else {
-      selected.add(toolId)
-    }
-    setTools(Array.from(selected))
-  }
-
-  return (
-    <div className="space-y-4">
-      {tools.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-tsushin-border px-4 py-8 text-center text-sm text-tsushin-slate">
-          No enabled sandboxed tools.
-        </div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {tools.map((tool) => {
-            const active = draft.sandboxed_tool_ids.includes(tool.id)
-            return (
-              <label
-                key={tool.id}
-                className={`${cardBase} cursor-pointer ${
-                  active
-                    ? 'border-tsushin-accent bg-tsushin-accent/10'
-                    : 'border-tsushin-border bg-tsushin-surface/40 hover:border-tsushin-muted'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <input type="checkbox" checked={active} onChange={() => toggleTool(tool.id)} className="mt-1" />
-                  <div>
-                    <div className="flex items-center gap-2 font-semibold text-white">
-                      <WrenchIcon size={16} />
-                      {tool.name}
-                    </div>
-                    <div className="mt-1 text-xs text-tsushin-slate">{tool.tool_type} - {tool.execution_mode}</div>
-                  </div>
-                </div>
-              </label>
-            )
-          })}
-        </div>
-      )}
-      {draft.sandboxed_tool_ids.length > 0 && (
-        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/30 px-4 py-3 text-sm text-tsushin-slate">
-          Selected: {draft.sandboxed_tool_ids.map((id) => toolLabel(toolById.get(id), id)).join(', ')}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function TriggersStep({
   draft,
   triggerOptions,
@@ -957,11 +870,9 @@ function TriggersStep({
 function ReviewStep({
   draft,
   agents,
-  tools,
 }: {
   draft: TeamWizardDraft
   agents: Map<number, Agent>
-  tools: Map<number, SandboxedTool>
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
@@ -983,13 +894,6 @@ function ReviewStep({
           />
         ))}
       </ReviewPanel>
-      <ReviewPanel title="Tools">
-        {draft.sandboxed_tool_ids.length === 0 ? (
-          <div className="text-sm text-tsushin-slate">No tool pool selected.</div>
-        ) : draft.sandboxed_tool_ids.map((id) => (
-          <ReviewRow key={id} label={`#${id}`} value={toolLabel(tools.get(id), id)} />
-        ))}
-      </ReviewPanel>
       <ReviewPanel title="Triggers">
         {draft.triggers.length === 0 ? (
           <div className="text-sm text-tsushin-slate">No trigger bindings selected.</div>
@@ -1008,19 +912,17 @@ function ReviewStep({
 function CreateStep({
   draft,
   agents,
-  tools,
   createTeam,
   isCreating,
 }: {
   draft: TeamWizardDraft
   agents: Map<number, Agent>
-  tools: Map<number, SandboxedTool>
   createTeam: () => void
   isCreating: boolean
 }) {
   return (
     <div className="space-y-4">
-      <ReviewStep draft={draft} agents={agents} tools={tools} />
+      <ReviewStep draft={draft} agents={agents} />
       <button
         type="button"
         onClick={createTeam}

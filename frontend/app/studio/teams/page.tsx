@@ -48,12 +48,13 @@ export default function StudioTeamsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [includeArchived, setIncludeArchived] = useState(false)
 
   const loadTeams = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const response = await api.getTeams({ page: 1, pageSize: 50 })
+      const response = await api.getTeams({ page: 1, pageSize: 50, includeArchived })
       setTeams(response.items)
       setTotal(response.total)
     } catch (err) {
@@ -61,7 +62,7 @@ export default function StudioTeamsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [includeArchived])
 
   useEffect(() => {
     loadTeams()
@@ -92,6 +93,15 @@ export default function StudioTeamsPage() {
             <p className="text-tsushin-slate">Coordinate multi-agent runs from one Studio surface.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-3 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={(event) => setIncludeArchived(event.target.checked)}
+                className="h-4 w-4 cursor-pointer accent-tsushin-vermilion"
+              />
+              Include archived
+            </label>
             <button
               type="button"
               onClick={() => teamWizard.openWizard()}

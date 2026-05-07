@@ -120,6 +120,23 @@ async def archive_team(
         _raise_api_error(exc)
 
 
+@router.delete(
+    "/api/v1/teams/{team_id}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={**COMMON_RESPONSES, **NOT_FOUND_RESPONSE},
+)
+async def delete_team_permanently(
+    team_id: int,
+    db: Session = Depends(get_db),
+    caller: ApiCaller = Depends(require_api_permission("agents.delete")),
+):
+    try:
+        _service(db, caller).delete_team_permanently(team_id)
+        return None
+    except AgentTeamApiError as exc:
+        _raise_api_error(exc)
+
+
 @router.post(
     "/api/v1/teams/{team_id}/members",
     response_model=TeamMemberResponse,
