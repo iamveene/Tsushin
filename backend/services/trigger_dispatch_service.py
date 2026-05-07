@@ -535,8 +535,13 @@ class TriggerDispatchService:
         config_json.trigger_instance_id that matches the dispatch instance.
         Optional event_types and filters then narrow the match.
         """
-        if trigger_type not in {"webhook", "github", "jira"}:
+        if trigger_type not in {"webhook", "github", "jira", "email"}:
             return [], []
+
+        # AgentTeamTrigger.trigger_kind stores "gmail" for the Gmail/email
+        # channel, while the dispatch trigger_type is "email". Translate so the
+        # query matches the persisted enum value.
+        team_trigger_kind = "gmail" if trigger_type == "email" else trigger_type
 
         try:
             rows = (
@@ -548,7 +553,7 @@ class TriggerDispatchService:
                 )
                 .filter(
                     AgentTeamTrigger.tenant_id == tenant_id,
-                    AgentTeamTrigger.trigger_kind == trigger_type,
+                    AgentTeamTrigger.trigger_kind == team_trigger_kind,
                     AgentTeamTrigger.is_enabled.is_(True),
                     AgentTeam.tenant_id == tenant_id,
                 )

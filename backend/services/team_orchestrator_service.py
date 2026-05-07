@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +36,9 @@ from services.team_coordinator_service import (
     ensure_hidden_team_coordinator,
     parse_coordinator_command,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class TeamOrchestrationError(RuntimeError):
@@ -190,6 +195,8 @@ class TeamRunOrchestrator:
         self.agent_invoke_fn = agent_invoke_fn or _invoke_agent_for_team_member
         self.sentinel_service_factory = sentinel_service_factory
         self.existing_run_id = existing_run_id
+        self._trigger_payload_doc: Optional[dict] = None
+        self._trigger_payload_summary: str = ""
         self.sentinel_enabled = (
             sentinel_enabled
             if sentinel_enabled is not None
@@ -198,11 +205,58 @@ class TeamRunOrchestrator:
 
     async def run(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
         team = self._load_active_team()
+        self._load_trigger_payload(trigger_event_id)
         if team.topology == TeamTopology.LINE.value:
             return await self.run_line(trigger_event_id=trigger_event_id)
         if team.topology == TeamTopology.MESH.value:
             return await self.run_mesh(trigger_event_id=trigger_event_id)
         raise TeamValidationError("unsupported_topology")
+
+    def _load_trigger_payload(self, trigger_event_id: Optional[int]) -> None:
+        """Read the wake event's payload from disk so prompt builders can inject it.
+
+        Without this the team agents only see ``team.goal_text`` and prior
+        member output — they never see the actual Jira issue / Gmail message
+        that fired the run, so summaries are uniformly "trigger payload is
+        missing." Failure to load is non-fatal: prompts simply fall back to
+        the previous behavior with a "[no payload]" marker.
+        """
+        self._trigger_payload_doc = None
+        self._trigger_payload_summary = ""
+        if not trigger_event_id:
+            return
+        try:
+            from models import WakeEvent
+            from services.trigger_dispatch_service import TriggerDispatchService
+
+            wake_event = (
+                self.db.query(WakeEvent)
+                .filter(
+                    WakeEvent.id == int(trigger_event_id),
+                    WakeEvent.tenant_id == self.tenant_id,
+                )
+                .first()
+            )
+            if wake_event is None:
+                return
+            payload_doc = TriggerDispatchService(self.db)._read_payload_ref(wake_event.payload_ref)
+            if not payload_doc:
+                return
+            self._trigger_payload_doc = payload_doc
+            payload_block = payload_doc.get("payload") if isinstance(payload_doc, dict) else None
+            if payload_block is None:
+                payload_block = payload_doc
+            self._trigger_payload_summary = (
+                f"channel={wake_event.channel_type} "
+                f"event_type={wake_event.event_type} "
+                f"occurred_at={wake_event.occurred_at.isoformat() if wake_event.occurred_at else 'unknown'}\n"
+                f"payload_json:\n{json.dumps(payload_block, ensure_ascii=False, indent=2)[:4000]}"
+            )
+        except Exception:
+            logger.exception(
+                "Failed to load trigger payload for team_run trigger_event_id=%s",
+                trigger_event_id,
+            )
 
     async def run_line(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
         team, runnable_members = self._load_runnable_line_team()
@@ -364,6 +418,7 @@ class TeamRunOrchestrator:
         self.db.commit()
         self.db.refresh(team_run)
         self._emit_team_run_event(team_run, "goal_achieved")
+        self._maybe_notify_contact_on_completion(team_run)
         return team_run
 
     async def run_mesh(self, trigger_event_id: Optional[int] = None) -> AgentTeamRun:
@@ -451,6 +506,7 @@ class TeamRunOrchestrator:
                 self.db.commit()
                 self.db.refresh(team_run)
                 self._emit_team_run_event(team_run, "goal_achieved")
+                self._maybe_notify_contact_on_completion(team_run)
                 return team_run
 
             if command.command == "escalate":
@@ -991,14 +1047,17 @@ class TeamRunOrchestrator:
         summaries = "\n".join(f"{idx + 1}. {summary}" for idx, summary in enumerate(prior_summaries))
         summaries = summaries or "[No prior member summaries]"
         previous = previous_output or "[No previous member output]"
+        trigger_block = self._trigger_payload_summary or "[No trigger payload (manual run)]"
         return (
             f"You are executing step {step_index} in a line-topology Agent Team.\n\n"
             f"Team goal:\n{team.goal_text or '[No explicit team goal]'}\n\n"
+            f"Trigger payload (data the team must analyze):\n{trigger_block}\n\n"
             f"Your team member id: {member.id}\n"
             f"Prior member summaries:\n{summaries}\n\n"
             f"Previous member full output:\n{previous}\n\n"
-            "Do your assigned part of the team goal. Respond normally first, then append one final JSON object "
-            'with exactly these keys: {"summary": "...", "key_findings": ["..."], "open_questions": ["..."]}.'
+            "Do your assigned part of the team goal using the trigger payload above. "
+            "Respond normally first, then append one final JSON object with exactly these keys: "
+            '{"summary": "...", "key_findings": ["..."], "open_questions": ["..."]}.'
         )
 
     def _build_mesh_coordinator_prompt(
@@ -1015,15 +1074,18 @@ class TeamRunOrchestrator:
             for runnable in runnable_members
         )
         history = json.dumps(transcript[-10:], ensure_ascii=True)
+        trigger_block = self._trigger_payload_summary or "[No trigger payload (manual run)]"
         return (
             "You are coordinating a mesh-topology Agent Team.\n\n"
             f"Team goal:\n{team.goal_text or '[No explicit team goal]'}\n\n"
+            f"Trigger payload (data the team must analyze):\n{trigger_block}\n\n"
             f"Coordinator member id: {coordinator_member.id}\n"
             f"Max steps: {team.max_steps}\n"
             f"Max total tokens: {team.max_total_tokens if team.max_total_tokens is not None else '[unbounded]'}\n\n"
             f"Runnable members:\n{members}\n\n"
             f"Recent mesh transcript JSON:\n{history or '[]'}\n\n"
-            "Choose the next action. Append one final JSON command object: dispatch, finish, or escalate."
+            "Choose the next action based on the trigger payload above. "
+            "Append one final JSON command object: dispatch, finish, or escalate."
         )
 
     def _build_mesh_member_prompt(
@@ -1035,14 +1097,17 @@ class TeamRunOrchestrator:
         coordinator_reason: str,
     ) -> str:
         history = json.dumps(transcript[-10:], ensure_ascii=True)
+        trigger_block = self._trigger_payload_summary or "[No trigger payload (manual run)]"
         return (
             "You are a member in a mesh-topology Agent Team.\n\n"
             f"Team goal:\n{team.goal_text or '[No explicit team goal]'}\n\n"
+            f"Trigger payload (data the team must analyze):\n{trigger_block}\n\n"
             f"Coordinator reason:\n{coordinator_reason or '[No reason supplied]'}\n\n"
             f"Your dispatched task:\n{dispatch['message']}\n\n"
             f"Recent mesh transcript JSON:\n{history or '[]'}\n\n"
-            "Complete only the dispatched task. Respond normally first, then append one final JSON object "
-            'with exactly these keys: {"summary": "...", "key_findings": ["..."], "open_questions": ["..."]}.'
+            "Complete only the dispatched task using the trigger payload above. "
+            "Respond normally first, then append one final JSON object with exactly these keys: "
+            '{"summary": "...", "key_findings": ["..."], "open_questions": ["..."]}.'
         )
 
     async def _invoke_with_limits(
@@ -1282,6 +1347,126 @@ class TeamRunOrchestrator:
         self.db.commit()
         self.db.refresh(team_run)
         self._emit_team_run_event(team_run, self._team_run_event_for_status(status))
+        self._maybe_notify_contact_on_completion(team_run)
+
+    def _maybe_notify_contact_on_completion(self, team_run: AgentTeamRun) -> None:
+        """Honor a `[notify:contact:<id>]` directive in the team's description.
+
+        BUG-731 follow-up: lets a team push its final summary to a contact's
+        WhatsApp via the tenant's agent MCP without requiring a custom skill or
+        DB migration. Failure to deliver must never break the run.
+        """
+        logger.debug(
+            "[notify-hook] entered for team_run_id=%s team_id=%s tenant=%s",
+            team_run.id,
+            team_run.team_id,
+            self.tenant_id,
+        )
+        try:
+            team = getattr(team_run, "team", None)
+            if team is None:
+                team = (
+                    self.db.query(AgentTeam)
+                    .filter(AgentTeam.id == team_run.team_id, AgentTeam.tenant_id == self.tenant_id)
+                    .first()
+                )
+            if team is None:
+                return
+            description = team.description or ""
+            match = re.search(r"\[notify:contact:(\d+)\]", description)
+            if not match:
+                return
+            contact_id = int(match.group(1))
+            contact = (
+                self.db.query(Contact)
+                .filter(Contact.id == contact_id, Contact.tenant_id == self.tenant_id)
+                .first()
+            )
+            if contact is None or not (contact.whatsapp_id or contact.phone_number):
+                logger.warning(
+                    "team_run notify skipped: contact %s missing or has no WhatsApp identifier (team_run_id=%s)",
+                    contact_id,
+                    team_run.id,
+                )
+                return
+
+            from models import WhatsAppMCPInstance
+            mcp = (
+                self.db.query(WhatsAppMCPInstance)
+                .filter(
+                    WhatsAppMCPInstance.tenant_id == self.tenant_id,
+                    WhatsAppMCPInstance.instance_type == "agent",
+                    WhatsAppMCPInstance.status == "running",
+                )
+                .order_by(WhatsAppMCPInstance.id.asc())
+                .first()
+            )
+            if mcp is None:
+                logger.warning(
+                    "team_run notify skipped: no running agent MCP for tenant (team_run_id=%s)",
+                    team_run.id,
+                )
+                return
+
+            phone = (contact.phone_number or "").strip().lstrip("+")
+            recipient = phone or (contact.whatsapp_id or "").strip()
+            if not recipient:
+                logger.warning(
+                    "team_run notify skipped: no usable recipient for contact %s",
+                    contact_id,
+                )
+                return
+            summary = (team_run.final_output_summary or "").strip()
+            if not summary:
+                summary = f"(Team {team.name} finished with status={team_run.status} but produced no summary.)"
+            message = (
+                f"[Tsushin · {team.name}]\n"
+                f"Status: {team_run.status}\n"
+                f"Run #{team_run.id}"
+                + (f" · trigger event {team_run.trigger_event_id}" if team_run.trigger_event_id else "")
+                + f"\n\n{summary}"
+            )
+
+            api_secret = getattr(mcp, "api_secret", None)
+            try:
+                import httpx
+
+                headers = {"Content-Type": "application/json"}
+                if api_secret:
+                    headers["Authorization"] = f"Bearer {api_secret}"
+                response = httpx.post(
+                    f"{mcp.mcp_api_url.rstrip('/')}/send",
+                    json={"recipient": recipient, "message": message},
+                    headers=headers,
+                    timeout=15.0,
+                )
+                if response.status_code in (200, 201, 202):
+                    logger.info(
+                        "team_run %s notified contact %s via MCP %s (HTTP %s)",
+                        team_run.id,
+                        contact_id,
+                        mcp.id,
+                        response.status_code,
+                    )
+                else:
+                    logger.warning(
+                        "team_run %s notify to contact %s returned HTTP %s body=%s",
+                        team_run.id,
+                        contact_id,
+                        response.status_code,
+                        response.text[:200],
+                    )
+            except Exception:
+                logger.exception(
+                    "team_run %s notify HTTP call failed (mcp=%s recipient=%s)",
+                    team_run.id,
+                    mcp.id,
+                    recipient,
+                )
+        except Exception:
+            logger.exception(
+                "team_run notify hook crashed (team_run_id=%s)", team_run.id
+            )
 
     @staticmethod
     def _elapsed(start_monotonic: float) -> float:
