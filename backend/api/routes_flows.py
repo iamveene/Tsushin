@@ -162,6 +162,9 @@ class FlowNodeCreate(BaseModel):
     timeout_seconds: int = 300
     retry_on_failure: bool = False
     max_retries: int = 0
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: bool = False
     max_turns: int = 20
     conversation_objective: Optional[str] = None
@@ -179,6 +182,9 @@ class FlowNodeUpdate(BaseModel):
     timeout_seconds: Optional[int] = None
     retry_on_failure: Optional[bool] = None
     max_retries: Optional[int] = None
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: Optional[bool] = None
     max_turns: Optional[int] = None
     conversation_objective: Optional[str] = None
@@ -198,6 +204,9 @@ class FlowNodeResponse(BaseModel):
     timeout_seconds: int = 300
     retry_on_failure: bool = False
     max_retries: int = 0
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: bool = False
     max_turns: int = 20
     conversation_objective: Optional[str] = None
@@ -373,6 +382,9 @@ def node_to_response(node: FlowNode) -> FlowNodeResponse:
         timeout_seconds=node.timeout_seconds or 300,
         retry_on_failure=node.retry_on_failure or False,
         max_retries=node.max_retries or 0,
+        retry_delay_seconds=node.retry_delay_seconds,
+        on_success=node.on_success,
+        on_failure=node.on_failure,
         allow_multi_turn=node.allow_multi_turn or False,
         max_turns=node.max_turns or 20,
         conversation_objective=node.conversation_objective,
@@ -2128,6 +2140,9 @@ def create_step(
             timeout_seconds=step.timeout_seconds,
             retry_on_failure=step.retry_on_failure,
             max_retries=step.max_retries,
+            retry_delay_seconds=step.retry_delay_seconds,
+            on_success=step.on_success,
+            on_failure=step.on_failure,
             allow_multi_turn=step.allow_multi_turn,
             max_turns=step.max_turns,
             conversation_objective=step.conversation_objective,
@@ -2259,6 +2274,12 @@ def update_step(
             db_step.retry_on_failure = step.retry_on_failure
         if step.max_retries is not None:
             db_step.max_retries = step.max_retries
+        if step.retry_delay_seconds is not None:
+            db_step.retry_delay_seconds = step.retry_delay_seconds
+        if step.on_success is not None:
+            db_step.on_success = step.on_success
+        if step.on_failure is not None:
+            db_step.on_failure = step.on_failure
         if step.allow_multi_turn is not None:
             db_step.allow_multi_turn = step.allow_multi_turn
         if step.max_turns is not None:
