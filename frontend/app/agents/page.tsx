@@ -12,6 +12,7 @@ import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import StudioTabs from '@/components/studio/StudioTabs'
 import SplitButton from '@/components/ui/SplitButton'
+import CreateChooserModal, { type ChosenKind } from '@/components/studio/CreateChooserModal'
 import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
 import { useToast } from '@/contexts/ToastContext'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
@@ -112,6 +113,21 @@ export default function AgentsPage() {
   const openTeamsUI = () => {
     if (!canWriteAgents) return
     router.push('/studio/teams?new=1')
+  }
+
+  const openContinuousAgentUI = () => {
+    if (!canWriteAgents) return
+    router.push('/studio/continuous-agents?new=1')
+  }
+
+  // v0.7.1 IA — kind-chooser modal. The SplitButton dropdown is the
+  // power-user shortcut; the "Compare options" entry opens this modal so
+  // first-time users get a side-by-side explanation before committing.
+  const [showKindChooser, setShowKindChooser] = useState(false)
+  const handleKindChosen = (kind: ChosenKind) => {
+    if (kind === 'agent') openCreateUI()
+    if (kind === 'continuous-agent') openContinuousAgentUI()
+    if (kind === 'team') openTeamsUI()
   }
 
   // Legacy modal pre-fill from a persisted Guided draft (set when the user
@@ -467,27 +483,43 @@ export default function AgentsPage() {
             <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
           </div>
           {canWriteAgents && (
-            <SplitButton
-              primaryLabel="Create Agent"
-              primaryIcon={<PlusIcon size={16} />}
-              onPrimaryClick={openCreateUI}
-              options={[
-                {
-                  id: 'agent',
-                  label: 'Agent',
-                  description: 'Open the guided agent wizard.',
-                  icon: <BotIcon size={16} />,
-                  onSelect: openCreateUI,
-                },
-                {
-                  id: 'team',
-                  label: 'Team',
-                  description: 'Open Studio Teams.',
-                  icon: <UsersIcon size={16} />,
-                  onSelect: openTeamsUI,
-                },
-              ]}
-            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowKindChooser(true)}
+                className="text-xs text-tsushin-slate hover:text-cyan-300 underline-offset-2 hover:underline"
+              >
+                Compare options
+              </button>
+              <SplitButton
+                primaryLabel="Create Agent"
+                primaryIcon={<PlusIcon size={16} />}
+                onPrimaryClick={openCreateUI}
+                options={[
+                  {
+                    id: 'agent',
+                    label: 'Agent',
+                    description: 'Open the guided agent wizard.',
+                    icon: <BotIcon size={16} />,
+                    onSelect: openCreateUI,
+                  },
+                  {
+                    id: 'continuous-agent',
+                    label: 'Continuous Agent',
+                    description: 'Wrap an agent so it wakes on inbound events.',
+                    icon: <LightningIcon size={16} />,
+                    onSelect: openContinuousAgentUI,
+                  },
+                  {
+                    id: 'team',
+                    label: 'Team',
+                    description: 'Multi-agent coordination (LINE/MESH).',
+                    icon: <UsersIcon size={16} />,
+                    onSelect: openTeamsUI,
+                  },
+                ]}
+              />
+            </div>
           )}
         </div>
       </div>
@@ -838,6 +870,14 @@ export default function AgentsPage() {
           )}
         </div>
       </div>
+
+      {/* Kind chooser — opened from "Compare options" or pre-creation
+          wizard. Dispatches to the existing per-kind launchers. */}
+      <CreateChooserModal
+        open={showKindChooser}
+        onClose={() => setShowKindChooser(false)}
+        onSelect={handleKindChosen}
+      />
 
       {/* Create Modal */}
       {showCreateModal && (
