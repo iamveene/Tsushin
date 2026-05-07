@@ -21,7 +21,6 @@ import {
   TrashIcon,
   UsersIcon,
   WebhookIcon,
-  WrenchIcon,
   XCircleIcon,
 } from '@/components/ui/icons'
 import {
@@ -29,7 +28,6 @@ import {
   type Agent,
   type GitHubTrigger,
   type JiraTrigger,
-  type SandboxedTool,
   type SentinelProfile,
   type TeamDetail,
   type TeamMemberResponse,
@@ -82,7 +80,6 @@ type SettingsForm = {
   max_steps: number
   max_total_tokens: string
   max_concurrent_runs: number
-  tools: number[]
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -190,7 +187,6 @@ export default function StudioTeamDetailPage() {
 
   const [team, setTeam] = useState<TeamDetail | null>(null)
   const [agents, setAgents] = useState<Agent[]>([])
-  const [tools, setTools] = useState<SandboxedTool[]>([])
   const [sentinelProfiles, setSentinelProfiles] = useState<SentinelProfile[]>([])
   const [triggerOptions, setTriggerOptions] = useState<TriggerOption[]>([])
   const [runs, setRuns] = useState<TeamRunListItem[]>([])
@@ -208,7 +204,6 @@ export default function StudioTeamDetailPage() {
     max_steps: 10,
     max_total_tokens: '',
     max_concurrent_runs: 1,
-    tools: [] as number[],
   })
   const [sentinelProfileId, setSentinelProfileId] = useState('')
   const [newTriggerKey, setNewTriggerKey] = useState('')
@@ -247,10 +242,9 @@ export default function StudioTeamDetailPage() {
     setLoading(true)
     setError(null)
     try {
-      const [teamRow, agentRows, toolRows, sentinelRows, webhookRows, githubRows, jiraRows, runRows] = await Promise.all([
+      const [teamRow, agentRows, sentinelRows, webhookRows, githubRows, jiraRows, runRows] = await Promise.all([
         api.getTeam(teamId),
         api.getAgents(true),
-        api.getSandboxedTools().catch(() => [] as SandboxedTool[]),
         api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
         api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
@@ -259,7 +253,6 @@ export default function StudioTeamDetailPage() {
       ])
       setTeam(teamRow)
       setAgents(agentRows)
-      setTools(toolRows.filter((tool) => tool.is_enabled))
       setSentinelProfiles(sentinelRows.filter((profile) => profile.is_enabled))
       setTriggerOptions(buildTriggerOptions(webhookRows, githubRows, jiraRows))
       setRuns(runRows.items)
@@ -271,7 +264,6 @@ export default function StudioTeamDetailPage() {
         max_steps: teamRow.max_steps,
         max_total_tokens: teamRow.max_total_tokens ? String(teamRow.max_total_tokens) : '',
         max_concurrent_runs: teamRow.max_concurrent_runs,
-        tools: teamRow.tools.sandboxed_tool_ids,
       })
       setSentinelProfileId(teamRow.sentinel_profile_id ? String(teamRow.sentinel_profile_id) : '')
       setTriggerEdits(Object.fromEntries(teamRow.triggers.map((trigger) => [
@@ -446,7 +438,6 @@ export default function StudioTeamDetailPage() {
         max_steps: Number(settingsForm.max_steps),
         max_total_tokens: settingsForm.max_total_tokens ? Number(settingsForm.max_total_tokens) : null,
         max_concurrent_runs: Number(settingsForm.max_concurrent_runs),
-        tools: { sandboxed_tool_ids: settingsForm.tools },
       })
       await loadAll()
     }, 'Team settings saved.')
@@ -458,6 +449,22 @@ export default function StudioTeamDetailPage() {
       await api.archiveTeam(teamId)
       router.push('/studio/teams')
     }, 'Team archived.')
+  }
+
+  const handleDeletePermanently = async () => {
+    if (!team) return
+    const typed = window.prompt(
+      `Permanently delete ${team.name}? This destroys all triggers and run history and cannot be undone.\n\nType the team name to confirm:`,
+    )
+    if (typed === null) return
+    if (typed.trim() !== team.name) {
+      window.alert('Team name did not match. Deletion cancelled.')
+      return
+    }
+    await runAction(async () => {
+      await api.deleteTeamPermanently(teamId)
+      router.push('/studio/teams')
+    }, 'Team permanently deleted.')
   }
 
   return (
@@ -564,7 +571,6 @@ export default function StudioTeamDetailPage() {
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs text-tsushin-slate">
                       <span className="badge badge-team">{addableAgents.length} addable agents</span>
-                      <span className="badge badge-neutral">{team.tools.sandboxed_tool_ids.length} shared tools</span>
                     </div>
                   </div>
                   <div className="h-[620px] min-h-[480px]">
@@ -629,10 +635,12 @@ export default function StudioTeamDetailPage() {
                 <SettingsTab
                   form={settingsForm}
                   setForm={setSettingsForm}
-                  tools={tools}
                   readOnly={readOnly || busy}
+                  isArchived={team?.status === 'archived'}
+                  busy={busy}
                   onSave={handleSaveSettings}
                   onArchive={handleArchive}
+                  onDeletePermanently={handleDeletePermanently}
                 />
               )}
             </>
@@ -949,36 +957,52 @@ function RunsTab({
 function SettingsTab({
   form,
   setForm,
-  tools,
   readOnly,
+  isArchived,
+  busy,
   onSave,
   onArchive,
+  onDeletePermanently,
 }: {
   form: SettingsForm
   setForm: (value: SettingsForm) => void
-  tools: SandboxedTool[]
   readOnly: boolean
+  isArchived: boolean
+  busy: boolean
   onSave: () => void
   onArchive: () => void
+  onDeletePermanently: () => void
 }) {
-  const toggleTool = (toolId: number) => {
-    const selected = new Set(form.tools)
-    if (selected.has(toolId)) selected.delete(toolId)
-    else selected.add(toolId)
-    setForm({ ...form, tools: Array.from(selected) })
-  }
-
   return (
     <section className="glass-card rounded-xl p-5">
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-lg font-display font-semibold text-white">Settings</h2>
-          <p className="text-sm text-tsushin-slate">Update identity, run limits, shared tools, and lifecycle.</p>
+          <p className="text-sm text-tsushin-slate">Update identity, run limits, and lifecycle.</p>
         </div>
-        <button type="button" onClick={onArchive} disabled={readOnly} className="inline-flex items-center gap-2 rounded-lg border border-tsushin-vermilion/30 px-4 py-2 text-sm text-tsushin-vermilion transition-colors hover:bg-tsushin-vermilion/10 disabled:opacity-50">
-          <ArchiveIcon size={16} />
-          Archive
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isArchived ? (
+            <button
+              type="button"
+              onClick={onDeletePermanently}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-lg border border-tsushin-vermilion/60 bg-tsushin-vermilion/10 px-4 py-2 text-sm text-tsushin-vermilion transition-colors hover:bg-tsushin-vermilion/20 disabled:opacity-50"
+            >
+              <TrashIcon size={16} />
+              Delete permanently
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onArchive}
+              disabled={readOnly}
+              className="inline-flex items-center gap-2 rounded-lg border border-tsushin-vermilion/30 px-4 py-2 text-sm text-tsushin-vermilion transition-colors hover:bg-tsushin-vermilion/10 disabled:opacity-50"
+            >
+              <ArchiveIcon size={16} />
+              Archive
+            </button>
+          )}
+        </div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
         <div className="space-y-4">
@@ -1017,20 +1041,6 @@ function SettingsTab({
               <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Concurrent runs</span>
               <input type="number" min={1} max={10} value={form.max_concurrent_runs} onChange={(event) => setForm({ ...form, max_concurrent_runs: Number(event.target.value) })} disabled={readOnly} className={`${FIELD_BASE} w-full`} />
             </label>
-          </div>
-          <div>
-            <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Shared tools</span>
-            <div className="grid max-h-72 gap-2 overflow-auto rounded-lg border border-tsushin-border bg-tsushin-surface/20 p-3">
-              {tools.length === 0 ? (
-                <EmptyState icon={<WrenchIcon size={24} />} title="No tools available" body="Enable sandboxed tools before assigning them to a team." />
-              ) : tools.map((tool) => (
-                <label key={tool.id} className="flex items-center gap-3 rounded-lg border border-tsushin-border bg-tsushin-surface/30 px-3 py-2 text-sm text-tsushin-slate">
-                  <input type="checkbox" checked={form.tools.includes(tool.id)} disabled={readOnly} onChange={() => toggleTool(tool.id)} />
-                  <span className="font-medium text-white">{tool.name}</span>
-                  <span className="text-xs text-tsushin-muted">{tool.tool_type}</span>
-                </label>
-              ))}
-            </div>
           </div>
           <button type="button" onClick={onSave} disabled={readOnly} className="btn-primary inline-flex items-center gap-2 text-sm disabled:opacity-50">
             <SaveIcon size={16} />

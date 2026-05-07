@@ -388,6 +388,12 @@ class ContinuousSubscriptionPage(BaseModel):
     offset: int
 
 
+class ContinuousSubscriptionWithAgentRead(ContinuousSubscriptionRead):
+    continuous_agent_name: Optional[str] = None
+    continuous_agent_status: str
+    continuous_agent_is_system_owned: bool
+
+
 def _caller_from_api(api_caller: ApiCaller, permission: str) -> ContinuousCaller:
     if not api_caller.has_permission(permission):
         raise HTTPException(
@@ -1127,6 +1133,68 @@ def delete_continuous_subscription(
         )
     db.delete(sub)
     db.commit()
+
+
+@router.get(
+    "/api/continuous-subscriptions",
+    response_model=list[ContinuousSubscriptionWithAgentRead],
+)
+def list_continuous_subscriptions_by_instance(
+    channel_type: str = Query(..., min_length=1, max_length=32),
+    channel_instance_id: int = Query(..., ge=1),
+    caller: ContinuousCaller = Depends(read_agents_caller),
+    db: Session = Depends(get_db),
+) -> list[ContinuousSubscriptionWithAgentRead]:
+    """List every continuous subscription wired to one channel instance.
+
+    Used by the trigger detail page (``/hub/triggers/{kind}/{id}``) to render
+    the "Wired Continuous Agents" card alongside flow and team bindings.
+    Mutations stay on the per-agent CRUD routes; this endpoint is read-only.
+    """
+    normalized_kind = channel_type.strip().lower()
+    rows = (
+        db.query(ContinuousSubscription, ContinuousAgent, Agent, Contact)
+        .join(
+            ContinuousAgent,
+            ContinuousAgent.id == ContinuousSubscription.continuous_agent_id,
+        )
+        .outerjoin(Agent, Agent.id == ContinuousAgent.agent_id)
+        .outerjoin(Contact, Contact.id == Agent.contact_id)
+        .filter(
+            ContinuousSubscription.tenant_id == caller.tenant_id,
+            ContinuousSubscription.channel_type == normalized_kind,
+            ContinuousSubscription.channel_instance_id == channel_instance_id,
+        )
+        .order_by(ContinuousSubscription.id.asc())
+        .all()
+    )
+
+    out: list[ContinuousSubscriptionWithAgentRead] = []
+    for sub, cont_agent, _agent, contact in rows:
+        agent_name = (
+            getattr(cont_agent, "name", None)
+            or (contact.friendly_name if contact else None)
+        )
+        out.append(
+            ContinuousSubscriptionWithAgentRead(
+                id=sub.id,
+                tenant_id=sub.tenant_id,
+                continuous_agent_id=sub.continuous_agent_id,
+                channel_type=sub.channel_type,
+                channel_instance_id=sub.channel_instance_id,
+                event_type=sub.event_type,
+                delivery_policy_id=sub.delivery_policy_id,
+                action_config=sub.action_config,
+                status=sub.status,
+                is_system_owned=bool(sub.is_system_owned),
+                created_at=sub.created_at,
+                updated_at=sub.updated_at,
+                continuous_agent_name=agent_name,
+                continuous_agent_status=cont_agent.status,
+                continuous_agent_is_system_owned=bool(cont_agent.is_system_owned),
+            )
+        )
+    return out
 
 
 __all__ = [

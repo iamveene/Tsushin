@@ -276,7 +276,10 @@ def test_enabling_auto_flow_notification_repairs_existing_conversation_failure_c
         .filter(FlowNode.flow_definition_id == flow.id, FlowNode.type == "conversation")
         .one()
     )
-    assert conversation.on_failure is None
+    # The auto-generated conversation node now ships with on_failure="continue"
+    # by default — see flow_binding_service.ensure_system_managed_flow_for_trigger.
+    # The contract is locked in test_flow_binding_service_auto_flow.py.
+    assert conversation.on_failure == "continue"
 
     result = update_auto_flow_notification(
         db_session,
@@ -356,9 +359,14 @@ def test_generated_trigger_flow_reaches_notification_after_conversation_failure(
         .all()
     )
 
+    # The auto-generated conversation node now ships with
+    # treat_failure_as_skipped=True so a failure downgrades to "skipped"
+    # (see flow_engine.py around line 4995-5018). This keeps the run out of
+    # the failed bucket — what users see on the trigger detail page when no
+    # human recipient is configured. Notification still runs.
     assert notification_calls
     assert [run.step.type for run in step_runs] == ["source", "gate", "conversation", "notification"]
-    assert [run.status for run in step_runs] == ["completed", "completed", "failed", "completed"]
-    assert flow_run.status == "completed_with_errors"
-    assert flow_run.failed_steps == 1
-    assert flow_run.completed_steps == 3
+    assert [run.status for run in step_runs] == ["completed", "completed", "skipped", "completed"]
+    assert flow_run.status == "completed"
+    assert flow_run.failed_steps == 0
+    assert flow_run.completed_steps == 4

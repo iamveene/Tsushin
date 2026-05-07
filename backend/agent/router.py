@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import AgentRun, MessageCache, Memory, Agent, ContactAgentMapping, Contact, TonePreset, ScheduledEvent, ConversationThread
+from models import AgentRun, MessageCache, Memory, Agent, AgentSkill, ContactAgentMapping, Contact, TonePreset, ScheduledEvent, ConversationThread
 from .agent_service import AgentService
 from .interactive_selection import choose_interactive_option, get_menu_signature
 from .acknowledgment import should_acknowledge_status
@@ -1299,7 +1299,12 @@ class AgentRouter:
                 if not contact:
                     from services.whatsapp_id_discovery import WhatsAppIDDiscovery
                     discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-                    contact = discovery.auto_link_contact(self.db, normalized_sender, self.logger)
+                    contact = discovery.auto_link_contact(
+                        self.db,
+                        normalized_sender,
+                        self.logger,
+                        tenant_id=self.tenant_id,
+                    )
 
                     if contact:
                         self.logger.info(
@@ -2286,8 +2291,52 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         # CRITICAL SAFETY CHECK: Prevent empty messages from reaching AI
         # Empty messages can cause AI hallucination and unintended tool execution
         if not message_text or message_text.strip() == "":
-            self.logger.error(f"[SAFETY] Empty message detected for agent {agent_id}, blocking AI processing")
-            error_message = "❌ Sorry, I couldn't process your message. If you sent an audio message, there was an issue with the audio transcription. Please try sending a text message or resending the audio."
+            original_media_type = (message.get("media_type") or "").lower()
+            is_audio = original_media_type.startswith("audio")
+
+            if is_audio:
+                # agent_id can legally be None at this point if dispatch fell through
+                # without resolving a default — querying AgentSkill with NULL would
+                # silently return zero rows and misreport "no audio skill" when the
+                # real failure is upstream. Treat that as the empty-text path instead.
+                if agent_id is None:
+                    self.logger.error(
+                        "[SAFETY] Audio message reached SAFETY block with agent_id=None "
+                        "(dispatch did not resolve an agent) — surfacing generic empty error"
+                    )
+                    error_message = "❌ Sorry, your message came through empty. Please try sending it again."
+                else:
+                    has_audio_skill = self.db.query(AgentSkill).filter(
+                        AgentSkill.agent_id == agent_id,
+                        AgentSkill.skill_type == "audio_transcript",
+                        AgentSkill.is_enabled == True,
+                    ).first() is not None
+
+                    if not has_audio_skill:
+                        self.logger.warning(
+                            f"[SAFETY] Audio message received for agent {agent_id} "
+                            f"but audio_transcript skill is not enabled — voice not handled"
+                        )
+                        error_message = (
+                            "🎤 This assistant isn't set up to handle voice messages yet. "
+                            "Please send a text message instead."
+                        )
+                    else:
+                        self.logger.error(
+                            f"[SAFETY] audio_transcript ran for agent {agent_id} "
+                            f"but produced empty text — transcription failed silently"
+                        )
+                        error_message = (
+                            "❌ Sorry, I couldn't transcribe your audio message. "
+                            "Please try resending it or send a text message."
+                        )
+            else:
+                self.logger.error(
+                    f"[SAFETY] Empty non-audio message detected for agent {agent_id}, "
+                    f"blocking AI processing"
+                )
+                error_message = "❌ Sorry, your message came through empty. Please try sending it again."
+
             recipient = message.get("chat_id") or message.get("sender")
             channel = message.get("channel", "whatsapp")
 

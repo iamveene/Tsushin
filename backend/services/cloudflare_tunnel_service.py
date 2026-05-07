@@ -275,7 +275,18 @@ class CloudflareTunnelService:
             return self._snapshot_dict()
 
     async def should_autostart(self) -> bool:
-        """Return True if the config says autostart is on and the tunnel is enabled."""
+        """Return True if the config says autostart is on and the tunnel is enabled.
+
+        Honors `TSN_CLOUDFLARED_DISABLE_INPROCESS=true` so deployments running
+        cloudflared as a separate sidecar can prevent the in-process
+        subprocess from competing for the same tunnel token. This avoids the
+        "backend restart drops the tunnel" problem during dev iteration.
+        """
+        import os
+        disable_inprocess = (os.environ.get("TSN_CLOUDFLARED_DISABLE_INPROCESS") or "").strip().lower()
+        if disable_inprocess in {"1", "true", "yes", "on"}:
+            logger.info("Remote access autostart skipped: TSN_CLOUDFLARED_DISABLE_INPROCESS=true (use sidecar)")
+            return False
         try:
             loaded = await asyncio.get_running_loop().run_in_executor(
                 None, self._load_config
