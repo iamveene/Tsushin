@@ -152,6 +152,10 @@ services:
       # Without this mount, every wizard_drift assertion that resolves
       # /frontend from inside the container short-circuits as "skip".
       - ./frontend:/frontend:ro
+      # Operator-private playbooks (gitignored). Used by Finan flow templates
+      # to inflate browser_automation steps. Absent on fresh clones — seeding
+      # logs once and skips the affected templates.
+      - ./.private:/app/.private:ro
     security_opt:
       - label:disable
     environment:
@@ -183,6 +187,11 @@ services:
       - TSN_FLOWS_AUTO_GENERATION_ENABLED=${TSN_FLOWS_AUTO_GENERATION_ENABLED:-false}
       - TSN_FLOWS_BACKFILL_ENABLED=${TSN_FLOWS_BACKFILL_ENABLED:-false}
       - TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=${TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY:-false}
+      # Operator-private finan playbook directory (gitignored on host, mounted
+      # read-only at /app/.private/finan_playbooks). Override to disable Finan
+      # templates entirely or point at a different path.
+      - TSN_FINAN_PLAYBOOK_DIR=${TSN_FINAN_PLAYBOOK_DIR:-/app/.private/finan_playbooks}
+      - TSN_FINAN_PROFILES_PATH=${TSN_FINAN_PROFILES_PATH:-/app/.private/finan_profiles.json}
       # Docker socket proxy (BUG-135: no direct socket mount)
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 

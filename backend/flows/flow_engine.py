@@ -1425,56 +1425,6 @@ class PasswordVaultStepHandler(FlowStepHandler):
         return safe
 
 
-class FinancialUtilityAutomationStepHandler(FlowStepHandler):
-    """Programmatic financial utility automation step."""
-
-    async def execute(
-        self,
-        step: FlowNode,
-        input_data: Dict[str, Any],
-        flow_run: FlowRun,
-        step_run: FlowNodeRun
-    ) -> Dict[str, Any]:
-        config = json.loads(step.config_json) if isinstance(step.config_json, str) else step.config_json
-        config = config or {}
-        resolved_config: Dict[str, Any] = {}
-        for key, value in config.items():
-            if isinstance(value, str):
-                resolved_config[key] = self._replace_variables(value, input_data or {})
-            else:
-                resolved_config[key] = value
-
-        tenant_id = flow_run.tenant_id if flow_run else None
-        if not tenant_id:
-            raise ValueError("Financial utility automation requires tenant context")
-
-        from services.financial_automation_service import FinancialAutomationService
-
-        try:
-            service = FinancialAutomationService(self.db, tenant_id=tenant_id)
-            template = (resolved_config.get("financial_automation_template") or "moderna_condominio_sao_blas_204").strip()
-            if template == "moderna_condominio_sao_blas_204":
-                return await service.run_moderna_condominio(resolved_config, flow_run_id=flow_run.id if flow_run else None)
-            if template == "consigaz_sao_blas_204":
-                return await service.run_consigaz_sao_blas(resolved_config, flow_run_id=flow_run.id if flow_run else None)
-            if template == "medsenior_samedil_plano_saude_mae":
-                return await service.run_medsenior_samedil(resolved_config, flow_run_id=flow_run.id if flow_run else None)
-            return {
-                "status": "failed",
-                "success": False,
-                "error": f"Unsupported financial automation template: {template}",
-                "redacted": True,
-            }
-        except Exception as exc:
-            logger.error("Financial utility automation failed: %s", exc, exc_info=True)
-            return {
-                "status": "failed",
-                "success": False,
-                "error": str(exc),
-                "redacted": True,
-            }
-
-
 class HttpRequestStepHandler(FlowStepHandler):
     """UI-authored HTTP request primitive with handle-based raw handoff."""
 
@@ -1731,9 +1681,9 @@ class DataTransformStepHandler(FlowStepHandler):
                 "record_kind": "utility_bill",
                 "automation_key": service.CONSIGAZ_AUTOMATION_ID,
                 "provider": service.CONSIGAZ_PROVIDER,
-                "unit_id": str(config.get("financial_unit_id") or "AP0204"),
-                "asset": str(config.get("financial_asset") or "AP Ed. San Blass"),
-                "address": str(config.get("financial_address") or "R PIRATININGA, 111 AP0204"),
+                "unit_id": str(config.get("financial_unit_id") or ""),
+                "asset": str(config.get("financial_asset") or ""),
+                "address": str(config.get("financial_address") or ""),
                 "reference_month": datetime.utcnow().strftime("%Y-%m"),
                 "no_open_bills": True,
                 "status": "no_pending_bills",
@@ -1743,9 +1693,9 @@ class DataTransformStepHandler(FlowStepHandler):
             "record_kind": "utility_bill",
             "automation_key": service.CONSIGAZ_AUTOMATION_ID,
             "provider": service.CONSIGAZ_PROVIDER,
-            "unit_id": str(config.get("financial_unit_id") or "AP0204"),
-            "asset": str(config.get("financial_asset") or "AP Ed. San Blass"),
-            "address": str(config.get("financial_address") or "R PIRATININGA, 111 AP0204"),
+            "unit_id": str(config.get("financial_unit_id") or ""),
+            "asset": str(config.get("financial_asset") or ""),
+            "address": str(config.get("financial_address") or ""),
             "bill_id": selected.get("bill_id"),
             "reference_month": selected.get("reference_month"),
             "due_date": selected.get("due_date"),
@@ -1780,8 +1730,8 @@ class DataTransformStepHandler(FlowStepHandler):
                 "record_kind": "utility_bill",
                 "automation_key": service.MEDSENIOR_AUTOMATION_ID,
                 "provider": service.MEDSENIOR_PROVIDER,
-                "unit_id": str(config.get("financial_unit_id") or "Plano Saude Mae"),
-                "asset": str(config.get("financial_asset") or "Plano Saude Mae"),
+                "unit_id": str(config.get("financial_unit_id") or ""),
+                "asset": str(config.get("financial_asset") or ""),
                 "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
                 "reference_month": datetime.utcnow().strftime("%Y-%m"),
                 "no_open_bills": True,
@@ -1792,8 +1742,8 @@ class DataTransformStepHandler(FlowStepHandler):
             "record_kind": "utility_bill",
             "automation_key": service.MEDSENIOR_AUTOMATION_ID,
             "provider": service.MEDSENIOR_PROVIDER,
-            "unit_id": str(config.get("financial_unit_id") or "Plano Saude Mae"),
-            "asset": str(config.get("financial_asset") or "Plano Saude Mae"),
+            "unit_id": str(config.get("financial_unit_id") or ""),
+            "asset": str(config.get("financial_asset") or ""),
             "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
             "bill_id": selected.get("bill_id"),
             "reference_month": selected.get("reference_month"),
@@ -4242,7 +4192,6 @@ class FlowEngine:
             "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
             "password_vault": PasswordVaultStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: secret references
-            "financial_utility_automation": FinancialUtilityAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: boleto/utility playbooks
             "http_request": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: UI-authored HTTP primitive
             "data_transform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: deterministic extraction primitive
             "financial_record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: generic financial storage primitive
@@ -4259,7 +4208,6 @@ class FlowEngine:
             "Summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Legacy casing
             "Gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Gate: Legacy casing
             "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Legacy casing
-            "FinancialUtilityAutomation": FinancialUtilityAutomationStepHandler(db, self.mcp_sender, self.token_tracker),
             "HttpRequest": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),
             "DataTransform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),
             "FinancialRecordStore": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),

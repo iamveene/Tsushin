@@ -183,7 +183,6 @@ class StepType(str, Enum):
     DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step
     FINANCIAL_BILL_STORE = "financial_bill_store"  # Utility-bill storage/dedupe only
     FINANCIAL_RECORD_STORE = "financial_record_store"  # Generic financial record storage/dedupe
-    FINANCIAL_UTILITY_AUTOMATION = "financial_utility_automation"  # v0.7.x: boleto/utility playbooks
     # v0.7.0 Wave 2/4: Triggers↔Flows Unification — Source step is the
     # canonical entry point for triggered flows. Wave 4 deep-link prefill
     # (Create flow from this trigger) sends a Source step with config
