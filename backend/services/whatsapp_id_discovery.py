@@ -90,7 +90,8 @@ class WhatsAppIDDiscovery:
                     db,
                     thread,
                     sender_whatsapp_id,
-                    logger_instance
+                    logger_instance,
+                    tenant_id=tenant_id,
                 )
 
                 if contact:
@@ -121,7 +122,8 @@ class WhatsAppIDDiscovery:
         db: Session,
         thread: ConversationThread,
         sender_whatsapp_id: str,
-        logger_instance: logging.Logger
+        logger_instance: logging.Logger,
+        tenant_id: Optional[str] = None,
     ) -> Optional[Contact]:
         """
         Try to link a thread's recipient to the sender's WhatsApp ID.
@@ -131,6 +133,9 @@ class WhatsAppIDDiscovery:
             thread: Conversation thread to analyze
             sender_whatsapp_id: WhatsApp ID to link
             logger_instance: Logger instance
+            tenant_id: Tenant scope for the contact lookup. Without this filter
+                a phone-number match could resolve a contact from a different
+                tenant — see code review on cb0771a.
 
         Returns:
             Contact if successfully linked, None otherwise
@@ -152,14 +157,17 @@ class WhatsAppIDDiscovery:
                 f"[AUTO-DISCOVERY] Thread {thread.id} has numeric recipient: {clean_recipient}"
             )
 
-            # Find contact with this phone number
-            contact = db.query(Contact).filter(
+            # Find contact with this phone number, scoped to tenant when known.
+            contact_q = db.query(Contact).filter(
                 or_(
                     Contact.phone_number == clean_recipient,
                     Contact.phone_number == f"+{clean_recipient}",
                     Contact.phone_number == recipient
                 )
-            ).first()
+            )
+            if tenant_id:
+                contact_q = contact_q.filter(Contact.tenant_id == tenant_id)
+            contact = contact_q.first()
 
             if not contact:
                 logger_instance.debug(

@@ -214,7 +214,11 @@ class WhatsAppProactiveResolver:
             if not data.get("success"):
                 return None
             for entry in data.get("contacts", []) or []:
-                if str(entry.get("phone") or "").lstrip("+") == digits:
+                # MCP may return phones formatted with +/spaces/hyphens — normalize to
+                # bare digits before comparing, otherwise stored phones with formatting
+                # silently fail the directory match.
+                entry_digits = "".join(ch for ch in str(entry.get("phone") or "") if ch.isdigit())
+                if entry_digits == digits:
                     name = (entry.get("name") or "").strip()
                     if name and name != digits:  # MCP returns phone as name if no display name
                         return name
@@ -302,31 +306,49 @@ class WhatsAppProactiveResolver:
         if not target_words:
             return None
 
-        seen_lids: dict[str, str] = {}
+        # Score each candidate LID by how many target words its chat_name shares.
+        # Keep only the highest-scoring tier and reject if that tier still has
+        # multiple distinct LIDs — ambiguity at peak score means we can't tell
+        # them apart safely. This handles both directions:
+        #   * Common-first-name false positive ("Ana"-only overlap): if a more
+        #     specific candidate exists with a 2-word overlap (e.g., "Ana Lima"
+        #     ∩ "Ana L. Lima"), it outranks the single-word match.
+        #   * Single-word truthy match ("Giza"/"Gisele Espini" ∩ "Gisele E."):
+        #     no other candidate competes, so the lone LID at score=1 wins.
+        scored: dict[str, tuple[int, str]] = {}  # lid -> (overlap_count, chat_name)
         for msg in data.get("messages", []) or []:
             chat_jid = (msg.get("chat_jid") or "")
             chat_name = (msg.get("chat_name") or "").strip()
             if not chat_jid.endswith("@lid") or not chat_name:
                 continue
             chat_words = self._name_words(chat_name)
-            if not chat_words.isdisjoint(target_words):
-                lid = chat_jid.split("@", 1)[0]
-                if lid:
-                    seen_lids[lid] = chat_name
+            shared = chat_words & target_words
+            if not shared:
+                continue
+            lid = chat_jid.split("@", 1)[0]
+            if not lid:
+                continue
+            prev = scored.get(lid)
+            if prev is None or len(shared) > prev[0]:
+                scored[lid] = (len(shared), chat_name)
 
-        if not seen_lids:
+        if not scored:
             return None
 
-        if len(seen_lids) > 1:
+        max_overlap = max(score for score, _ in scored.values())
+        top_tier = {lid: name for lid, (score, name) in scored.items() if score == max_overlap}
+
+        if len(top_tier) > 1:
             self.logger.warning(
-                f"[LID PRE-BIND] Multiple LID candidates for contact "
-                f"'{contact.friendly_name}': {list(seen_lids.items())} — skipping "
-                f"to avoid binding the wrong identity. Will rely on first-inbound "
-                f"name-match path instead."
+                f"[LID PRE-BIND] Ambiguous LID match for contact "
+                f"'{contact.friendly_name}' at overlap={max_overlap}: "
+                f"{list(top_tier.items())} — skipping to avoid binding the "
+                f"wrong identity. Will rely on first-inbound name-match path."
             )
             return None
 
-        lid, chat_name = next(iter(seen_lids.items()))
+        lid, chat_name = next(iter(top_tier.items()))
+        seen_lids = top_tier  # preserved name retained for downstream code paths
 
         try:
             mapping_service = ContactChannelMappingService(self.db)
