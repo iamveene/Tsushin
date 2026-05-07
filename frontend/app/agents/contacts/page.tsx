@@ -192,7 +192,25 @@ export default function ContactsPage() {
   }
 
   const handleDelete = async (contactId: number) => {
-    if (!confirm('Are you sure you want to delete this contact?')) return
+    const target = contacts.find(c => c.id === contactId)
+    const targetName = target?.friendly_name ?? `contact ${contactId}`
+    // Agent-role contacts back an Agent record; deleting one removes routing
+    // targets that operators may not have in mind while skimming the list.
+    // Surface the cascade explicitly so a misclick on Tsushin/Gigi doesn't
+    // silently take an active agent offline.
+    const isAgent = target?.role === 'agent'
+    const prompt = isAgent
+      ? `Delete agent contact "${targetName}"?\n\n` +
+        `This is an agent record. Removing it will also clear its channel aliases, ` +
+        `any user→agent assignments pointing at it, and the linked-user mapping. ` +
+        `Users currently routed to this agent will fall back to the default agent.\n\n` +
+        `This cannot be undone.`
+      : `Delete contact "${targetName}"?\n\n` +
+        `Channel aliases (WhatsApp/Telegram/etc.), the agent assignment, ` +
+        `and the linked-user mapping for this contact will also be removed.\n\n` +
+        `This cannot be undone.`
+
+    if (!confirm(prompt)) return
 
     try {
       await api.deleteContact(contactId)
