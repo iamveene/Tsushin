@@ -31,10 +31,22 @@ const LockClosedIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-type WatcherTab = 'dashboard' | 'graph' | 'conversations' | 'flows' | 'security' | 'channel-health' | 'communication' | 'billing' | 'wake-events' | 'continuous-agents' | 'team-runs'
+// v0.7.1 IA consolidation. Pre-fix Watcher had 11 top-level tabs and the
+// agent-runtime surfaces (Continuous Agents, Wake Events, Conversations,
+// Team Runs, A2A Comms) sat alongside non-agent observability (Dashboard,
+// Flows, Channel Health, Billing). Operators reported overload + difficulty
+// finding agent run history. The 5 agent-runtime tabs now nest under a
+// single "Agents" top-level tab with sub-tabs; the 6 non-agent observability
+// surfaces remain top-level.
+type WatcherTab = 'dashboard' | 'graph' | 'agents' | 'flows' | 'security' | 'channel-health' | 'billing'
+type AgentsSubTab = 'continuous-agents' | 'wake-events' | 'conversations' | 'team-runs' | 'communication'
 
 export default function WatcherPage() {
   const [activeTab, setActiveTab] = useState<WatcherTab>('dashboard')
+  // Default sub-tab is the inventory ("what is currently always-on") so the
+  // Agents tab opens with the most-tactically-useful view. Other sub-tabs
+  // are run-history surfaces consulted on-demand.
+  const [agentsSubTab, setAgentsSubTab] = useState<AgentsSubTab>('continuous-agents')
   const { hasPermission } = useAuth()
 
   // Phase 2: Graph View requires admin permissions (org.settings.write is admin/owner only)
@@ -43,15 +55,19 @@ export default function WatcherPage() {
   const tabs = [
     { id: 'dashboard' as WatcherTab, label: 'Dashboard', description: 'System Overview' },
     { id: 'graph' as WatcherTab, label: 'Graph View', description: 'Network Visualization', adminOnly: true },
-    { id: 'conversations' as WatcherTab, label: 'Conversations', description: 'Message & Agent Monitoring' },
+    { id: 'agents' as WatcherTab, label: 'Agents', description: 'Continuous, conversations, runs' },
     { id: 'flows' as WatcherTab, label: 'Flows', description: 'Flow Execution Monitoring' },
     { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel Security Events' },
     { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
-    { id: 'communication' as WatcherTab, label: 'A2A Comms', description: 'Inter-Agent Messaging' },
-    { id: 'team-runs' as WatcherTab, label: 'Team Runs', description: 'Agent Team Executions' },
     { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
-    { id: 'wake-events' as WatcherTab, label: 'Wake Events', description: 'Trigger event browser' },
-    { id: 'continuous-agents' as WatcherTab, label: 'Continuous Agents', description: 'Always-on inventory' },
+  ]
+
+  const agentsSubTabs: { id: AgentsSubTab; label: string; description: string }[] = [
+    { id: 'continuous-agents', label: 'Continuous Agents', description: 'Always-on inventory' },
+    { id: 'wake-events',       label: 'Wake Events',       description: 'Trigger event browser' },
+    { id: 'conversations',     label: 'Conversations',     description: 'Message & agent threads' },
+    { id: 'team-runs',         label: 'Team Runs',         description: 'Agent team executions' },
+    { id: 'communication',     label: 'A2A Comms',         description: 'Inter-agent messaging' },
   ]
 
   const handleTabChange = (tab: WatcherTab) => {
@@ -123,15 +139,48 @@ export default function WatcherPage() {
             </div>
           )
         )}
-        {activeTab === 'conversations' && <ConversationsTab />}
+        {activeTab === 'agents' && (
+          <div className="space-y-4">
+            {/* Sub-tab strip. Renders the same glass-card affordance as the
+                top-level strip but at a smaller scale so the visual
+                hierarchy stays clear. */}
+            <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
+              {agentsSubTabs.map((sub) => (
+                <button
+                  key={sub.id}
+                  onClick={() => setAgentsSubTab(sub.id)}
+                  className={`
+                    relative px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200
+                    ${agentsSubTab === sub.id
+                      ? 'text-white'
+                      : 'text-tsushin-slate hover:text-white'
+                    }
+                  `}
+                >
+                  {agentsSubTab === sub.id && (
+                    <span className="absolute inset-0 rounded-lg bg-tsushin-surface border border-tsushin-border/50 shadow-lg" />
+                  )}
+                  <span className="relative flex flex-col items-start">
+                    <span>{sub.label}</span>
+                    <span className="text-2xs text-tsushin-muted">{sub.description}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div key={agentsSubTab} className="animate-fade-in">
+              {agentsSubTab === 'continuous-agents' && <ContinuousAgentsPage />}
+              {agentsSubTab === 'wake-events' && <WakeEventsPage />}
+              {agentsSubTab === 'conversations' && <ConversationsTab />}
+              {agentsSubTab === 'team-runs' && <TeamRunsTab />}
+              {agentsSubTab === 'communication' && <CommunicationTab />}
+            </div>
+          </div>
+        )}
         {activeTab === 'flows' && <FlowsTab />}
         {activeTab === 'security' && <SecurityTab />}
         {activeTab === 'channel-health' && <ChannelHealthTab />}
-        {activeTab === 'communication' && <CommunicationTab />}
-        {activeTab === 'team-runs' && <TeamRunsTab />}
         {activeTab === 'billing' && <BillingTab />}
-        {activeTab === 'wake-events' && <WakeEventsPage />}
-        {activeTab === 'continuous-agents' && <ContinuousAgentsPage />}
       </div>
     </div>
   )
