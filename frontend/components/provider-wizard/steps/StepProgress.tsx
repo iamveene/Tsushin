@@ -14,8 +14,11 @@ import { CheckCircleIcon, AlertTriangleIcon } from '@/components/ui/icons'
  *   provision container + optional model pulls.
  * For Kokoro (local TTS): POST /api/tts-instances (the TTS route auto-provisions
  *   the container when auto_provision=true).
+ * For OpenAI/Gemini (cloud TTS): POST /api/provider-instances — same path as LLM
+ *   cloud, since the same vendor key powers both. The resolver picks the default
+ *   instance per vendor.
  * For ElevenLabs (cloud TTS): save the api_key via the legacy api_keys surface —
- *   we rely on the same backend entry point as /hub/api-keys.
+ *   ProviderInstance does not yet support elevenlabs as a vendor.
  *
  * Failures surface a Retry → back to Review. The `fireComplete` callback hands
  * control back to the Hub so it can refetch the instance list.
@@ -63,16 +66,45 @@ export default function StepProgress() {
         createdInstanceId = result.id
         setProgress({ message: 'TTS container provisioning...' })
       }
-      // Branch 2: TTS cloud (ElevenLabs / OpenAI / Gemini) — legacy api_keys
-      // surface (/api/api-keys). The endpoint is upsert (create_or_update_api_key
-      // in routes_api_keys.py) so re-saving an existing OpenAI/Gemini key the
-      // user already added via the LLM/Image flow is non-destructive — it just
-      // refreshes the encrypted blob and bumps `updated_at`. ElevenLabs is
-      // TTS-only so for that vendor this is the sole save path.
+      // Branch 2a: TTS cloud OpenAI / Gemini — create a real ProviderInstance.
+      // Previously this branch wrote to the legacy api_keys table via /api/api-keys,
+      // which (a) silently overwrote any existing tenant-wide LLM key for the
+      // same vendor, (b) discarded the wizard's `instance_name`, and (c) became
+      // invisible in the Hub once any ProviderInstance for that vendor existed
+      // (the fallback disclosure hides vendors with an instance). That combo
+      // let an orphaned QA seed (sk-test-qa070-tts-fake-12345) shadow the
+      // visible ProviderInstance for weeks. Now both LLM and TTS cloud flows
+      // use the same ProviderInstance backbone — the resolver prefers
+      // ProviderInstance over legacy ApiKey rows, and the instance_name
+      // round-trips to the DB so cleanup/audit can see what was created.
       else if (
         draft.modality === 'tts' &&
-        (draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini')
+        (draft.vendor === 'openai' || draft.vendor === 'gemini')
       ) {
+        // POST /api/provider-instances enforces a non-empty `available_models`
+        // list (the LLM-cloud branch fills it from a discovery call). For TTS,
+        // voice selection happens per-agent in the Audio Agents Wizard, not on
+        // the ProviderInstance row — so we seed a vendor-appropriate default
+        // TTS model list here purely to satisfy the API contract. Edit/Refresh
+        // on the instance card can update these later if new TTS models ship.
+        const ttsModels =
+          draft.vendor === 'openai'
+            ? ['tts-1', 'tts-1-hd']
+            : ['gemini-2.5-flash-preview-tts']
+        const body: ProviderInstanceCreate = {
+          vendor: draft.vendor,
+          instance_name: draft.instance_name,
+          api_key: draft.api_key || undefined,
+          available_models: ttsModels,
+          is_default: draft.is_default,
+        }
+        const result = await api.createProviderInstance(body)
+        createdInstanceId = result.id
+      }
+      // Branch 2b: TTS cloud ElevenLabs — legacy api_keys surface remains the
+      // only path because `elevenlabs` is not in ProviderInstance.SUPPORTED_VENDORS.
+      // When elevenlabs gains ProviderInstance support, fold it into 2a.
+      else if (draft.modality === 'tts' && draft.vendor === 'elevenlabs') {
         const res = await authenticatedFetch('/api/api-keys', {
           method: 'POST',
           body: JSON.stringify({
