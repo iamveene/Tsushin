@@ -212,19 +212,8 @@ export function useCreateAgentChain() {
     try {
       setStage('skills')
       wiz.setProgress({ message: STAGE_MESSAGES.skills })
-      // Memory-step mode drives the semantic_search skill — without this, the
-      // "Built-in + semantic" / "External vector store" options in StepMemory
-      // would set `enable_semantic_search` on the draft but never actually
-      // flip the AgentSkill row, so the feature silently stayed off.
-      const memoryWantsSemantic = draft.memory.mode === 'semantic' || draft.memory.mode === 'vector'
       const skillMap: Record<string, { is_enabled: boolean; config: Record<string, unknown> }> = {
         ...draft.skills.builtIns,
-      }
-      if (memoryWantsSemantic) {
-        skillMap.semantic_search = {
-          is_enabled: true,
-          config: skillMap.semantic_search?.config || {},
-        }
       }
       for (const [skillType, cfg] of Object.entries(skillMap)) {
         if (!cfg.is_enabled) continue
