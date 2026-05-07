@@ -1524,6 +1524,36 @@ def seed_project_command_patterns(session):
         print(f"[Projects] All {len(patterns_data)} project command patterns already present")
 
 
+_DEV_MODE_SEED_USERS = (
+    ("test@example.com", "test1234"),
+    ("testadmin@example.com", "admin1234"),
+    ("member@example.com", "member1234"),
+)
+
+
+def _seed_dev_mode_users(session: Session) -> None:
+    """Re-apply canonical dev/QA passwords to existing user rows.
+
+    Hash is computed via auth_utils.hash_password (argon2id) so the
+    update is indistinguishable from a normal password change. Missing
+    user rows are silently skipped — this hook only re-seeds; user
+    creation belongs to the setup wizard.
+    """
+    from auth_utils import hash_password
+    from models_rbac import User
+
+    updated = 0
+    for email, password in _DEV_MODE_SEED_USERS:
+        user = session.query(User).filter(User.email == email).first()
+        if user is None:
+            continue
+        user.password_hash = hash_password(password)
+        updated += 1
+    if updated:
+        session.commit()
+        print(f"[Dev Mode Seed Users] Re-applied canonical passwords on {updated} dev user(s)")
+
+
 def init_database(engine):
     """Initialize all tables and default config.
 
@@ -1661,6 +1691,16 @@ def init_database(engine):
 
         # Seed default subscription plans (idempotent — skips existing plans)
         seed_subscription_plans(session)
+
+        # Dev-mode credential reset (TSN_DEV_MODE_SEED_USERS=true).
+        # Production deployments leave the flag unset so this is a no-op.
+        try:
+            from config.feature_flags import dev_mode_seed_users_enabled
+            if dev_mode_seed_users_enabled():
+                _seed_dev_mode_users(session)
+        except Exception as e:
+            session.rollback()
+            print(f"[Dev Mode Seed Users] Skipped: {e}")
 
         # Cleanup deprecated weather skill records
         try:

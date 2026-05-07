@@ -57,6 +57,25 @@ def flows_backfill_suppress_legacy() -> bool:
     return _bool_env("TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY", default=False)
 
 
+def dev_mode_seed_users_enabled() -> bool:
+    """Dev-only — re-apply canonical passwords to the documented dev/QA users on every backend boot.
+
+    When True, ``init_database`` ensures the three published dev credentials
+    (``test@example.com / test1234``, ``testadmin@example.com / admin1234``,
+    ``member@example.com / member1234``) work after every container start,
+    even if some other code path or operator action rotated their hashes.
+    The flag exists only for local development and CI fixtures; in production
+    the env var must remain unset (the default), so the function has no
+    effect and operator-managed credentials stay authoritative.
+
+    The published dev seed script ``backend/ops/create_test_users.py`` was
+    excluded from the public-repo allowlist (commit e1763a5), so the
+    boot-time hook is the sole reproducible mechanism for keeping these
+    credentials stable in dev. Default OFF.
+    """
+    return _bool_env("TSN_DEV_MODE_SEED_USERS", default=False)
+
+
 def case_memory_enabled(tenant_id: str | None = None, db=None) -> bool:
     """v0.7.x — per-tenant case-memory gate. Reads ``tenant.case_memory_enabled``.
 
@@ -108,6 +127,7 @@ __all__ = [
     "flows_trigger_binding_enabled",
     "flows_auto_generation_enabled",
     "flows_backfill_suppress_legacy",
+    "dev_mode_seed_users_enabled",
     "case_memory_enabled",
     "case_memory_recap_enabled",
 ]

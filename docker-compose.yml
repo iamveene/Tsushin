@@ -187,6 +187,11 @@ services:
       - TSN_FLOWS_AUTO_GENERATION_ENABLED=${TSN_FLOWS_AUTO_GENERATION_ENABLED:-false}
       - TSN_FLOWS_BACKFILL_ENABLED=${TSN_FLOWS_BACKFILL_ENABLED:-false}
       - TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=${TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY:-false}
+      # Re-seed canonical dev/QA passwords on every backend boot. Default
+      # off; set to true ONLY in dev/CI fixtures so the documented
+      # test/testadmin/member credentials always work after a restart.
+      # See backend/config/feature_flags.py:dev_mode_seed_users_enabled.
+      - TSN_DEV_MODE_SEED_USERS=${TSN_DEV_MODE_SEED_USERS:-false}
       # Operator-private finan playbook directory (gitignored on host, mounted
       # read-only at /app/.private/finan_playbooks). Override to disable Finan
       # templates entirely or point at a different path.
