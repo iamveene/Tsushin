@@ -271,6 +271,87 @@ export default function SourceStepConfig({ config }: Props) {
     ? `curl -X POST '${inboundUrl}' \\\n  -H 'X-Webhook-Secret: <your-secret>' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"event":"test","data":{"id":42}}'`
     : ''
 
+  // Read-only trigger configuration summary.
+  //
+  // Pre-fix the source step exposed only the trigger NAME plus a sample-payload
+  // expander, which forced flow authors to leave the editor and chase the
+  // filter parameters from Hub → Triggers. Surfacing the kind-specific
+  // filter inputs (JQL/search_query/repo/etc.) plus a criteria.filters
+  // preview right next to the agent-summary card closes that gap and
+  // gives operators a direct anchor for "what is this flow ingesting?".
+  const triggerCriteria = (trigger && 'trigger_criteria' in trigger
+    ? (trigger as { trigger_criteria?: Record<string, unknown> | null }).trigger_criteria
+    : null) || null
+  const criteriaFiltersRaw = triggerCriteria && typeof triggerCriteria === 'object'
+    ? (triggerCriteria as Record<string, unknown>).filters
+    : null
+  const criteriaFilters = criteriaFiltersRaw && typeof criteriaFiltersRaw === 'object'
+    ? (criteriaFiltersRaw as Record<string, unknown>)
+    : null
+  const criteriaJsonpathMatchers = (() => {
+    if (!criteriaFilters) return []
+    const cands = ['jsonpath_matchers', 'jsonpath', 'matchers']
+    for (const k of cands) {
+      const v = criteriaFilters[k]
+      if (Array.isArray(v)) return v
+    }
+    return []
+  })()
+  const criteriaFiltersHasContent = (() => {
+    if (criteriaJsonpathMatchers.length > 0) return true
+    if (!criteriaFilters) return false
+    return Object.keys(criteriaFilters).some((k) => {
+      const v = criteriaFilters[k]
+      if (v === null || v === undefined || v === '' || v === false) return false
+      if (Array.isArray(v) && v.length === 0) return false
+      if (typeof v === 'object' && v !== null && Object.keys(v as Record<string, unknown>).length === 0) return false
+      return true
+    })
+  })()
+
+  type ConfigEntry = { label: string; value: string; mono?: boolean }
+  const configEntries: ConfigEntry[] = (() => {
+    if (!trigger) return []
+    if (triggerKind === 'jira') {
+      const t = trigger as { project_key?: string | null; jql?: string }
+      return [
+        ...(t.project_key ? [{ label: 'Project', value: t.project_key, mono: true } as ConfigEntry] : []),
+        ...(t.jql ? [{ label: 'JQL', value: t.jql, mono: true } as ConfigEntry] : []),
+      ]
+    }
+    if (triggerKind === 'email') {
+      const t = trigger as { search_query?: string | null; gmail_account_email?: string | null }
+      return [
+        ...(t.gmail_account_email ? [{ label: 'Inbox', value: t.gmail_account_email } as ConfigEntry] : []),
+        ...(t.search_query ? [{ label: 'Search query', value: t.search_query, mono: true } as ConfigEntry] : []),
+      ]
+    }
+    if (triggerKind === 'github') {
+      const t = trigger as {
+        repo_owner?: string
+        repo_name?: string
+        events?: string[] | null
+        branch_filter?: string | null
+        path_filters?: string[] | null
+        author_filter?: string | null
+      }
+      return [
+        ...(t.repo_owner && t.repo_name
+          ? [{ label: 'Repository', value: `${t.repo_owner}/${t.repo_name}`, mono: true } as ConfigEntry]
+          : []),
+        ...(t.events && t.events.length > 0
+          ? [{ label: 'Events', value: t.events.join(', '), mono: true } as ConfigEntry]
+          : []),
+        ...(t.branch_filter ? [{ label: 'Branch filter', value: t.branch_filter, mono: true } as ConfigEntry] : []),
+        ...(t.path_filters && t.path_filters.length > 0
+          ? [{ label: 'Path filters', value: t.path_filters.join(', '), mono: true } as ConfigEntry]
+          : []),
+        ...(t.author_filter ? [{ label: 'Author filter', value: t.author_filter, mono: true } as ConfigEntry] : []),
+      ]
+    }
+    return []
+  })()
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
@@ -292,6 +373,61 @@ export default function SourceStepConfig({ config }: Props) {
           </Link>
         </div>
       </div>
+
+      {(configEntries.length > 0 || criteriaFiltersHasContent) && (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+              Trigger configuration
+            </div>
+            <Link
+              href={`${triggerHref}?tab=criteria`}
+              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200"
+            >
+              Edit in Hub <ExternalLinkIcon size={11} />
+            </Link>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Filters that gate which events fire this flow. Edited on the trigger detail page.
+          </p>
+          {configEntries.length > 0 && (
+            <dl className="mt-3 grid gap-2 sm:grid-cols-[120px_1fr] text-xs">
+              {configEntries.map((entry) => (
+                <div key={entry.label} className="contents">
+                  <dt className="text-slate-400">{entry.label}</dt>
+                  <dd
+                    className={`break-words text-slate-100 ${entry.mono ? 'font-mono' : ''}`}
+                  >
+                    {entry.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {criteriaFiltersHasContent && (
+            <div className="mt-3">
+              <div className="text-xs text-slate-400 mb-1">
+                Payload filters
+                {criteriaJsonpathMatchers.length > 0 && (
+                  <span className="ml-1 text-slate-500">
+                    ({criteriaJsonpathMatchers.length} JSONPath matcher
+                    {criteriaJsonpathMatchers.length === 1 ? '' : 's'})
+                  </span>
+                )}
+              </div>
+              <pre className="rounded bg-slate-900/60 border border-slate-700 p-2 text-[11px] text-slate-300 overflow-x-auto">
+                {JSON.stringify(criteriaFilters, null, 2)}
+              </pre>
+            </div>
+          )}
+          {!criteriaFiltersHasContent && (
+            <div className="mt-3 text-xs text-slate-500">
+              No payload filters set on the trigger — every event fanned out by the source
+              configuration above reaches this flow.
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
         <button
