@@ -60,6 +60,7 @@ def main() -> int:
     from services.flow_binding_service import (
         ensure_system_managed_flow_for_trigger,
         find_system_managed_flow_for_trigger,
+        repair_system_managed_flow_conversation_soft_failure,
     )
 
     SessionLocal = sessionmaker(bind=get_global_engine())
@@ -79,6 +80,31 @@ def main() -> int:
                     trigger_kind=kind,
                     trigger_instance_id=instance_id,
                 ) is not None:
+                    # Even when the flow already exists, backfill the soft-
+                    # failure config on the conversation node so older
+                    # auto-flows generated before this fix stop registering
+                    # bogus run failures on the trigger detail page.
+                    try:
+                        repaired = repair_system_managed_flow_conversation_soft_failure(
+                            db,
+                            tenant_id=tenant_id,
+                            trigger_kind=kind,
+                            trigger_instance_id=instance_id,
+                        )
+                        if repaired:
+                            db.commit()
+                            tally.setdefault("repaired", 0)
+                            tally["repaired"] += 1
+                            logger.info(
+                                "Repaired %s/%s conversation soft-failure config for tenant %s",
+                                kind, instance_id, tenant_id,
+                            )
+                    except Exception:
+                        db.rollback()
+                        logger.exception(
+                            "Failed to repair %s/%s conversation node for tenant %s",
+                            kind, instance_id, tenant_id,
+                        )
                     tally["skipped"] += 1
                     continue
                 try:
