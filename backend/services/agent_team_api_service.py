@@ -20,6 +20,7 @@ from models import (
     AgentTeamRun,
     AgentTeamTrigger,
     Contact,
+    EmailChannelInstance,
     GitHubChannelInstance,
     JiraChannelInstance,
     SentinelProfile,
@@ -41,6 +42,7 @@ SUPPORTED_TEAM_TRIGGER_KINDS = {
     TeamTriggerKind.WEBHOOK.value,
     TeamTriggerKind.GITHUB.value,
     TeamTriggerKind.JIRA.value,
+    TeamTriggerKind.GMAIL.value,
 }
 
 
@@ -862,8 +864,6 @@ class AgentTeamApiService:
 
     def _validate_team_trigger_instance(self, trigger_kind: str, trigger_instance_id: int) -> str:
         normalized = (trigger_kind or "").strip().lower()
-        if normalized == TeamTriggerKind.GMAIL.value:
-            raise AgentTeamApiError(422, "Gmail trigger bindings are not supported for Agent Teams")
         if normalized not in SUPPORTED_TEAM_TRIGGER_KINDS:
             raise AgentTeamApiError(422, "Unsupported team trigger kind")
 
@@ -871,6 +871,7 @@ class AgentTeamApiService:
             TeamTriggerKind.WEBHOOK.value: WebhookIntegration,
             TeamTriggerKind.GITHUB.value: GitHubChannelInstance,
             TeamTriggerKind.JIRA.value: JiraChannelInstance,
+            TeamTriggerKind.GMAIL.value: EmailChannelInstance,
         }
         model = model_by_kind[normalized]
         row = (
