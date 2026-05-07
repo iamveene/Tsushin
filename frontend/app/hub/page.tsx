@@ -4069,13 +4069,16 @@ export default function HubPage() {
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
-  // (v0.7.x) Service API Keys — surface ONLY vendors that have a fallback
-  // api_key configured AND zero `ProviderInstance` rows. This eliminates the
-  // duplicate-Gemini display by construction: if you have a Gemini instance,
-  // Gemini never appears in the fallback disclosure below.
-  const vendorsWithInstances = new Set(providerInstances.map(i => i.vendor))
+  // Service API Keys — surface every vendor that has a legacy api_key row,
+  // even when a matching ProviderInstance also exists. Hiding shadowed rows
+  // (the prior behavior) created an invisible-orphan class of bug: a legacy
+  // ApiKey row would silently shadow a visible ProviderInstance via the
+  // get_api_key resolver, with no UI surface to find or delete it. Now the
+  // resolver prefers ProviderInstance, but legacy rows must still be
+  // discoverable so users can clean them up. The card itself flags
+  // "Configured via instance" when both exist so it's clear which one wins.
   const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider =>
-    Boolean(getApiKeyForService(provider.value)) && !vendorsWithInstances.has(provider.value)
+    Boolean(getApiKeyForService(provider.value))
   )
   const visibleToolApis = TOOL_APIS.filter(tool => {
     if (tool.value === 'jira') return false

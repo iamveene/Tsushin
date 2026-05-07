@@ -5,9 +5,11 @@ Phase SEC-001: Added encryption at rest for API keys (CRIT-003 fix).
 Centralized service for loading API keys from database.
 Configure via Settings → Integrations or Hub → API Keys UI (encrypted at rest).
 
-Priority order:
-1. Tenant-specific database key (if tenant_id provided)
-2. System-wide database key (tenant_id = NULL)
+Priority order (post-2026-05-07 fix; see get_api_key docstring for context):
+1. Tenant ProviderInstance default (vendor=service)
+2. Tenant ProviderInstance (only active candidate, when no default flag set)
+3. Tenant-specific legacy ApiKey row
+4. System-wide legacy ApiKey row (tenant_id = NULL)
 
 No env var fallback — all keys must be stored in the database.
 """
@@ -120,10 +122,21 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     """
     Get API key for a service.
 
-    Priority order:
-    1. Tenant-specific service API key (if tenant_id provided)
-    2. System-wide service API key (tenant_id = NULL)
-    3. Provider instance key (default instance for matching vendor)
+    Priority order (post-2026-05-07 fix):
+    1. Tenant ProviderInstance default for vendor=service
+    2. Tenant ProviderInstance (only active candidate, when no default)
+    3. Tenant-specific legacy ApiKey row
+    4. System-wide legacy ApiKey row
+
+    Why ProviderInstance comes first: the Hub UI presents ProviderInstance as
+    the canonical configuration surface and hides legacy ApiKey rows for any
+    vendor that already has a ProviderInstance (frontend/app/hub/page.tsx
+    fallback disclosure). If the resolver checked the legacy table first, an
+    orphaned ApiKey row (e.g. a leftover QA seed or a TTS-cloud wizard side
+    effect) would silently override the visible ProviderInstance — exactly
+    the regression that surfaced via the QA-070 `sk-test-qa070-tts-fake-12345`
+    leak. Modern config wins; legacy ApiKey rows only fill in when no
+    ProviderInstance exists.
 
     Args:
         service: Service name ('anthropic', 'openai', 'gemini', 'openrouter', 'brave_search', 'amadeus', 'serpapi')
@@ -138,36 +151,7 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
         logger.error(f"❌ get_api_key called with db=None for service={service}")
         return None
 
-    # Step 1: Check tenant-specific database key
-    if tenant_id:
-        try:
-            tenant_key = db.query(ApiKey).filter(
-                ApiKey.service == service,
-                ApiKey.tenant_id == tenant_id,
-                ApiKey.is_active == True
-            ).first()
-
-            if tenant_key:
-                logger.info(f" Using tenant-specific API key for {service} (tenant: {tenant_id})")
-                return _decrypt_api_key(tenant_key, db)
-        except Exception as e:
-            logger.warning(f"Failed to load tenant-specific API key for {service}: {e}")
-
-    # Step 2: Check system-wide database key (tenant_id = NULL)
-    try:
-        system_key = db.query(ApiKey).filter(
-            ApiKey.service == service,
-            ApiKey.tenant_id.is_(None),
-            ApiKey.is_active == True
-        ).first()
-
-        if system_key:
-            logger.info(f" Using system-wide API key for {service}")
-            return _decrypt_api_key(system_key, db)
-    except Exception as e:
-        logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
-
-    # Step 3: Fall back to provider instance key (reuse LLM provider key for TTS etc.)
+    # Step 1+2: Tenant ProviderInstance — modern, UI-visible config wins.
     if tenant_id:
         try:
             from models import ProviderInstance
@@ -187,10 +171,8 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
                     logger.info(f" Using provider instance key for {service} (instance: {instance.instance_name})")
                     return key
 
-            # UX fallback: if the tenant has exactly one active instance with a
-            # key for this vendor, use it even when the user forgot to mark it
-            # as default. This avoids confusing "not configured" behavior when
-            # an instance clearly exists and is the only candidate.
+            # If no default but exactly one active instance has a key, use it.
+            # Avoids "not configured" confusion when one candidate clearly exists.
             active_instances = db.query(ProviderInstance).filter(
                 ProviderInstance.vendor == service,
                 ProviderInstance.tenant_id == tenant_id,
@@ -210,6 +192,36 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
                     return key
         except Exception as e:
             logger.warning(f"Failed to load provider instance key for {service}: {e}")
+
+    # Step 3: Tenant-specific legacy ApiKey row — fallback for vendors without
+    # a ProviderInstance (e.g. ElevenLabs TTS today, search/maps tool keys).
+    if tenant_id:
+        try:
+            tenant_key = db.query(ApiKey).filter(
+                ApiKey.service == service,
+                ApiKey.tenant_id == tenant_id,
+                ApiKey.is_active == True
+            ).first()
+
+            if tenant_key:
+                logger.info(f" Using tenant-specific legacy ApiKey for {service} (tenant: {tenant_id})")
+                return _decrypt_api_key(tenant_key, db)
+        except Exception as e:
+            logger.warning(f"Failed to load tenant-specific API key for {service}: {e}")
+
+    # Step 4: System-wide legacy ApiKey row (tenant_id = NULL).
+    try:
+        system_key = db.query(ApiKey).filter(
+            ApiKey.service == service,
+            ApiKey.tenant_id.is_(None),
+            ApiKey.is_active == True
+        ).first()
+
+        if system_key:
+            logger.info(f" Using system-wide legacy ApiKey for {service}")
+            return _decrypt_api_key(system_key, db)
+    except Exception as e:
+        logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
 
     logger.warning(f"No API key found for {service}. Configure via Hub → AI Providers or Service API Keys.")
     return None
