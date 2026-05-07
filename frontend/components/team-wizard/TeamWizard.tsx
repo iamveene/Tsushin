@@ -805,10 +805,6 @@ function TriggersStep({
         </button>
       </div>
 
-      <div className="rounded-lg border border-tsushin-warning/30 bg-tsushin-warning/10 px-4 py-3 text-sm text-tsushin-warning">
-        Gmail team triggers are not available in v0.7.0.
-      </div>
-
       {draft.triggers.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border px-4 py-8 text-center text-sm text-tsushin-slate">
           No trigger bindings selected.

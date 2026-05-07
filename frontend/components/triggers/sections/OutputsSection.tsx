@@ -35,14 +35,15 @@ import type { EmailGmailIntegrationSummary } from '@/components/triggers/section
 
 type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
 
-// AgentTeamTrigger.trigger_kind only validates jira/github/webhook today
-// (see backend `_validate_team_trigger_instance`). Email is rejected by
-// the team API, so the WiredTeamsCard hides on that kind.
+// AgentTeamTrigger.trigger_kind validates jira/github/webhook/gmail. Email
+// triggers persist as kind='gmail' (see _validate_team_trigger_instance and
+// SUPPORTED_TEAM_TRIGGER_KINDS in agent_team_api_service). The frontend uses
+// 'email' as the OutputsKind tag and translates to 'gmail' at the API edge.
 const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
   jira: 'jira',
   github: 'github',
   webhook: 'webhook',
-  email: null,
+  email: 'gmail',
 }
 
 // Email triggers are subscribed via channel_type='gmail' on

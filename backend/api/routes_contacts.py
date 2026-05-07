@@ -562,6 +562,9 @@ def delete_contact(
     # Cascade-delete dependent rows that reference this contact via FK.
     # Without ON DELETE CASCADE on these tables, PostgreSQL otherwise rejects
     # the contact delete and the operator gets a 500 with no recourse from the UI.
+    # synchronize_session=False is safe here because no further reads of these
+    # tables happen before the commit below — the audit log call afterwards
+    # is the only DB activity and it touches a separate table.
     db.query(UserContactMapping).filter(
         UserContactMapping.contact_id == contact_id
     ).delete(synchronize_session=False)
