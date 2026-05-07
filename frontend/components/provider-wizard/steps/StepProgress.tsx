@@ -81,10 +81,21 @@ export default function StepProgress() {
         draft.modality === 'tts' &&
         (draft.vendor === 'openai' || draft.vendor === 'gemini')
       ) {
+        // POST /api/provider-instances enforces a non-empty `available_models`
+        // list (the LLM-cloud branch fills it from a discovery call). For TTS,
+        // voice selection happens per-agent in the Audio Agents Wizard, not on
+        // the ProviderInstance row — so we seed a vendor-appropriate default
+        // TTS model list here purely to satisfy the API contract. Edit/Refresh
+        // on the instance card can update these later if new TTS models ship.
+        const ttsModels =
+          draft.vendor === 'openai'
+            ? ['tts-1', 'tts-1-hd']
+            : ['gemini-2.5-flash-preview-tts']
         const body: ProviderInstanceCreate = {
           vendor: draft.vendor,
           instance_name: draft.instance_name,
           api_key: draft.api_key || undefined,
+          available_models: ttsModels,
           is_default: draft.is_default,
         }
         const result = await api.createProviderInstance(body)
