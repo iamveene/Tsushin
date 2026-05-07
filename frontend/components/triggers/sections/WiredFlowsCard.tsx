@@ -144,8 +144,8 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
       toast.success(
         'Binding updated',
         updated.suppress_default_agent
-          ? `${b.flow_name || 'Flow'} now suppresses the default agent.`
-          : `${b.flow_name || 'Flow'} no longer suppresses the default agent.`,
+          ? `Flow-only mode: ${b.flow_name || 'this flow'} now fires alone — the legacy continuous-agent path is suppressed.`
+          : `Parallel-fire mode: both ${b.flow_name || 'this flow'} AND the legacy continuous-agent path will fire on each event.`,
       )
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to update binding'
@@ -292,16 +292,24 @@ export default function WiredFlowsCard({ triggerKind, triggerId, onBindingsChang
 
               {canWrite && (
                 <div className="flex items-center gap-2">
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-tsushin-fog">
-                    <input
-                      type="checkbox"
-                      checked={b.suppress_default_agent}
-                      disabled={busy}
-                      onChange={() => handleToggleSuppress(b)}
-                      className="h-3.5 w-3.5 rounded border-tsushin-border bg-tsushin-surface text-cyan-500 focus:ring-cyan-500/40"
-                    />
-                    Suppress default agent
-                  </label>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSuppress(b)}
+                    disabled={busy}
+                    title={b.suppress_default_agent
+                      ? 'Flow-only mode. The legacy continuous-agent path is suppressed for this trigger — only this flow fires. Click to fire BOTH paths in parallel (safe migration mode).'
+                      : 'Parallel-fire mode (default). On each trigger event, BOTH this flow AND the legacy continuous-agent path fire. Click to suppress the continuous-agent path so only this flow runs.'}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                      b.suppress_default_agent
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+                        : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${
+                      b.suppress_default_agent ? 'bg-emerald-300' : 'bg-amber-300'
+                    }`} />
+                    {b.suppress_default_agent ? 'Flow-only' : 'Parallel fire'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleUnbind(b)}

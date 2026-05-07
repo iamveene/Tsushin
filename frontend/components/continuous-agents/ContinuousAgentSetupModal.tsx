@@ -152,7 +152,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
       }
       onSaved(saved)
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to save Watcher monitor'))
+      setError(getErrorMessage(err, 'Failed to save continuous agent'))
     } finally {
       setSubmitting(false)
     }
@@ -171,11 +171,11 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
         <div className="mb-4 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-semibold text-white">
-              {isEdit ? 'Edit Watcher Monitor' : 'Create Watcher Monitor'}
+              {isEdit ? 'Edit Continuous Agent' : 'Create Continuous Agent'}
             </h2>
             <p className="mt-1 text-sm text-tsushin-slate">
-              Create the always-on monitor for an agent built in Studio. It wakes when an external event fires
-              (email, Jira, GitHub, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong>.
+              An always-on wrapper around an agent built in Studio. It wakes when an external event fires
+              (email, Jira, GitHub, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong> instead.
             </p>
           </div>
           <button

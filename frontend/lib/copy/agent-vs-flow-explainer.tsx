@@ -1,10 +1,10 @@
 /**
  * AgentVsFlowExplainer
  *
- * v0.7.0-fix Phase 7 — retained for Watcher monitor setup copy. The Flow
+ * v0.7.0-fix Phase 7 — retained for continuous-agent setup copy. The Flow
  * creation modal intentionally does not render this comparison anymore:
- * Flow configuration is the valid creation surface there, and Watcher
- * monitors should not be implied as a selectable Flow option.
+ * Flow configuration is the valid creation surface there, and continuous
+ * agents should not be implied as a selectable Flow option.
  *
  * Current production callers use <AgentVsFlowExplainer kind="agent" />.
  * Keep the prop shape stable for older local branches, but do not add it
@@ -67,8 +67,8 @@ export default function AgentVsFlowExplainer({ kind, className }: Props) {
           tagline="Always-on wrapper around an existing agent that wakes on external events."
           bullets={[
             'Reacts to inbound events (email, Jira, GitHub, webhook).',
-            'Runs the same agent each time — stateful budget + run history.',
-            'Lives under Watcher → Continuous Agents.',
+            'Daily budget enforcement (runs/tokens/tool-calls) + persistent run history.',
+            'Configure in Studio → Continuous Agents · monitor in Watcher → Agents.',
           ]}
           example='"When a Jira P0 ticket arrives, page on-call."'
           badge={kind === 'agent' ? 'You are here' : 'Reactive'}

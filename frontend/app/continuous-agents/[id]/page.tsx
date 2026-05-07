@@ -118,7 +118,7 @@ export default function ContinuousAgentDetailPage() {
       setRunsPage(runData)
       setSelectedRunId(current => current ?? runData.items[0]?.id ?? null)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to load Watcher monitor'))
+      setError(getErrorMessage(err, 'Failed to load continuous agent'))
     } finally {
       setLoading(false)
     }
@@ -136,7 +136,7 @@ export default function ContinuousAgentDetailPage() {
     if (!agent) return
     if (typeof window !== 'undefined') {
       const confirmed = window.confirm(
-        `Delete Watcher monitor "${agent.name || `#${agent.id}`}"? Monitored trigger links are removed too.`,
+        `Delete continuous agent "${agent.name || `#${agent.id}`}"? Monitored trigger links are removed too.`,
       )
       if (!confirmed) return
     }
@@ -162,7 +162,7 @@ export default function ContinuousAgentDetailPage() {
       }
       router.replace('/continuous-agents')
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to delete Watcher monitor'))
+      setError(getErrorMessage(err, 'Failed to delete continuous agent'))
     } finally {
       setDeleting(false)
     }
@@ -225,15 +225,15 @@ export default function ContinuousAgentDetailPage() {
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/continuous-agents" className="hover:text-white">Watcher Monitors</Link>
+            <Link href="/continuous-agents" className="hover:text-white">Continuous Agents</Link>
             <span>/</span>
             <span>#{agentId}</span>
           </div>
           <h1 className="text-3xl font-display font-bold text-white">
-            {agent?.name || agent?.agent_name || `Watcher Monitor #${agentId}`}
+            {agent?.name || agent?.agent_name || `Continuous Agent #${agentId}`}
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Detail view for this Studio-created Watcher monitor, its monitored triggers, and recent run history.
+            Detail view for this Studio-created continuous agent, its monitored triggers, and recent run history.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -276,12 +276,12 @@ export default function ContinuousAgentDetailPage() {
 
       {loading ? (
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/50 p-10 text-center text-tsushin-slate">
-          Loading Watcher monitor...
+          Loading continuous agent...
         </div>
       ) : !agent ? (
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/50 p-10 text-center">
           <AlertTriangleIcon size={28} className="mx-auto mb-3 text-yellow-300" />
-          <div className="text-white">Watcher monitor not found</div>
+          <div className="text-white">continuous agent not found</div>
         </div>
       ) : (
         <div className="space-y-6">
@@ -319,7 +319,7 @@ export default function ContinuousAgentDetailPage() {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-white">Watcher Runs</h2>
-                  <p className="text-xs text-tsushin-slate">Latest read-only runs for this Watcher monitor.</p>
+                  <p className="text-xs text-tsushin-slate">Latest read-only runs for this continuous agent.</p>
                 </div>
                 <span className="text-sm text-tsushin-slate">{filteredRuns.length} of {runsPage?.total || 0}</span>
               </div>

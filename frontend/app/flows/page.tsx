@@ -48,6 +48,7 @@ import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
 import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
+import StepSamplePreview from '@/components/flows/StepSamplePreview'
 import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
 import {
   MessageIcon,
@@ -4433,6 +4434,26 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
       )}
 
+      {/* Per-step sample-payload preview for non-source steps on
+          system-managed flows. Reads the source step's trigger binding
+          (allSteps[0].config) to know which trigger's wake events to
+          fetch. Lets operators see real data + the JSON paths their
+          step's config already references — closes the "what does this
+          step actually receive?" gap without spinning up a dry-run. */}
+      {flowIsSystemOwned && step.type !== 'source' && (() => {
+        const sourceCfg = (allSteps[0]?.config as Record<string, unknown> | undefined) || {}
+        const triggerKind = (sourceCfg.trigger_kind as string | undefined) || ''
+        const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+        if (!triggerKind || triggerInstanceId <= 0) return null
+        return (
+          <StepSamplePreview
+            triggerKind={triggerKind}
+            triggerInstanceId={triggerInstanceId}
+            stepConfig={(step.config as Record<string, unknown>) || {}}
+          />
+        )
+      })()}
+
       {/* Inbound trigger note for system-managed Default-agent step.
           Channel + recipient + initial_prompt are outbound-message fields
           that don't apply when the conversation step is the entry point
@@ -5928,6 +5949,24 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
       {step.type === 'source' && (
         <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
       )}
+
+      {/* Per-step sample-payload preview for non-source steps on
+          system-managed flows. Reads the source step's trigger binding
+          (allSteps[0].config) to know which trigger's wake events to
+          fetch. Mirrors the version in StepConfigForm. */}
+      {flowIsSystemOwned && step.type !== 'source' && (() => {
+        const sourceCfg = (allSteps[0]?.config as Record<string, unknown> | undefined) || {}
+        const triggerKind = (sourceCfg.trigger_kind as string | undefined) || ''
+        const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+        if (!triggerKind || triggerInstanceId <= 0) return null
+        return (
+          <StepSamplePreview
+            triggerKind={triggerKind}
+            triggerInstanceId={triggerInstanceId}
+            stepConfig={(step.config as Record<string, unknown>) || {}}
+          />
+        )
+      })()}
 
       {/* Inbound trigger note for system-managed Default-agent step.
           Channel + recipient + initial_prompt are outbound-message fields
