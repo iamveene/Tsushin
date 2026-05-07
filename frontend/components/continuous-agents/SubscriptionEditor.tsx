@@ -80,9 +80,9 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
     <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Watcher Monitoring</h2>
+          <h2 className="text-lg font-semibold text-white">Trigger Monitoring</h2>
           <p className="text-xs text-tsushin-slate">
-            Trigger monitoring links that wake this Studio-created agent monitor.
+            Trigger links that wake this continuous agent.
           </p>
         </div>
         <a

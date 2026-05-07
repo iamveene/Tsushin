@@ -145,8 +145,10 @@ export default function OutputsSection({
           triggerId={email.id}
           onBindingsChange={setBindings}
         />
-        {/* Agent Team triggers do not currently support email — the team
-            API rejects `email`/`gmail` kinds. WiredTeamsCard is hidden here. */}
+        {/* AgentTeamTrigger.trigger_kind persists email triggers as 'gmail'
+            (see _validate_team_trigger_instance + SUPPORTED_TEAM_TRIGGER_KINDS
+            in agent_team_api_service). WiredTeamsCard re-translates back. */}
+        <WiredTeamsCard triggerKind="gmail" triggerId={email.id} />
         <WiredContinuousCard
           channelType={continuousChannelType('email')}
           channelInstanceId={email.id}
