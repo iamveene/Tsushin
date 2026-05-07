@@ -182,6 +182,63 @@ class WhatsAppProactiveResolver:
 
         return jid
 
+    async def _fetch_directory_name(
+        self,
+        phone_number: str,
+        mcp_instance: WhatsAppMCPInstance,
+    ) -> Optional[str]:
+        """Look up the WhatsApp directory display name for a phone via MCP /contacts.
+
+        The display name there ("Gisele Espini") is what WhatsApp itself shows the
+        bot — distinct from the operator's nickname for the contact ("Giza"). It's
+        the missing bridge for LID matching when chat metadata uses the WhatsApp
+        name (e.g., "Gisele E.") and the Tsushin contact uses a nickname.
+        """
+        if not phone_number:
+            return None
+        digits = "".join(ch for ch in phone_number if ch.isdigit())
+        if not digits:
+            return None
+        try:
+            client = await self._get_http_client()
+            from services.mcp_auth_service import get_auth_headers
+
+            response = await client.get(
+                f"{mcp_instance.mcp_api_url}/contacts",
+                params={"q": digits},
+                headers=get_auth_headers(mcp_instance.api_secret),
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            if not data.get("success"):
+                return None
+            for entry in data.get("contacts", []) or []:
+                if str(entry.get("phone") or "").lstrip("+") == digits:
+                    name = (entry.get("name") or "").strip()
+                    if name and name != digits:  # MCP returns phone as name if no display name
+                        return name
+            return None
+        except Exception as e:
+            self.logger.debug(f"MCP /contacts directory lookup failed: {e}")
+            return None
+
+    @staticmethod
+    def _name_words(value: str) -> set[str]:
+        """Tokenize a name into matchable words: lowercased, alpha-only, ≥3 chars.
+
+        Filters punctuation ("E." → dropped) and short noise tokens. Used for
+        word-overlap matching between operator nicknames, WhatsApp directory
+        names, and chat-display names that all reference the same person but
+        with different surface forms.
+        """
+        words: set[str] = set()
+        for raw in (value or "").split():
+            cleaned = "".join(ch for ch in raw.lower() if ch.isalpha())
+            if len(cleaned) >= 3:
+                words.add(cleaned)
+        return words
+
     async def _bind_lid_from_recent_chats(
         self,
         contact: Contact,
@@ -189,17 +246,19 @@ class WhatsAppProactiveResolver:
         scan_limit: int = 500,
         scan_days: int = 30,
     ) -> Optional[str]:
-        """Scan recent MCP messages for an @lid chat whose name matches this contact.
+        """Scan recent MCP messages for an @lid chat that matches this contact.
 
         WhatsApp's contact directory (/api/contacts) only returns @s.whatsapp.net JIDs,
         not the @lid identifiers used in inbound message envelopes. The chats table on
         the MCP container holds the LID↔chat-name mapping, but is not exposed as its
-        own endpoint, so we scan the recent /api/messages stream and look for any chat
-        whose chat_name matches this contact's friendly_name. Any LID match is written
-        into contact_channel_mapping so layer-2 LID lookups resolve directly without
-        relying on the name-match fallback.
+        own endpoint, so we scan the recent /api/messages stream and look for any
+        @lid chat whose chat_name shares a meaningful word with either the operator's
+        friendly_name or the WhatsApp directory name resolved from the contact's phone.
+        Any unambiguous match is written into contact_channel_mapping so layer-2 LID
+        lookups resolve directly without relying on the dispatcher's name-match
+        fallback at first inbound.
         """
-        if not contact.friendly_name:
+        if not contact.friendly_name and not contact.phone_number:
             return None
 
         mcp_instance = self._get_active_mcp_instance(tenant_id)
@@ -228,15 +287,29 @@ class WhatsAppProactiveResolver:
             self.logger.debug(f"MCP /messages scan failed: {e}")
             return None
 
-        target = contact.friendly_name.strip().lower()
+        # Build the union of name words from operator nickname AND WhatsApp directory.
+        # Operator may use a nickname unrelated to the WhatsApp display name, and the
+        # LID chat name may be yet another shortened form — covering all three forms
+        # is what makes nickname-only contacts resolve correctly.
+        target_words: set[str] = set()
+        if contact.friendly_name:
+            target_words |= self._name_words(contact.friendly_name)
+        if contact.phone_number:
+            directory_name = await self._fetch_directory_name(contact.phone_number, mcp_instance)
+            if directory_name:
+                target_words |= self._name_words(directory_name)
+
+        if not target_words:
+            return None
+
         seen_lids: dict[str, str] = {}
         for msg in data.get("messages", []) or []:
             chat_jid = (msg.get("chat_jid") or "")
             chat_name = (msg.get("chat_name") or "").strip()
             if not chat_jid.endswith("@lid") or not chat_name:
                 continue
-            chat_name_lower = chat_name.lower()
-            if target in chat_name_lower or chat_name_lower in target:
+            chat_words = self._name_words(chat_name)
+            if not chat_words.isdisjoint(target_words):
                 lid = chat_jid.split("@", 1)[0]
                 if lid:
                     seen_lids[lid] = chat_name
