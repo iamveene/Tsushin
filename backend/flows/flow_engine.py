@@ -784,6 +784,22 @@ class NotificationStepHandler(FlowStepHandler):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
+        # The wizard ships notification nodes with `enabled=False` until an
+        # operator wires up a recipient via the trigger detail toggle. Honor
+        # that flag — without it, the step tries to send to an empty recipient
+        # and surfaces as a failure on the run UI even though it was never
+        # meant to fire. See flow_binding_service.ensure_system_managed_flow_for_trigger.
+        if "enabled" in config and not bool(config.get("enabled")):
+            logger.info(
+                "Notification step skipped: enabled=False on node %s",
+                getattr(step, "id", None),
+            )
+            return {
+                "status": "skipped",
+                "reason": "notification_disabled",
+                "message": "Notification step skipped — node is disabled.",
+            }
+
         # Handle both "recipient" (singular) and "recipients" (array) formats
         recipient = config.get("recipient", "")
         if not recipient:
@@ -802,6 +818,21 @@ class NotificationStepHandler(FlowStepHandler):
 
         # Variable replacement
         recipient = self._replace_variables(recipient or "", delivery_data)
+
+        # Empty-recipient short-circuit. This mirrors the conversation step's
+        # guard: when no recipient is configured the step has nothing to do,
+        # and the resolve-to-phone call below would otherwise fail with a
+        # misleading "Could not resolve recipient '' to a phone number" error.
+        if not (recipient or "").strip():
+            logger.info(
+                "Notification step skipped: no recipient configured on node %s",
+                getattr(step, "id", None),
+            )
+            return {
+                "status": "skipped",
+                "reason": "no_recipient_configured",
+                "message": "Notification step skipped — no recipient configured.",
+            }
         message = self._render_and_resolve_secret_handles(message_template, delivery_data)
         persisted_message = _redact_for_persistence(message)
 
@@ -2619,6 +2650,24 @@ class ConversationStepHandler(FlowStepHandler):
         objective = self._replace_variables(objective, input_data)
         initial_prompt = self._replace_variables(initial_prompt, input_data)
         initial_message_from_config = self._replace_variables(initial_message_from_config, input_data)
+
+        # Empty recipient is structurally a no-op — the MCP send below would
+        # always return False and surface as a misleading "Single-turn message
+        # sent" failure in the run UI. Return "skipped" so the flow continues
+        # to downstream nodes (notification, etc.) and the run doesn't get
+        # painted red for what is really a not-yet-configured conversation.
+        if not (recipient or "").strip():
+            logger.info(
+                "Conversation step skipped: no recipient configured for agent %s",
+                agent_id,
+            )
+            return {
+                "agent_id": agent_id,
+                "objective": objective,
+                "status": "skipped",
+                "reason": "no_recipient_configured",
+                "message": "Conversation step skipped — no recipient configured.",
+            }
 
         logger.info(f"Starting conversation with agent {agent_id} for {recipient}")
 

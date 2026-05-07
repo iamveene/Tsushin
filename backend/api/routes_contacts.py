@@ -10,7 +10,7 @@ import asyncio
 import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import Contact, UserContactMapping, ContactChannelMapping
+from models import Contact, UserContactMapping, ContactChannelMapping, ContactAgentMapping
 from api.sanitizers import strip_html_tags
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -559,12 +559,23 @@ def delete_contact(
 
     contact_name = contact.friendly_name
 
-    # Delete any user-contact mapping first
-    existing_mapping = db.query(UserContactMapping).filter(
+    # Cascade-delete dependent rows that reference this contact via FK.
+    # Without ON DELETE CASCADE on these tables, PostgreSQL otherwise rejects
+    # the contact delete and the operator gets a 500 with no recourse from the UI.
+    # synchronize_session=False is safe here because no further reads of these
+    # tables happen before the commit below — the audit log call afterwards
+    # is the only DB activity and it touches a separate table.
+    db.query(UserContactMapping).filter(
         UserContactMapping.contact_id == contact_id
-    ).first()
-    if existing_mapping:
-        db.delete(existing_mapping)
+    ).delete(synchronize_session=False)
+
+    db.query(ContactAgentMapping).filter(
+        ContactAgentMapping.contact_id == contact_id
+    ).delete(synchronize_session=False)
+
+    db.query(ContactChannelMapping).filter(
+        ContactChannelMapping.contact_id == contact_id
+    ).delete(synchronize_session=False)
 
     db.delete(contact)
     db.commit()

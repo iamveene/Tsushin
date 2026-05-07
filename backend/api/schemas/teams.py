@@ -14,15 +14,6 @@ def _enum_values(enum_cls) -> set[str]:
     return {item.value for item in enum_cls}
 
 
-class TeamToolPool(BaseModel):
-    sandboxed_tool_ids: list[int] = Field(default_factory=list)
-
-    @field_validator("sandboxed_tool_ids")
-    @classmethod
-    def dedupe_tool_ids(cls, value: list[int]) -> list[int]:
-        return list(dict.fromkeys(int(item) for item in value))
-
-
 class TeamMemberCreate(BaseModel):
     agent_id: int = Field(..., gt=0)
     execution_order: Optional[int] = Field(None, ge=0)
@@ -110,7 +101,6 @@ class TeamCreate(BaseModel):
     max_total_tokens: Optional[int] = Field(None, ge=1)
     max_concurrent_runs: int = Field(default=1, ge=1, le=10)
     sentinel_profile_id: Optional[int] = Field(None, gt=0)
-    tools: TeamToolPool = Field(default_factory=TeamToolPool)
     members: list[TeamMemberCreate] = Field(default_factory=list)
 
     @field_validator("name")
@@ -148,7 +138,6 @@ class TeamUpdate(BaseModel):
     max_total_tokens: Optional[int] = Field(None, ge=1)
     max_concurrent_runs: Optional[int] = Field(None, ge=1, le=10)
     sentinel_profile_id: Optional[int] = Field(None, gt=0)
-    tools: Optional[TeamToolPool] = None
 
     @field_validator("name")
     @classmethod
@@ -205,6 +194,14 @@ class TeamTriggerResponse(BaseModel):
     is_enabled: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class TeamTriggerWithTeamRead(TeamTriggerResponse):
+    team_id: int
+    team_name: str
+    team_status: str
+    team_topology: str
+    member_count: int
 
 
 class TeamRunMemberStep(BaseModel):
@@ -292,7 +289,6 @@ class TeamListItem(BaseModel):
     max_steps: int
     max_total_tokens: Optional[int] = None
     max_concurrent_runs: int
-    tools: TeamToolPool = Field(default_factory=TeamToolPool)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

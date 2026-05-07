@@ -979,10 +979,6 @@ export interface Agent {
   updated_at: string
 }
 
-export interface TeamToolPool {
-  sandboxed_tool_ids: number[]
-}
-
 export interface TeamMemberResponse {
   id: number
   team_id: number
@@ -1023,7 +1019,6 @@ export interface TeamListItem {
   max_steps: number
   max_total_tokens?: number | null
   max_concurrent_runs: number
-  tools: TeamToolPool
   created_at?: string | null
   updated_at?: string | null
 }
@@ -1064,7 +1059,6 @@ export interface TeamCreatePayload {
   max_steps?: number
   max_total_tokens?: number | null
   max_concurrent_runs?: number
-  tools?: TeamToolPool
   members?: TeamMemberCreatePayload[]
 }
 
@@ -2535,6 +2529,26 @@ export interface FlowTriggerBindingCreate {
 export interface FlowTriggerBindingUpdate {
   is_active?: boolean
   suppress_default_agent?: boolean
+}
+
+// Reverse-lookup: every Agent Team trigger wired to one trigger instance.
+// Powers the "Wired Agent Teams" card on the trigger detail page so
+// operators can see at a glance which teams a Jira/GitHub/Webhook event
+// will fan out to.
+export interface TeamTriggerWithTeam extends TeamTriggerResponse {
+  team_id: number
+  team_name: string
+  team_status: TeamStatus
+  team_topology: TeamTopology
+  member_count: number
+}
+
+// Reverse-lookup: every continuous-agent subscription wired to one
+// channel instance. Powers the "Wired Continuous Agents" card.
+export interface ContinuousSubscriptionWithAgent extends ContinuousSubscription {
+  continuous_agent_name?: string | null
+  continuous_agent_status: string
+  continuous_agent_is_system_owned: boolean
 }
 
 // Phase 5.0: Knowledge Management
@@ -5245,6 +5259,13 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to archive team')
   },
 
+  async deleteTeamPermanently(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/teams/${id}/permanent`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete team')
+  },
+
   async addTeamMember(teamId: number, member: TeamMemberCreatePayload): Promise<TeamMemberResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/teams/${teamId}/members`, {
       method: 'POST',
@@ -6606,6 +6627,46 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete flow trigger binding')
+  },
+
+  // Reverse-lookup of Agent Team triggers wired to one trigger instance.
+  // Mutations live on the team-side routes (`updateTeamTrigger`,
+  // `deleteTeamTrigger`); each row in the response carries `team_id`.
+  async listTeamTriggersByInstance(params: {
+    trigger_kind: 'jira' | 'github' | 'webhook'
+    trigger_instance_id: number
+  }): Promise<TeamTriggerWithTeam[]> {
+    const search = new URLSearchParams({
+      trigger_kind: params.trigger_kind,
+      trigger_instance_id: String(params.trigger_instance_id),
+    })
+    const res = await authenticatedFetch(`${API_URL}/api/team-triggers?${search.toString()}`)
+    if (!res.ok) {
+      if (res.status === 404) return []
+      await handleApiError(res, 'Failed to load wired teams')
+    }
+    const data = await res.json()
+    return Array.isArray(data) ? (data as TeamTriggerWithTeam[]) : []
+  },
+
+  // Reverse-lookup of continuous subscriptions wired to one channel instance.
+  // Mutations live on the per-agent routes (`updateContinuousSubscription`,
+  // `deleteContinuousSubscription`); each row carries `continuous_agent_id`.
+  async listContinuousSubscriptionsByInstance(params: {
+    channel_type: string
+    channel_instance_id: number
+  }): Promise<ContinuousSubscriptionWithAgent[]> {
+    const search = new URLSearchParams({
+      channel_type: params.channel_type,
+      channel_instance_id: String(params.channel_instance_id),
+    })
+    const res = await authenticatedFetch(`${API_URL}/api/continuous-subscriptions?${search.toString()}`)
+    if (!res.ok) {
+      if (res.status === 404) return []
+      await handleApiError(res, 'Failed to load wired continuous agents')
+    }
+    const data = await res.json()
+    return Array.isArray(data) ? (data as ContinuousSubscriptionWithAgent[]) : []
   },
 
   async getFlowNodes(flowId: number): Promise<FlowNode[]> {

@@ -27,9 +27,31 @@ import JiraManualPollCard from '@/components/triggers/sections/JiraManualPollCar
 import EmailManagedTriageCard from '@/components/triggers/sections/EmailManagedTriageCard'
 import EmailManualPollCard from '@/components/triggers/sections/EmailManualPollCard'
 import WiredFlowsCard from '@/components/triggers/sections/WiredFlowsCard'
+import WiredTeamsCard, {
+  type WiredTeamsTriggerKind,
+} from '@/components/triggers/sections/WiredTeamsCard'
+import WiredContinuousCard from '@/components/triggers/sections/WiredContinuousCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
 
 type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
+
+// AgentTeamTrigger.trigger_kind validates jira/github/webhook/gmail. Email
+// triggers persist as kind='gmail' (see _validate_team_trigger_instance and
+// SUPPORTED_TEAM_TRIGGER_KINDS in agent_team_api_service). The frontend uses
+// 'email' as the OutputsKind tag and translates to 'gmail' at the API edge.
+const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
+  jira: 'jira',
+  github: 'github',
+  webhook: 'webhook',
+  email: 'gmail',
+}
+
+// Email triggers are subscribed via channel_type='gmail' on
+// continuous_subscription — see trigger_dispatch_service. The frontend
+// must apply the same translation when reading back.
+function continuousChannelType(kind: OutputsKind): string {
+  return kind === 'email' ? 'gmail' : kind
+}
 type OutputsTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
@@ -88,6 +110,11 @@ export default function OutputsSection({
           triggerId={jira.id}
           onBindingsChange={setBindings}
         />
+        <WiredTeamsCard triggerKind="jira" triggerId={jira.id} />
+        <WiredContinuousCard
+          channelType={continuousChannelType('jira')}
+          channelInstanceId={jira.id}
+        />
       </div>
     )
   }
@@ -118,18 +145,33 @@ export default function OutputsSection({
           triggerId={email.id}
           onBindingsChange={setBindings}
         />
+        {/* Agent Team triggers do not currently support email — the team
+            API rejects `email`/`gmail` kinds. WiredTeamsCard is hidden here. */}
+        <WiredContinuousCard
+          channelType={continuousChannelType('email')}
+          channelInstanceId={email.id}
+        />
       </div>
     )
   }
 
   // github + webhook: no managed outputs — Wired Flows IS the
   // outputs surface. The card carries its own empty-state copy.
+  const generic = trigger as { id: number }
+  const teamKind = TEAM_KIND_BY_OUTPUT[kind]
   return (
     <div className="space-y-4">
       <WiredFlowsCard
         triggerKind={kind}
-        triggerId={(trigger as { id: number }).id}
+        triggerId={generic.id}
         onBindingsChange={setBindings}
+      />
+      {teamKind && (
+        <WiredTeamsCard triggerKind={teamKind} triggerId={generic.id} />
+      )}
+      <WiredContinuousCard
+        channelType={continuousChannelType(kind)}
+        channelInstanceId={generic.id}
       />
     </div>
   )

@@ -253,3 +253,299 @@ def test_team_queue_enqueue_failure_emits_watcher_event(db_session, tmp_path, mo
             "error_json": {"reason": "team_run_queue_enqueue_failed"},
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# BUG-731 regression: Gmail (email) trigger -> team dispatch must fire a run.
+# ---------------------------------------------------------------------------
+
+from test_trigger_dispatch_service import _seed_email  # noqa: E402,F401
+
+
+def test_gmail_email_trigger_dispatches_team_run(db_session, tmp_path):
+    """A team bound with trigger_kind='gmail' must fire when an EmailTrigger
+    dispatches with trigger_type='email'. Regression for BUG-731 — the
+    dispatcher used to gate out trigger_type='email' before reaching team
+    matching, and the team-trigger query stored the kind as 'gmail', so no
+    Gmail event ever produced an AgentTeamRun.
+    """
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    _seed_email(
+        db_session,
+        instance_id=501,
+        tenant_id="tenant-a",
+        created_by=1,
+        default_agent_id=None,
+    )
+    _seed_team_trigger(
+        db_session,
+        tenant_id="tenant-a",
+        trigger_kind="gmail",
+        config_json={
+            "trigger_instance_id": 501,
+            "event_types": ["email.message.received"],
+        },
+    )
+    db_session.commit()
+
+    result = TriggerDispatchService(
+        db_session,
+        payload_dir=tmp_path / "backend" / "data" / "wake_events",
+    ).dispatch(
+        TriggerDispatchInput(
+            trigger_type="email",
+            instance_id=501,
+            event_type="email.message.received",
+            dedupe_key="bug731-email-team-1",
+            payload={"message": {"id": "abc", "subject": "test"}},
+        )
+    )
+
+    assert result.status == "dispatched", result
+    assert len(result.team_run_ids) == 1, (
+        "Expected the Gmail-bound team trigger to fire exactly one team run; "
+        "if this is empty, _matching_team_triggers regressed and is gating out "
+        "trigger_type='email' or failing to translate it to trigger_kind='gmail'."
+    )
+    team_run = db_session.get(AgentTeamRun, result.team_run_ids[0])
+    assert team_run is not None
+    assert team_run.tenant_id == "tenant-a"
+
+
+# ---------------------------------------------------------------------------
+# Team -> contact notification hook (BUG-731 follow-up).
+# ---------------------------------------------------------------------------
+
+def test_team_notify_contact_directive_calls_mcp_sender(db_session, tmp_path, monkeypatch):
+    """When a team description carries `[notify:contact:N]`, _finish_run must
+    call MCPSender.send_message with the run summary. Failure to deliver must
+    not raise.
+    """
+    from models import (
+        AgentTeam,
+        AgentTeamRun,
+        Contact,
+        TeamRunStatus,
+        TeamStatus,
+        WhatsAppMCPInstance,
+    )
+    import services.team_orchestrator_service as orch
+    from services.team_orchestrator_service import TeamRunOrchestrator
+
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    contact = Contact(
+        id=909,
+        tenant_id="tenant-a",
+        friendly_name="VINI-TEST",
+        phone_number="+5500000000099",
+        whatsapp_id="259099000000099",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(contact)
+    team = AgentTeam(
+        id=4242,
+        tenant_id="tenant-a",
+        name="Notify-Team",
+        description="QA — should notify [notify:contact:909]",
+        topology="line",
+        status=TeamStatus.ACTIVE.value,
+        max_steps=3,
+        created_by_user_id=1,
+    )
+    db_session.add(team)
+
+    # whatsapp_mcp_instance is not in the shared db_session fixture's table list;
+    # create it on demand for this test only.
+    from models import Base
+    Base.metadata.create_all(
+        db_session.get_bind(),
+        tables=[WhatsAppMCPInstance.__table__],
+    )
+
+    mcp = WhatsAppMCPInstance(
+        id=77,
+        tenant_id="tenant-a",
+        container_name="t-mcp",
+        phone_number="+5500000000050",
+        instance_type="agent",
+        mcp_api_url="http://mock-mcp:8080/api",
+        mcp_port=8080,
+        messages_db_path="/tmp/m.db",
+        session_data_path="/tmp/s",
+        created_by=1,
+        is_group_handler=False,
+        status="running",
+        api_secret="secret",
+    )
+    db_session.add(mcp)
+    team_run = AgentTeamRun(
+        tenant_id="tenant-a",
+        team_id=team.id,
+        topology_snapshot="line",
+        status=TeamRunStatus.PENDING.value,
+        goal_text_snapshot="x",
+        final_output_summary="hello from team",
+    )
+    db_session.add(team_run)
+    db_session.commit()
+    db_session.refresh(team_run)
+
+    captured = {}
+
+    class _FakeResponse:
+        status_code = 202
+        text = "{}"
+
+    def _fake_post(url, json=None, headers=None, timeout=None, **kwargs):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        return _FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    orchestrator = TeamRunOrchestrator(
+        db=db_session,
+        tenant_id="tenant-a",
+        team_id=team.id,
+        existing_run_id=team_run.id,
+    )
+
+    orchestrator._maybe_notify_contact_on_completion(team_run)
+
+    assert captured.get("url") == "http://mock-mcp:8080/api/send"
+    assert captured.get("json", {}).get("recipient") == "5500000000099"
+    assert "hello from team" in (captured.get("json", {}).get("message") or "")
+    assert captured.get("headers", {}).get("Authorization") == "Bearer secret"
+
+
+def test_team_member_prompts_include_trigger_payload(db_session, tmp_path, monkeypatch):
+    """Agents must see the actual trigger payload, not just the team goal.
+
+    Pre-fix, _build_line_prompt / _build_mesh_*_prompt only included
+    team.goal_text + prior summaries, so agents wrote 'trigger payload is
+    missing' for every triggered run. This regression locks in payload
+    propagation: dispatcher writes the payload to disk, orchestrator reads
+    it via _read_payload_ref, prompts include it.
+    """
+    from models import (
+        AgentTeam,
+        AgentTeamMember,
+        AgentTeamRun,
+        TeamMemberRole,
+        TeamRunStatus,
+        TeamStatus,
+        WakeEvent,
+    )
+    from services.team_orchestrator_service import TeamRunOrchestrator
+    import services.trigger_dispatch_service as dispatch_module
+
+    _seed_tenant_user_agent(
+        db_session,
+        tenant_id="tenant-a",
+        user_id=1,
+        contact_id=101,
+        agent_id=201,
+    )
+    team = AgentTeam(
+        id=5050,
+        tenant_id="tenant-a",
+        name="Payload-Team",
+        description="QA",
+        topology="line",
+        status=TeamStatus.ACTIVE.value,
+        goal_text="Summarize the issue.",
+        max_steps=3,
+        created_by_user_id=1,
+    )
+    db_session.add(team)
+    member = AgentTeamMember(
+        tenant_id="tenant-a",
+        team_id=team.id,
+        agent_id=201,
+        execution_order=1,
+    )
+    db_session.add(member)
+    wake = WakeEvent(
+        id=9999,
+        tenant_id="tenant-a",
+        channel_type="jira",
+        channel_instance_id=401,
+        event_type="jira.issue.detected",
+        dedupe_key="payload-test-1",
+        payload_ref="backend/data/wake_events/payload-test-1.json",
+    )
+    db_session.add(wake)
+    team_run = AgentTeamRun(
+        tenant_id="tenant-a",
+        team_id=team.id,
+        topology_snapshot="line",
+        status=TeamRunStatus.PENDING.value,
+        goal_text_snapshot="Summarize the issue.",
+        trigger_event_id=wake.id,
+    )
+    db_session.add(team_run)
+    db_session.commit()
+
+    fake_payload = {
+        "payload": {
+            "issue": {"key": "JSM-42", "fields": {"summary": "Outage in checkout flow"}},
+            "site_url": "https://example.atlassian.net",
+        }
+    }
+    monkeypatch.setattr(
+        dispatch_module.TriggerDispatchService,
+        "_read_payload_ref",
+        lambda self, ref: fake_payload,
+    )
+
+    orchestrator = TeamRunOrchestrator(
+        db=db_session,
+        tenant_id="tenant-a",
+        team_id=team.id,
+        existing_run_id=team_run.id,
+    )
+    orchestrator._load_trigger_payload(wake.id)
+    assert "JSM-42" in orchestrator._trigger_payload_summary
+    assert "Outage in checkout flow" in orchestrator._trigger_payload_summary
+
+    line_prompt = orchestrator._build_line_prompt(
+        team=team,
+        step_index=1,
+        member=member,
+        prior_summaries=[],
+        previous_output="",
+    )
+    assert "Trigger payload (data the team must analyze)" in line_prompt
+    assert "JSM-42" in line_prompt
+    assert "Outage in checkout flow" in line_prompt
+
+    mesh_coord_prompt = orchestrator._build_mesh_coordinator_prompt(
+        team=team,
+        coordinator_member=member,
+        runnable_members=[],
+        transcript=[],
+    )
+    assert "JSM-42" in mesh_coord_prompt
+
+    mesh_member_prompt = orchestrator._build_mesh_member_prompt(
+        team=team,
+        dispatch={"message": "do work", "member_id": member.id},
+        transcript=[],
+        coordinator_reason="because",
+    )
+    assert "JSM-42" in mesh_member_prompt

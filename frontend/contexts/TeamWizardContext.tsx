@@ -52,7 +52,6 @@ export interface TeamWizardContextType {
   removeMember: (agentId: number) => void
   patchMember: (agentId: number, patch: Partial<TeamMemberDraft>) => void
   reorderMember: (agentId: number, direction: 'up' | 'down') => void
-  setTools: (toolIds: number[]) => void
   addTrigger: (trigger: TeamTriggerDraft) => void
   removeTrigger: (uid: string) => void
   patchTrigger: (uid: string, patch: Partial<TeamTriggerDraft>) => void
@@ -146,7 +145,6 @@ export function TeamWizardProvider({ children }: { children: ReactNode }) {
     (agentId: number, direction: 'up' | 'down') => dispatch({ type: 'REORDER_MEMBER', agentId, direction }),
     [],
   )
-  const setTools = useCallback((toolIds: number[]) => dispatch({ type: 'SET_TOOLS', toolIds }), [])
   const addTrigger = useCallback((trigger: TeamTriggerDraft) => dispatch({ type: 'ADD_TRIGGER', trigger }), [])
   const removeTrigger = useCallback((uid: string) => dispatch({ type: 'REMOVE_TRIGGER', uid }), [])
   const patchTrigger = useCallback(
@@ -202,7 +200,6 @@ export function TeamWizardProvider({ children }: { children: ReactNode }) {
     removeMember,
     patchMember,
     reorderMember,
-    setTools,
     addTrigger,
     removeTrigger,
     patchTrigger,

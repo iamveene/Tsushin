@@ -3981,7 +3981,6 @@ class AgentTeam(Base):
     max_steps = Column(Integer, default=10, nullable=False)
     max_total_tokens = Column(Integer, nullable=True)
     max_concurrent_runs = Column(Integer, default=1, nullable=False)
-    tools_json = Column(JSON, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

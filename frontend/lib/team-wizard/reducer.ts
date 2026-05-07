@@ -3,7 +3,6 @@ export type TeamWizardStep =
   | 'basics'
   | 'topology'
   | 'members'
-  | 'tools'
   | 'triggers'
   | 'review'
   | 'create'
@@ -41,7 +40,6 @@ export interface TeamWizardDraft {
   max_steps: number
   max_total_tokens: number | null
   max_concurrent_runs: number
-  sandboxed_tool_ids: number[]
   members: TeamMemberDraft[]
   triggers: TeamTriggerDraft[]
 }
@@ -68,7 +66,6 @@ export const TEAM_WIZARD_STEPS: TeamWizardStep[] = [
   'basics',
   'topology',
   'members',
-  'tools',
   'triggers',
   'review',
   'create',
@@ -84,7 +81,6 @@ export const EMPTY_TEAM_DRAFT: TeamWizardDraft = {
   max_steps: 10,
   max_total_tokens: null,
   max_concurrent_runs: 1,
-  sandboxed_tool_ids: [],
   members: [],
   triggers: [],
 }
@@ -164,9 +160,6 @@ export function normalizeTeamDraft(draft: Partial<TeamWizardDraft> | null | unde
   const merged: TeamWizardDraft = {
     ...EMPTY_TEAM_DRAFT,
     ...(draft || {}),
-    sandboxed_tool_ids: Array.isArray(draft?.sandboxed_tool_ids)
-      ? Array.from(new Set(draft.sandboxed_tool_ids.map(Number).filter(Number.isFinite)))
-      : [],
     members: Array.isArray(draft?.members)
       ? draft.members
           .filter((member) => Number.isFinite(Number(member.agent_id)) && Number(member.agent_id) > 0)
@@ -223,7 +216,6 @@ export function isTeamStepComplete(draft: TeamWizardDraft, step: TeamWizardStep)
       return draft.max_steps >= 1 && draft.max_steps <= 100 && draft.max_concurrent_runs >= 1 && draft.max_concurrent_runs <= 10
     case 'members':
       return draft.members.length > 0
-    case 'tools':
     case 'triggers':
       return true
     case 'review':
@@ -251,7 +243,6 @@ export function hasMeaningfulTeamDraft(draft: TeamWizardDraft): boolean {
       draft.goal_text.trim() ||
       draft.members.length ||
       draft.triggers.length ||
-      draft.sandboxed_tool_ids.length ||
       draft.template_id !== 'custom',
   )
 }
@@ -277,7 +268,6 @@ export type TeamWizardAction =
   | { type: 'REMOVE_MEMBER'; agentId: number }
   | { type: 'PATCH_MEMBER'; agentId: number; patch: Partial<TeamMemberDraft> }
   | { type: 'REORDER_MEMBER'; agentId: number; direction: 'up' | 'down' }
-  | { type: 'SET_TOOLS'; toolIds: number[] }
   | { type: 'ADD_TRIGGER'; trigger: TeamTriggerDraft }
   | { type: 'REMOVE_TRIGGER'; uid: string }
   | { type: 'PATCH_TRIGGER'; uid: string; patch: Partial<TeamTriggerDraft> }
@@ -365,11 +355,6 @@ export function teamWizardReducer(state: TeamWizardState, action: TeamWizardActi
       })
     case 'REORDER_MEMBER':
       return recomputeCompleted({ ...state, draft: moveMember(state.draft, action.agentId, action.direction) })
-    case 'SET_TOOLS':
-      return recomputeCompleted({
-        ...state,
-        draft: normalizeTeamDraft({ ...state.draft, sandboxed_tool_ids: action.toolIds }),
-      })
     case 'ADD_TRIGGER':
       if (state.draft.triggers.some((trigger) => trigger.uid === action.trigger.uid)) return state
       return recomputeCompleted({
