@@ -1299,7 +1299,12 @@ class AgentRouter:
                 if not contact:
                     from services.whatsapp_id_discovery import WhatsAppIDDiscovery
                     discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-                    contact = discovery.auto_link_contact(self.db, normalized_sender, self.logger)
+                    contact = discovery.auto_link_contact(
+                        self.db,
+                        normalized_sender,
+                        self.logger,
+                        tenant_id=self.tenant_id,
+                    )
 
                     if contact:
                         self.logger.info(
