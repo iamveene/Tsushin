@@ -22,7 +22,6 @@ from models import (
     Contact,
     GitHubChannelInstance,
     JiraChannelInstance,
-    SandboxedTool,
     SentinelProfile,
     TeamMemberRole,
     TeamRunStatus,
@@ -97,20 +96,6 @@ def _rollback_membership_service(service: TeamMembershipService, db: Session) ->
         db.rollback()
 
 
-def _team_tools_payload(tool_ids: list[int]) -> dict[str, list[int]]:
-    return {"sandboxed_tool_ids": list(dict.fromkeys(int(tool_id) for tool_id in tool_ids))}
-
-
-def _extract_tool_ids(tools: Any) -> list[int]:
-    if tools is None:
-        return []
-    if hasattr(tools, "sandboxed_tool_ids"):
-        return list(getattr(tools, "sandboxed_tool_ids") or [])
-    if isinstance(tools, dict):
-        return list(tools.get("sandboxed_tool_ids") or [])
-    return []
-
-
 def _agent_name_map(db: Session, agent_ids: list[int]) -> dict[int, str]:
     if not agent_ids:
         return {}
@@ -179,12 +164,10 @@ class AgentTeamApiService:
     def create_team(self, payload: Any) -> dict[str, Any]:
         data = payload.model_dump() if hasattr(payload, "model_dump") else dict(payload)
         members = list(data.pop("members", []) or [])
-        tools = data.pop("tools", None)
         topology = data.get("topology") or TeamTopology.LINE.value
         status = data.get("status") or TeamStatus.DRAFT.value
         self._reject_direct_archive_status(status)
         self._validate_active_ready(status=status, goal_text=data.get("goal_text"), member_count=len(members))
-        tool_ids = self._validate_tool_ids(_extract_tool_ids(tools))
         sentinel_profile_id = self._validate_sentinel_profile_id(data.get("sentinel_profile_id"))
         self._ensure_unique_name(data["name"])
         self._validate_member_payloads(members)
@@ -202,7 +185,6 @@ class AgentTeamApiService:
                 max_total_tokens=data.get("max_total_tokens"),
                 max_concurrent_runs=data.get("max_concurrent_runs") or 1,
                 sentinel_profile_id=sentinel_profile_id,
-                tools_json=_team_tools_payload(tool_ids),
                 created_by_user_id=self.user_id,
             )
             self.db.add(team)
@@ -249,9 +231,6 @@ class AgentTeamApiService:
                 setattr(team, field, data[field])
         if "sentinel_profile_id" in data:
             team.sentinel_profile_id = self._validate_sentinel_profile_id(data["sentinel_profile_id"])
-        if "tools" in data and data["tools"] is not None:
-            tool_ids = self._validate_tool_ids(_extract_tool_ids(data["tools"]))
-            team.tools_json = _team_tools_payload(tool_ids)
         self._validate_active_ready(
             status=team.status,
             goal_text=team.goal_text,
@@ -289,6 +268,32 @@ class AgentTeamApiService:
         except Exception:
             _rollback_membership_service(service, self.db)
             raise
+
+    def delete_team_permanently(self, team_id: int) -> None:
+        team = self._get_team_or_404(team_id)
+        if team.status != TeamStatus.ARCHIVED.value:
+            raise AgentTeamApiError(409, "Team must be archived before permanent deletion")
+        active_run = (
+            self.db.query(AgentTeamRun.id)
+            .filter(
+                AgentTeamRun.tenant_id == self.tenant_id,
+                AgentTeamRun.team_id == team_id,
+                AgentTeamRun.status.in_(ACTIVE_RUN_STATUSES),
+            )
+            .first()
+        )
+        if active_run:
+            raise AgentTeamApiError(409, "Cannot permanently delete a team with an active run")
+
+        # agent_team_member FK is ondelete=RESTRICT; archive normally clears members,
+        # but defensively drop any leftover rows so db.delete(team) doesn't trip the FK.
+        self.db.query(AgentTeamMember).filter(
+            AgentTeamMember.tenant_id == self.tenant_id,
+            AgentTeamMember.team_id == team_id,
+        ).delete(synchronize_session=False)
+        self.db.flush()
+        self.db.delete(team)
+        self.db.commit()
 
     def add_member(self, team_id: int, payload: Any) -> dict[str, Any]:
         team = self._get_team_or_404(team_id)
@@ -587,7 +592,6 @@ class AgentTeamApiService:
             "max_steps": team.max_steps,
             "max_total_tokens": team.max_total_tokens,
             "max_concurrent_runs": team.max_concurrent_runs,
-            "tools": _team_tools_payload(_extract_tool_ids(team.tools_json)),
             "created_at": team.created_at,
             "updated_at": team.updated_at,
         }
@@ -834,25 +838,6 @@ class AgentTeamApiService:
         missing = sorted(set(agent_ids) - found)
         if missing:
             raise AgentTeamApiError(404, f"Agent not found or not eligible for team membership: {missing[0]}")
-
-    def _validate_tool_ids(self, tool_ids: list[int]) -> list[int]:
-        unique_ids = list(dict.fromkeys(tool_ids))
-        if not unique_ids:
-            return []
-        found = {
-            tool_id
-            for (tool_id,) in self.db.query(SandboxedTool.id)
-            .filter(
-                SandboxedTool.id.in_(unique_ids),
-                SandboxedTool.is_enabled.is_(True),
-                or_(SandboxedTool.tenant_id == self.tenant_id, SandboxedTool.tenant_id.is_(None)),
-            )
-            .all()
-        }
-        missing = sorted(set(unique_ids) - found)
-        if missing:
-            raise AgentTeamApiError(404, f"Sandboxed tool not found or disabled: {missing[0]}")
-        return unique_ids
 
     def _validate_sentinel_profile_id(self, profile_id: Optional[int]) -> Optional[int]:
         if profile_id is None:
