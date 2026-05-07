@@ -12,7 +12,7 @@ import logging
 import asyncio
 import httpx
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from models import Contact, WhatsAppMCPInstance, ContactChannelMapping
@@ -156,25 +156,131 @@ class WhatsAppProactiveResolver:
             self.logger.warning(f"Contact {contact_id} not found for tenant {tenant_id}")
             return None
 
-        # Skip if already has WhatsApp ID (unless force)
+        jid: Optional[str] = None
+
+        # Skip phone→JID resolution if already done (unless force).
         if contact.whatsapp_id and not force:
             self.logger.debug(f"Contact {contact.friendly_name} already has WhatsApp ID: {contact.whatsapp_id}")
-            return contact.whatsapp_id
-
-        # Need phone number to resolve
-        if not contact.phone_number:
+            jid = contact.whatsapp_id
+        elif contact.phone_number:
+            jid = await self.resolve_phone_number(contact.phone_number, tenant_id)
+            if jid:
+                await self._update_contact_whatsapp_id(contact, jid, tenant_id)
+        else:
             self.logger.debug(f"Contact {contact.friendly_name} has no phone number to resolve")
+
+        # WhatsApp's modern @lid sender identifiers are not returned by /check-numbers,
+        # which only resolves to phone-style @s.whatsapp.net JIDs. Bind any LID seen in
+        # recent chat history so dispatcher routing works without depending on the
+        # name-match heuristic at first inbound.
+        try:
+            await self._bind_lid_from_recent_chats(contact, tenant_id)
+        except Exception as e:
+            self.logger.debug(
+                f"LID binding skipped for contact {contact.friendly_name}: {e}"
+            )
+
+        return jid
+
+    async def _bind_lid_from_recent_chats(
+        self,
+        contact: Contact,
+        tenant_id: str,
+        scan_limit: int = 500,
+        scan_days: int = 30,
+    ) -> Optional[str]:
+        """Scan recent MCP messages for an @lid chat whose name matches this contact.
+
+        WhatsApp's contact directory (/api/contacts) only returns @s.whatsapp.net JIDs,
+        not the @lid identifiers used in inbound message envelopes. The chats table on
+        the MCP container holds the LID↔chat-name mapping, but is not exposed as its
+        own endpoint, so we scan the recent /api/messages stream and look for any chat
+        whose chat_name matches this contact's friendly_name. Any LID match is written
+        into contact_channel_mapping so layer-2 LID lookups resolve directly without
+        relying on the name-match fallback.
+        """
+        if not contact.friendly_name:
             return None
 
-        # Resolve the phone number
-        jid = await self.resolve_phone_number(contact.phone_number, tenant_id)
+        mcp_instance = self._get_active_mcp_instance(tenant_id)
+        if not mcp_instance:
+            return None
 
-        if jid:
-            # Update contact with resolved WhatsApp ID
-            await self._update_contact_whatsapp_id(contact, jid, tenant_id)
-            return jid
+        # MCP /messages returns oldest-first; pass `since` to bias toward recent traffic
+        # where the contact's @lid is most likely to appear.
+        since = (datetime.utcnow() - timedelta(days=scan_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        return None
+        try:
+            client = await self._get_http_client()
+            from services.mcp_auth_service import get_auth_headers
+
+            response = await client.get(
+                f"{mcp_instance.mcp_api_url}/messages",
+                params={"limit": scan_limit, "since": since},
+                headers=get_auth_headers(mcp_instance.api_secret),
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            if not data.get("success"):
+                return None
+        except Exception as e:
+            self.logger.debug(f"MCP /messages scan failed: {e}")
+            return None
+
+        target = contact.friendly_name.strip().lower()
+        seen_lids: dict[str, str] = {}
+        for msg in data.get("messages", []) or []:
+            chat_jid = (msg.get("chat_jid") or "")
+            chat_name = (msg.get("chat_name") or "").strip()
+            if not chat_jid.endswith("@lid") or not chat_name:
+                continue
+            chat_name_lower = chat_name.lower()
+            if target in chat_name_lower or chat_name_lower in target:
+                lid = chat_jid.split("@", 1)[0]
+                if lid:
+                    seen_lids[lid] = chat_name
+
+        if not seen_lids:
+            return None
+
+        if len(seen_lids) > 1:
+            self.logger.warning(
+                f"[LID PRE-BIND] Multiple LID candidates for contact "
+                f"'{contact.friendly_name}': {list(seen_lids.items())} — skipping "
+                f"to avoid binding the wrong identity. Will rely on first-inbound "
+                f"name-match path instead."
+            )
+            return None
+
+        lid, chat_name = next(iter(seen_lids.items()))
+
+        try:
+            mapping_service = ContactChannelMappingService(self.db)
+            existing = mapping_service.get_channel_mappings(contact.id, channel_type='whatsapp')
+            if any(m.channel_identifier == lid for m in existing):
+                return lid
+
+            mapping_service.add_channel_mapping(
+                contact_id=contact.id,
+                channel_type='whatsapp',
+                channel_identifier=lid,
+                channel_metadata={
+                    "discovered_from": "lid_pre_bind",
+                    "matched_chat_name": chat_name,
+                },
+                tenant_id=tenant_id,
+            )
+            self.db.commit()
+            self.logger.info(
+                f"🔗 [LID PRE-BIND] Linked LID {lid} to contact "
+                f"'{contact.friendly_name}' (matched chat_name '{chat_name}')"
+            )
+            return lid
+        except Exception as e:
+            self.db.rollback()
+            self.logger.warning(f"[LID PRE-BIND] Failed to write channel_mapping: {e}")
+            return None
 
     async def _update_contact_whatsapp_id(
         self,
