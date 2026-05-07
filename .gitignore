@@ -352,6 +352,7 @@ backend/tests/*
 !backend/tests/test_bug723_stack_scoped_http_routing.py
 !backend/tests/test_flow_binding_service_gate_schema.py
 !backend/tests/test_routes_flows_step_failure_roundtrip.py
+!backend/tests/test_alembic_0092_gate_schema_backfill.py
 !backend/tests/test_api_key_resolver_priority.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
