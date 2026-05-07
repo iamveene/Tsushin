@@ -21,6 +21,8 @@ Design notes:
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, time
@@ -617,146 +619,35 @@ VAULT_ITEM_PARAM = TemplateParamSpec(
 )
 
 
-FINANCIAL_PROFILES: Dict[str, Dict[str, Any]] = {
-    "cond_sao_blas_boleto": {
-        "name": "Cond. Sao Blas 204 - Boleto Condominio",
-        "description": "Visible-step boleto workflow for the Sao Blas condominium portal.",
-        "record_kind": "utility_bill",
-        "provider": "moderna",
-        "automation_id": "cond_sao_blas_204_boleto_condominio",
-        "unit_id": "0204",
-        "asset": "AP Ed. San Blass",
-        "credential_item": "Moderna Condominio",
-        "username_field": "username",
-        "password_field": "password",
-        "schedule": "45 7,19 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "moderna-condominio.json",
-    },
-    "consigaz_sao_blas": {
-        "name": "Consigaz - Gas Cond. Sao Blas 204",
-        "description": "Visible-step API workflow for Consigaz boleto discovery.",
-        "record_kind": "utility_bill",
-        "provider": "consigaz",
-        "automation_id": "consigaz_gas_cond_sao_blas_204",
-        "unit_id": "AP0204",
-        "asset": "AP Ed. San Blass",
-        "credential_item": "Consigaz",
-        "username_field": "username",
-        "password_field": "Codigo_Client",
-        "extra_secret_fields": [
-            {
-                "alias": "vault_basic_auth",
-                "field_name": "basic_auth",
-                "action": "compose_basic_auth",
-                "username_handle": "{{vault_username.secret_handle}}",
-                "password_handle": "{{vault_password.secret_handle}}",
-                "scheme": "Basic",
-                "description": "Compose the Consigaz API Basic Auth header from CPF/CNPJ and Codigo_Client handles.",
-            }
-        ],
-        "schedule": "0 */3 * * *",
-        "steps": "browser_playbook",
-        "parser": "record_mapping",
-        "playbook_file": "consigaz-san-blas.json",
-    },
-    "medsenior_samedil_mae": {
-        "name": "Medsenior / Samedil - Plano Saude Mae",
-        "description": "Visible-step health-plan boleto workflow with login/API or browser extraction.",
-        "record_kind": "utility_bill",
-        "provider": "medsenior",
-        "automation_id": "medsenior_samedil_plano_saude_mae",
-        "unit_id": "Plano Saude Mae",
-        "asset": "Plano Saude Mae",
-        "credential_item": "Medsenior",
-        "username_field": "username",
-        "password_field": "password",
-        "schedule": "55 7,19 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "medsenior-saude-mae.json",
-    },
-    "cypreste_superlogica": {
-        "name": "Cypreste Superlogica - Aluguel AP Praia da Costa",
-        "description": "Visible-step rental boleto workflow for Superlogica/Cypreste.",
-        "record_kind": "utility_bill",
-        "provider": "cypreste_superlogica",
-        "automation_id": "cypreste_aluguel_ap_praia_da_costa",
-        "unit_id": "cypreste-001",
-        "asset": "AP Praia da Costa",
-        "credential_item": "Cypreste Superlogica",
-        "username_field": "email",
-        "password_field": "password",
-        "schedule": "30 7,19 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "cypreste-aluguel.json",
-    },
-    "edp_es": {
-        "name": "EDP - Conta de Luz ES",
-        "description": "Visible-step public second-copy electricity bill workflow.",
-        "record_kind": "utility_bill",
-        "provider": "edp",
-        "automation_id": "edp_conta_luz_es",
-        "unit_id": "edp-multi-unit",
-        "asset": "Contas de luz ES",
-        "credential_item": "EDP",
-        "username_field": "username",
-        "password_field": "password",
-        "extra_secret_fields": [
-            {
-                "alias": "vault_cpf",
-                "field_name": "cpf",
-                "description": "Resolve CPF for EDP simplified second-copy lookup. This can come from 1Password or a tenant-managed vault field.",
-            }
-        ],
-        "schedule": "0 7,19 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "edp.json",
-    },
-    "pmvv_iptu": {
-        "name": "PMVV - IPTU Vila Velha",
-        "description": "Visible-step municipal tax workflow with CAPTCHA/manual-run boundary.",
-        # PMVV is intentionally kept as a private profile/playbook draft, but
-        # not exposed in the UI template catalog: the portal CAPTCHA made this
-        # migration explicitly aborted for the current delivery scope.
-        "template_enabled": False,
-        "record_kind": "tax_obligation",
-        "provider": "pmvv",
-        "automation_id": "pmvv_iptu_vila_velha",
-        "unit_id": "sao_blas_property",
-        "asset": "Imovel Vila Velha",
-        "credential_item": "IPTU San Blas",
-        "username_field": "inscricao",
-        "password_field": "cpf",
-        "schedule": "15 8,20 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "pmvv-iptu.json",
-    },
-    "husky_transfers": {
-        "name": "Husky - Transferencias Recebidas",
-        "description": "Visible-step transfer ingestion workflow with explicit TOTP/vault node.",
-        # Kept private until the Husky workflow has the same UI recreation,
-        # manual-run, dedupe, and notification evidence as the accepted flows.
-        "template_enabled": False,
-        "record_kind": "income_transfer",
-        "provider": "husky",
-        "automation_id": "husky_transferencias_recebidas",
-        "unit_id": "husky-account",
-        "asset": "Husky",
-        "credential_item": "Husky",
-        "username_field": "email",
-        "password_field": "password",
-        "totp": True,
-        "schedule": "15 7,19 * * *",
-        "steps": "browser",
-        "parser": "record_mapping",
-        "playbook_file": "husky.json",
-    },
-}
+def _load_financial_profiles() -> Dict[str, Dict[str, Any]]:
+    """Load operator-private Finan flow profiles.
+
+    The catalog of personal flow profiles (asset names, schedules, playbook bindings)
+    lives outside the public repo at `.private/finan_profiles.json`. A fresh clone
+    without that file boots with zero Finan templates registered.
+    """
+    env_path = os.environ.get("TSN_FINAN_PROFILES_PATH")
+    candidates = [Path(env_path)] if env_path else [
+        Path(__file__).resolve().parents[2] / ".private" / "finan_profiles.json",
+        Path("/app/.private/finan_profiles.json"),
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to parse %s: %s; Finan templates will be skipped.", path, exc,
+                )
+                return {}
+    logging.getLogger(__name__).info(
+        "Finan profile catalog not found; Finan flow templates will be skipped. "
+        "Set TSN_FINAN_PROFILES_PATH or place .private/finan_profiles.json on disk.",
+    )
+    return {}
+
+
+FINANCIAL_PROFILES: Dict[str, Dict[str, Any]] = _load_financial_profiles()
 
 
 def _financial_params(profile: Dict[str, Any]) -> List[TemplateParamSpec]:
@@ -896,7 +787,28 @@ def _browser_action_step(
     )
 
 
-FINAN_PLAYBOOK_DIR = Path(__file__).resolve().parent / "finan_playbooks"
+def _resolve_finan_playbook_dir() -> Path:
+    """Resolve the finan playbook directory.
+
+    Priority: TSN_FINAN_PLAYBOOK_DIR env var, then host repo `.private/finan_playbooks`,
+    then container `/app/.private/finan_playbooks`. The first existing path wins; if none
+    exist we still return the most likely default so seeding can log a helpful warning.
+    """
+    env = os.environ.get("TSN_FINAN_PLAYBOOK_DIR")
+    if env:
+        return Path(env)
+    candidates = [
+        Path(__file__).resolve().parents[2] / ".private" / "finan_playbooks",
+        Path("/app/.private/finan_playbooks"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+FINAN_PLAYBOOK_DIR = _resolve_finan_playbook_dir()
+_FINAN_DIR_MISSING_LOGGED = False
 
 
 def _safe_flow_step_name(prefix: str, value: str, max_len: int = 72) -> str:
@@ -909,8 +821,18 @@ def _safe_flow_step_name(prefix: str, value: str, max_len: int = 72) -> str:
 
 
 def _load_finan_playbook(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    global _FINAN_DIR_MISSING_LOGGED
     filename = profile.get("playbook_file")
     if not filename:
+        return None
+    if not FINAN_PLAYBOOK_DIR.exists():
+        if not _FINAN_DIR_MISSING_LOGGED:
+            logging.getLogger(__name__).info(
+                "Finan playbook directory not found at %s; Finan flow templates will be skipped. "
+                "Set TSN_FINAN_PLAYBOOK_DIR or place playbooks at .private/finan_playbooks/.",
+                FINAN_PLAYBOOK_DIR,
+            )
+            _FINAN_DIR_MISSING_LOGGED = True
         return None
     path = FINAN_PLAYBOOK_DIR / str(filename)
     if not path.exists():

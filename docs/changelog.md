@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Removed — Legacy `financial_utility_automation` step + operator PII off the public repo (2026-05-07)
+
+- Deleted the opaque `financial_utility_automation` step type ("Legacy Utility Bill" in the palette) along with its frontend templates, config panel, backend handler (`FinancialUtilityAutomationStepHandler`), and the three site-specific runners (`run_moderna_condominio`, `run_consigaz_sao_blas`, `run_medsenior_samedil`) plus their `_extract_*` helpers, login URLs, and Keycloak/API constants in `FinancialAutomationService`. The 6 migrated `Finan | …` flows already use only generic primitives (`browser_automation`, `data_transform`, `financial_bill_store`, `gate`, `notification`) and a DB audit confirmed zero remaining flow nodes referenced the legacy type before deletion.
+- Moved operator-private template profiles and browser playbooks out of the public repo into `.private/` (gitignored). `backend/services/finan_playbooks/*.json` → `.private/finan_playbooks/`, and the inline `FINANCIAL_PROFILES` dict in `flow_template_seeding.py` → `.private/finan_profiles.json`. Both locations are env-overridable via `TSN_FINAN_PLAYBOOK_DIR` and `TSN_FINAN_PROFILES_PATH`. A fresh clone without `.private/` boots cleanly with zero Finan templates registered (one info log, no crash).
+- Replaced PII-bearing UI placeholders (specific apartment IDs, asset names, customer codes) in the financial step config panels with neutral examples.
+- Added a real-Postgres dedupe regression test (`tests/test_financial_record_dedupe.py`) covering `_upsert_bill` and `store_financial_record` round-trips: second run with identical payload yields `created=False`/`barcode_changed=False`; new barcode flips `barcode_changed=True`; same payload under a different tenant_id does not dedupe. Replaced the legacy-affirming tests in `test_password_vault_contract.py` with an absence guardrail.
+
+### Changed — Cloudflared sidecar opt-out + agent wizard semantic-search opt-in (2026-05-07)
+
+- Added `TSN_CLOUDFLARED_DISABLE_INPROCESS`. When truthy, the in-process `cloudflared` subprocess no longer autostarts, letting deployments run `cloudflared` as an external sidecar (or skip it entirely during dev) without the "backend restart drops the tunnel" race when both copies fight for the same token.
+- Stopped the Agent Wizard create chain from auto-flipping the `semantic_search` skill on when memory mode is `semantic` or `vector`. The draft's `enable_semantic_search` flag is now the canonical signal; previously the chain shadow-enabled the skill row from the memory step, which muddied the source of truth and surprised operators who deliberately disabled the skill.
+
+### Added — Gmail trigger bindings for Agent Teams + trigger-payload context for team runs (2026-05-07)
+
+- `AgentTeamApiService` now accepts `gmail` alongside `webhook`/`github`/`jira` for trigger bindings and resolves the instance against `EmailChannelInstance`. The dispatcher translates the runtime `email` `trigger_type` to the persisted `gmail` enum value when matching team triggers. This lifts the Phase 6 restriction that excluded Gmail from Agent Teams in v0.7.0.
+- `TeamRunOrchestrator` now loads the originating `WakeEvent` payload doc plus a short summary string at the start of every run and threads them into member-step inputs, so member agents can reason about the event that woke them up instead of running on `goal_text` alone.
+- Added focused tests covering team Gmail trigger create / update / dispatch and trigger-payload context propagation through line and mesh runs.
+
+### Fixed — Cleaner audio-routing failure mode + LID pre-bind + delete cascade (2026-05-07)
+
+- `agent/router.py` now distinguishes three audio-related failure cases instead of returning a single generic SAFETY error: (a) audio inbound to an agent without `audio_transcript` enabled replies "voice isn't handled, please send text"; (b) audio with the skill enabled but empty transcript output keeps the existing "transcription failed" wording; (c) empty non-audio messages get a plain "message came through empty" reply. The dispatched agent's skill set is now the source of truth.
+- `services/whatsapp_proactive_resolver.py::resolve_contact()` now scans recent MCP `/messages` for an `@lid` chat whose `chat_name` partial-matches the new contact's `friendly_name` and writes a `contact_channel_mapping` row. WhatsApp's `/check-numbers` only resolves to phone-style `@s.whatsapp.net` JIDs and never returns the `@lid` identifiers used in inbound message envelopes, which previously left routing dependent on the dispatcher's name-match heuristic firing on the first inbound. Bidirectional substring match handles "Gisele" ↔ "Gisele E."; multiple ambiguous LID candidates skip binding to avoid wrong-identity attachment.
+- `_bind_lid_from_recent_chats` now bridges operator nicknames to WhatsApp display names via `_fetch_directory_name` (queries MCP `/api/contacts?q=<phone>` for the authoritative WhatsApp display name) and tokenizes nickname/directory/chat names into ≥3-char alpha words for any-word-overlap matching. The previously-broken "Giza" ↔ "Gisele Espini" ↔ "Gisele E." case now resolves on the shared `gisele` word.
+- `DELETE /api/contacts/{id}` now clears `contact_agent_mapping` and `contact_channel_mapping` rows before deleting the contact. Without this cascade, FK constraints rejected the delete and the UI silently failed.
+
+### Fixed — WhatsApp router tenant-scopes auto-link discovery in the LID match path (2026-05-07)
+
+- The thread-recipient → contact lookup at `agent/router.py:1302` was the last remaining call into `WhatsAppIDDiscovery.auto_link_contact()` that did not pass `tenant_id`. Without scoping, auto-discovery could in principle return a contact from a different tenant. The other two call sites (line 324 above, and `mcp_reader/filters.py`) were already tenant-scoped.
+
+### Added — Trigger detail aggregates all binding kinds + auto-flow recipient repair (2026-05-07)
+
+- The trigger detail page previously only listed `flow_trigger_binding` rows even though Jira/GitHub/Email/Webhook events also fan out to `agent_team_trigger` and `continuous_subscription` rows at runtime. Two QA E2E teams could be invisibly attached to a Jira trigger with no way to inspect or pause them from one place.
+- Added reverse-lookup endpoints: `GET /api/team-triggers?trigger_kind=&trigger_instance_id=` reads `agent_team_trigger` by JSON config (mutations reuse the existing per-team PUT/DELETE so the response carries `team_id`) and `GET /api/continuous-subscriptions?channel_type=&channel_instance_id=` leans on the existing `(tenant_id, channel_type, channel_instance_id)` composite index.
+- Two new cards (`WiredTeamsCard`, `WiredContinuousCard`) mirror `WiredFlowsCard` in `OutputsSection` with pause/resume + unbind, gated on `agents.read` / `agents.write`. System-owned continuous subscriptions render disabled controls with a tooltip explaining the rule. Email triggers translate `channel_type → 'gmail'` to match dispatcher storage; the teams card hides on email triggers since team Gmail bindings are scoped through their own surface.
+- Stopped bogus auto-flow run failures on the trigger detail page when the originating wake event had no recipient — the auto-generated Notification step now resolves recipients consistently with manual flows.
+
+### Added — Hard-delete for Agent Teams + drop unused shared sandboxed-tool pool (2026-05-07)
+
+- Added `DELETE /api/teams/{id}/permanent` and `/api/v1/teams/{id}/permanent`, gated on the team already being archived and having no active runs. Studio team detail surfaces a "Delete permanently" button on archived teams that requires retyping the team name; the teams list grows an "Include archived" toggle so archived teams are reachable. SQLAlchemy + DB cascades clean up triggers, runs, member runs, scratch, and queued messages; a defensive sweep handles any lingering `AgentTeamMember` rows ahead of the FK `RESTRICT`.
+- Removed the team-level shared sandboxed-tool pool: the `agent_team.tools_json` column, `TeamToolPool` schema, related helpers, the wizard "Tools" step, and the Settings tab "Shared tools" section are all gone because the orchestrator never read `team.tools_json` at runtime — agents resolve their own sandboxed tools from per-agent assignments and persona config. Migration `0091` drops `agent_team.tools_json`.
+
+### Fixed — Honor `cf-visitor` scheme behind Cloudflare Tunnel (2026-05-06)
+
+- Cloudflare Tunnel terminates TLS at the edge and forwards plain HTTP to the origin, so `X-Forwarded-Proto` reflected the in-cluster hop (`http`) rather than the visitor's scheme. The visitor scheme is exposed via Cloudflare's `cf-visitor` JSON header (e.g. `{"scheme":"https"}`).
+- Without honoring it, behind a Tunnel the backend treated every request as HTTP, which caused (a) session cookies to be issued without `Secure` even though the visitor was on HTTPS, and (b) redirect/origin construction to emit `http://` links.
+- Extracted scheme resolution into `_resolve_request_scheme` so the fallback chain `cf-visitor → X-Forwarded-Proto → request.url.scheme` is shared between origin construction and Secure-cookie decisions.
+
+### Changed — Public-repo path allowlist enforcement (2026-05-06)
+
+- The denylist approach in `.gitignore` kept letting internal material slip through whenever a new naming convention appeared (`BUGS_FOUND.md`, `wave_*_bugs.md`, `docs/qa/**`, `docs/internal/**`, `backend/dev_tests/**`, etc.). Replaced with a positive allowlist that any new public path must explicitly join.
+- Added `.github/path-allowlist.txt` (positive list), `.github/workflows/path-allowlist.yml` (CI gate), `scripts/check-path-allowlist.py` (pure-Python gitwildmatch matcher), and `scripts/check-no-internal-files.sh` (name-based guard for `CLAUDE.md` / `BUGS*.md` / `ROADMAP*.md` / `AGENTS.md` / `*_bugs.md` / `*-playbook.md` / `.private/**`). Wired both guards into `.pre-commit-config.yaml` so failures surface at commit time, not only in CI.
+- Untracked 472 files from the public tree (`docs/qa/**`, `docs/internal/**`, internal v0.7.0 design notes) and moved them under `.private/`.
+
+### Fixed — Watcher bypasses conversation debounce for media-only WhatsApp bursts (2026-05-06)
+
+- `_flush_conversation_buffer` aggregates buffered messages by joining their text bodies and bailed out with `if not combined_body: return` when the joined body was empty. Audio/image/video/document messages all carry an empty body, so an active conversation receiving a burst of N voice notes buffered them, the flush saw an empty body, and dropped every one silently — the user got a single transcript (the first audio that arrived before the conversation opened) and the remaining audios disappeared despite the ASR backend transcribing them.
+- Now: any message with a non-empty `media_type` bypasses the debounce window entirely. Each media message is dispatched to `on_message_callback` as soon as it lands. Text-only conversation messages keep their debounce behavior unchanged.
+- Added regression tests covering 7-media-burst (7 callbacks dispatched), text-only conversation burst (still 1 aggregated callback for N text messages), and mixed bursts (media immediate, text aggregated around it).
+
+### Fixed — ASR provider does not silently fall back to OpenAI when a local instance is pinned (2026-05-06)
+
+- When `asr_mode=='instance'` the operator explicitly chose a local Whisper or Speaches instance for privacy/cost reasons. Falling back to OpenAI on local failure violated that intent: it routed audio to a third-party cloud provider invisibly, leaked the user's voice data, and hid the real failure mode behind misleading 401 noise. A pinned local instance failure now surfaces directly with the local provider's error and no OpenAI call is made. OpenAI Whisper remains available when the operator explicitly sets `asr_mode='openai'`.
+- Bumped the local provider httpx timeout from 180s/120s to 600s. `onerahmet/openai-whisper-asr-webservice` serializes CPU requests, so a burst of 7 voice notes can queue several minutes before the last one even starts; `ReadTimeout('')` was the symptom and the queue was the cause.
+
 ### Changed — Financial flow notifications: state-aware classifier, gate, and templates (2026-05-06)
 
 - Reworked `FinancialBillStoreStepHandler` to emit a `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `no_pending_bills`, `paid`, `unchanged`, `error`) at top level and inside `conditions`. Previous `should_notify` boolean kept for backward compatibility but now derived from the rich state (`new_boleto | barcode_changed | pending_no_barcode` notify by default).
@@ -67,6 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moved provider bootstrap secrets such as Consigaz `basic_auth` into visible Password Vault steps so imported playbook templates do not persist raw provider credentials.
 - Kept `financial_utility_automation` as a legacy compatibility handler for existing canary flows only. Opaque single-step financial flows must not be counted as migrated or accepted.
 - Accepted the clean canonical financial Flow set after the UI-first gap review: Condominio (`#171` / run `#45902`), Consigaz (`#172` / `#45958`), Medsenior/Samedil (`#174` / `#46158`), Cypreste/Superlógica (`#177` / `#46462`), EDP AP São Blas (`#186` / `#47815`), and EDP Casa Paraju (`#187` / `#47834`) all completed with `0` failed steps and `0` opaque `financial_utility_automation` nodes.
+
+## [0.7.0] - 2026-05-05
+
+The v0.7.0 release block. Highlights: Hub split into Channels / Triggers / Tool APIs / Local Services, Triggers ↔ Flows Unification (Waves 1-5), Agent Teams (Phases 1-10), Continuous Agents, multi-index vector stores + pluggable embedding providers, self-hosted Whisper as 2nd ASR engine, Trigger Case Memory v2, Code Repository (GitHub) skill, Ticket Management (Jira) skill, granular Gmail send capability, Password Vault foundation, Provider Wizard + Managed Container Panel, Variable Reference panel everywhere, and the unified Trigger Creation Wizard. See README and ROADMAP for the operator-facing summary.
 
 ### Release 0.7.0 — Agent Teams Phase 10 Watcher Team Runs (2026-05-05)
 
