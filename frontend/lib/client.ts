@@ -2879,7 +2879,7 @@ export interface ConversationThread {
 export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword' | 'triggered'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store' | 'financial_utility_automation'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
