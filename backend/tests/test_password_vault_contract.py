@@ -249,52 +249,17 @@ def test_flow_step_config_preserves_password_vault_picker_metadata():
         assert dumped[key] == value
 
 
-def test_flow_step_config_preserves_financial_utility_automation_metadata():
+def test_legacy_financial_utility_automation_step_is_removed():
+    """Guardrail: the opaque provider-dispatch step must stay deleted."""
     schemas = _import_any("schemas")
-    config_cls = _get_attr_any(schemas, "FlowStepConfig")
     step_type = _get_attr_any(schemas, "StepType")
-
-    assert step_type.FINANCIAL_UTILITY_AUTOMATION.value == "financial_utility_automation"
-
-    payload = {
-        "financial_automation_template": "moderna_condominio_sao_blas_204",
-        "financial_provider": "moderna",
-        "financial_unit_id": "0204",
-        "financial_asset": "AP Ed. San Blass",
-        "financial_address": "Rua Piratininga 111, Praia da Costa, Vila Velha",
-        "financial_customer_code": "1051548",
-        "financial_delivery_location": "PADRAO",
-        "financial_username_field": "email",
-        "financial_password_field": "password",
-        "financial_browser_timeout_ms": 30000,
-        "financial_notification_enabled": False,
-        "financial_notification_recipient": "@Vini",
-        "financial_notification_agent_id": 1,
-        "financial_password_vault_integration_id": 17,
-        "financial_password_vault_provider": "onepassword",
-        "financial_password_vault_vault_id": "lriprlys6dhrzhqlmwlhmgkw2m",
-        "financial_password_vault_vault_name": "FinanApp",
-        "financial_password_vault_item_id": "jpsqxvax44tmv46d3uo6enhkl4",
-        "financial_password_vault_item_title": "Moderna Condominio",
-        "financial_password_vault_field_name": "password",
-        "financial_password_vault_reference": "op://FinanApp/Moderna Condominio/password",
-    }
-
-    dumped = config_cls(**payload).model_dump()
-
-    for key, value in payload.items():
-        assert dumped[key] == value
-
-
-def test_flow_engine_registers_financial_utility_automation_handler():
+    assert not hasattr(step_type, "FINANCIAL_UTILITY_AUTOMATION")
     source = (BACKEND_ROOT / "flows" / "flow_engine.py").read_text(encoding="utf-8")
-
-    assert "FinancialUtilityAutomationStepHandler" in source
-    assert '"financial_utility_automation"' in source
-    assert "FinancialAutomationService" in source
-    assert "run_moderna_condominio" in source
-    assert "run_consigaz_sao_blas" in source
-    assert "run_medsenior_samedil" in source
+    assert "FinancialUtilityAutomationStepHandler" not in source
+    assert '"financial_utility_automation"' not in source
+    assert "run_moderna_condominio" not in source
+    assert "run_consigaz_sao_blas" not in source
+    assert "run_medsenior_samedil" not in source
 
 
 def test_flow_engine_registers_ui_first_financial_primitives():
@@ -379,7 +344,7 @@ def test_financial_templates_expand_to_visible_ui_first_nodes():
             "tenant-a",
         )
         step_values = [step.type.value if hasattr(step.type, "value") else step.type for step in flow.steps]
-        assert step_type.FINANCIAL_UTILITY_AUTOMATION.value not in step_values
+        assert "financial_utility_automation" not in step_values
         assert step_values[:2] == [step_type.PASSWORD_VAULT.value, step_type.PASSWORD_VAULT.value]
         assert step_type.DATA_TRANSFORM.value in step_values
         assert step_type.GATE.value in step_values
@@ -773,7 +738,7 @@ def test_data_transform_consigaz_parser_returns_redacted_preview_and_raw_bill_ha
                             "boleto_json": "boleto_response",
                             "nota_json": "nota_response",
                         },
-                        "financial_unit_id": "AP0204",
+                        "financial_unit_id": "UNIT-A",
                         "emit_raw_bill_handle": True,
                     }
                 ),
@@ -811,7 +776,7 @@ def test_financial_bill_store_persists_utility_bill_without_hidden_notification(
                 "record_kind": "utility_bill",
                 "provider": "consigaz",
                 "automation_id": "consigaz_visible_flow",
-                "unit_id": "AP0204",
+                "unit_id": "UNIT-A",
                 "reference_month": "2026-05",
                 "due_date": "10/05/2026",
                 "amount": "123,45",
@@ -832,7 +797,7 @@ def test_financial_bill_store_persists_utility_bill_without_hidden_notification(
                 automation_key=extracted["automation_key"],
                 provider=extracted["provider"],
                 unit_id=extracted["unit_id"],
-                asset="AP Ed. San Blass",
+                asset="Test Asset Building",
                 reference_month=extracted["reference_month"],
                 due_date=extracted["due_date"],
                 amount_cents=12345,
@@ -962,7 +927,7 @@ def test_financial_bill_store_skips_explicit_no_pending_bill_without_persisting(
                             "record_kind": "utility_bill",
                             "automation_id": "medsenior_samedil_plano_saude_mae",
                             "provider": "medsenior",
-                            "unit_id": "Plano Saude Mae",
+                            "unit_id": "Test Health Plan",
                             "reference_month": "",
                             "period_key": "latest",
                             "amount": "",
@@ -1415,7 +1380,7 @@ def test_financial_bill_store_emits_pending_no_barcode_when_open_bill_has_no_bar
                 automation_key=extracted["automation_key"],
                 provider=extracted["provider"],
                 unit_id=extracted["unit_id"],
-                asset="EDP Casa Paraju",
+                asset="Test Utility Asset",
                 reference_month=extracted.get("reference_month") or "2026-05",
                 due_date=extracted.get("due_date") or "",
                 amount_cents=0,
@@ -1486,7 +1451,7 @@ def test_financial_bill_store_no_pending_bill_path_emits_no_pending_bills_state(
                             "record_kind": "utility_bill",
                             "automation_id": "medsenior_samedil_plano_saude_mae",
                             "provider": "medsenior",
-                            "unit_id": "Plano Saude Mae",
+                            "unit_id": "Test Health Plan",
                             "status": "no_pending_bills",
                             "barcode": "",
                             "amount": "",
@@ -1551,7 +1516,7 @@ def test_notification_step_picks_state_template_matching_upstream_notification_s
             ),
             {
                 "financial_store": {
-                    "asset": "EDP Casa Paraju",
+                    "asset": "Test Utility Asset",
                     "notification_state": "pending_no_barcode",
                 }
             },
@@ -1561,7 +1526,7 @@ def test_notification_step_picks_state_template_matching_upstream_notification_s
     )
 
     assert output["status"] == "completed"
-    assert "Conta em aberto sem linha digitável: EDP Casa Paraju" in captured["message"]
+    assert "Conta em aberto sem linha digitável: Test Utility Asset" in captured["message"]
     assert "Fallback" not in captured["message"]
 
 

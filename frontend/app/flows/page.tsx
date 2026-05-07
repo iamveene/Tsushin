@@ -122,7 +122,7 @@ const TRIGGER_KIND_OPTIONS: { value: TriggerKind; label: string; description: st
   { value: 'webhook', label: 'Webhook', description: 'Inbound webhook payloads', Icon: WebhookIcon },
 ]
 
-const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string; legacy?: boolean }[] = [
+const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
   // v0.7.0 Wave 2: 'source' step is locked at position 1, max 1 per flow.
   // The dropdown filters this out when a source step already exists; the
   // step row hides Delete + reorder buttons when type === 'source'.
@@ -137,7 +137,6 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'data_transform', label: 'Data Transform', Icon: ClipboardIcon, description: 'Extract and normalize fields from prior step output' },
   { value: 'financial_record_store', label: 'Financial Record Store', Icon: DatabaseIcon, description: 'Persist and dedupe financial records by kind' },
   { value: 'financial_bill_store', label: 'Utility Bill Store', Icon: DatabaseIcon, description: 'Utility-specific alias for bill storage and dedupe' },
-  { value: 'financial_utility_automation', label: 'Legacy Utility Bill', Icon: FileTextIcon, description: 'Legacy/compat opaque utility automation', legacy: true },
   { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
@@ -157,14 +156,10 @@ function hasUnboundSourceStep(steps?: Array<{ type?: string; config?: Record<str
 function getAddableStepTypes(
   steps: Array<{ type?: string }>,
   allowSourceStep: boolean,
-  includeLegacy = false
 ): typeof STEP_TYPES {
   return STEP_TYPES.filter((type) => (
-    (includeLegacy || !type.legacy)
-    && (
-      type.value !== 'source'
-      || (allowSourceStep && !steps.some((s) => s.type === 'source'))
-    )
+    type.value !== 'source'
+    || (allowSourceStep && !steps.some((s) => s.type === 'source'))
   ))
 }
 
@@ -498,64 +493,6 @@ function PasswordVaultStepConfigPanel({
   )
 }
 
-type FinancialUtilityTemplateKey =
-  | 'moderna_condominio_sao_blas_204'
-  | 'consigaz_sao_blas_204'
-  | 'medsenior_samedil_plano_saude_mae'
-
-const FINANCIAL_UTILITY_TEMPLATES: Record<FinancialUtilityTemplateKey, {
-  label: string
-  vaultField: string
-  config: Partial<FlowStepConfig>
-}> = {
-  moderna_condominio_sao_blas_204: {
-    label: 'Cond. São Blas 204 - Boleto Condomínio',
-    vaultField: 'password',
-    config: {
-      financial_provider: 'moderna',
-      financial_unit_id: '0204',
-      financial_asset: 'AP Ed. San Blass',
-      financial_address: 'Rua Piratininga 111, Praia da Costa, Vila Velha',
-      financial_username_field: 'username',
-      financial_password_field: 'password',
-      financial_browser_timeout_ms: 30000,
-    },
-  },
-  consigaz_sao_blas_204: {
-    label: 'Consigaz - Gas Cond. Sao Blas 204',
-    vaultField: 'username',
-    config: {
-      financial_provider: 'consigaz',
-      financial_unit_id: 'AP0204',
-      financial_asset: 'AP Ed. San Blass',
-      financial_address: 'R PIRATININGA, 111 AP0204',
-      financial_customer_code: '1051548',
-      financial_delivery_location: 'PADRAO',
-      financial_username_field: 'username',
-      financial_password_field: 'Codigo_Client',
-      financial_browser_timeout_ms: 30000,
-    },
-  },
-  medsenior_samedil_plano_saude_mae: {
-    label: 'Medsenior / Samedil - Plano Saude Mae',
-    vaultField: 'password',
-    config: {
-      financial_provider: 'medsenior',
-      financial_unit_id: 'Plano Saude Mae',
-      financial_asset: 'Plano Saude Mae',
-      financial_address: 'Medsenior / Samedil',
-      financial_username_field: 'username',
-      financial_password_field: 'password',
-      financial_browser_timeout_ms: 30000,
-    },
-  },
-}
-
-function getFinancialTemplate(template?: string | null) {
-  return FINANCIAL_UTILITY_TEMPLATES[(template as FinancialUtilityTemplateKey) || 'moderna_condominio_sao_blas_204']
-    || FINANCIAL_UTILITY_TEMPLATES.moderna_condominio_sao_blas_204
-}
-
 const HTTP_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
 const BROWSER_ACTION_OPTIONS = [
@@ -650,15 +587,6 @@ function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
 }
 
 function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
-  if (stepType === 'financial_utility_automation') {
-    const templateKey: FinancialUtilityTemplateKey = 'moderna_condominio_sao_blas_204'
-    const template = getFinancialTemplate(templateKey)
-    return {
-      financial_automation_template: templateKey,
-      ...template.config,
-      financial_password_vault_field_name: template.vaultField,
-    }
-  }
   if (stepType === 'browser_automation') {
     return {
       mode: 'container',
@@ -705,219 +633,6 @@ function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
     return { channel: 'whatsapp' }
   }
   return {}
-}
-
-function financialVaultValueFromConfig(config: FlowStepConfig | undefined | null): PasswordVaultReferenceValue {
-  const source = config || {}
-  const template = getFinancialTemplate(source.financial_automation_template)
-  return {
-    password_vault_integration_id: source.financial_password_vault_integration_id ?? null,
-    password_vault_provider: source.financial_password_vault_provider ?? null,
-    password_vault_vault_id: source.financial_password_vault_vault_id ?? null,
-    password_vault_vault_name: source.financial_password_vault_vault_name ?? null,
-    password_vault_item_id: source.financial_password_vault_item_id ?? null,
-    password_vault_item_title: source.financial_password_vault_item_title ?? null,
-    password_vault_field_name: source.financial_password_vault_field_name ?? template.vaultField,
-    password_vault_reference: source.financial_password_vault_reference ?? null,
-  }
-}
-
-function financialVaultValueToConfig(next: PasswordVaultReferenceValue, defaultField = 'password'): Partial<FlowStepConfig> {
-  return {
-    financial_password_vault_integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
-    financial_password_vault_provider: next.password_vault_provider || null,
-    financial_password_vault_vault_id: next.password_vault_vault_id || null,
-    financial_password_vault_vault_name: next.password_vault_vault_name || null,
-    financial_password_vault_item_id: next.password_vault_item_id || null,
-    financial_password_vault_item_title: next.password_vault_item_title || null,
-    financial_password_vault_field_name: next.password_vault_field_name || defaultField,
-    financial_password_vault_reference: next.password_vault_reference || null,
-  }
-}
-
-function FinancialUtilityAutomationConfigPanel({
-  config,
-  agents,
-  onChange,
-}: {
-  config: FlowStepConfig | undefined
-  agents: Agent[]
-  onChange: (update: Partial<FlowStepConfig>) => void
-}) {
-  const current = config || {}
-  const notifyEnabled = Boolean(current.financial_notification_enabled)
-  const selectedTemplateId = (current.financial_automation_template || 'moderna_condominio_sao_blas_204') as FinancialUtilityTemplateKey
-  const selectedTemplate = getFinancialTemplate(selectedTemplateId)
-  const isConsigaz = selectedTemplateId === 'consigaz_sao_blas_204'
-  const isMedsenior = selectedTemplateId === 'medsenior_samedil_plano_saude_mae'
-  const templateDefaults = selectedTemplate.config
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Automation template</label>
-            <select
-              value={selectedTemplateId}
-              onChange={(e) => {
-                const nextTemplate = e.target.value as FinancialUtilityTemplateKey
-                const defaults = getFinancialTemplate(nextTemplate)
-                onChange({
-                  financial_automation_template: nextTemplate,
-                  ...defaults.config,
-                  financial_password_vault_field_name: defaults.vaultField,
-                })
-              }}
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            >
-              {Object.entries(FINANCIAL_UTILITY_TEMPLATES).map(([value, template]) => (
-                <option key={value} value={value}>{template.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
-            <input
-              type="text"
-              value={current.financial_provider || templateDefaults.financial_provider || ''}
-              onChange={(e) => onChange({ financial_provider: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Unit</label>
-            <input
-              type="text"
-              value={current.financial_unit_id || templateDefaults.financial_unit_id || ''}
-              onChange={(e) => onChange({ financial_unit_id: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Asset</label>
-            <input
-              type="text"
-              value={current.financial_asset || templateDefaults.financial_asset || ''}
-              onChange={(e) => onChange({ financial_asset: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Address</label>
-            <input
-              type="text"
-              value={current.financial_address || templateDefaults.financial_address || ''}
-              onChange={(e) => onChange({ financial_address: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            />
-          </div>
-          {isConsigaz && (
-            <>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Customer code</label>
-                <input
-                  type="text"
-                  value={current.financial_customer_code || templateDefaults.financial_customer_code || ''}
-                  onChange={(e) => onChange({ financial_customer_code: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Delivery location</label>
-                <input
-                  type="text"
-                  value={current.financial_delivery_location || templateDefaults.financial_delivery_location || ''}
-                  onChange={(e) => onChange({ financial_delivery_location: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      <PasswordVaultReferencePicker
-        value={financialVaultValueFromConfig(current)}
-        onChange={(next) => onChange({
-          ...financialVaultValueToConfig(next, selectedTemplate.vaultField),
-          financial_username_field: current.financial_username_field || templateDefaults.financial_username_field || 'email',
-          financial_password_field: current.financial_password_field || templateDefaults.financial_password_field || 'password',
-        })}
-        compact
-      />
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">{isConsigaz ? 'CPF/CNPJ field' : isMedsenior ? 'CPF field' : 'Username field'}</label>
-          <input
-            type="text"
-            value={current.financial_username_field || templateDefaults.financial_username_field || 'email'}
-            onChange={(e) => onChange({ financial_username_field: e.target.value })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">{isConsigaz ? 'Customer code field' : 'Password field'}</label>
-          <input
-            type="text"
-            value={current.financial_password_field || templateDefaults.financial_password_field || 'password'}
-            onChange={(e) => onChange({ financial_password_field: e.target.value })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser timeout ms</label>
-          <input
-            type="number"
-            min={5000}
-            value={current.financial_browser_timeout_ms || templateDefaults.financial_browser_timeout_ms || 30000}
-            onChange={(e) => onChange({ financial_browser_timeout_ms: Number(e.target.value) || 30000 })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
-        <label className="flex items-center gap-2 text-sm text-slate-200">
-          <input
-            type="checkbox"
-            checked={notifyEnabled}
-            onChange={(e) => onChange({ financial_notification_enabled: e.target.checked })}
-            className="h-4 w-4 rounded border-slate-600 bg-slate-700 text-cyan-500"
-          />
-          Create Scheduler notification when a new unpaid boleto is detected
-        </label>
-        {notifyEnabled && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-              <input
-                type="text"
-                value={current.financial_notification_recipient || ''}
-                onChange={(e) => onChange({ financial_notification_recipient: e.target.value })}
-                placeholder="@Vini or +5527999999999"
-                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm placeholder:text-slate-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Notification agent</label>
-              <select
-                value={current.financial_notification_agent_id || ''}
-                onChange={(e) => onChange({ financial_notification_agent_id: e.target.value ? Number(e.target.value) : undefined })}
-                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-              >
-                <option value="">Use default</option>
-                {agents.map(agent => (
-                  <option key={agent.id} value={agent.id}>{agent.contact_name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
 }
 
 function BrowserAutomationConfigPanel({
@@ -1515,7 +1230,7 @@ function DataTransformConfigPanel({
               type="text"
               value={current.financial_automation_key || ''}
               onValueChange={(value) => onChange({ financial_automation_key: value })}
-              placeholder="cond_sao_blas_204_boleto_condominio"
+              placeholder="provider_unit_period_kind"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1525,7 +1240,7 @@ function DataTransformConfigPanel({
               type="text"
               value={current.financial_unit_id || ''}
               onValueChange={(value) => onChange({ financial_unit_id: value })}
-              placeholder="0204, CPF, plate, installation"
+              placeholder="unit, account, CPF, plate, installation"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1535,7 +1250,7 @@ function DataTransformConfigPanel({
               type="text"
               value={current.financial_asset || ''}
               onValueChange={(value) => onChange({ financial_asset: value })}
-              placeholder="AP Ed. San Blass"
+              placeholder="property name, vehicle plate, broker account"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1841,7 +1556,7 @@ function FinancialRecordStoreConfigPanel({
             type="text"
             value={current.financial_automation_key || current.financial_automation_template || ''}
             onValueChange={(value) => onChange({ financial_automation_key: value })}
-            placeholder="consigaz_gas_cond_sao_blas_204"
+            placeholder="provider_unit_invoice"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -1871,7 +1586,7 @@ function FinancialRecordStoreConfigPanel({
             type="text"
             value={current.financial_asset || ''}
             onValueChange={(value) => onChange({ financial_asset: value })}
-            placeholder="AP 204, vehicle plate, broker account, etc."
+            placeholder="apartment, vehicle plate, broker account, etc."
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -4215,30 +3930,6 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
               )
             })}
           </div>
-          {getAddableStepTypes(steps, allowSourceStep, true).some(type => type.legacy) && (
-            <div className="mt-5 pt-4 border-t border-slate-700/60">
-              <div className="text-xs uppercase tracking-wide text-slate-500 mb-3">Legacy / compat</div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {getAddableStepTypes(steps, allowSourceStep, true).filter(type => type.legacy).map(type => {
-                  const StepIcon = type.Icon
-                  return (
-                    <button
-                      key={type.value}
-                      type="button"
-                      onClick={(event) => handleStepTypeClick(event, type.value)}
-                      className="p-4 rounded-lg border border-amber-500/20 hover:border-amber-500/50 hover:bg-amber-500/5 text-center transition-all text-slate-300 hover:text-amber-300"
-                    >
-                      <div className="flex justify-center">
-                        <StepIcon size={24} />
-                      </div>
-                      <div className="text-sm text-white mt-2">{type.label}</div>
-                      <div className="text-xs text-slate-500 mt-1">{type.description}</div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <button
@@ -5142,14 +4833,6 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         />
       )}
 
-      {step.type === 'financial_utility_automation' && (
-        <FinancialUtilityAutomationConfigPanel
-          config={currentConfig}
-          agents={agents}
-          onChange={(next) => updateConfigMany(next)}
-        />
-      )}
-
       {step.type === 'browser_automation' && (
         <BrowserAutomationConfigPanel
           config={currentConfig}
@@ -6025,30 +5708,6 @@ function EditableStepBuilder({
               )
             })}
           </div>
-          {getAddableStepTypes(steps, false, true).some(type => type.legacy) && (
-            <div className="mt-5 pt-4 border-t border-slate-700/60">
-              <div className="text-xs uppercase tracking-wide text-slate-500 mb-3">Legacy / compat</div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {getAddableStepTypes(steps, false, true).filter(type => type.legacy).map(type => {
-                  const StepIcon = type.Icon
-                  return (
-                    <button
-                      key={type.value}
-                      type="button"
-                      onClick={() => addStep(type.value)}
-                      className="p-4 rounded-lg border border-amber-500/20 hover:border-amber-500/50 hover:bg-amber-500/5 text-center transition-all text-slate-300 hover:text-amber-300"
-                    >
-                      <div className="flex justify-center">
-                        <StepIcon size={24} />
-                      </div>
-                      <div className="text-sm text-white mt-2">{type.label}</div>
-                      <div className="text-xs text-slate-500 mt-1">{type.description}</div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
           {steps.length > 0 && (
             <button
               type="button"
@@ -6604,14 +6263,6 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           onChange={(next) => updateConfigMany(next)}
           allSteps={stepInfoList}
           currentStepPosition={step.position}
-        />
-      )}
-
-      {step.type === 'financial_utility_automation' && (
-        <FinancialUtilityAutomationConfigPanel
-          config={currentConfig}
-          agents={agents}
-          onChange={(next) => updateConfigMany(next)}
         />
       )}
 

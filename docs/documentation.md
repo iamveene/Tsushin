@@ -1941,19 +1941,13 @@ The Flow editor now exposes UI-first primitives for financial migrations: `Passw
 
 v0.7.x ships an initial financial template catalog that expands into visible nodes, not a hidden automation wrapper:
 
-| Template | Provider | Default subject | Required visible primitive shape |
-|---|---|---|---|
-| `Cond. São Blas 204 - Boleto Condomínio` | Moderna/Superlógica | `0204` | vault username/password -> browser navigate/fill/fill/click/navigate/extract -> transform -> utility bill store -> gate -> notification |
-| `Consigaz - Gas Cond. Sao Blas 204` | Consigaz | `AP0204` | vault CPF/customer code/basic_auth -> browser context API/extraction action nodes -> transform -> utility bill store -> gate -> notification |
-| `Medsenior / Samedil - Plano Saude Mae` | Medsenior/Samedil | `Plano Saude Mae` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
-| `Cypreste Superlogica - Aluguel AP Praia da Costa` | Cypreste/Superlógica | `cypreste-001` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
-| `EDP - Conta de Luz ES` | EDP | `edp-multi-unit` | vault username/password -> browser action nodes -> transform -> utility bill store -> gate -> notification |
+Operator-private template profiles live in `.private/finan_profiles.json` and the corresponding browser playbook JSONs live under `.private/finan_playbooks/` (both gitignored). The expected shape of a profile entry plus the keys consumed by template seeding are documented in `services/flow_template_seeding.py`. Override the locations with `TSN_FINAN_PROFILES_PATH` and `TSN_FINAN_PLAYBOOK_DIR`. A clone without those files boots cleanly with zero Finan templates registered.
 
-Financial templates import the corresponding Finan playbook steps into visible Flow nodes instead of wrapping them in one hidden runner. Browser work is split into editable actions such as navigate, fill, click, wait for selector, wait for URL, dismiss modal, execute script, solve CAPTCHA boundary, and extract. Provider bootstrap secrets such as Consigaz `basic_auth` are separate Password Vault steps, not literals inside template JSON. PMVV remains a private aborted handoff because the CAPTCHA boundary was not accepted for this pass; Husky remains a private pending handoff until the transfer workflow has accepted UI recreation, run, dedupe, and notification evidence. Both are intentionally hidden from the public template catalog until their handoffs are designed and validated.
+Financial templates inflate the corresponding playbook steps into visible Flow nodes — never an opaque runner. Browser work is split into editable actions such as navigate, fill, click, wait for selector, wait for URL, dismiss modal, execute script, solve CAPTCHA boundary, and extract. Provider bootstrap secrets are separate Password Vault steps, not literals inside template JSON.
 
 Storage primitives persist tenant-scoped state only. Utility bills upsert `financial_utility_bill` rows keyed by `(tenant_id, provider, unit_id, reference_month)` with encrypted boleto/barcode data; generic records upsert `financial_automation_record` rows keyed by a deterministic dedupe key. Flow outputs expose redacted previews and notification conditions, while raw browser/API payloads are passed through short-lived handles for trusted downstream parsing.
 
-`financial_utility_automation` is therefore compatibility, not the migration target. A migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
+The previous opaque `financial_utility_automation` step has been removed; a migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
 
 1. Vault credential: a Password Vault step or built-in `password_vault` Tool step that selects the 1Password reference through the picker.
 2. HTTP/browser automation: explicit `HTTP Request` nodes or Browser Automation action nodes that sign in or fetch the source page/API using the vault output.
@@ -1970,11 +1964,7 @@ Acceptance for each migrated financial workflow requires all of the following ev
 4. A second manual run against the same bill proving dedupe/no duplicate state or duplicate notification.
 5. Conditional notification validation for both paths: notify when a new or changed unpaid bill is detected with delivery configured, and skip when unchanged, paid/quitado, or missing a valid recipient.
 
-Current validation status: accepted financial flows use clean `Finan | ...` names and keep one active row per migrated workflow/unit. The active set is `Finan | Condominio Sao Blas 204 | Boleto` (`#171`, 24 visible nodes), `Finan | Consigaz | Gas Cond. Sao Blas 204` (`#172`, 16 visible nodes), `Finan | Medsenior/Samedil | Plano Saude Mae` (`#174`, 22 visible nodes), `Finan | Cypreste/Superlogica | Aluguel Praia da Costa` (`#177`, 28 visible nodes), `Finan | EDP | Conta Luz AP Sao Blas 204` (`#186`, 24 visible nodes), and `Finan | EDP | Conta Luz Casa Paraju` (`#187`, 24 visible nodes). The 2026-05-06 inventory confirmed all six are active, recurring, recently completed, and have `0` `financial_utility_automation` nodes. Old QA/test rows and their system-managed Jira trigger flows were deleted after the clean rows were validated in the Flow list. PMVV is aborted for this pass at its explicit CAPTCHA boundary, with handoff notes kept in `.private/financial-automation-migration/pmvv-aborted-2026-05-06.md`; DETRAN-ES and B3 are out of scope; Husky remains private/pending and is not part of the accepted Flow or template catalog until it passes the same UI recreation, run, dedupe, and notification validation.
-
-Accepted financial Flow notifications target `@Vini`; the contact record resolves `@Vini` to WhatsApp `+5527999616279`. The wrong local test number was removed from the Flow node configs and local run-detail artifacts during the final release cleanup.
-
-2026-05-06 UI recreation proof: a new Consigaz Flow was created from Flows → From Template after dismissing the initial tour. The wizard exposed Password Vault `Connection`, `Vault`, `Item`, and `Field` controls, kept browser/unit technical fields collapsed under Advanced options by default, previewed 16 visible primitive nodes, created a real 16-step Flow, opened it in the editor, exposed the Browser Automation `Tool action`, `URL`, and selector controls, and allowed adding normal `Skill`, `Summarization`, and `Notification` steps. The temporary QA Flow was deleted after validation. A final catalog recheck confirmed both PMVV and Husky are absent from the public picker.
+Operator-private validation evidence (active flow IDs, run history, abort/handoff notes for providers that did not graduate) lives in `.private/` and is not tracked in this repo. The `2026-05-07` audit confirmed: zero remaining `financial_utility_automation` nodes in the live DB, all migrated flows green on second-run dedupe, regression tests for `_upsert_bill` and `store_financial_record` pinned in `tests/test_financial_record_dedupe.py`.
 
 New-user runbook:
 
@@ -2031,6 +2021,16 @@ Flow execution via `POST /api/flows/{flow_id}/execute` is fully asynchronous. Th
 ### 13.7 Stale Flow Cleanup
 
 Source: `backend/flows/stale_flow_cleanup.py`. Periodically removes or marks stale flow runs (orphaned conversation threads, timed-out runs).
+
+### 13.8 Financial flow notification state classifier (2026-05-06)
+
+`FinancialBillStoreStepHandler` now emits a `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `no_pending_bills`, `paid`, `unchanged`, `error`) at top level and inside `conditions`. The previous `should_notify` boolean is kept for backward compatibility but is now derived from the rich state (`new_boleto | barcode_changed | pending_no_barcode` notify by default).
+
+`GateStepHandler` supports `in` / `not_in` operators on list values so flows can route on a configurable set of states. `NotificationStepHandler` accepts a `message_templates_by_state` config — when present, the handler picks the template whose key matches the upstream `notification_state` (with `default` and `message_template` fallbacks). Existing single-template flows continue to work unchanged.
+
+Seeded financial flow templates (Cond. São Blas, Consigaz, Medsenior/Samedil, Cypreste/Superlogica, EDP) ship with friendly defaults for each state. Existing tenants can apply the upgrade to active flows with `backend/scripts/upgrade_financial_flow_state_gates.py` (idempotent, dry-run aware) which rewrites legacy seeded financial flow gates to the `notification_state in [...]` shape and adds `message_templates_by_state` to their notification step.
+
+Test coverage: 13 unit + integration tests covering all 7 state branches, the `in`/`not_in` gate operators, and state-template selection (including default-key fallback and unknown-state fallback).
 
 ---
 
@@ -2097,6 +2097,17 @@ Trigger default-agent edits keep the generated system-managed Flow aligned: the 
 **A11y:** wizard inputs use `htmlFor`/`id` associations. Kind-picker tiles in step 1 are a `role="radiogroup"`. GitHub event/action chips are in `role="group"` + `aria-pressed`.
 
 **Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted at the top of the list, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround: user clicks the highlighted flow row's Edit button.
+
+### 14.3.1 Trigger detail aggregates all binding kinds (2026-05-07)
+
+The trigger detail page previously only listed `flow_trigger_binding` rows even though Jira/GitHub/Email/Webhook events also fan out to `agent_team_trigger` and `continuous_subscription` rows at runtime. Two new reverse-lookup endpoints + UI cards close the gap so a single page faithfully represents what a trigger actually does end-to-end.
+
+- `GET /api/team-triggers?trigger_kind=&trigger_instance_id=` reads `agent_team_trigger` by JSON config; mutations reuse the existing per-team `PUT/DELETE` so the response carries `team_id`.
+- `GET /api/continuous-subscriptions?channel_type=&channel_instance_id=` leans on the existing `(tenant_id, channel_type, channel_instance_id)` composite index; mutations reuse the per-agent CRUD.
+- `WiredTeamsCard` and `WiredContinuousCard` mirror `WiredFlowsCard` in `OutputsSection` with pause / resume / unbind actions, gated on `agents.read` / `agents.write`. System-owned continuous subscriptions render disabled controls with an explanatory tooltip.
+- Email triggers translate `channel_type → 'gmail'` to match the dispatcher's storage. The teams card hides on email triggers because team Gmail bindings flow through their own surface (see §2.4.6 update).
+
+The change also fixes a class of bogus auto-flow run failures that surfaced on the trigger detail page when the originating wake event lacked a recipient — the auto-generated Notification step now resolves recipients consistently with manual flows.
 
 ### 14.4 Triggered Flow Creation from Flows
 
@@ -2226,6 +2237,23 @@ WhatsApp is rolling out **Linked Device IDs (LIDs)** — a new identifier format
 - No migration script is required — the upgrade is transparent. Existing contacts continue to work; LIDs are attached on the fly as they arrive.
 - If you see a group member that Tsushin treats as a new contact after the upgrade (because WhatsApp switched them to LID-only exposure), open the contact modal and add the previous phone number as an alternate identifier. The bot will then recognize both.
 - Sentinel audit events for WhatsApp continue to log the original raw identifier (LID or phone), so the audit trail survives the transition.
+
+### 15.1.1 LID matcher + audio routing safeguards (2026-05-07)
+
+The 2026-05-07 patch hardened three LID-related code paths uncovered while debugging an LID-only voice note that fell through to the default agent and surfaced a misleading "transcription failed" error.
+
+**Audio failure-mode disambiguation (`agent/router.py`).** Replaced the single SAFETY error with three distinct branches that key off the *dispatched* agent's skill set:
+- Audio inbound to an agent with `audio_transcript` disabled now replies "voice isn't handled, please send text".
+- Audio with the skill enabled but empty transcript output keeps the existing "transcription failed" wording.
+- Empty non-audio messages get "message came through empty".
+
+**LID pre-bind (`services/whatsapp_proactive_resolver.py`).** WhatsApp's `/check-numbers` only resolves to phone-style `@s.whatsapp.net` JIDs and never returns the `@lid` identifiers used in inbound message envelopes, which left routing dependent on the dispatcher's name-match heuristic firing on the first inbound. `resolve_contact()` now also scans recent MCP `/messages` for an `@lid` chat whose `chat_name` partial-matches the new contact's `friendly_name` and writes a `contact_channel_mapping` row so layer-2 LID lookups resolve directly. Bidirectional substring match handles "Gisele" ↔ "Gisele E."; multiple ambiguous LID candidates skip binding to avoid wrong-identity attachment.
+
+**Operator nickname bridging (`_bind_lid_from_recent_chats`).** The substring matcher failed when the operator saved a contact under a nickname unrelated to the WhatsApp display name — e.g. "Giza" in Tsushin vs "Gisele Espini" in the WhatsApp directory vs "Gisele E." in the LID chat metadata. `_fetch_directory_name` now queries MCP `/api/contacts?q=<phone>` for the authoritative WhatsApp display name; `_name_words` tokenizes nickname / directory / chat names into ≥3-char alpha words; we match on any-word overlap. The Giza/Gisele case resolves on the shared `gisele` word.
+
+**Tenant-scoped auto-link (`agent/router.py:1302`).** The thread-recipient → contact lookup was the last remaining call into `WhatsAppIDDiscovery.auto_link_contact()` without `tenant_id`. Without scoping, auto-discovery could in principle return a contact from a different tenant. The other two call sites (line 324 above, and `mcp_reader/filters.py`) were already tenant-scoped.
+
+**Contact delete cascade (`api/routes_contacts.py`).** `DELETE /api/contacts/{id}` now clears `contact_agent_mapping` and `contact_channel_mapping` rows before deleting the contact. Without that cascade, FK constraints rejected the delete and the UI silently failed.
 
 ### 15.2 Telegram
 
@@ -2556,6 +2584,15 @@ Underlying services:
 - `backend/services/playground_thread_service.py`
 - `backend/services/playground_message_service.py`
 - `backend/services/playground_document_service.py`
+
+### 15.6.1 Watcher media-only debounce bypass (2026-05-06)
+
+`MCPWatcher._flush_conversation_buffer` aggregates buffered messages by joining their text bodies and bailed out with `if not combined_body: return` when the joined body was empty. Audio/image/video/document messages all carry an empty text body, so an active conversation receiving a burst of N voice notes buffered them, the flush saw an empty body, and dropped every one silently — the user got a single transcript (the first audio that arrived before the conversation opened) and the remaining audios disappeared even though the ASR backend transcribed them.
+
+After the fix, any message with a non-empty `media_type` bypasses the debounce window entirely and is dispatched to `on_message_callback` immediately. Text-only conversation messages keep the existing aggregating-debounce behavior. Regression coverage in `backend/tests/test_mcp_watcher_burst.py`:
+- 7 media-only messages in conversation mode → 7 callbacks dispatched (was 0 before the fix).
+- Text-only conversation burst → 1 aggregated callback (existing behavior preserved).
+- Mixed bursts → media goes through immediately, text aggregates around it.
 
 ### 15.7 Channel Health Monitoring & Circuit Breakers
 
@@ -3483,6 +3520,20 @@ ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** vi
 
 **Removed surfaces (v0.7.0 RC cleanup).** `/settings/asr`, `Tenant.default_asr_instance_id`, the legacy `tenant_default` value of `asr_mode`, and the GET/PUT `/api/settings/asr/default` routes were retired in this release. Existing skill rows still carrying `asr_mode='tenant_default'` collapse to `'openai'` at read time — no silent fan-out to a phantom tenant default.
 
+#### 25.8.1 ASR runtime resilience (2026-05-06)
+
+Three patches landed together to make ASR failures observable and to honor the operator's privacy choice when a local engine is pinned.
+
+**No silent OpenAI fallback when a local instance is pinned.** When `asr_mode == 'instance'` the operator explicitly chose a local Whisper or Speaches instance for privacy/cost reasons. Falling back to OpenAI on local failure violated that intent: it routed audio to a third-party cloud invisibly, leaked the user's voice data, and hid the real failure mode behind misleading 401 noise. A pinned local-instance failure now surfaces directly with the local provider's error and no OpenAI call is made. OpenAI Whisper remains available when the operator explicitly sets `asr_mode == 'openai'`.
+
+**Local provider httpx timeout bumped from 180s/120s to 600s.** `onerahmet/openai-whisper-asr-webservice` serializes CPU requests, so a burst of seven voice notes can queue several minutes before the last one even starts. `ReadTimeout('')` was the symptom; the queue was the cause. On GPU the timeout is harmless because requests return in seconds.
+
+**Exception type surfaced in `request_error`.** `OpenAIWhisperASRProvider` and `WhisperASRProvider` previously returned `request_error: <str(exc)>`, which was empty for `httpx` exceptions whose `__str__` returns an empty string (e.g. `RemoteProtocolError` on certain mid-stream disconnects). The bot then surfaced "Local ASR (1): request_error: " with no detail, making the failure undiagnosable from a WhatsApp transcript or run log. Now `request_error: <ExceptionType>: <detail-or-repr>`.
+
+**Tenant-scoped reconciliation.** Auto-provisioned Whisper/Speaches reconciliation on startup now compares active ASR rows with Docker identity labels (`tsushin.service`, `tsushin.tenant`, `tsushin.instance_id`, `tsushin.lifecycle`) and removes labeled ASR containers without a matching active tenant row. Tenant/id ownership checks gate every start, stop, restart, logs, status, deprovision, and retry replacement operation, preventing a stale or cross-tenant container name from being controlled through the wrong ASR instance. Kokoro and Ollama auto-provisioning now use the same `tsushin.lifecycle=auto-provisioned` label and ownership checks.
+
+**Audio-skill failure mode delivery.** WhatsApp audio transcription release any open Postgres transaction before waiting on Whisper/Speaches, avoiding `idle-in-transaction timeout` disconnects while 1-2 minute voice notes are transcribed. The OpenAI Whisper fallback returns structured ASR errors instead of raising through the skill, so local-ASR failures and fallback failures are reported together. WhatsApp audio skill failures return the transcription error directly instead of passing an empty audio body into normal AI processing and triggering the generic safety block.
+
 #### 20.6.2 Ollama Setup Wizard
 
 **Component:** `frontend/components/ollama/OllamaSetupWizard.tsx`
@@ -4017,6 +4068,18 @@ To fully disable remote access for every tenant without tearing the config down:
 2. (Optional) In **Tunnel Configuration**, uncheck **Feature enabled globally** → Save.
 
 To restore it later, just click Start — the encrypted token and hostname are preserved.
+
+#### 22.5.10 Cloudflared sidecar opt-out (2026-05-07)
+
+`TSN_CLOUDFLARED_DISABLE_INPROCESS` controls whether the in-process `cloudflared` subprocess autostarts inside the backend container. When the env var is truthy, the in-process supervisor stays dormant even if a tunnel token is configured — operators can run `cloudflared` as an external sidecar (or skip it entirely during dev iteration) without the "backend restart drops the tunnel" race when both copies fight for the same token.
+
+The backend retains every other Remote Access responsibility regardless of where `cloudflared` runs: configuration storage, audit, per-tenant entitlement gating, hostname-aware auth enforcement, and the `/api/admin/remote-access/*` status APIs. Closes the v0.6.0 pre-release-hardening item that asked for a slimmer Remote Access packaging path.
+
+#### 22.5.11 cf-visitor scheme honored behind Cloudflare Tunnel (2026-05-06)
+
+Cloudflare Tunnel terminates TLS at the edge and forwards plain HTTP to the origin proxy, so `X-Forwarded-Proto` reflects the in-cluster hop (`http`) rather than the visitor's scheme. The visitor scheme is exposed via Cloudflare's `cf-visitor` JSON header (e.g. `{"scheme":"https"}`).
+
+Without honoring it, behind a Tunnel the backend treated every request as HTTP, which caused (a) session cookies to be issued without `Secure`, even though the visitor was on HTTPS, and (b) redirect/origin construction to emit `http://` links even though the user-facing scheme was `https`. The fix extracts scheme resolution into `_resolve_request_scheme` so the fallback chain `cf-visitor → X-Forwarded-Proto → request.url.scheme` is shared between origin construction and Secure-cookie decisions, instead of being duplicated and inconsistent.
 
 ---
 
@@ -4784,6 +4847,17 @@ All variables accept legacy (non-prefixed) aliases where noted. Resolution order
 | `TSN_CHANNEL_HEALTH_ENABLED` | `true` | Enable channel-health worker. | `settings.py:207` |
 | `TSN_CHANNEL_CB_FAILURE_THRESHOLD` | `3` | CB trips after N consecutive failures. | `settings.py:205` |
 | `TSN_CHANNEL_CB_RECOVERY_TIMEOUT` | `60` | CB half-open after N seconds. | `settings.py:206` |
+
+### A.11.1 Triggers ↔ Flows + Remote Access feature flags
+
+| Variable | Default | Purpose | Source |
+|---|---|---|---|
+| `TSN_FLOWS_TRIGGER_BINDING_ENABLED` | `false` | Wave 3 dispatch fork: `TriggerDispatchService.dispatch` queries `flow_trigger_binding` and enqueues FlowRuns alongside ContinuousRuns. | `services/trigger_dispatch_service.py`, see §2.16 |
+| `TSN_FLOWS_AUTO_GENERATION_ENABLED` | `false` | Wave 4 auto-Flow per trigger and notification-toggle write-through onto the auto-flow's Notification node. | `services/flow_binding_service.py`, see §2.17 |
+| `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY` | `false` | Wave 5 backfill migration: suppress the legacy ContinuousAgent dispatch path once flow bindings exist for a (kind, instance). | see §2.18 |
+| `TSN_CLOUDFLARED_DISABLE_INPROCESS` | `false` | When truthy, the in-process `cloudflared` subprocess never autostarts. Required when running `cloudflared` as an external sidecar; also useful during dev iteration. See §22.5.10. | `services/cloudflare_tunnel_service.py` |
+
+The `case_memory_enabled` and `case_memory_recap_enabled` toggles are tenant-scoped DB flags exposed via `Tenant` and `/api/feature-flags`, not env vars (see §10.6).
 
 ### A.12 Misc / integrations (grepped from codebase)
 
