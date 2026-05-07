@@ -1109,6 +1109,16 @@ export default function TriggerCreationWizard({
     router.push(`/flows?edit=${autoFlowId}`)
   }, [autoFlowId, onClose, router])
 
+  const handleViewTriggerDetail = useCallback(() => {
+    const triggerId = (savedTrigger as { id?: number } | null)?.id
+    if (!kind || !triggerId) {
+      onClose()
+      return
+    }
+    onClose()
+    router.push(`/hub/triggers/${kind}/${triggerId}`)
+  }, [kind, savedTrigger, onClose, router])
+
   const handleCopySecret = useCallback(async () => {
     if (!webhookSecret) return
     try {
@@ -1871,21 +1881,30 @@ export default function TriggerCreationWizard({
               onClick={handleClose}
               className="rounded-lg border border-tsushin-border/70 bg-transparent px-4 py-2 text-sm text-tsushin-slate transition-colors hover:border-tsushin-border hover:text-white"
             >
-              Done
+              Close
             </button>
-            {autoFlowId ? (
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleOpenFlowEditor}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity ${accentButtonClass}`}
+                onClick={handleViewTriggerDetail}
+                className="rounded-lg border border-tsushin-border/70 bg-transparent px-4 py-2 text-sm text-tsushin-slate transition-colors hover:border-tsushin-border hover:text-white"
               >
-                Open Flow Editor
+                View Trigger
               </button>
-            ) : (
-              <span className="rounded-lg border border-tsushin-border/30 bg-tsushin-slate/5 px-4 py-2 text-xs text-tsushin-slate/60">
-                Wired flow not generated (flows feature flag disabled)
-              </span>
-            )}
+              {autoFlowId ? (
+                <button
+                  type="button"
+                  onClick={handleOpenFlowEditor}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity ${accentButtonClass}`}
+                >
+                  Open Flow Editor
+                </button>
+              ) : (
+                <span className="rounded-lg border border-tsushin-border/30 bg-tsushin-slate/5 px-4 py-2 text-xs text-tsushin-slate/60">
+                  Wired flow not generated (flows feature flag disabled)
+                </span>
+              )}
+            </div>
           </>,
         )}
       />
