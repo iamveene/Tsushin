@@ -319,9 +319,13 @@ def ensure_system_managed_flow_for_trigger(
         position=2,
         name="Criteria gate",
         config_json=json.dumps({
-            "mode": "programmatic",
-            "rules": [],  # empty = pass-all; trigger-side criteria is canonical
-            "logic": "all",
+            # Field names match the flow_engine GateExecutor + the editor
+            # form (frontend/app/flows/page.tsx StepConfigForm). Earlier
+            # auto-flows wrote "mode"/"rules"/"logic" which the engine
+            # silently ignored — both layers now read these canonical keys.
+            "gate_mode": "programmatic",
+            "gate_conditions": [],  # empty = pass-all; trigger-side criteria is canonical
+            "gate_logic": "all",
         }),
     )
     db.add(gate_node)
