@@ -94,13 +94,16 @@ export default function Modal({
         )}
 
         {/* Body - Scrollable */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 min-h-0">
           {children}
         </div>
 
-        {/* Footer */}
+        {/* Footer — relative + z-10 so its hit-test always wins over any
+        * sibling stacking context the body's overflow-y-auto creates.
+        * shrink-0 keeps the footer's natural height under
+        * tall-content + max-h-[85vh] flex layouts. */}
         {footer && (
-          <div className="p-6 border-t border-tsushin-border">
+          <div className="relative z-10 shrink-0 p-6 border-t border-tsushin-border">
             {footer}
           </div>
         )}
