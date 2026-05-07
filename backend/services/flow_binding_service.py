@@ -164,6 +164,68 @@ def sync_system_managed_flow_default_agent(
     return changed
 
 
+def repair_system_managed_flow_conversation_soft_failure(
+    db: Session,
+    *,
+    tenant_id: str,
+    trigger_kind: str,
+    trigger_instance_id: int,
+) -> bool:
+    """Backfill the soft-failure config on the auto-flow's conversation node.
+
+    Pre-fix auto-flows were created with ``on_failure=None`` (or ``"continue"``
+    only when notification was enabled at creation) and no
+    ``treat_failure_as_skipped`` flag. That meant every conversation failure
+    on a default-route trigger surfaced as a flow-run failure on the trigger
+    detail page, even though the step is structurally a no-op when no
+    recipient is configured.
+
+    This helper updates such existing flows in place. Returns True iff a
+    change was made. Idempotent — safe to re-run.
+    """
+    flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=tenant_id,
+        trigger_kind=trigger_kind,
+        trigger_instance_id=trigger_instance_id,
+    )
+    if flow is None:
+        return False
+
+    conversation_nodes = (
+        db.query(FlowNode)
+        .filter(
+            FlowNode.flow_definition_id == flow.id,
+            FlowNode.type == "conversation",
+        )
+        .all()
+    )
+    changed = False
+    for node in conversation_nodes:
+        try:
+            config = json.loads(node.config_json) if isinstance(node.config_json, str) else (node.config_json or {})
+        except Exception:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+
+        node_changed = False
+        if node.on_failure != "continue":
+            node.on_failure = "continue"
+            node_changed = True
+        if not config.get("treat_failure_as_skipped"):
+            config["treat_failure_as_skipped"] = True
+            node.config_json = json.dumps(config)
+            node_changed = True
+        if node_changed:
+            node.updated_at = datetime.utcnow()
+            changed = True
+
+    if changed:
+        flow.updated_at = datetime.utcnow()
+    return changed
+
+
 def ensure_system_managed_flow_for_trigger(
     db: Session,
     *,
@@ -264,6 +326,13 @@ def ensure_system_managed_flow_for_trigger(
     )
     db.add(gate_node)
 
+    # The auto-generated conversation node is "best-effort": when the trigger
+    # has no human recipient configured (the common default-agent path), the
+    # step has nothing deliverable. Marking it on_failure=continue +
+    # treat_failure_as_skipped lets the flow engine downgrade any conversation
+    # failure to "skipped", so the overall run still completes cleanly and
+    # downstream nodes (Notification, etc.) still execute. Operators who later
+    # add a recipient get the normal failure-loud behavior on real errors.
     conversation_node = FlowNode(
         flow_definition_id=flow.id,
         type="conversation",
@@ -271,10 +340,11 @@ def ensure_system_managed_flow_for_trigger(
         name="Default agent",
         agent_id=default_agent_id,
         conversation_objective=objective,
-        on_failure="continue" if notification_enabled and notification_recipient else None,
+        on_failure="continue",
         config_json=json.dumps({
             "objective": objective,
             "allow_multi_turn": False,
+            "treat_failure_as_skipped": True,
         }),
     )
     db.add(conversation_node)
