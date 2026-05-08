@@ -118,8 +118,12 @@ export default function StepReview() {
               )}
               {s.key === 'memory' && (
                 <>
-                  <div className="capitalize">{state.draft.memory.mode}</div>
-                  <div className="text-xs text-gray-400">{state.draft.memory.memory_size} turns{state.draft.memory.enable_semantic_search ? ' · semantic' : ''}</div>
+                  <div>
+                    {state.draft.memory.mode === 'builtin' && 'Recent messages only'}
+                    {state.draft.memory.mode === 'semantic' && 'Recent messages + meaning search'}
+                    {state.draft.memory.mode === 'vector' && 'External knowledge store'}
+                  </div>
+                  <div className="text-xs text-gray-400">Keeps last {state.draft.memory.memory_size} messages in mind</div>
                 </>
               )}
               {s.key === 'channels' && (
