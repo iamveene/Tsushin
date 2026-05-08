@@ -329,6 +329,94 @@ def test_warmup_call_sends_bearer_not_basic():
     )
 
 
+class _RecordingRequests:
+    """Stand-in for `requests` that records every POST in order."""
+
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, *, headers=None, files=None, data=None, timeout=None):
+        self.calls.append({
+            "url": url,
+            "headers": dict(headers or {}),
+            "data": dict(data or {}),
+            "files_keys": list((files or {}).keys()),
+            "timeout": timeout,
+        })
+        return SimpleNamespace(status_code=200, text="")
+
+
+def test_speaches_warmup_downloads_model_before_transcribing():
+    """The Speaches `latest-cpu` image does not honor PRELOAD_MODELS, so the
+    container manager must POST /v1/models/{model} to fetch the asset before
+    the silent-WAV warm-up. Without this, `/v1/audio/transcriptions` 404s with
+    'Model not installed locally' and the instance lands in cstatus=error."""
+    manager = manager_module.WhisperContainerManager.__new__(
+        manager_module.WhisperContainerManager
+    )
+    rec = _RecordingRequests()
+
+    with patch.object(manager_module, "requests", rec):
+        ok = manager._warm_up_detached(
+            base_url="http://whisper-test:8000",
+            token="warmup-bearer-xyz",
+            model="Systran/faster-whisper-tiny",
+            vendor="speaches",
+        )
+
+    assert ok is True
+    assert len(rec.calls) == 2, (
+        f"Expected 2 POSTs (model-download then transcribe). Got: {rec.calls!r}"
+    )
+
+    download_call, transcribe_call = rec.calls
+    assert download_call["url"] == (
+        "http://whisper-test:8000/v1/models/Systran/faster-whisper-tiny"
+    ), f"First POST must be the model download. Got: {download_call['url']!r}"
+    assert download_call["headers"].get("Authorization") == "Bearer warmup-bearer-xyz"
+    assert download_call["files_keys"] == [], (
+        "Model-download POST must not carry a file payload"
+    )
+
+    assert transcribe_call["url"].endswith("/v1/audio/transcriptions")
+    assert transcribe_call["headers"].get("Authorization") == "Bearer warmup-bearer-xyz"
+
+
+def test_speaches_warmup_attempts_transcribe_even_if_model_download_fails():
+    """Defense in depth: if /v1/models returns a non-2xx (e.g. already cached
+    in some Speaches versions, or transient hiccup), the warm-up should still
+    attempt the silent-WAV transcribe rather than bailing early. The transcribe
+    call's status is the source of truth for readiness."""
+    manager = manager_module.WhisperContainerManager.__new__(
+        manager_module.WhisperContainerManager
+    )
+
+    class _FlakyDownload:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, *, headers=None, files=None, data=None, timeout=None):
+            self.calls.append(url)
+            if "/v1/models/" in url and "/v1/audio" not in url:
+                return SimpleNamespace(status_code=500, text="oh no")
+            return SimpleNamespace(status_code=200, text="")
+
+    rec = _FlakyDownload()
+    with patch.object(manager_module, "requests", rec):
+        ok = manager._warm_up_detached(
+            base_url="http://whisper-test:8000",
+            token="t",
+            model="Systran/faster-whisper-tiny",
+            vendor="speaches",
+        )
+
+    assert ok is True
+    assert any(c.endswith("/v1/audio/transcriptions") for c in rec.calls), (
+        "Transcribe warm-up must be attempted even when model-download fails. "
+        f"Got: {rec.calls!r}"
+    )
+
+
 def test_no_basic_auth_helper_remains_in_provider_or_manager():
     """Defence-in-depth: assert the Basic-auth helper functions were removed,
     so a future regression cannot accidentally re-introduce Basic auth via
