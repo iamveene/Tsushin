@@ -78,7 +78,11 @@ export default function StepBindAgent() {
       {agents.length === 0 ? (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4 text-center">
           <p className="text-sm text-amber-300">
-            No agents found. You can create agents in the Studio page and come back to bind them later.
+            No agents found. You can create agents in{' '}
+            <a href="/agents" className="underline hover:text-white">
+              Studio
+            </a>{' '}
+            and come back to bind them later.
           </p>
         </div>
       ) : (

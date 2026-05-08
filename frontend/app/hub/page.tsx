@@ -71,6 +71,7 @@ import { PasswordVaultIntegrationModal, PasswordVaultIntegrationsPanel, password
 import { BrowserSessionProfileModal, BrowserSessionProfilesPanel } from '@/components/browser-sessions/BrowserSessionProfilesPanel'
 import TypeaheadChipInput, { TypeaheadSuggestion } from '@/components/hub/TypeaheadChipInput'
 import InfoTooltip from '@/components/ui/InfoTooltip'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 import { useProviderWizard, useProviderWizardComplete } from '@/contexts/ProviderWizardContext'
@@ -1177,6 +1178,7 @@ export default function HubPage() {
   const [loading, setLoading] = useState(true)
   const [showApiKeyModal, setShowApiKeyModal] = useState(false)
   const [apiKeyDeleteTarget, setApiKeyDeleteTarget] = useState<string | null>(null)
+  const [showApiKeyPreviewByService, setShowApiKeyPreviewByService] = useState<Record<string, boolean>>({})
   const [deletingApiKeyService, setDeletingApiKeyService] = useState<string | null>(null)
   const [showMcpCreateModal, setShowMcpCreateModal] = useState(false)
   const [showCreateModeSelector, setShowCreateModeSelector] = useState(false)
@@ -1185,6 +1187,8 @@ export default function HubPage() {
   const [editingKey, setEditingKey] = useState<APIKey | null>(null)
   const [selectedMcpInstance, setSelectedMcpInstance] = useState<WhatsAppMCPInstance | null>(null)
   const [selectedQrResource, setSelectedQrResource] = useState<'instance' | 'tester' | null>(null)
+  const [resetAuthTarget, setResetAuthTarget] = useState<{ kind: 'instance'; instance: WhatsAppMCPInstance } | { kind: 'tester' } | null>(null)
+  const [resetAuthBusy, setResetAuthBusy] = useState(false)
   const [qrCode, setQRCode] = useState<string | null>(null)
   // QR Modal polling state for auto-refresh and auto-close
   const [qrPollingActive, setQrPollingActive] = useState(false)
@@ -3345,12 +3349,9 @@ export default function HubPage() {
     }
   }
 
-  // Reset WhatsApp authentication (logout and regenerate QR)
-  const handleResetAuth = async (instance: WhatsAppMCPInstance) => {
-    if (!confirm(`Reset authentication for ${instance.phone_number}? This will:\n\n• Unlink the device from WhatsApp\n• Create a backup of session data\n• Generate a new QR code for re-authentication\n\nMessages will be preserved.`)) {
-      return
-    }
-
+  // Reset WhatsApp authentication (logout and regenerate QR). The destructive
+  // call is only invoked from the styled ConfirmDialog's confirm handler.
+  const performResetAuth = async (instance: WhatsAppMCPInstance) => {
     try {
       setSuccessMessage('Resetting authentication...')
       const response = await api.logoutMCPInstance(instance.id, true)
@@ -3385,11 +3386,7 @@ export default function HubPage() {
     }
   }
 
-  const handleResetTesterAuth = async () => {
-    if (!confirm('Reset authentication for the tester WhatsApp instance?')) {
-      return
-    }
-
+  const performResetTesterAuth = async () => {
     try {
       const response = await api.logoutTester()
       setSuccessMessage(response.message || 'Tester authentication reset. Opening QR code...')
@@ -3400,6 +3397,18 @@ export default function HubPage() {
       }, 1500)
     } catch (err: any) {
       setError(err.message || 'Failed to reset tester authentication')
+    }
+  }
+
+  const confirmResetAuth = async () => {
+    if (!resetAuthTarget) return
+    setResetAuthBusy(true)
+    try {
+      if (resetAuthTarget.kind === 'tester') await performResetTesterAuth()
+      else await performResetAuth(resetAuthTarget.instance)
+      setResetAuthTarget(null)
+    } finally {
+      setResetAuthBusy(false)
     }
   }
 
@@ -3932,6 +3941,7 @@ export default function HubPage() {
     const hasJiraIntegration = type === 'tool' && item.value === 'jira' && jiraIntegrations.some(i => i.is_active)
     const hasInstanceKey = Boolean(configuredInstance)
     const configuredViaInstance = !apiKey && (hasInstanceKey || hasSearxngInstance || hasJiraIntegration)
+    const showApiKeyPreview = Boolean(showApiKeyPreviewByService[item.value])
     const ItemIcon = item.Icon
 
     return (
@@ -3978,13 +3988,27 @@ export default function HubPage() {
         <p className="text-xs text-tsushin-slate mb-4">{item.description}</p>
         {!isComingSoon && apiKey && (
           <div className="text-sm text-tsushin-slate mb-4">
-            <p className="font-mono text-xs text-tsushin-accent">{apiKey.api_key_preview}</p>
+            <button
+              type="button"
+              onClick={() => setShowApiKeyPreviewByService((current) => ({ ...current, [item.value]: !showApiKeyPreview }))}
+              className="text-xs text-teal-300 hover:text-white"
+            >
+              {showApiKeyPreview ? 'Hide key preview' : 'Show key preview'}
+            </button>
+            {showApiKeyPreview && <p className="mt-1 font-mono text-xs text-tsushin-accent">{apiKey.api_key_preview}</p>}
           </div>
         )}
         {!isComingSoon && !apiKey && configuredInstance && (
           <div className="text-sm text-tsushin-slate mb-4">
             <p className="text-xs text-tsushin-slate">Using instance <span className="font-medium text-white">{configuredInstance.instance_name}</span></p>
-            <p className="font-mono text-xs text-tsushin-accent">{configuredInstance.api_key_preview}</p>
+            <button
+              type="button"
+              onClick={() => setShowApiKeyPreviewByService((current) => ({ ...current, [item.value]: !showApiKeyPreview }))}
+              className="mt-1 text-xs text-teal-300 hover:text-white"
+            >
+              {showApiKeyPreview ? 'Hide key preview' : 'Show key preview'}
+            </button>
+            {showApiKeyPreview && <p className="mt-1 font-mono text-xs text-tsushin-accent">{configuredInstance.api_key_preview}</p>}
           </div>
         )}
         {!isComingSoon && canWriteHub && (
@@ -4198,7 +4222,7 @@ export default function HubPage() {
               <div className="space-y-6 animate-fade-in">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">AI Model Providers</h2>
+                    <h2 className="text-lg font-display font-semibold text-white">AI Providers</h2>
                     <p className="text-sm text-tsushin-slate">Manage provider instances and API keys for AI models</p>
                   </div>
                   {canWriteHub && (
@@ -4327,7 +4351,7 @@ export default function HubPage() {
                                         <h4 className="text-sm font-semibold text-white truncate">{inst.instance_name}</h4>
                                         {inst.is_default && (
                                           <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-tsushin-indigo/20 text-tsushin-indigo border border-tsushin-indigo/30">
-                                            DEFAULT
+                                            Default
                                           </span>
                                         )}
                                       </div>
@@ -4429,7 +4453,7 @@ export default function HubPage() {
                                       <p className="text-tsushin-slate">
                                         {inst.base_url
                                           ? <span className="font-mono text-tsushin-accent truncate block">{inst.base_url}</span>
-                                          : <span className="text-tsushin-slate italic">Default URL</span>
+                                          : <span className="text-tsushin-slate italic">Using vendor default URL</span>
                                         }
                                       </p>
                                       {inst.api_key_configured && (
@@ -5196,19 +5220,30 @@ export default function HubPage() {
                 </div>
 
                 {channelConfiguredCount === 0 && (
-                  <div className="card p-8 text-center border-dashed border-tsushin-border/60">
-                    <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-tsushin-accent/10 flex items-center justify-center">
-                      <MessageIconSvg size={24} className="text-tsushin-accent" />
-                    </div>
-                    <h3 className="text-white font-semibold mb-1">No channels configured yet</h3>
-                    <p className="text-xs text-tsushin-slate mb-4 max-w-md mx-auto">
-                      Connect WhatsApp, Telegram, Slack, or Discord so users can reach your agents on the platforms they already use.
-                    </p>
-                    {canWriteHub && (
-                      <p className="text-xs text-tsushin-slate">
-                        Use the + Add Channel button above to connect your first channel.
-                      </p>
-                    )}
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      { label: 'WhatsApp', Icon: MessageIconSvg, helper: 'Pair a phone with QR.' },
+                      { label: 'Telegram', Icon: PlaneIcon, helper: 'Connect a Telegram bot token.' },
+                      { label: 'Slack', Icon: SlackIcon, helper: 'Connect a workspace app.' },
+                      { label: 'Discord', Icon: DiscordIcon, helper: 'Connect a Discord bot.' },
+                    ].map(({ label, Icon, helper }) => (
+                      <div key={label} className="card p-4 text-center border-dashed border-tsushin-border/60">
+                        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-tsushin-accent/10">
+                          <Icon size={20} className="text-tsushin-accent" />
+                        </div>
+                        <h3 className="text-sm font-semibold text-white">{label}</h3>
+                        <p className="mt-1 text-xs text-tsushin-slate">{helper}</p>
+                        {canWriteHub && (
+                          <button
+                            type="button"
+                            onClick={openChannelsWizard}
+                            className="mt-3 rounded-lg border border-tsushin-accent/30 bg-tsushin-accent/10 px-3 py-1.5 text-xs text-tsushin-accent hover:text-white"
+                          >
+                            Add channel
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -5352,7 +5387,7 @@ export default function HubPage() {
                                 QR Code
                               </button>
                               <button
-                                onClick={() => handleResetAuth(instance)}
+                                onClick={() => setResetAuthTarget({ kind: 'instance', instance })}
                                 className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
                                 title="Reset authentication and generate new QR code"
                               >
@@ -5457,7 +5492,7 @@ export default function HubPage() {
                           Restart
                         </button>
                         <button
-                          onClick={handleResetTesterAuth}
+                          onClick={() => setResetAuthTarget({ kind: 'tester' })}
                           className="px-3 py-1.5 bg-orange-600/20 text-orange-400 border border-orange-600/50 rounded text-xs"
                         >
                           Reset Auth
@@ -5845,14 +5880,18 @@ export default function HubPage() {
                       )}
                     </div>
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {gmailIntegrations.map(integration => (
+                      {gmailIntegrations.map(integration => {
+                        const gmailAccount = integration.name?.replace('Gmail - ', '') || 'Unknown'
+                        return (
                         <div key={integration.id} className={`card p-5 hover-glow ${integration.health_status === 'unavailable' ? 'border-red-500/50' : 'border-red-700/30'}`}>
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
                                 <EnvelopeIcon size={20} className="text-red-400" />
                               </div>
-                              <h3 className="font-semibold text-white">Gmail</h3>
+                              <h3 className="min-w-0 truncate font-semibold text-white">
+                                {gmailIntegrations.length > 1 ? gmailAccount : 'Gmail'}
+                              </h3>
                             </div>
                             <span className={`px-2 py-1 text-xs font-medium rounded-full ${
                               integration.health_status === 'healthy'
@@ -5864,9 +5903,9 @@ export default function HubPage() {
                               {integration.health_status === 'healthy' ? 'Connected' : integration.health_status === 'unavailable' ? 'Expired' : integration.health_status}
                             </span>
                           </div>
-                          <p className="text-xs text-tsushin-slate mb-3">Email actions and trigger inbox selection</p>
+                          <p className="text-xs text-tsushin-slate mb-3">Send/read emails and use as a trigger source</p>
                           <div className="text-sm text-tsushin-slate mb-3">
-                            <p className="text-xs">Account: {integration.name?.replace('Gmail - ', '') || 'Unknown'}</p>
+                            <p className="truncate text-xs">Account: {gmailAccount}</p>
                           </div>
                           {integration.health_status === 'unavailable' && (
                             <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
@@ -5880,7 +5919,7 @@ export default function HubPage() {
                             <div className="mb-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                               <p className="text-xs text-amber-300">
                                 <AlertTriangleIcon size={14} className="inline-block align-text-bottom mr-1" />
-                                Drafts require <span className="font-mono">gmail.compose</span>. Reconnect to enable draft creation.
+                                Drafts require the Gmail Compose permission. Reconnect to enable draft creation.
                               </p>
                             </div>
                           )}
@@ -5917,7 +5956,7 @@ export default function HubPage() {
                             )}
                           </div>
                         </div>
-                      ))}
+                      )})}
                     </div>
                   </div>
                 )}
@@ -6122,10 +6161,24 @@ export default function HubPage() {
                         </div>
                         <div>
                           <h3 className="font-semibold text-white text-lg">Sandboxed Tools</h3>
-                          <p className="text-sm text-tsushin-slate">Per-tenant isolated execution environment</p>
+                          <p className="text-sm text-tsushin-slate">Each tenant gets its own private sandbox</p>
                         </div>
                       </div>
-                      {getToolboxBadge()}
+                      <div className="flex items-center gap-2">
+                        {getToolboxBadge()}
+                        {toolboxStatus && (toolboxStatus.status.toLowerCase() === 'not_created' || toolboxStatus.health.toLowerCase() === 'not_created') && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              window.location.href = '/hub/sandboxed-tools'
+                            }}
+                            className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-2.5 py-1 text-xs text-teal-200 hover:text-white"
+                          >
+                            Start
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="text-sm text-tsushin-slate mb-4">
                       <p className="mb-2">Create command-based tools that run in a secure, isolated container with pre-installed security scanners and utilities.</p>
@@ -6136,7 +6189,7 @@ export default function HubPage() {
                         </div>
                         <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
                           <span className="text-xs text-tsushin-accent">nuclei</span>
-                          <p className="text-xs text-gray-500">Vuln scanner</p>
+                          <p className="text-xs text-gray-500">Vulnerability scanner</p>
                         </div>
                         <div className="bg-tsushin-deep/50 px-3 py-2 rounded-lg">
                           <span className="text-xs text-tsushin-accent">katana</span>
@@ -6427,7 +6480,7 @@ export default function HubPage() {
               <div className="space-y-6 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">MCP Servers</h2>
+                    <h2 className="text-lg font-display font-semibold text-white">MCP (Model Context Protocol) Servers</h2>
                     <p className="text-sm text-tsushin-slate">Connect external Model Context Protocol servers for tool discovery</p>
                   </div>
                   {canWriteHub && (
@@ -6485,7 +6538,9 @@ export default function HubPage() {
                               <h3 className="text-white font-semibold text-sm truncate">{server.server_name}</h3>
                             </div>
                             <span className="text-xs px-2 py-0.5 rounded-full bg-tsushin-indigo/20 text-tsushin-accent flex-shrink-0 ml-2">
-                              {transportLabel}
+                              <span title={server.transport_type === 'sse' ? 'Server-Sent Events transport (long-lived HTTP stream)' : undefined}>
+                                {transportLabel}
+                              </span>
                             </span>
                           </div>
 
@@ -6502,7 +6557,7 @@ export default function HubPage() {
                             </span>
                             {server.last_connected_at && (
                               <span title={server.last_connected_at}>
-                                Last: {new Date(server.last_connected_at).toLocaleDateString()}
+                                Last refreshed: {new Date(server.last_connected_at).toLocaleDateString()}
                               </span>
                             )}
                           </div>
@@ -6547,7 +6602,7 @@ export default function HubPage() {
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                               </svg>
-                              Create Skill
+                              <span title="Wrap an MCP tool as a custom skill so an agent can use it.">Create Skill</span>
                             </Link>
                             <button
                               onClick={() => handleDeleteMcpServer(server.id, server.server_name)}
@@ -6569,8 +6624,7 @@ export default function HubPage() {
                     <LightbulbIcon size={16} className="text-cyan-300" /> MCP Server Integration
                   </h3>
                   <p className="text-xs text-tsushin-slate">
-                    MCP (Model Context Protocol) servers expose tools that your agents can use. Connect via SSE, HTTP, or Stdio transport.
-                    Stdio transport runs approved launchers inside your tenant toolbox container for maximum isolation. This stack ships with `uvx` available by default.
+                    MCP (Model Context Protocol) servers expose tools that your agents can use. Connect with a hosted URL or with an approved local command that runs inside the tenant toolbox.
                     After connecting, use &ldquo;Refresh Tools&rdquo; to discover available tools from the server.
                   </p>
                 </div>
@@ -6584,7 +6638,7 @@ export default function HubPage() {
                 <div className="flex justify-between items-center">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">Vector Stores</h2>
-                    <p className="text-sm text-tsushin-slate">Connect external vector databases for enhanced RAG and semantic search</p>
+                    <p className="text-sm text-tsushin-slate">Connect external vector databases for search-by-meaning memory.</p>
                   </div>
                   <button
                     onClick={() => { setEditingVectorStore(null); setShowVectorStoreModal(true) }}
@@ -6607,7 +6661,7 @@ export default function HubPage() {
                     </div>
                     <h3 className="text-white font-semibold mb-2">No Vector Stores Connected</h3>
                     <p className="text-tsushin-slate text-sm mb-4 max-w-md mx-auto">
-                      Connect an external vector database (MongoDB Atlas, Pinecone, or Qdrant) to enable advanced RAG capabilities for your agents.
+                      Connect an external vector database (MongoDB Atlas, Pinecone, or Qdrant) to enable search-by-meaning memory for your agents.
                     </p>
                     <button
                       onClick={() => { setEditingVectorStore(null); setShowVectorStoreModal(true) }}
@@ -6624,7 +6678,7 @@ export default function HubPage() {
                         instance={instance}
                         onEdit={(inst) => { setEditingVectorStore(inst); setShowVectorStoreModal(true) }}
                         onDelete={async (inst) => {
-                          if (!confirm(`Delete vector store "${inst.instance_name}"? Agents using this store will fall back to ChromaDB.`)) return
+                          if (!confirm(`Delete vector store "${inst.instance_name}"? Agents using this store will fall back to the built-in store.`)) return
                           try {
                             await api.deleteVectorStoreInstance(inst.id)
                             toast.success('Vector store deleted')
@@ -6664,7 +6718,7 @@ export default function HubPage() {
                 <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-emerald-300 mb-2">External Vector Stores</h3>
                   <p className="text-xs text-tsushin-slate">
-                    Connect external vector databases to replace or complement the built-in ChromaDB. Each agent can be configured to use a specific vector store in override, complement, or shadow mode. When an external store is unavailable, the system automatically falls back to ChromaDB.
+                    Connect external vector databases to replace, extend, or preview alongside the built-in store. When an external store is unavailable, agents automatically fall back to the built-in store.
                   </p>
                 </div>
               </div>
@@ -7185,7 +7239,7 @@ export default function HubPage() {
                       Restart Tester
                     </button>
                     <button
-                      onClick={handleResetTesterAuth}
+                      onClick={() => setResetAuthTarget({ kind: 'tester' })}
                       className="px-3 py-2 bg-orange-600/20 text-orange-300 border border-orange-600/40 rounded-lg text-sm"
                     >
                       Reset Authentication
@@ -7200,7 +7254,7 @@ export default function HubPage() {
                       Restart Instance
                     </button>
                     <button
-                      onClick={() => handleResetAuth(selectedMcpInstance)}
+                      onClick={() => setResetAuthTarget({ kind: 'instance', instance: selectedMcpInstance })}
                       className="px-3 py-2 bg-orange-600/20 text-orange-300 border border-orange-600/40 rounded-lg text-sm"
                     >
                       Reset Authentication
@@ -7712,6 +7766,26 @@ export default function HubPage() {
           </div>
         )
       })()}
+
+      <ConfirmDialog
+        isOpen={resetAuthTarget !== null}
+        title="Reset WhatsApp authentication?"
+        message={
+          <div className="space-y-2">
+            <p>This will sign the WhatsApp session out and require re-scanning the QR. Continue?</p>
+            {resetAuthTarget?.kind === 'instance' && (
+              <p className="text-xs text-tsushin-slate">
+                Target: {resetAuthTarget.instance.display_name || resetAuthTarget.instance.phone_number}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel="Reset authentication"
+        danger
+        isBusy={resetAuthBusy}
+        onCancel={() => setResetAuthTarget(null)}
+        onConfirm={confirmResetAuth}
+      />
 
       <AddIntegrationWizard
         isOpen={showSearchWizard}

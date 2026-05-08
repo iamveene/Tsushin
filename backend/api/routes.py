@@ -16,6 +16,7 @@ from schemas import (
 )
 from auth_dependencies import require_permission, require_global_admin, get_current_user_optional, get_tenant_context, TenantContext
 from services.audit_service import log_tenant_event, TenantAuditActions
+from services.agent_run_status import determine_agent_run_status
 from agent.router import AgentRouter
 # Import SenderMemory from the old location (agent/memory.py)
 import importlib.util
@@ -25,6 +26,31 @@ spec.loader.exec_module(sender_memory_module)
 SenderMemory = sender_memory_module.SenderMemory
 
 router = APIRouter()
+
+
+def _agent_run_contains_execution_error(*values: Optional[str]) -> bool:
+    """Detect legacy runs that captured tool/runtime failures as successful text."""
+    error_markers = (
+        "error executing ",
+        "traceback (most recent call last)",
+        "curl: (",
+        "command failed",
+    )
+    combined = "\n".join(value for value in values if value).lower()
+    return any(marker in combined for marker in error_markers)
+
+
+def _effective_agent_run_status(run: AgentRun) -> str:
+    """Return the status the UI should show for historical AgentRun rows."""
+    return determine_agent_run_status(
+        {
+            "error": run.error_text,
+            "output_preview": run.output_preview,
+            "tool_result": run.tool_result,
+        },
+        current_status=run.status,
+        output_text=run.output_preview,
+    )
 
 
 class HealthResponse(BaseModel):
@@ -688,7 +714,7 @@ def get_agent_runs(
             "tool_result": run.tool_result,
             "model_used": run.model_used,
             "output_preview": run.output_preview,
-            "status": run.status,
+            "status": _effective_agent_run_status(run),
             "error_text": run.error_text,
             "execution_time_ms": run.execution_time_ms,
             "created_at": run.created_at

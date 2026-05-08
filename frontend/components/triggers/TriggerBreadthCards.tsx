@@ -82,7 +82,7 @@ export default function TriggerBreadthCards({
     {
       kind: 'email',
       title: 'Email Triggers',
-      description: 'Gmail-backed trigger rows that watch inbox activity and wake agents from matching messages.',
+      description: 'Gmail triggers that watch inbox activity and wake agents from matching messages.',
       emptyTitle: 'No email triggers yet',
       emptyBody: 'Reuse a connected Gmail account and route matching inbox activity to an agent.',
       Icon: EnvelopeIcon,
@@ -96,7 +96,7 @@ export default function TriggerBreadthCards({
       title: 'Webhook Triggers',
       description: 'Signed external events that can wake agents or continuous flows.',
       emptyTitle: 'No Webhook Triggers',
-      emptyBody: 'Connect external HTTP systems through the unified trigger launcher.',
+      emptyBody: 'Click + Add Trigger above to connect a webhook.',
       Icon: WebhookIcon,
       iconClass: 'text-cyan-300',
       borderClass: 'border-cyan-700/30',
@@ -106,7 +106,7 @@ export default function TriggerBreadthCards({
     {
       kind: 'jira',
       title: 'Jira Triggers',
-      description: 'JQL polling for matching issues and service desk handoffs.',
+      description: 'Jira issue queries for ticket workflows.',
       emptyTitle: 'No Jira triggers',
       emptyBody: 'Watch issues by JQL and route matching issues to an agent.',
       Icon: CodeIcon,
@@ -120,7 +120,7 @@ export default function TriggerBreadthCards({
       title: 'GitHub Triggers',
       description: 'Repository activity from pushes, pull requests, issues, and releases.',
       emptyTitle: 'No GitHub triggers',
-      emptyBody: 'Connect a repository and route selected events into wake events.',
+      emptyBody: 'Connect a repository and route selected events to an agent.',
       Icon: GitHubIcon,
       iconClass: 'text-violet-300',
       borderClass: 'border-violet-700/30',
@@ -158,8 +158,10 @@ export default function TriggerBreadthCards({
       return (
         <>
           <DetailLine label="Inbox">{email.gmail_account_email || email.gmail_integration_name || 'Gmail inbox'}</DetailLine>
-          <DetailLine label="Search">{email.search_query || 'Inbox default'}</DetailLine>
-          <DetailLine label="Poll">{email.poll_interval_seconds}s</DetailLine>
+          <DetailLine label="Search">
+            <span title="Gmail search syntax, such as is:unread or from:billing@example.com.">{email.search_query || 'Inbox default'}</span>
+          </DetailLine>
+          <DetailLine label="Checks every">{email.poll_interval_seconds}s</DetailLine>
         </>
       )
     }
@@ -178,8 +180,10 @@ export default function TriggerBreadthCards({
       return (
         <>
           <DetailLine label="Site">{jira.site_url}</DetailLine>
-          <DetailLine label="JQL">{jira.jql}</DetailLine>
-          <DetailLine label="Poll">{jira.poll_interval_seconds}s</DetailLine>
+          <DetailLine label="Jira query">
+            <span title="JQL is Jira Query Language, Jira's issue search syntax.">{jira.jql}</span>
+          </DetailLine>
+          <DetailLine label="Checks every">{jira.poll_interval_seconds}s</DetailLine>
         </>
       )
     }

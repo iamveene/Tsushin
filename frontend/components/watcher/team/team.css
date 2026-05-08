@@ -64,16 +64,6 @@
   background: #14b8a6 !important;
 }
 
-.team-edge-line .react-flow__edge-path {
-  stroke: #3c5afe;
-  stroke-width: 2;
-}
-
-.team-edge-mesh .react-flow__edge-path {
-  stroke: #14b8a6;
-  stroke-width: 2;
-}
-
 .team-addable-agent {
   cursor: grab;
   user-select: none;

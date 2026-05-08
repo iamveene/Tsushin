@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import React from 'react'
+import Link from 'next/link'
 import { api, Agent, WhatsAppMCPInstance, TelegramBotInstance, SlackIntegration, DiscordIntegration } from '@/lib/client'
 import { GamepadIcon, WhatsAppIcon, TelegramIcon, SlackIcon, DiscordIcon, CheckCircleIcon, CircleIcon, IconProps } from '@/components/ui/icons'
 import InfoTooltip from '@/components/ui/InfoTooltip'
@@ -274,7 +275,9 @@ export default function AgentChannelsManager({ agentId }: Props) {
           {telegramInstances.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Telegram bots available.</p>
-              <p className="text-sm mt-1">Go to Hub → Channels to create one.</p>
+              <p className="text-sm mt-1">
+                Go to <Link href="/hub?tab=channels" className="text-teal-400 underline hover:text-teal-300">Hub → Channels</Link> to create one.
+              </p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -327,13 +330,16 @@ export default function AgentChannelsManager({ agentId }: Props) {
             Slack Integration
           </h2>
           <p className="text-sm text-tsushin-slate mb-4">
-            Select which Slack workspace this agent should use to send and receive messages. Create the integration in Hub → Channels → Slack first.
+            Select which Slack workspace this agent should use to send and receive messages. Create the integration in{' '}
+            <Link href="/hub?tab=channels" className="text-teal-400 underline hover:text-teal-300">Hub → Channels → Slack</Link> first.
           </p>
 
           {slackIntegrations.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Slack integrations available.</p>
-              <p className="text-sm mt-1">Go to Hub → Channels → Slack to create one.</p>
+              <p className="text-sm mt-1">
+                Go to <Link href="/hub?tab=channels" className="text-teal-400 underline hover:text-teal-300">Hub → Channels → Slack</Link> to create one.
+              </p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -393,7 +399,9 @@ export default function AgentChannelsManager({ agentId }: Props) {
           {discordIntegrations.length === 0 ? (
             <div className="text-center py-6 text-tsushin-muted">
               <p>No Discord bots available.</p>
-              <p className="text-sm mt-1">Go to Hub → Channels → Discord to create one.</p>
+              <p className="text-sm mt-1">
+                Go to <Link href="/hub?tab=channels" className="text-teal-400 underline hover:text-teal-300">Hub → Channels → Discord</Link> to create one.
+              </p>
             </div>
           ) : (
             <div className="space-y-3">

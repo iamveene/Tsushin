@@ -254,10 +254,10 @@ export default function DebugPanel({ agentId }: DebugPanelProps) {
             {debugData.last_reasoning && (
               <div className="bg-white/[0.02] rounded-xl border border-white/[0.06] p-4">
                 <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <MessageIcon size={14} /> Last Internal Reasoning
+                  <MessageIcon size={14} /> Last Run Notes
                 </h4>
                 <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-lg p-3">
-                  <pre className="text-xs text-indigo-300 whitespace-pre-wrap font-mono">
+                  <pre className="max-h-40 overflow-auto text-xs text-indigo-300 whitespace-pre-wrap font-mono">
                     {debugData.last_reasoning}
                   </pre>
                 </div>

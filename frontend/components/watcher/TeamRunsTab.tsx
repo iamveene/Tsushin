@@ -43,6 +43,29 @@ function label(value?: string | null): string {
   return value.split('_').join(' ').replace(/\b\w/g, char => char.toUpperCase())
 }
 
+function agentLabel(name?: string | null): string {
+  return name?.trim() || 'Agent unavailable'
+}
+
+function formatCents(cents?: number | null): string {
+  if (!cents) return '$0.00'
+  return `$${(cents / 100).toFixed(2)}`
+}
+
+function commandSummary(command: Record<string, unknown>): string {
+  const candidate =
+    command.task ||
+    command.goal ||
+    command.instruction ||
+    command.message ||
+    command.action ||
+    command.type
+  if (typeof candidate === 'string' && candidate.trim()) {
+    return candidate.trim()
+  }
+  return 'Coordinator instruction recorded'
+}
+
 function formatMaybeDate(value?: string | null): string {
   return value ? formatDateTimeFull(value) : '-'
 }
@@ -93,10 +116,10 @@ function JsonBlock({ value }: { value: unknown }) {
   )
 }
 
-function Metric({ label: metricLabel, value }: { label: string; value: string }) {
+function Metric({ label: metricLabel, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div className="rounded-lg border border-tsushin-border/60 bg-tsushin-surface/40 p-3">
-      <div className="text-xs uppercase text-tsushin-muted">{metricLabel}</div>
+      <div className="text-xs uppercase text-tsushin-muted" title={title}>{metricLabel}</div>
       <div className="mt-1 text-sm font-medium text-white">{value}</div>
     </div>
   )
@@ -108,7 +131,7 @@ function StepRow({ step }: { step: TeamRunMemberStep }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="font-medium text-white">
-            Step {step.step_index + 1}: {step.agent_name || `Agent #${step.agent_id || '-'}`}
+            Step {step.step_index + 1}: {agentLabel(step.agent_name)}
           </div>
           <div className="mt-1 text-xs text-tsushin-slate">
             {formatMaybeDate(step.started_at || step.created_at)} · {durationLabel(step.started_at, step.completed_at)}
@@ -245,10 +268,10 @@ export default function TeamRunsTab() {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-4">
-        <Metric label="Visible Runs" value={String(runs.length)} />
-        <Metric label="Total Matches" value={String(total)} />
-        <Metric label="Active" value={String(summary.running)} />
-        <Metric label="Needs Review" value={String(summary.failed)} />
+        <Metric label="Visible Runs" value={String(runs.length)} title="Runs currently shown after filters are applied." />
+        <Metric label="Total Matches" value={String(total)} title="All runs matching the current filters on the server." />
+        <Metric label="Active" value={String(summary.running)} title="Runs that have not reached a final status yet." />
+        <Metric label="Needs Review" value={String(summary.failed)} title="Failed, timed out, blocked, or goal-not-achieved runs." />
       </div>
 
       <section className="glass-card rounded-xl p-5">
@@ -260,7 +283,7 @@ export default function TeamRunsTab() {
             </h2>
             <div className="mt-2 inline-flex items-center gap-2 text-xs text-tsushin-slate">
               <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-gray-500'}`} />
-              Watcher WS {isConnected ? 'connected' : 'disconnected'}
+              Live updates {isConnected ? 'connected' : 'disconnected'}
             </div>
           </div>
 
@@ -367,7 +390,7 @@ export default function TeamRunsTab() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="text-sm font-medium text-white">{run.team_name}</div>
+                      <div className="text-sm font-medium text-white">{run.team_name || 'Unnamed team'}</div>
                       <div className="text-xs text-tsushin-slate">{label(run.topology_snapshot)} · {run.member_count} members</div>
                     </td>
                     <td className="px-4 py-3">
@@ -383,7 +406,7 @@ export default function TeamRunsTab() {
                       {formatMaybeDate(run.started_at || run.created_at)}
                     </td>
                     <td className="px-4 py-3 text-sm text-tsushin-slate">
-                      {run.total_cost_cents} cents
+                      {formatCents(run.total_cost_cents)}
                     </td>
                   </tr>
                 )
@@ -408,7 +431,7 @@ export default function TeamRunsTab() {
               <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/35 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-base font-semibold text-white">{selectedRun.team_name} · Run #{selectedRun.id}</h3>
+                    <h3 className="text-base font-semibold text-white">{selectedRun.team_name || 'Unnamed team'} · Run #{selectedRun.id}</h3>
                     <p className="mt-1 text-sm text-tsushin-slate">{selectedRun.goal_text_snapshot || 'No goal snapshot'}</p>
                   </div>
                   <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass(selectedRun.status)}`}>
@@ -434,7 +457,7 @@ export default function TeamRunsTab() {
                 <Metric label="Duration" value={durationLabel(selectedRun.started_at, selectedRun.completed_at)} />
                 <Metric label="Progress" value={`${selectedRun.completed_steps}/${selectedRun.total_steps} steps`} />
                 <Metric label="Tokens" value={`${selectedRun.total_input_tokens + selectedRun.total_output_tokens}`} />
-                <Metric label="Cost" value={`${selectedRun.total_cost_cents} cents`} />
+                <Metric label="Cost" value={formatCents(selectedRun.total_cost_cents)} title="Estimated model cost reported for this run." />
               </div>
             </div>
 
@@ -448,10 +471,16 @@ export default function TeamRunsTab() {
                   {selectedRun.coordinator_commands.map(command => (
                     <div key={command.member_run_id} className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
-                        <span className="font-medium text-amber-100">Step {command.step_index + 1}: {command.agent_name || 'Coordinator'}</span>
+                        <span className="font-medium text-amber-100">Step {command.step_index + 1}: {agentLabel(command.agent_name)}</span>
                         <span className="text-xs text-tsushin-slate">{command.created_at ? formatDateTimeFull(command.created_at) : '-'}</span>
                       </div>
-                      <JsonBlock value={command.command} />
+                      <p className="text-sm text-tsushin-slate">{commandSummary(command.command)}</p>
+                      <details className="mt-3">
+                        <summary className="cursor-pointer text-xs font-medium text-tsushin-muted hover:text-white">Command details</summary>
+                        <div className="mt-2">
+                          <JsonBlock value={command.command} />
+                        </div>
+                      </details>
                     </div>
                   ))}
                 </div>

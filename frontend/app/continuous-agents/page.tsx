@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { api, ApiError, type ContinuousAgent, type ContinuousRun, type PageResponse } from '@/lib/client'
 import { formatDateTime, formatRelative } from '@/lib/dateUtils'
 import { ActivityIcon, BotIcon, ClockIcon, EyeIcon, LightningIcon, RefreshIcon } from '@/components/ui/icons'
 import { ContinuousAgentSetupModal } from '@/components/continuous-agents/ContinuousAgentSetupModal'
 
 const STATUS_OPTIONS = ['all', 'active', 'paused', 'disabled', 'error']
+const STUDIO_CONTINUOUS_AGENTS_PATH = '/studio/continuous-agents'
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
@@ -26,6 +27,15 @@ function statusClass(status: string): string {
     return 'bg-red-500/10 text-red-300 border-red-500/30'
   }
   return 'bg-gray-500/10 text-gray-300 border-gray-500/30'
+}
+
+function formatExecutionMode(mode: string): string {
+  if (mode === 'notify_only') return 'Notify only'
+  return mode
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
@@ -51,6 +61,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 
 export default function ContinuousAgentsPage() {
   const pathname = usePathname()
+  const router = useRouter()
   const searchParams = useSearchParams()
   // True when this component is mounted inside a parent surface that
   // already provides its own header / breadcrumb / create-button —
@@ -68,6 +79,7 @@ export default function ContinuousAgentsPage() {
   const [editingAgent, setEditingAgent] = useState<ContinuousAgent | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const pageSize = 50
+  const isLegacyStandalone = pathname === '/continuous-agents'
   const initialAgentId = useMemo(() => {
     const raw = searchParams?.get('agent_id')
     const parsed = raw ? Number(raw) : NaN
@@ -98,6 +110,12 @@ export default function ContinuousAgentsPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  useEffect(() => {
+    if (!isLegacyStandalone) return
+    const qs = searchParams?.toString()
+    router.replace(qs ? `${STUDIO_CONTINUOUS_AGENTS_PATH}?${qs}` : STUDIO_CONTINUOUS_AGENTS_PATH)
+  }, [isLegacyStandalone, router, searchParams])
 
   // v0.7.0-fix Phase 6b: when Studio hands off here with ?new=1&agent_id=N
   // we auto-open the setup modal with that base agent already selected.
@@ -169,13 +187,15 @@ export default function ContinuousAgentsPage() {
   const activeCount = agents.filter(agent => agent.status === 'active').length
   const systemOwnedCount = agents.filter(agent => agent.is_system_owned).length
 
+  if (isLegacyStandalone) return null
+
   return (
     <div className={isEmbedded ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
       {!isEmbedded && (
         <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-              <Link href="/" className="hover:text-white">Watcher</Link>
+              <Link href="/studio" className="hover:text-white">Studio</Link>
               <span>/</span>
               <span>Continuous Agents</span>
             </div>
@@ -229,7 +249,7 @@ export default function ContinuousAgentsPage() {
         </div>
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
-            <LightningIcon size={14} /> System-owned
+            <LightningIcon size={14} /> <span title="Auto-created by triggers. Promote to user-owned before editing freely.">System-owned</span>
           </div>
           <div className="mt-2 text-2xl font-semibold text-white">{systemOwnedCount}</div>
         </div>
@@ -286,7 +306,7 @@ export default function ContinuousAgentsPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <Link
-                      href={`/continuous-agents/${agent.id}`}
+                      href={`/studio/continuous-agents/${agent.id}`}
                       prefetch={false}
                       className="block truncate text-lg font-semibold text-white hover:text-cyan-300"
                     >
@@ -304,7 +324,7 @@ export default function ContinuousAgentsPage() {
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <div>
                     <div className="text-xs text-tsushin-slate">Mode</div>
-                    <div className="text-sm text-white">{agent.execution_mode}</div>
+                    <div className="text-sm text-white">{formatExecutionMode(agent.execution_mode)}</div>
                   </div>
                   <div>
                     <div className="text-xs text-tsushin-slate">Monitored triggers</div>
@@ -334,7 +354,7 @@ export default function ContinuousAgentsPage() {
                       buttons (was: View detail = link, Edit = button,
                       Delete = button) — visual hierarchy now consistent. */}
                   <Link
-                    href={`/continuous-agents/${agent.id}`}
+                    href={`/studio/continuous-agents/${agent.id}`}
                     prefetch={false}
                     className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border px-3 py-1 text-xs text-tsushin-fog hover:text-white"
                   >

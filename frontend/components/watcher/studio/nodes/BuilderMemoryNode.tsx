@@ -21,7 +21,11 @@ function BuilderMemoryNode({ data, selected }: NodeProps) {
             <span className="text-blue-300/70">{ISOLATION_LABELS[d.isolationMode] || d.isolationMode}</span>
             <span className="text-tsushin-muted">{d.memorySize} msgs</span>
           </div>
-          {d.enableSemanticSearch && <span className="text-2xs text-blue-300/50">Semantic Search</span>}
+          {d.enableSemanticSearch && (
+            <span className="text-2xs text-blue-300/50" title="Finds related memories by meaning, not only exact words.">
+              Smart Search
+            </span>
+          )}
         </div>
       </div>
     </div>

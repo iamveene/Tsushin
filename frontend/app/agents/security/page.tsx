@@ -12,20 +12,19 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, SentinelConfig, SentinelLog, SentinelStats, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
 import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
 import SkillSecurityPanel from '@/components/sentinel/SkillSecurityPanel'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 
 interface AgentWithSecurity extends Agent {
   profileAssignment?: SentinelProfileAssignment | null
 }
 
 export default function SecurityPage() {
-  const pathname = usePathname()
   const { user, loading: authLoading, hasPermission } = useRequireAuth()
   const canEdit = hasPermission('org.settings.write')
 
@@ -51,7 +50,9 @@ export default function SecurityPage() {
   const [assignmentMode, setAssignmentMode] = useState<'inherit' | 'custom'>('inherit')
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null)
 
-  const aggressivenessLabels = ['Off', 'Moderate', 'Aggressive', 'Extra Aggressive']
+  const aggressivenessLabels = ['Off', 'Light', 'Standard', 'Strict']
+
+  const getAgentDisplayName = (agent: AgentWithSecurity) => agent.contact_name || '[deleted agent]'
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -116,7 +117,7 @@ export default function SecurityPage() {
           profile_id: selectedProfileId,
           agent_id: selectedAgent.id,
         })
-        setSuccess(`Security profile assigned to ${selectedAgent.contact_name}`)
+        setSuccess(`Security profile assigned to ${getAgentDisplayName(selectedAgent)}`)
       } else {
         // Remove assignment to inherit from tenant
         const existingAssignment = assignments.find(
@@ -125,7 +126,7 @@ export default function SecurityPage() {
         if (existingAssignment) {
           await api.removeSentinelProfileAssignment(existingAssignment.id)
         }
-        setSuccess(`${selectedAgent.contact_name} now inherits from tenant`)
+        setSuccess(`${getAgentDisplayName(selectedAgent)} now inherits from tenant`)
       }
       setShowModal(false)
       loadData()
@@ -202,7 +203,7 @@ export default function SecurityPage() {
               </svg>
             </div>
             <div>
-              <h1 className="text-3xl font-display font-bold text-white">Security Configuration</h1>
+              <h1 className="text-3xl font-display font-bold text-white">Security</h1>
               <p className="text-tsushin-slate">Configure Sentinel protection for your agents</p>
             </div>
           </div>
@@ -273,7 +274,13 @@ export default function SecurityPage() {
           <div className="stat-card stat-card-accent group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Profile Assignments</p>
+                <div className="flex items-center gap-2 text-sm font-medium text-tsushin-slate">
+                  Profile Assignments
+                  <InfoTooltip
+                    text="Agents with a custom Sentinel security profile. Agents without one inherit the tenant default."
+                    position="top"
+                  />
+                </div>
                 <p className="text-3xl font-display font-bold text-purple-400 mt-1">
                   {customAssignments}
                 </p>
@@ -337,17 +344,17 @@ export default function SecurityPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-500 to-cyan-400 flex items-center justify-center text-white font-bold">
-                        {agent.contact_name?.charAt(0).toUpperCase() || 'A'}
+                        {getAgentDisplayName(agent).charAt(0).toUpperCase()}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="font-medium text-white">{agent.contact_name}</p>
+                          <p className="font-medium text-white">{getAgentDisplayName(agent)}</p>
                           {getProtectionBadge(agent)}
                         </div>
                         <p className="text-xs text-tsushin-slate">
                           {agent.profileAssignment
                             ? `Profile: ${agent.profileAssignment.profile_name}`
-                            : 'Inheriting from tenant'}
+                            : 'Uses tenant default'}
                         </p>
                       </div>
                     </div>
@@ -421,7 +428,7 @@ export default function SecurityPage() {
           >
             <div className="p-6 border-b border-tsushin-border/50">
               <h3 className="text-lg font-semibold text-white">
-                Security Profile — {selectedAgent.contact_name}
+                Security Profile - {getAgentDisplayName(selectedAgent)}
               </h3>
               <p className="text-sm text-tsushin-slate mt-1">
                 Assign a security profile to this agent

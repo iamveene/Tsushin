@@ -80,6 +80,7 @@ class VectorStoreInstanceResponse(BaseModel):
     instance_name: str
     description: Optional[str] = None
     base_url: Optional[str] = None
+    display_url: Optional[str] = None
     credentials_configured: bool
     credentials_preview: str
     extra_config: Dict[str, Any]
@@ -119,6 +120,10 @@ class VectorStoreIndexResponse(BaseModel):
     purpose: str
     owner_type: str
     owner_id: int
+    display_name: Optional[str] = None
+    collection_name: Optional[str] = None
+    namespace: Optional[str] = None
+    index_name: Optional[str] = None
     embedding_provider_instance_id: Optional[int] = None
     embedding_provider: str
     embedding_model: str
@@ -155,9 +160,86 @@ class VectorStoreIndexResolveRequest(BaseModel):
 
 # ==================== Helpers ====================
 
+_SENSITIVE_EXTRA_CONFIG_KEYS = {
+    "collection_name",
+    "index_name",
+    "namespace",
+    "physical_collection_name",
+    "physical_index_name",
+    "physical_namespace",
+}
+
+
+def _is_internal_vector_url(instance: VectorStoreInstance) -> bool:
+    base_url = str(instance.base_url or "").lower()
+    container_name = str(getattr(instance, "container_name", "") or "").lower()
+    return bool(
+        getattr(instance, "is_auto_provisioned", False)
+        or container_name
+        or "://vs-" in base_url
+        or "://qdrant-" in base_url
+        or "://chroma-" in base_url
+        or "host.docker.internal" in base_url
+    )
+
+
+def _safe_vector_base_url(instance: VectorStoreInstance) -> Optional[str]:
+    if not instance.base_url:
+        return None
+    if _is_internal_vector_url(instance):
+        return None
+    return instance.base_url
+
+
+def _safe_vector_display_url(instance: VectorStoreInstance) -> Optional[str]:
+    if _is_internal_vector_url(instance):
+        return "Managed by Tsushin"
+    return instance.base_url
+
+
+def _display_index_name(index: VectorStoreIndex) -> str:
+    purpose = (index.purpose or "").replace("_", " ").strip().title()
+    if purpose:
+        return f"{purpose} index"
+    return "Vector index"
+
+
+def _safe_index_response(index: VectorStoreIndex) -> Dict[str, Any]:
+    from services.vector_store_index_resolver import VectorStoreIndexResolver
+
+    payload = dict(VectorStoreIndexResolver.to_dict(index))
+    display_name = _display_index_name(index)
+    payload.update(
+        {
+            "display_name": display_name,
+            "collection_name": display_name,
+            "namespace": "Default namespace",
+            "index_name": display_name,
+            "physical_collection_name": display_name,
+            "physical_namespace": "Default namespace",
+            "physical_index_name": display_name,
+        }
+    )
+    return payload
+
+
+def _safe_extra_config(extra_config: Any) -> Dict[str, Any]:
+    if not isinstance(extra_config, dict):
+        return {}
+    safe = dict(extra_config)
+    for key in _SENSITIVE_EXTRA_CONFIG_KEYS:
+        if key in safe and safe[key]:
+            safe[key] = "Default collection" if "collection" in key else "Default namespace"
+    if isinstance(safe.get("indexes"), list):
+        safe["indexes"] = []
+    if isinstance(safe.get("vector_indexes"), list):
+        safe["vector_indexes"] = []
+    return safe
+
 def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
     from services.vector_store_instance_service import VectorStoreInstanceService
     from services.vector_store_index_resolver import VectorStoreIndexResolver
+
     resolver = VectorStoreIndexResolver(db)
     indexes = []
     default_index = None
@@ -172,7 +254,7 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
             .order_by(VectorStoreIndex.created_at.desc())
             .all()
         )
-        indexes = [resolver.to_response(row) for row in rows]
+        indexes = [_safe_index_response(row) for row in rows]
         extra = instance.extra_config or {}
         if isinstance(extra, dict):
             default_index_id = extra.get("default_vector_store_index_id") or extra.get("long_term_memory_index_id")
@@ -186,10 +268,11 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "vendor": instance.vendor,
         "instance_name": instance.instance_name,
         "description": instance.description,
-        "base_url": instance.base_url,
+        "base_url": _safe_vector_base_url(instance),
+        "display_url": _safe_vector_display_url(instance),
         "credentials_configured": bool(instance.credentials_encrypted),
         "credentials_preview": VectorStoreInstanceService.mask_credentials(instance, db),
-        "extra_config": instance.extra_config or {},
+        "extra_config": _safe_extra_config(instance.extra_config),
         "security_config": (getattr(instance, "security_config", None) or {}),
         "health_status": instance.health_status or "unknown",
         "health_status_reason": instance.health_status_reason,
@@ -198,7 +281,7 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "is_active": instance.is_active,
         "is_auto_provisioned": getattr(instance, 'is_auto_provisioned', False),
         "container_status": getattr(instance, 'container_status', None),
-        "container_name": getattr(instance, 'container_name', None),
+        "container_name": None if _is_internal_vector_url(instance) else getattr(instance, 'container_name', None),
         "container_port": getattr(instance, 'container_port', None),
         "indexes": indexes,
         "default_index": default_index,
@@ -333,7 +416,7 @@ async def list_vector_store_indexes(
         .order_by(VectorStoreIndex.purpose, VectorStoreIndex.owner_type, VectorStoreIndex.owner_id, VectorStoreIndex.created_at.desc())
         .all()
     )
-    return [VectorStoreIndexResolver.to_dict(index) for index in indexes]
+    return [_safe_index_response(index) for index in indexes]
 
 
 @router.post(
@@ -370,7 +453,7 @@ async def resolve_vector_store_index(
         )
         if not index:
             raise HTTPException(status_code=404, detail="Vector store index not found")
-        return VectorStoreIndexResolver.to_dict(index)
+        return _safe_index_response(index)
     except ValueError as exc:
         db.rollback()
         message = str(exc)

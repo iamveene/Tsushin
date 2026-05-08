@@ -358,6 +358,20 @@ export default function StudioTeamDetailPage() {
     }, 'Member requirement updated.')
   }
 
+  const handleResetLayout = async () => {
+    if (!team) return
+    const targets = team.members.filter((member) => member.role !== 'coordinator')
+    if (targets.length === 0) return
+    await runAction(async () => {
+      await Promise.all(
+        targets.map((member) =>
+          api.updateTeamMember(teamId, member.agent_id, { position_x: null, position_y: null }),
+        ),
+      )
+      await loadAll()
+    }, 'Layout reset to defaults.')
+  }
+
   const handleCreateTrigger = async () => {
     const option = triggerOptions.find((item) => item.key === newTriggerKey)
     if (!option) return
@@ -583,6 +597,7 @@ export default function StudioTeamDetailPage() {
                       onReorderMembers={handleReorderMembers}
                       onUpdateMemberPosition={handleUpdateMemberPosition}
                       onToggleRequired={handleToggleRequired}
+                      onResetLayout={handleResetLayout}
                     />
                   </div>
                 </section>

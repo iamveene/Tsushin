@@ -439,7 +439,7 @@ export default function WakeEventsPage() {
                   <div>
                     <div className="text-xs text-tsushin-slate">Continuous agent</div>
                     {selectedEvent.continuous_agent_id ? (
-                      <Link href={`/continuous-agents/${selectedEvent.continuous_agent_id}`} className="font-mono text-cyan-200 hover:text-white">
+                      <Link href={`/studio/continuous-agents/${selectedEvent.continuous_agent_id}`} className="font-mono text-cyan-200 hover:text-white">
                         #{selectedEvent.continuous_agent_id}
                       </Link>
                     ) : (

@@ -25,6 +25,35 @@ import { formatDateTimeFull } from '@/lib/dateUtils'
 
 type ViewKey = 'log' | 'statistics'
 
+const PROMPT_SCAFFOLDING_PATTERNS = [
+  /<\s*(system|developer|instructions?)\b/i,
+  /\b(system|developer)\s+prompt\b/i,
+  /\byou are\b/i,
+  /\brespond (as|with|in)\b/i,
+  /\bresponse_template\b/i,
+  /\{agent_name\}|\{response\}/i,
+]
+
+function label(value?: string | null): string {
+  if (!value) return 'Unknown'
+  return value.split('_').join(' ').replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function agentLabel(name?: string | null): string {
+  return name?.trim() || 'Agent unavailable'
+}
+
+function isPromptScaffolding(value?: string | null): boolean {
+  if (!value) return false
+  return PROMPT_SCAFFOLDING_PATTERNS.some(pattern => pattern.test(value))
+}
+
+function safePreview(value?: string | null): string | null {
+  if (!value?.trim()) return null
+  if (isPromptScaffolding(value)) return 'Setup prompt hidden'
+  return value.trim()
+}
+
 export default function CommunicationTab() {
   const toast = useToast()
   const [activeView, setActiveView] = useState<ViewKey>('log')
@@ -131,13 +160,13 @@ export default function CommunicationTab() {
     }
     return (
       <span className={`text-xs px-2 py-0.5 rounded-full border ${styles[status] || styles.pending}`}>
-        {status}
+        {label(status)}
       </span>
     )
   }
 
   const views: { key: ViewKey; label: string }[] = [
-    { key: 'log', label: 'Communication Log' },
+    { key: 'log', label: 'Session Log' },
     { key: 'statistics', label: 'Statistics' },
   ]
 
@@ -149,7 +178,7 @@ export default function CommunicationTab() {
             <div className="absolute inset-0 rounded-full border-4 border-tsushin-surface"></div>
             <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-tsushin-indigo animate-spin"></div>
           </div>
-          <p className="text-tsushin-slate font-medium">Loading...</p>
+          <p className="text-tsushin-slate font-medium">Loading agent messages...</p>
         </div>
       </div>
     )
@@ -185,7 +214,7 @@ export default function CommunicationTab() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         <span>
-          Permission rules moved — configure which agents can communicate in{' '}
+          Permission rules moved. Configure which agents can message each other in{' '}
           <a href="/agents/communication" className="text-teal-400 hover:text-teal-300 underline">
             Studio → A2A Communications
           </a>
@@ -198,8 +227,8 @@ export default function CommunicationTab() {
         <div className="glass-card rounded-xl overflow-hidden">
           <div className="p-6 border-b border-tsushin-border/50 flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-display font-semibold text-white">Communication Sessions</h3>
-              <p className="text-sm text-tsushin-slate mt-1">Monitor inter-agent messaging activity</p>
+              <h3 className="text-lg font-display font-semibold text-white">Agent Message Sessions</h3>
+              <p className="text-sm text-tsushin-slate mt-1">Monitor agent-to-agent requests, responses, and safety blocks.</p>
             </div>
             <div className="flex items-center gap-3">
               <select
@@ -207,7 +236,7 @@ export default function CommunicationTab() {
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-1.5 bg-tsushin-surface border border-tsushin-border rounded-lg text-sm text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
               >
-                <option value="">All Statuses</option>
+                <option value="">All statuses</option>
                 <option value="completed">Completed</option>
                 <option value="in_progress">In Progress</option>
                 <option value="blocked">Blocked</option>
@@ -229,7 +258,10 @@ export default function CommunicationTab() {
             </div>
           ) : sessions.length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-tsushin-slate">No communication sessions found.</p>
+              <p className="text-tsushin-slate">No agent message sessions found.</p>
+              <p className="mt-1 text-xs text-tsushin-muted">
+                Sessions appear here after one agent asks another agent for help.
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-tsushin-border/30">
@@ -239,8 +271,8 @@ export default function CommunicationTab() {
                     className="p-4 hover:bg-gray-800/30 transition-colors cursor-pointer"
                     onClick={() => handleExpandSession(session.id)}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex min-w-0 items-center gap-4">
                         <svg
                           className={`w-4 h-4 text-tsushin-slate transition-transform ${
                             expandedSessionId === session.id ? 'rotate-90' : ''
@@ -251,31 +283,31 @@ export default function CommunicationTab() {
                         >
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
-                        <div>
+                        <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-white font-medium text-sm">
-                              {session.initiator_agent_name || `Agent #${session.initiator_agent_id}`}
+                            <span className="truncate text-white font-medium text-sm" title={agentLabel(session.initiator_agent_name)}>
+                              {agentLabel(session.initiator_agent_name)}
                             </span>
                             <svg className="w-4 h-4 text-tsushin-slate" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                             </svg>
-                            <span className="text-white font-medium text-sm">
-                              {session.target_agent_name || `Agent #${session.target_agent_id}`}
+                            <span className="truncate text-white font-medium text-sm" title={agentLabel(session.target_agent_name)}>
+                              {agentLabel(session.target_agent_name)}
                             </span>
                           </div>
                           <p className="text-xs text-tsushin-muted mt-0.5">
                             {formatDateTimeFull(session.started_at)}
-                            {session.original_message_preview && (
-                              <span className="ml-2 text-tsushin-slate">
-                                &mdash; {session.original_message_preview}
+                            {safePreview(session.original_message_preview) && (
+                              <span className="ml-2 text-tsushin-slate" title={safePreview(session.original_message_preview) || undefined}>
+                                - {safePreview(session.original_message_preview)}
                               </span>
                             )}
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-tsushin-muted">
-                          Depth {session.depth}/{session.max_depth}
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-xs text-tsushin-muted" title="Current delegation depth out of this permission rule's allowed maximum.">
+                          Hops {session.depth}/{session.max_depth}
                         </span>
                         <span className="text-xs text-tsushin-muted">
                           {session.total_messages} msg{session.total_messages !== 1 ? 's' : ''}
@@ -304,12 +336,12 @@ export default function CommunicationTab() {
                                   <span className={`text-xs font-medium ${
                                     msg.direction === 'request' ? 'text-amber-400' : 'text-teal-400'
                                   }`}>
-                                    {msg.direction === 'request' ? 'REQUEST' : 'RESPONSE'}
+                                    {msg.direction === 'request' ? 'Request' : 'Response'}
                                   </span>
                                   <span className="text-xs text-tsushin-slate">
-                                    {msg.from_agent_name || `Agent #${msg.from_agent_id}`}
+                                    {agentLabel(msg.from_agent_name)}
                                     {' -> '}
-                                    {msg.to_agent_name || `Agent #${msg.to_agent_id}`}
+                                    {agentLabel(msg.to_agent_name)}
                                   </span>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -331,7 +363,7 @@ export default function CommunicationTab() {
                                 </div>
                               </div>
                               <p className="text-sm text-gray-300 whitespace-pre-wrap break-words">
-                                {msg.message_content ?? ''}
+                                {safePreview(msg.message_content) || 'No message content recorded.'}
                               </p>
                               <p className="text-xs text-tsushin-muted mt-1">
                                 {formatDateTimeFull(msg.created_at)}
@@ -355,7 +387,7 @@ export default function CommunicationTab() {
           <div className="stat-card stat-card-indigo group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Total Sessions</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="All recorded agent-to-agent sessions.">Total Sessions</p>
                 <p className="text-3xl font-display font-bold text-white mt-1">
                   {statsLoading ? '...' : (stats?.total_sessions ?? 0)}
                 </p>
@@ -371,7 +403,7 @@ export default function CommunicationTab() {
           <div className="stat-card stat-card-success group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Success Rate</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Share of agent message sessions that completed.">Success Rate</p>
                 <p className="text-3xl font-display font-bold text-green-400 mt-1">
                   {statsLoading ? '...' : `${(stats?.success_rate ?? 0).toFixed(1)}%`}
                 </p>
@@ -390,7 +422,7 @@ export default function CommunicationTab() {
           <div className="stat-card stat-card-warning group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Avg Response Time</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Average time for an agent message response.">Avg Response Time</p>
                 <p className="text-3xl font-display font-bold text-orange-400 mt-1">
                   {statsLoading ? '...' : `${(stats?.avg_response_time_ms ?? 0).toFixed(0)}ms`}
                 </p>
@@ -406,7 +438,7 @@ export default function CommunicationTab() {
           <div className="stat-card stat-card-accent group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Blocked</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Sessions blocked by permissions, Sentinel, or safety rules.">Blocked</p>
                 <p className="text-3xl font-display font-bold text-red-400 mt-1">
                   {statsLoading ? '...' : (stats?.blocked_sessions ?? 0)}
                 </p>

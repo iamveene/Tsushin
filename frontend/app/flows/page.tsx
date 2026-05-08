@@ -1342,7 +1342,7 @@ function DataTransformConfigPanel({
 
       <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium text-slate-300">Raw response handles</label>
+          <label className="text-sm font-medium text-slate-300">Advanced response references</label>
           <button
             type="button"
             onClick={() => setRawHandleRows([...rawHandleRows, { key: '', value: '' }])}
@@ -1352,7 +1352,7 @@ function DataTransformConfigPanel({
           </button>
         </div>
         {rawHandleRows.length === 0 ? (
-          <p className="text-xs text-slate-500">No direct raw handles configured. Most UI-authored flows should reference source steps instead.</p>
+          <p className="text-xs text-slate-500">No direct response references configured. Most flows you build in the UI should reference source steps instead.</p>
         ) : (
           <div className="space-y-2">
             {rawHandleRows.map((row, index) => (
@@ -2649,7 +2649,10 @@ export default function FlowsPage() {
                     <tr key={run.id} className="hover:bg-slate-700/20 transition-colors">
                       <td className="px-4 py-3 text-sm text-slate-200">#{run.id}</td>
                       <td className="px-4 py-3 text-sm text-slate-300">
-                        Flow #{run.flow_definition_id}
+                        <span className="block max-w-[18rem] truncate text-slate-100" title={run.flow_name || run.flow_definition_name || 'Unnamed flow'}>
+                          {run.flow_name || run.flow_definition_name || 'Unnamed flow'}
+                        </span>
+                        <span className="text-xs text-slate-500">#{run.flow_definition_id}</span>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={run.status} />
@@ -7401,7 +7404,10 @@ function ViewRunModal({ runId, onClose }: {
                 Run #{run?.id || '...'}
                 {runIsActive && <span className="ml-2 text-sm font-normal text-cyan-400">Live</span>}
               </h2>
-              <p className="text-sm text-slate-400">Flow #{run?.flow_definition_id}</p>
+              <p className="text-sm text-slate-400">
+                {run?.flow_name || run?.flow_definition_name || 'Unnamed flow'}
+                {run?.flow_definition_id ? <span className="ml-2 text-xs text-slate-500">#{run.flow_definition_id}</span> : null}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">

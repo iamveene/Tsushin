@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, react/no-unescaped-entities */
 
 /**
- * Discord Setup Wizard (v0.6.0 V060-CHN-002).
+ * Discord Setup Wizard.
  *
  * Replaces the bare-form DiscordSetupModal with a guided 6-step wizard:
  *   1. Welcome + public-URL prereq (Discord requires a public HTTPS endpoint).
@@ -166,9 +166,15 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
           </h4>
           <p className="text-xs text-amber-100/80">
             {ingressWarning ? (
-              <>Tenant override is stored but invalid: {ingressWarning}. Fix it in Hub → Channels, or ask a global admin to enable Remote Access.</>
+              <>
+                Tenant override is stored but invalid: {ingressWarning}. Fix it in{' '}
+                <a href="/hub?tab=channels" className="underline hover:text-white">Hub → Channels</a>, or ask a global admin to enable Remote Access.
+              </>
             ) : (
-              <>Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Ask a global admin to enable <strong>Remote Access</strong> for this tenant, or set an <strong>Ingress Override</strong> in Hub → Channels.</>
+              <>
+                Discord can't reach <code className="bg-amber-900/40 px-1 rounded">https://localhost</code>. Ask a global admin to enable <strong>Remote Access</strong> for this tenant, or set an <strong>Ingress Override</strong> in{' '}
+                <a href="/hub?tab=channels" className="underline hover:text-white">Hub → Channels</a>.
+              </>
             )}
           </p>
         </div>
@@ -355,7 +361,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
       ) : (
         <div className="p-3 bg-amber-500/10 border border-amber-500/40 rounded-lg">
           <p className="text-xs text-amber-200">
-            URL preview unavailable — set your <strong>Public Base URL</strong> in Hub → Channels and recreate the integration.
+            URL preview unavailable — set your <strong>Public Base URL</strong> in{' '}
+            <a href="/hub?tab=channels" className="underline hover:text-white">Hub → Channels</a> and recreate the integration.
           </p>
         </div>
       )}
@@ -404,7 +411,10 @@ export default function DiscordSetupWizard({ isOpen, onClose, onSubmit, saving }
       <div className="bg-tsushin-deep/50 rounded-xl p-5">
         <h4 className="text-sm font-semibold text-white mb-3">Last step:</h4>
         <ol className="text-sm text-tsushin-slate space-y-2 list-decimal list-inside">
-          <li>Go to <strong>Agents → {`{your agent}`} → Channels</strong>, enable <strong>Discord</strong>, and pick this bot.</li>
+          <li>
+            Go to <a href="/agents" className="text-indigo-300 underline hover:text-white">Agents</a> → <strong>{`{your agent}`}</strong> → <strong>Channels</strong>,
+            enable <strong>Discord</strong>, and pick this bot.
+          </li>
           <li>DM the bot or invoke a slash command — it will reply via your assigned agent.</li>
         </ol>
       </div>

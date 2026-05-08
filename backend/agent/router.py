@@ -39,6 +39,7 @@ from services.group_sender_resolver import GroupSenderResolver
 
 # Phase 8: Watcher activity events
 from services.watcher_activity_service import emit_agent_processing_async
+from services.agent_run_status import determine_agent_run_status
 
 # Item 38: Circuit breaker queuing — defer messages when a channel is OPEN
 
@@ -52,31 +53,7 @@ def _determine_agent_run_status(result: Dict) -> str:
     Determine the status of an agent run based on the result.
     Checks both explicit error field and failure indicators in the answer.
     """
-    # Check explicit error field
-    if result.get("error"):
-        return "error"
-
-    # Check for failure indicators in the answer
-    answer = (result.get("answer") or "").lower()
-    failure_indicators = [
-        "command failed",
-        "exit code: 1",
-        "exit code: 2",
-        "exit code:",
-        "error:",
-        "failed to",
-        "exception:",
-        "traceback",
-        "permission denied",
-        "not found",
-        "timed out",
-        "timeout"
-    ]
-
-    if answer and any(indicator in answer for indicator in failure_indicators):
-        return "error"
-
-    return "success"
+    return determine_agent_run_status(result)
 
 
 class AgentRouter:
