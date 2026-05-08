@@ -40,6 +40,7 @@ interface WizardState {
   asrMode: 'openai' | 'instance'
   asrInstanceId: number | null
   transcriptModel: string
+  rememberTranscript: boolean
   // Kokoro-only
   memLimit: string
   autoProvision: boolean
@@ -65,6 +66,7 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
     asrMode: 'openai',
     asrInstanceId: null,
     transcriptModel: 'whisper-1',
+    rememberTranscript: true,
     memLimit: '1.5g',
     autoProvision: true,
     providerInstanceId: null,
@@ -198,6 +200,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
         language: state.language,
         model: state.transcriptModel || 'whisper-1',
         asr_mode: state.asrMode,
+        remember_transcript: state.rememberTranscript !== false,
       }
       if (state.asrMode === 'instance' && state.asrInstanceId) {
         transcriptConfig.asr_instance_id = state.asrInstanceId
@@ -487,6 +490,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
                 model: state.transcriptModel,
                 asrMode: state.asrMode,
                 asrInstanceId: state.asrInstanceId,
+                rememberTranscript: state.rememberTranscript,
               }}
               onChange={(patch) => setState(s => ({
                 ...s,
@@ -494,6 +498,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
                 transcriptModel: patch.model !== undefined ? patch.model : s.transcriptModel,
                 asrMode: patch.asrMode !== undefined ? patch.asrMode : s.asrMode,
                 asrInstanceId: patch.asrInstanceId !== undefined ? patch.asrInstanceId : s.asrInstanceId,
+                rememberTranscript: patch.rememberTranscript !== undefined ? patch.rememberTranscript : s.rememberTranscript,
               }))}
               showResponseMode={false}
             />
@@ -650,10 +655,16 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
               </div>
             )}
             {(state.agentType === 'transcript' || state.agentType === 'hybrid') && (
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
-                <div className="text-xs text-gray-500">Transcript model</div>
-                <div className="text-white font-mono text-xs">{state.transcriptModel}</div>
-              </div>
+              <>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                  <div className="text-xs text-gray-500">Transcript model</div>
+                  <div className="text-white font-mono text-xs">{state.transcriptModel}</div>
+                </div>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                  <div className="text-xs text-gray-500">Transcript memory</div>
+                  <div className="text-white text-sm">{state.rememberTranscript !== false ? 'Remembered' : 'Immediate only'}</div>
+                </div>
+              </>
             )}
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
               <div className="text-xs text-gray-500">Target agent</div>
