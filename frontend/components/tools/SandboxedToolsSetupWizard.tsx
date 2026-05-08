@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import Modal from '@/components/ui/Modal'
 import { api, Agent, SandboxedTool } from '@/lib/client'
 
@@ -238,7 +239,9 @@ export default function SandboxedToolsSetupWizard({ isOpen, onClose, onComplete 
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Custom tools</div>
-              <div className="text-white">Add your own via Hub → Sandboxed Tools</div>
+              <div className="text-white">
+                Add your own via <Link href="/hub/sandboxed-tools" className="underline hover:text-teal-200">Hub → Sandboxed Tools</Link>
+              </div>
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500 mb-1">Execution</div>
@@ -272,7 +275,8 @@ export default function SandboxedToolsSetupWizard({ isOpen, onClose, onComplete 
             <div className="py-10 text-center text-sm text-gray-400">Loading tools…</div>
           ) : tools.length === 0 ? (
             <div className="py-6 text-center text-sm text-gray-400 border border-white/5 rounded-lg bg-white/[0.02]">
-              No sandboxed tools found in this tenant. Seed them from Hub → Sandboxed Tools first.
+              No sandboxed tools found in this tenant. Seed them from{' '}
+              <Link href="/hub/sandboxed-tools" className="text-teal-300 underline hover:text-white">Hub → Sandboxed Tools</Link> first.
             </div>
           ) : (
             <div>
@@ -513,7 +517,8 @@ export default function SandboxedToolsSetupWizard({ isOpen, onClose, onComplete 
               </div>
             </div>
             <div className="text-xs text-gray-400 bg-teal-500/5 border border-teal-500/20 rounded-lg p-3">
-              Send these from an agent in Playground or WhatsApp. Executions show up in Hub → Sandboxed Tools → Executions.
+              Send these from an agent in Playground or WhatsApp. Executions show up in{' '}
+              <Link href="/hub/sandboxed-tools" className="text-teal-300 underline hover:text-white">Hub → Sandboxed Tools → Executions</Link>.
             </div>
           </>
         )}

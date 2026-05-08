@@ -409,7 +409,7 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
               autoFocus
             />
             <p className="text-[11px] text-gray-500 mt-1">
-              Displayed in Hub and Agent Studio. You can rename it later from the Ollama provider panel.
+              Displayed in Hub and Studio → Agents. You can rename it later from the Ollama provider panel.
             </p>
           </div>
 
@@ -581,7 +581,7 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
             <p className="text-xs text-gray-500 mt-2">
               Skip to just provision the container — agents can be rewired later from{' '}
               <a href="/agents" className="text-purple-300 underline hover:text-white">
-                Agent Studio
+                Studio → Agents
               </a>.
             </p>
           </div>

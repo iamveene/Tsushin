@@ -530,7 +530,7 @@ export default function KokoroSetupWizard({ isOpen, onClose, onComplete }: Kokor
             <p className="text-xs text-gray-500 mt-2">
               Skip this if you just want to create the instance — you can link agents later from{' '}
               <a href="/agents" className="text-emerald-300 underline hover:text-white">
-                Agent Studio
+                Studio → Agents
               </a>.
             </p>
           </div>

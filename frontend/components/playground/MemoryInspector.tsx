@@ -846,7 +846,7 @@ export default function MemoryInspector({ agentId, senderKey, threadId }: Memory
       <div className="px-4 py-2 border-t border-white/[0.06] text-xs text-white/30">
         {memoryData?.stats.sender_key ? (
           <>
-            Thread: <span className="font-mono text-teal-400/60">{memoryData.stats.sender_key}</span>
+            Thread: <span className="font-mono text-teal-400/60" title={memoryData.stats.sender_key}>Active conversation</span>
             {memoryData.stats.project_id && (
               <span className="ml-3">Project: <span className="font-mono">{memoryData.stats.project_id}</span></span>
             )}

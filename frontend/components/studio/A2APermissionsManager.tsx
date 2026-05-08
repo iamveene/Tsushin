@@ -73,6 +73,12 @@ export default function A2APermissionsManager() {
     setLoading(false)
   }, [loadAgents, loadPermissions])
 
+  const agentExists = useCallback((id: number) => agents.some(agent => agent.id === id), [agents])
+  const agentRuleLabel = useCallback((name: string | null | undefined, id: number) => {
+    if (name) return name
+    return agentExists(id) ? `Agent #${id}` : '[deleted agent]'
+  }, [agentExists])
+
   useEffect(() => {
     loadAll()
   }, [loadAll])
@@ -201,10 +207,16 @@ export default function A2APermissionsManager() {
               {permissions.map((perm) => (
                 <tr key={perm.id} className="hover:bg-gray-800/30 transition-colors">
                   <td className="px-6 py-4 text-sm text-white">
-                    {perm.source_agent_name || `Agent #${perm.source_agent_id}`}
+                    <span>{agentRuleLabel(perm.source_agent_name, perm.source_agent_id)}</span>
+                    {!agentExists(perm.source_agent_id) && (
+                      <span className="mt-1 block text-xs text-amber-300">This agent was deleted. Remove this rule.</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-white">
-                    {perm.target_agent_name || `Agent #${perm.target_agent_id}`}
+                    <span>{agentRuleLabel(perm.target_agent_name, perm.target_agent_id)}</span>
+                    {!agentExists(perm.target_agent_id) && (
+                      <span className="mt-1 block text-xs text-amber-300">This agent was deleted. Remove this rule.</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-tsushin-slate">{perm.max_depth}</td>
                   <td className="px-6 py-4 text-sm text-tsushin-slate" title={`${perm.rate_limit_rpm} requests per minute`}>

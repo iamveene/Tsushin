@@ -1342,7 +1342,7 @@ function DataTransformConfigPanel({
 
       <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium text-slate-300">Raw response handles</label>
+          <label className="text-sm font-medium text-slate-300">Advanced response references</label>
           <button
             type="button"
             onClick={() => setRawHandleRows([...rawHandleRows, { key: '', value: '' }])}
@@ -1352,7 +1352,7 @@ function DataTransformConfigPanel({
           </button>
         </div>
         {rawHandleRows.length === 0 ? (
-          <p className="text-xs text-slate-500">No direct raw handles configured. Most UI-authored flows should reference source steps instead.</p>
+          <p className="text-xs text-slate-500">No direct response references configured. Most flows you build in the UI should reference source steps instead.</p>
         ) : (
           <div className="space-y-2">
             {rawHandleRows.map((row, index) => (

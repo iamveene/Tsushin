@@ -31,13 +31,13 @@ export type ProfileCategoryId =
 
 // Cardinality rules per category
 export const CATEGORY_CARDINALITY: Record<ProfileCategoryId, { min: number; max: number | null; label: string }> = {
-  persona: { min: 0, max: 1, label: '0..1' },
-  channels: { min: 0, max: null, label: '0..N' },
-  skills: { min: 0, max: null, label: '0..N' },
-  tools: { min: 0, max: null, label: '0..N' },
-  security: { min: 0, max: 1, label: '0..1' },
-  knowledge: { min: 0, max: null, label: '0..N' },
-  memory: { min: 1, max: 1, label: '1' },
+  persona: { min: 0, max: 1, label: 'optional' },
+  channels: { min: 0, max: null, label: 'many allowed' },
+  skills: { min: 0, max: null, label: 'many allowed' },
+  tools: { min: 0, max: null, label: 'many allowed' },
+  security: { min: 0, max: 1, label: 'optional' },
+  knowledge: { min: 0, max: null, label: 'many allowed' },
+  memory: { min: 1, max: 1, label: 'required' },
 }
 
 // Categories that render as expandable group nodes (0..N cardinality)

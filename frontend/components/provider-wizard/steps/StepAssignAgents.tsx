@@ -102,7 +102,7 @@ export default function StepAssignAgents() {
           Optional — switch existing agents over to this new <span className="font-mono text-tsushin-accent">{vendor}</span> instance now.
           You can always do this later from{' '}
           <a href="/agents" className="text-teal-300 underline hover:text-white">
-            Agent Studio
+            Studio → Agents
           </a>.
         </p>
         <p className="text-[11px] text-amber-300/80 mt-1.5">
@@ -145,7 +145,7 @@ export default function StepAssignAgents() {
           <p className="text-xs text-tsushin-slate italic">
             No agents yet — create one in{' '}
             <a href="/agents" className="text-teal-300 underline hover:text-white">
-              Agent Studio
+              Studio → Agents
             </a>
             , then link this instance to it.
           </p>

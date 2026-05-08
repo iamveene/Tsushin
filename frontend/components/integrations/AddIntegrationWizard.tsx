@@ -969,7 +969,7 @@ export default function AddIntegrationWizard({
           <div className="py-6 text-sm text-gray-300 text-center">
             Credentials saved. You can link agents to this integration any time from{' '}
             <a href="/agents" className="text-teal-300 underline hover:text-white">
-              Agent Studio
+              Studio → Agents
             </a>.
           </div>
         ) : assignmentResults.length === 0 ? (
