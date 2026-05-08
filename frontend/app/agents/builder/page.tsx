@@ -14,8 +14,8 @@ export default function BuilderPage() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Studio</h1>
-            <p className="text-tsushin-slate">Visual agent configuration builder</p>
+            <h1 className="text-3xl font-display font-bold text-white mb-2">Builder</h1>
+            <p className="text-tsushin-slate">Visual canvas for wiring agents, skills, and triggers together.</p>
           </div>
         </div>
       </div>

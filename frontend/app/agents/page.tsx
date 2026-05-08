@@ -479,8 +479,8 @@ export default function AgentsPage() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Studio</h1>
-            <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
+            <h1 className="text-3xl font-display font-bold text-white mb-2">Agents</h1>
+            <p className="text-tsushin-slate">Configure AI agents with personas, skills, and channel bindings.</p>
           </div>
           {canWriteAgents && (
             // The primary "Create" click opens the kind-chooser modal so
