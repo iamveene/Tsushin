@@ -177,7 +177,6 @@ services:
       # BUG-654: single authoritative declaration — the previous duplicate on
       # line 156 shadowed this value with an empty string when the var was unset.
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
-      - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
       - TSN_WHATSAPP_MCP_IMAGE=${TSN_WHATSAPP_MCP_IMAGE:-tsushin/whatsapp-mcp:latest}
       - TSN_TOOLBOX_BASE_IMAGE=${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}
       # v0.7.0 Triggers↔Flows Unification env-var gates. Default off so
