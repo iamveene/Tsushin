@@ -3,6 +3,7 @@
 import React, { useState, useEffect, FormEvent } from 'react'
 import client, { ProjectCommandPattern } from '@/lib/client'
 import { ConfirmDialog, RegexTester, Tooltip, InfoIcon } from '../ui'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface ProjectPatternFormData {
   command_type: string
@@ -31,6 +32,7 @@ export function ProjectPatternsTab({ canWrite, showToast }: ProjectPatternsTabPr
 
   // Modal state
   const [showModal, setShowModal] = useState(false)
+  const showModalBackdropDismiss = useBackdropDismiss(() => setShowModal(false))
   const [editingPattern, setEditingPattern] = useState<ProjectCommandPattern | null>(null)
   const [formData, setFormData] = useState<ProjectPatternFormData>({
     command_type: 'enter',
@@ -296,7 +298,7 @@ export function ProjectPatternsTab({ canWrite, showToast }: ProjectPatternsTabPr
 
       {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8" onClick={() => setShowModal(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8" {...showModalBackdropDismiss}>
           <div className="glass-card rounded-xl p-6 max-w-2xl w-full mx-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-white mb-4">
               {editingPattern ? 'Edit Project Pattern' : 'Create Project Pattern'}

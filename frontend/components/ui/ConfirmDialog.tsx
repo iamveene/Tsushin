@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface Props {
   isOpen: boolean
@@ -82,6 +83,8 @@ export default function ConfirmDialog({
     return () => document.removeEventListener('keydown', handleKey)
   }, [isOpen, isBusy, onCancel, requireType])
 
+  const backdropDismiss = useBackdropDismiss(() => { if (!isBusy) onCancel() })
+
   if (!isOpen) return null
 
   const typeMatches = !requireType || typeInput.trim() === requireType
@@ -90,8 +93,7 @@ export default function ConfirmDialog({
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-      onClick={() => { if (!isBusy) onCancel() }}
-      onMouseDown={(e) => e.stopPropagation()}
+      {...backdropDismiss}
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"

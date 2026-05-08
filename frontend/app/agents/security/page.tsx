@@ -16,6 +16,7 @@ import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, SentinelConfig, SentinelLog, SentinelStats, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
 import SkillSecurityPanel from '@/components/sentinel/SkillSecurityPanel'
 
@@ -43,6 +44,7 @@ export default function SecurityPage() {
   // Modal state
   const [selectedAgent, setSelectedAgent] = useState<AgentWithSecurity | null>(null)
   const [showModal, setShowModal] = useState(false)
+  const showModalBackdropDismiss = useBackdropDismiss(() => setShowModal(false))
   const [saving, setSaving] = useState(false)
 
   // Profile assignment form state
@@ -411,7 +413,7 @@ export default function SecurityPage() {
       {showModal && selectedAgent && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowModal(false)}
+          {...showModalBackdropDismiss}
         >
           <div
             className="bg-tsushin-elevated rounded-xl max-w-2xl w-full shadow-xl max-h-[90vh] overflow-y-auto"

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, FormEvent } from 'react'
 import client, { TonePreset } from '@/lib/client'
 import { ConfirmDialog } from '../ui'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface TonePresetFormData {
   name: string
@@ -21,6 +22,7 @@ export function TonePresetsTab({ canWrite, showToast }: TonePresetsTabProps) {
 
   // Modal state
   const [showModal, setShowModal] = useState(false)
+  const showModalBackdropDismiss = useBackdropDismiss(() => setShowModal(false))
   const [editingPreset, setEditingPreset] = useState<TonePreset | null>(null)
   const [formData, setFormData] = useState<TonePresetFormData>({ name: '', description: '' })
   const [saving, setSaving] = useState(false)
@@ -203,7 +205,7 @@ export function TonePresetsTab({ canWrite, showToast }: TonePresetsTabProps) {
 
       {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowModal(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...showModalBackdropDismiss}>
           <div className="glass-card rounded-xl p-6 max-w-lg w-full mx-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-white mb-4">
               {editingPreset ? 'Edit Tone Preset' : 'Create Tone Preset'}

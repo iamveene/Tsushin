@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread, authenticatedFetch } from '@/lib/client'
 import { ConnectionState } from '@/lib/websocket'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import { formatTime } from '@/lib/dateUtils'
 import {
   BotIcon,
@@ -397,6 +398,9 @@ export default function ExpertMode({
     setRenamingThreadId(null)
     setRenameTitle('')
   }
+
+  const renameBackdropDismiss = useBackdropDismiss(handleCancelRename)
+  const lightboxBackdropDismiss = useBackdropDismiss(() => setLightboxImage(null))
 
   const handleSaveRename = async () => {
     if (!renamingThreadId || !renameTitle.trim()) {
@@ -1416,7 +1420,7 @@ export default function ExpertMode({
           <div
             className="fixed inset-0 z-50"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(4px)' }}
-            onClick={handleCancelRename}
+            {...renameBackdropDismiss}
           />
           <div
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1491,7 +1495,7 @@ export default function ExpertMode({
       {lightboxImage && (
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer"
-          onClick={() => setLightboxImage(null)}
+          {...lightboxBackdropDismiss}
         >
           <button
             className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"

@@ -14,6 +14,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, SentinelLog, SentinelStats } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import { SearchIcon, AlertTriangleIcon, ShieldIcon, CheckCircleIcon, ChartBarIcon, LockIcon, UnlockIcon, EyeIcon, BrainIcon, TerminalIcon, SyringeIcon, BotIcon } from '@/components/ui/icons'
 
 interface Agent {
@@ -37,6 +38,7 @@ export default function SecurityTab() {
 
   // Selected log for details modal
   const [selectedLog, setSelectedLog] = useState<SentinelLog | null>(null)
+  const selectedLogBackdropDismiss = useBackdropDismiss(() => setSelectedLog(null))
 
   const loadData = useCallback(async () => {
     try {
@@ -504,7 +506,7 @@ export default function SecurityTab() {
       {selectedLog && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedLog(null)}
+          {...selectedLogBackdropDismiss}
         >
           <div
             className="bg-tsushin-elevated rounded-xl max-w-2xl w-full max-h-[90vh] overflow-auto shadow-xl"

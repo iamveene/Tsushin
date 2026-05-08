@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface ModalProps {
   isOpen: boolean
@@ -50,17 +51,14 @@ export default function Modal({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
 
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   if (!isOpen || !mounted) return null
 
   return createPortal(
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={(e) => {
-        // Close modal when clicking backdrop
-        if (e.target === e.currentTarget) {
-          onClose()
-        }
-      }}
+      {...backdropDismiss}
     >
       <div
         className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full ${autoHeight ? 'max-h-[calc(100vh-2rem)]' : 'max-h-[85vh]'} flex flex-col shadow-elevated animate-scale-in`}

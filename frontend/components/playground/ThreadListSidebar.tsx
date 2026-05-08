@@ -9,6 +9,7 @@
 import React, { useState, useEffect } from 'react'
 import { api, PlaygroundThread } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface ThreadListSidebarProps {
   agentId: number | null
@@ -122,6 +123,8 @@ export default function ThreadListSidebar({
     setRenamingThreadId(null)
     setRenameTitle('')
   }
+
+  const renameBackdropDismiss = useBackdropDismiss(handleCancelRename)
 
   const handleSaveRename = async () => {
     if (!renamingThreadId || !renameTitle.trim()) {
@@ -335,7 +338,7 @@ export default function ThreadListSidebar({
         <>
           <div
             className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
-            onClick={handleCancelRename}
+            {...renameBackdropDismiss}
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="bg-tsushin-dark border border-tsushin-indigo/20 rounded-lg p-6 max-w-md w-full shadow-xl">
