@@ -109,6 +109,8 @@ export default function StepReview() {
                       ASR: {state.draft.audio.asrMode === 'instance'
                         ? `local instance #${state.draft.audio.asrInstanceId ?? '—'}`
                         : 'OpenAI Whisper'}
+                      {' · '}
+                      {state.draft.audio.rememberTranscript !== false ? 'remember transcripts' : 'do not remember transcripts'}
                     </div>
                   )}
                 </>

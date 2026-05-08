@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Audio transcript memory toggle (2026-05-08)
+
+- Added a per-agent **Remember audio transcripts** toggle to the shared transcript configuration UI used by the Audio Agents Wizard, regular Agent Wizard audio step, and Agent Skills Manager. The UI treats missing `audio_transcript.config.remember_transcript` as enabled, and new/edited transcript skill saves now persist the explicit `remember_transcript` flag alongside the existing response mode and ASR settings.
+- Transcript-only WhatsApp and Playground audio now store the transcript as a normal user memory turn by default, with transcript metadata (`source=audio_transcript`, response mode, provider/model/language, original message id where available) and pre-storage security gates so blocked Sentinel/MemGuard content is not remembered.
+
 ### Fixed — UI audit backend/runtime contracts (2026-05-08)
 
 - Hardened backend API boundaries for UI audit findings: A2A permission lists clean up tenant-owned rules pointing at deleted or foreign agents, Sentinel profile assignments expose safe agent display labels for deleted-agent cases, agent-run status now treats execution-error output as failed, flow-run responses include flow display names plus safe duration fields, billing usage labels prefer agent/contact display names, and vector-store responses mask internal Docker/container/index identifiers while preserving operational fields for the UI.

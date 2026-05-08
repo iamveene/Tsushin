@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Dict, Optional, Set, List
+from typing import Any, Dict, Optional, Set, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -911,6 +911,291 @@ class AgentRouter:
             self.logger.error(f"{context_label}: failed to send response to {channel}: {recipient}")
 
         return success
+
+    @staticmethod
+    def _coerce_bool_default_true(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"false", "0", "no", "n", "off"}:
+                return False
+            if normalized in {"true", "1", "yes", "y", "on"}:
+                return True
+            return True
+        return bool(value)
+
+    @staticmethod
+    def _extract_transcript_from_skill_output(skill_output: Optional[str]) -> str:
+        output = (skill_output or "").strip()
+        prefixes = (
+            "📝 Transcript:\n\n",
+            "Transcript:\n\n",
+            "📝 ",
+        )
+        for prefix in prefixes:
+            if output.startswith(prefix):
+                return output[len(prefix):].strip()
+        return output
+
+    async def _transcript_memory_safety_allows(
+        self,
+        *,
+        agent_id: int,
+        tenant_id: Optional[str],
+        sender_key: str,
+        transcript: str,
+        message: Dict,
+        recipient: str,
+    ) -> bool:
+        """Run the same pre-storage safety gates used by normal user turns."""
+        if not tenant_id:
+            self.logger.warning(
+                "Skipping transcript memory persistence for agent %s because tenant_id is unavailable",
+                agent_id,
+            )
+            return False
+
+        sentinel = None
+        channel = message.get("channel", "whatsapp")
+        try:
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+            skill_context_str = None
+            try:
+                from services.skill_context_service import SkillContextService
+                skill_ctx_service = SkillContextService(self.db)
+                skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                skill_context_str = skill_ctx.get('formatted_context')
+            except Exception as skill_e:
+                self.logger.warning(f"Failed to load skill context for transcript Sentinel: {skill_e}")
+
+            sentinel_result = await sentinel.analyze_prompt(
+                prompt=transcript,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                source=None,
+                skill_context=skill_context_str,
+            )
+
+            if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":
+                self.logger.warning(
+                    "Sentinel blocked transcript before memory storage - %s: %s",
+                    sentinel_result.detection_type,
+                    sentinel_result.threat_reason,
+                )
+                try:
+                    from services.audit_service import log_tenant_event, TenantAuditActions
+                    log_tenant_event(
+                        self.db,
+                        tenant_id,
+                        None,
+                        TenantAuditActions.SECURITY_SENTINEL_BLOCK,
+                        "message",
+                        None,
+                        {
+                            "detection_type": sentinel_result.detection_type,
+                            "threat_score": sentinel_result.threat_score,
+                            "reason": sentinel_result.threat_reason,
+                            "sender": sender_key,
+                            "channel": channel,
+                            "agent_id": agent_id,
+                            "source": "audio_transcript",
+                        },
+                        severity="warning",
+                    )
+                except Exception:
+                    pass
+                await self._send_message(
+                    recipient=recipient,
+                    message_text=sentinel_result.threat_reason or "Message blocked for security reasons.",
+                    channel=channel,
+                    agent_id=agent_id,
+                )
+                return False
+
+            if sentinel_result.is_threat_detected:
+                self.logger.info(
+                    "Sentinel detect_only allowed transcript before memory storage - %s",
+                    sentinel_result.detection_type,
+                )
+                try:
+                    config = sentinel.get_effective_config(agent_id)
+                    await sentinel.send_threat_notification(
+                        result=sentinel_result,
+                        config=config,
+                        sender_key=sender_key,
+                        agent_id=agent_id,
+                        mcp_api_url=(getattr(self, "config", {}) or {}).get("mcp_api_url"),
+                        mcp_api_secret=(getattr(self, "config", {}) or {}).get("mcp_api_secret"),
+                    )
+                except Exception as notif_e:
+                    self.logger.warning(f"Failed to send transcript Sentinel notification: {notif_e}")
+        except Exception as e:
+            fail_behavior = "open"
+            try:
+                from models import Config as ConfigModel
+                cfg = self.db.query(ConfigModel).first()
+                if cfg:
+                    fail_behavior = getattr(cfg, "sentinel_fail_behavior", None) or "open"
+            except Exception:
+                pass
+
+            if fail_behavior == "closed":
+                self.logger.error(
+                    "Sentinel fail-closed blocked transcript before memory storage: %s",
+                    e,
+                )
+                await self._send_message(
+                    recipient=recipient,
+                    message_text="Message blocked: security analysis unavailable. Please try again later.",
+                    channel=channel,
+                    agent_id=agent_id,
+                )
+                return False
+            self.logger.warning(f"Transcript Sentinel pre-check failed, allowing message (fail-open): {e}")
+
+        try:
+            from services.memguard_service import MemGuardService
+
+            if not sentinel:
+                from services.sentinel_service import SentinelService
+                sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+            effective_config = sentinel.get_effective_config(agent_id)
+            memguard_enabled = effective_config.detection_config.get(
+                "memory_poisoning", {}
+            ).get("enabled", True)
+
+            if memguard_enabled:
+                memguard = MemGuardService(self.db, tenant_id)
+                memguard_result = await memguard.analyze_for_memory_poisoning(
+                    content=transcript,
+                    agent_id=agent_id,
+                    sender_key=sender_key,
+                    config=effective_config,
+                )
+
+                if memguard_result.blocked:
+                    self.logger.warning(
+                        "MemGuard blocked transcript before memory storage: %s",
+                        memguard_result.reason,
+                    )
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(
+                            self.db,
+                            tenant_id,
+                            None,
+                            TenantAuditActions.SECURITY_MEMGUARD_BLOCK,
+                            "message",
+                            None,
+                            {
+                                "reason": memguard_result.reason,
+                                "threat_score": getattr(memguard_result, 'threat_score', None),
+                                "sender": sender_key,
+                                "channel": channel,
+                                "agent_id": agent_id,
+                                "source": "audio_transcript",
+                            },
+                            severity="warning",
+                        )
+                    except Exception:
+                        pass
+                    await self._send_message(
+                        recipient=recipient,
+                        message_text="Message blocked: memory poisoning attempt detected.",
+                        channel=channel,
+                        agent_id=agent_id,
+                    )
+                    return False
+        except Exception as e:
+            self.logger.warning(f"Transcript MemGuard check failed, allowing message: {e}")
+
+        return True
+
+    async def _remember_transcript_only_skill_output(
+        self,
+        *,
+        agent_id: int,
+        message: Dict,
+        sender_key: str,
+        sender_name: str,
+        recipient: str,
+        skill_type: Optional[str],
+        skill_output: Optional[str],
+        skill_metadata: Optional[Dict[str, Any]],
+        project_id: Optional[int] = None,
+        project_name: Optional[str] = None,
+    ) -> bool:
+        """
+        Persist transcript-only audio as a user turn before direct delivery.
+
+        Returns False when a pre-storage safety gate blocked the transcript and
+        the direct skill output should not be sent.
+        """
+        metadata = dict(skill_metadata or {})
+        resolved_skill_type = skill_type or metadata.get("skill_type")
+        if resolved_skill_type != "audio_transcript":
+            return True
+        if metadata.get("response_mode") != "transcript_only":
+            return True
+        if not self._coerce_bool_default_true(metadata.get("remember_transcript")):
+            return True
+
+        transcript = (metadata.get("transcript") or "").strip()
+        if not transcript:
+            transcript = self._extract_transcript_from_skill_output(skill_output)
+        if not transcript:
+            self.logger.warning("Transcript-only skill output had no transcript text to remember")
+            return True
+
+        tenant_id = self._get_agent_tenant_id(agent_id)
+        allowed = await self._transcript_memory_safety_allows(
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            sender_key=sender_key,
+            transcript=transcript,
+            message=message,
+            recipient=recipient,
+        )
+        if not allowed:
+            return False
+
+        is_group = message.get("is_group", False)
+        chat_id = message.get("chat_id") if is_group else None
+        memory_metadata = {
+            "source": "audio_transcript",
+            "response_mode": "transcript_only",
+            "provider": metadata.get("provider"),
+            "model": metadata.get("model"),
+            "language": metadata.get("language"),
+            "original_message_id": metadata.get("original_message_id") or message.get("id"),
+            "sender_name": sender_name,
+            "is_group": is_group,
+            "project_id": project_id,
+            "project_name": project_name,
+        }
+        memory_metadata = {key: value for key, value in memory_metadata.items() if value is not None}
+
+        await self.memory_manager.add_message(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            role="user",
+            content=transcript,
+            message_id=message.get("id") or metadata.get("original_message_id"),
+            metadata=memory_metadata,
+            chat_id=chat_id,
+            whatsapp_id=message.get("sender"),
+            telegram_id=message.get("telegram_id"),
+            use_contact_mapping=True,
+            project_id=project_id,
+        )
+        self.logger.info("Remembered transcript-only audio as user memory for agent %s", agent_id)
+        return True
 
     def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
         """
@@ -1980,8 +2265,28 @@ class AgentRouter:
             # Process audio transcription if needed
             if thread_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation thread, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, skill_media_paths = await self._process_with_skills(thread_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(thread_agent_id, message)
                 if skip_ai and skill_output:
+                    should_send_skill_output = await self._remember_transcript_only_skill_output(
+                        agent_id=thread_agent_id,
+                        message=message,
+                        sender_key=sender_key,
+                        sender_name=sender_name,
+                        recipient=active_thread.recipient,
+                        skill_type=skill_type,
+                        skill_output=skill_output,
+                        skill_metadata=skill_metadata,
+                    )
+                    if not should_send_skill_output:
+                        if thread_tenant_id:
+                            emit_agent_processing_async(
+                                tenant_id=thread_tenant_id,
+                                agent_id=thread_agent_id,
+                                status="end",
+                                sender_key=sender_key,
+                                channel=message.get("channel", "whatsapp")
+                            )
+                        return
                     await self._send_skill_output_directly(
                         recipient=active_thread.recipient,
                         message=message,
@@ -2075,9 +2380,29 @@ class AgentRouter:
             # IMPORTANT: Process audio transcription BEFORE sending to conversation handler
             if conversation_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, skill_media_paths = await self._process_with_skills(conversation_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(conversation_agent_id, message)
                 if skip_ai and skill_output:
                     recipient = message.get("chat_id") or sender
+                    should_send_skill_output = await self._remember_transcript_only_skill_output(
+                        agent_id=conversation_agent_id,
+                        message=message,
+                        sender_key=sender_key,
+                        sender_name=sender_name,
+                        recipient=recipient,
+                        skill_type=skill_type,
+                        skill_output=skill_output,
+                        skill_metadata=skill_metadata,
+                    )
+                    if not should_send_skill_output:
+                        if conv_tenant_id:
+                            emit_agent_processing_async(
+                                tenant_id=conv_tenant_id,
+                                agent_id=conversation_agent_id,
+                                status="end",
+                                sender_key=sender_key,
+                                channel=message.get("channel", "whatsapp")
+                            )
+                        return
                     await self._send_skill_output_directly(
                         recipient=recipient,
                         message=message,
@@ -2217,7 +2542,7 @@ class AgentRouter:
                 self.logger.info(f"[PROJECT] Processing message in project context: {current_project_name} (ID: {current_project_id})")
 
         # Phase 5.0: Process message with skills (e.g., audio transcription) BEFORE AI processing
-        processed_message_text, skip_ai, skill_output, processed_skill_type, skill_media_paths = await self._process_with_skills(agent_id, message)
+        processed_message_text, skip_ai, skill_output, processed_skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(agent_id, message)
         if processed_message_text != message_text:
             self.logger.info(f"Message processed by skills: {len(message_text)} -> {len(processed_message_text)} chars")
             message_text = processed_message_text
@@ -2226,6 +2551,28 @@ class AgentRouter:
         if skip_ai and skill_output:
             self.logger.info("Skill requested to skip AI processing, sending output directly")
             recipient = message.get("chat_id") or message.get("sender")
+            should_send_skill_output = await self._remember_transcript_only_skill_output(
+                agent_id=agent_id,
+                message=message,
+                sender_key=sender_key,
+                sender_name=sender_name,
+                recipient=recipient,
+                skill_type=processed_skill_type,
+                skill_output=skill_output,
+                skill_metadata=skill_metadata,
+                project_id=current_project_id,
+                project_name=current_project_name,
+            )
+            if not should_send_skill_output:
+                if agent_tenant_id_early:
+                    emit_agent_processing_async(
+                        tenant_id=agent_tenant_id_early,
+                        agent_id=agent_id,
+                        status="end",
+                        sender_key=sender_key,
+                        channel=message.get("channel", "whatsapp")
+                    )
+                return
             await self._send_skill_output_directly(
                 recipient=recipient,
                 message=message,
@@ -4298,7 +4645,7 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             self.logger.error(f"Error handling slash command: {e}", exc_info=True)
             return None
 
-    async def _process_with_skills(self, agent_id: int, message: Dict) -> str:
+    async def _process_with_skills(self, agent_id: int, message: Dict) -> tuple:
         """
         Phase 5.0: Process message with enabled skills before AI processing.
 
@@ -4315,7 +4662,7 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             message: Message dict from MCP database
 
         Returns:
-            Tuple of (processed_message_text, skip_ai_flag, skill_output, skill_type, media_paths)
+            Tuple of (processed_message_text, skip_ai_flag, skill_output, skill_type, media_paths, skill_metadata)
         """
         try:
             message_body = message.get("body", "")
@@ -4396,14 +4743,15 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
                 if skip_ai:
                     # Return: (message_text, skip_ai_flag, skill_output, skill_type, media_paths)
-                    return (message_body, True, skill_result.output, skill_type, media_paths)
+                    transcript_text = skill_result.metadata.get("transcript") if skill_result.metadata else None
+                    return (transcript_text or message_body, True, skill_result.output, skill_type, media_paths, skill_result.metadata or {})
                 elif skill_result.processed_content:
                     # Return: (transcribed_text, no_skip, None, skill_type, media_paths)
-                    return (skill_result.processed_content, False, None, skill_type, media_paths)
+                    return (skill_result.processed_content, False, None, skill_type, media_paths, skill_result.metadata or {})
                 else:
                     # Skill succeeded but wants AI to format the response
                     # Return skill output so it can be included in AI context
-                    return (message_body, False, skill_result.output, skill_type, media_paths)
+                    return (message_body, False, skill_result.output, skill_type, media_paths, skill_result.metadata or {})
 
             elif skill_result and not skill_result.success:
                 self.logger.warning(f"[ERROR] Skill processing failed: {skill_result.output}")
@@ -4415,12 +4763,13 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                         skill_result.output or "❌ Audio transcription failed.",
                         skill_type,
                         skill_result.media_paths,
+                        skill_result.metadata or {},
                     )
 
             # No skill handled it or processing failed, return original
-            return (message_body, False, None, None, None)
+            return (message_body, False, None, None, None, {})
 
         except Exception as e:
             self.logger.error(f"Error processing message with skills: {e}", exc_info=True)
             # On error, return original message text
-            return (message.get("body", ""), False, None, None, None)
+            return (message.get("body", ""), False, None, None, None, {})
