@@ -5,12 +5,12 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import StudioTabs from '@/components/studio/StudioTabs'
+import DetailShellHeader from '@/components/ui/DetailShell'
 import {
   AlertCircleIcon,
   ArchiveIcon,
   BotIcon,
   CheckCircleIcon,
-  ChevronLeftIcon,
   ClockIcon,
   GitHubIcon,
   PlayIcon,
@@ -470,43 +470,42 @@ export default function StudioTeamDetailPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <button
-              type="button"
-              onClick={() => router.push('/studio/teams')}
-              className="mb-3 inline-flex items-center gap-2 text-sm text-tsushin-slate transition-colors hover:text-white"
-            >
-              <ChevronLeftIcon size={16} />
-              Teams
-            </button>
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-3xl font-display font-bold text-white">{team?.name || 'Agent Team'}</h1>
+        <DetailShellHeader
+          breadcrumb={[
+            { label: 'Studio', href: '/agents' },
+            { label: 'Teams', href: '/studio/teams' },
+            { label: team?.name || 'Agent Team' },
+          ]}
+          title={team?.name || 'Agent Team'}
+          badges={
+            <>
               {team && <span className={`badge ${STATUS_STYLES[team.status] || 'badge-neutral'}`}>{formatLabel(team.status)}</span>}
               {readOnly && <span className="badge badge-warning">Read only</span>}
-            </div>
-            <p className="mt-2 text-tsushin-slate">{team?.description || 'Build, run, and monitor this team.'}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleStartRun}
-              disabled={busy || readOnly || team?.status !== 'active'}
-              className="btn-primary inline-flex items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <PlayIcon size={16} />
-              Run Now
-            </button>
-            <button
-              type="button"
-              onClick={loadAll}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white"
-            >
-              <RefreshIcon size={16} />
-              Refresh
-            </button>
-          </div>
-        </div>
+            </>
+          }
+          description={team?.description || 'Build, run, and monitor this team.'}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={handleStartRun}
+                disabled={busy || readOnly || team?.status !== 'active'}
+                className="btn-primary inline-flex items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PlayIcon size={16} />
+                Run Now
+              </button>
+              <button
+                type="button"
+                onClick={loadAll}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white"
+              >
+                <RefreshIcon size={16} />
+                Refresh
+              </button>
+            </>
+          }
+        />
 
         <div className="space-y-5">
           <StudioTabs />

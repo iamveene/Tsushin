@@ -16,6 +16,7 @@ import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
   LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, WrenchIcon, UsersIcon
 } from '@/components/ui/icons'
+import DetailShellHeader from '@/components/ui/DetailShell'
 
 type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge' | 'advanced'
 
@@ -112,59 +113,56 @@ export default function AgentDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-tsushin-ink">
-      {/* Header */}
-      <div className="bg-tsushin-surface/80 backdrop-blur-md border-b border-tsushin-border">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center gap-4 mb-4">
-            <button
-              onClick={() => router.push('/agents')}
-              className="text-tsushin-slate hover:text-white"
-            >
-              ← Back
-            </button>
-            <div className="h-6 w-px bg-tsushin-border"></div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold text-white">{agent.contact_name}</h1>
-                {agent.is_default && (
-                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-warning/20 text-yellow-200 rounded-full inline-flex items-center gap-1">
-                    <StarIcon size={12} /> Default
-                  </span>
-                )}
-                {agent.is_active ? (
-                  <span className="px-2 py-1 text-xs font-medium bg-green-800/30 text-green-200 rounded-full">
-                    ✓ Active
-                  </span>
-                ) : (
-                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-surface text-tsushin-slate rounded-full">
-                    ○ Inactive
-                  </span>
-                )}
-                {agent.is_team_member && (
-                  <span className="badge badge-team flex items-center gap-1">
-                    <UsersIcon size={12} /> Team
-                  </span>
-                )}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-4 text-sm text-tsushin-slate">
-                <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
-                <span className="inline-flex items-center gap-1"><BotIcon size={14} /> Model: {agent.model_name}</span>
-                <span className="inline-flex items-center gap-1"><LightningIcon size={14} /> Skills: {skillsCount}</span>
-                <span className="inline-flex items-center gap-1"><KeyIcon size={14} /> Keywords: {agent.keywords.length || 0}</span>
-              </div>
-            </div>
+    <div className="min-h-screen bg-tsushin-ink animate-fade-in">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <DetailShellHeader
+          breadcrumb={[
+            { label: 'Studio', href: '/agents' },
+            { label: 'Agents', href: '/agents' },
+            { label: agent.contact_name },
+          ]}
+          title={agent.contact_name}
+          badges={
+            <>
+              {agent.is_default && (
+                <span className="px-2 py-1 text-xs font-medium bg-tsushin-warning/20 text-yellow-200 rounded-full inline-flex items-center gap-1">
+                  <StarIcon size={12} /> Default
+                </span>
+              )}
+              {agent.is_active ? (
+                <span className="px-2 py-1 text-xs font-medium bg-green-800/30 text-green-200 rounded-full">
+                  ✓ Active
+                </span>
+              ) : (
+                <span className="px-2 py-1 text-xs font-medium bg-tsushin-surface text-tsushin-slate rounded-full">
+                  ○ Inactive
+                </span>
+              )}
+              {agent.is_team_member && (
+                <span className="badge badge-team flex items-center gap-1">
+                  <UsersIcon size={12} /> Team
+                </span>
+              )}
+            </>
+          }
+          meta={
+            <>
+              <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
+              <span className="inline-flex items-center gap-1"><BotIcon size={14} /> Model: {agent.model_name}</span>
+              <span className="inline-flex items-center gap-1"><LightningIcon size={14} /> Skills: {skillsCount}</span>
+              <span className="inline-flex items-center gap-1"><KeyIcon size={14} /> Keywords: {agent.keywords.length || 0}</span>
+            </>
+          }
+          actions={
             <button
               onClick={() => setActiveTab('configuration')}
-              className="btn-primary px-4 py-2 rounded-lg"
+              className="btn-primary inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm"
             >
               <SettingsIcon size={16} /> Edit Configuration
             </button>
-          </div>
-        </div>
-      </div>
+          }
+        />
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
         {agent.is_team_member && (
           <div className="mb-6 rounded-xl border border-tsushin-indigo/25 bg-tsushin-indigo/10 px-4 py-3">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
