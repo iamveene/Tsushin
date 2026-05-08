@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Watcher IA consolidation: 11 tabs → 7 with nested Agents sub-tabs (2026-05-07)
+
+- Watcher's top-level tab strip is now **Dashboard · Graph View · Agents · Flows · Security · Channel Health · Billing**. The five agent-runtime surfaces (Continuous Agents, Wake Events, Conversations, Team Runs, A2A Comms) collapsed into a single **Agents** top-level tab with sub-tabs. The non-agent observability tabs stay top-level. Result: single-row tab strip on standard screens, easier pivoting between agent inventory and recent activity.
+- Continuous Agents is the default sub-tab landing because it's the inventory surface (the others are run-history surfaces consulted on-demand).
+- Per `frontend/app/page.tsx` — type narrowed to `WatcherTab = 'dashboard' | 'graph' | 'agents' | 'flows' | 'security' | 'channel-health' | 'billing'` plus a new `AgentsSubTab` enum. No backend changes.
+
+### Added — Studio Continuous Agents tab + 3-way kind-chooser modal (2026-05-07)
+
+- Studio gains a new **Continuous Agents** tab (between Personas and Teams) at `/studio/continuous-agents`. The page re-mounts the existing CA list/management component inside the Studio shell so creation lives next to Agents and Teams in Studio (configuration), while observability stays in Watcher (run history).
+- New `CreateChooserModal` — "What do you want to build?" — surfaces Agent / Continuous Agent / Team side-by-side with one-paragraph orientation, key bullets, an example, and a routing CTA per kind. The chooser opens from a **Compare options** link next to the Studio Agents page Create button. The SplitButton dropdown also gains the **Continuous Agent** option for power users.
+- Replaces the earlier 2-option SplitButton (Agent/Team) that hid Continuous Agent entirely from first-time users — discovery gap closed.
+
+### Changed — Renamed UI: "Watcher Monitor" → "Continuous Agent" (2026-05-07)
+
+- Every "Watcher Monitor" / "Watcher monitor" string in the UI now reads "Continuous Agent" / "continuous agent" — h1, breadcrumbs, modal titles, button labels, error/loading copy, fallback names. Also updated the agent-vs-flow explainer's bullet copy to "Daily budget enforcement (runs/tokens/tool-calls) + persistent run history" and "Configure in Studio → Continuous Agents · monitor in Watcher → Agents". Backend model name (`ContinuousAgent`) unchanged — UI rename only. Closes the 3-name confusion (Watcher Monitor / Continuous Agent / Continuous Agents tab).
+
+### Added — Auto-flow editor surfaces trigger context + per-step sample preview (2026-05-07)
+
+System-managed (auto-generated from a Hub trigger) flows used to render the same outbound-message UI on the Default-agent step as a hand-built notification flow, gave zero visibility into the trigger's filter parameters, and offered no orientation that the flow was system-managed at all. Five fixes ship together:
+
+- **System-managed banner** at the top of the Edit modal: "edit the trigger to change what fires; edit the steps to change what happens after," with a deep link back to the Hub trigger detail page reconstructed from the source step's `config_json`.
+- **Source step trigger summary** in `SourceStepConfig.tsx` — kind-specific filter inputs (JQL/project_key for Jira, inbox+search_query for Email, repo+events+branch+paths+author for GitHub) plus a `trigger_criteria.filters` JSON preview, with an "Edit in Hub" deep link.
+- **Criteria gate callout** prepended on system-managed flows — explains the trigger's own criteria already gated the event upstream, so conditions added on the gate are *secondary* filters and an empty gate is the canonical default.
+- **Default-agent conversation step** hides the outbound-message fields (channel, recipient, initial prompt) when `flowIsSystemOwned` is true, replacing them with a one-line "Inbound step" note. Conversation Objective + Max Turns + Timeout + Output Alias + Agent picker stay (they apply to inbound).
+- **Per-step sample preview** — new `StepSamplePreview` component renders an expandable "Sample data this step receives" panel on every non-source step in system-managed flows. Fetches the most-recent wake event for the bound trigger, shows the raw JSON payload + a count badge of `{{source.payload.X}}` references already in the step's config.
+
+Wiring: `flowIsSystemOwned: boolean` prop threaded through `EditFlowModal → EditableStepBuilder → EditableStepConfigForm` plus `StepConfigForm` in the new-flow path (defaults to false). Default false means user-authored flows render exactly as before — no regression.
+
+### Added — `WiredTeamsCard` for email triggers + parallel-fire/flow-only pill toggle (2026-05-07)
+
+- Hub trigger detail page now shows **Wired Agent Teams** for email triggers at parity with Jira. The pre-fix comment in `OutputsSection.tsx` claimed the team API rejects gmail/email — that was wrong (`_validate_team_trigger_instance` in `agent_team_api_service.py` maps `gmail → EmailChannelInstance`).
+- The "Suppress default agent" checkbox on each bound flow row is now a clearer pill toggle: **● Parallel fire** (amber) ↔ **● Flow-only** (emerald). Hover tooltip explains both states. Toast messages reworded to mirror the pill copy. Underlying API call unchanged — `flow_trigger_binding.suppress_default_agent` is still the persisted field.
+
+### Fixed — Flow step `on_failure` round-trip + auto-flow gate canonical schema (2026-05-07)
+
+Two related auto-flow editor regressions surfaced during the Jira-trigger flow audit on flow #207:
+
+- The legacy `/api/flows/{id}/steps` and `/nodes` endpoints serialized through `FlowNodeCreate` / `FlowNodeUpdate` / `FlowNodeResponse`, all of which omitted `on_failure`, `on_success`, and `retry_delay_seconds`. The DB columns exist, the engine reads them, and the auto-flow generator writes `on_failure='continue'` for the conversation step — but the editor loaded a saved `continue` as undefined and rendered "Stop flow", and saving silently rewrote the field to NULL. Fields now round-trip correctly. Lock with `tests/test_routes_flows_step_failure_roundtrip.py` (GET, POST, PUT).
+- `flow_binding_service.create_auto_flow_for_trigger` was emitting gate `config_json` keys `"mode"` / `"rules"` / `"logic"`, but `flow_engine.py`'s `GateExecutor.execute()` and the editor's `StepConfigForm` read `"gate_mode"` / `"gate_conditions"` / `"gate_logic"`. The pre-fix gate only passed-all by coincidence (engine defaults to programmatic + zero conditions). The day an operator added a real rule via the UI it would have landed under `gate_conditions` while `rules` lingered as dead config. Auto-generator now writes the canonical keys. Lock with `tests/test_flow_binding_service_gate_schema.py`.
+
 ### Removed — Legacy `financial_utility_automation` step + operator PII off the public repo (2026-05-07)
 
 - Deleted the opaque `financial_utility_automation` step type ("Legacy Utility Bill" in the palette) along with its frontend templates, config panel, backend handler (`FinancialUtilityAutomationStepHandler`), and the three site-specific runners (`run_moderna_condominio`, `run_consigaz_sao_blas`, `run_medsenior_samedil`) plus their `_extract_*` helpers, login URLs, and Keycloak/API constants in `FinancialAutomationService`. The 6 migrated `Finan | …` flows already use only generic primitives (`browser_automation`, `data_transform`, `financial_bill_store`, `gate`, `notification`) and a DB audit confirmed zero remaining flow nodes referenced the legacy type before deletion.
