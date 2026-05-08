@@ -18,6 +18,7 @@ import type { StudioCanvasRef } from './StudioCanvas'
 import type { DragTransferData, BuilderNodeData, BuilderNodeType, ConfigPanelTarget } from './types'
 import { DragProvider } from './context/DragContext'
 import { UsersIcon } from '@/components/ui/icons'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import './studio.css'
 
 const StudioCanvasComponent = dynamic(() => import('./StudioCanvas'), {
@@ -50,6 +51,7 @@ const MinimizeIcon = ({ className }: { className?: string }) => (
 export default function AgentStudioTab() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
+  const maximizedBackdropDismiss = useBackdropDismiss(() => setIsMaximized(false))
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null)
   const [configPanel, setConfigPanel] = useState<ConfigPanelTarget | null>(null)
   const [skillDefinitions, setSkillDefinitions] = useState<SkillDefinition[]>([])
@@ -240,7 +242,7 @@ export default function AgentStudioTab() {
         </div>
       )}
 
-      {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setIsMaximized(false)} />}
+      {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" {...maximizedBackdropDismiss} />}
 
       <div className={`${isMaximized ? 'fixed inset-4 z-50 h-auto' : 'h-[calc(100vh-19rem)] min-h-[350px] relative'} glass-card rounded-xl p-1 transition-all duration-300`}>
         {isMaximized && (

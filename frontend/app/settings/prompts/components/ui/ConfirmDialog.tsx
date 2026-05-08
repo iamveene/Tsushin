@@ -1,6 +1,7 @@
 'use client'
 
 import React from 'react'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 export interface ConfirmDialogProps {
   isOpen: boolean
@@ -11,10 +12,12 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }: ConfirmDialogProps) {
+  const backdropDismiss = useBackdropDismiss(onCancel)
+
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...backdropDismiss}>
       <div className="glass-card rounded-xl p-6 max-w-md mx-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
         <p className="text-tsushin-slate mb-6">{message}</p>
