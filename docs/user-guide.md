@@ -9,6 +9,7 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 1. [Getting Started](#1-getting-started)
 2. [LLM Providers and Hub](#2-llm-providers-and-hub)
 3. [Creating and Configuring Agents](#3-creating-and-configuring-agents)
+3a. [Agent Teams](#3a-agent-teams)
 4. [Personas and Tone Presets](#4-personas-and-tone-presets)
 5. [Skills](#5-skills)
 6. [Setting Up Communication Channels](#6-setting-up-communication-channels)
@@ -20,6 +21,7 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 11. [Projects (Knowledge Isolation)](#11-projects-knowledge-isolation)
 12. [Memory and Knowledge](#12-memory-and-knowledge)
 13. [Security -- Sentinel](#13-security----sentinel)
+13a. [Watcher Reference](#13a-watcher-reference)
 14. [Settings Reference](#14-settings-reference)
 15. [Slash Commands Reference](#15-slash-commands-reference)
 16. [Using the Public API](#16-using-the-public-api)
@@ -192,6 +194,34 @@ For migrated financial automations, use **Flows > From Template** when a support
 
 Three options: **Kokoro** (local, self-hosted), **OpenAI TTS**, or **ElevenLabs**. Configure under **Hub > TTS Providers**, then enable the TTS skill on your agents.
 
+#### ASR Providers (Speech-to-Text) — v0.7.0
+
+Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voice notes, Playground audio, Telegram voice messages):
+
+| Engine | Where it runs | When to use |
+|---|---|---|
+| **OpenAI Whisper API** | Cloud (OpenAI). Reuses your tenant's saved OpenAI key. | Default if you already have OpenAI configured and don't mind cloud transcription. |
+| **Whisper (local)** | Auto-provisioned container under Hub > Local Services. | Privacy-sensitive deployments — voice data never leaves your infrastructure. CPU-friendly. |
+| **Speaches** | Auto-provisioned container under Hub > Local Services. | Local Whisper alternative with different performance profile. |
+
+**Setup (Hub > Add Provider > Speech-to-Text):**
+
+1. Go to **Hub > AI Providers > + New Instance**, pick **Speech-to-Text** as the modality.
+2. Choose **Cloud** (OpenAI Whisper API — no extra credentials needed) or **Local** (Whisper or Speaches).
+3. For Local: name the instance, optionally pick a GPU profile, and click **Provision**. The container is created with `auto_provision=true`; the wizard polls until it's healthy.
+4. Once running, the instance shows up under **Hub > Local Services > Speech-to-Text** with start/stop/restart/logs/status controls.
+
+**Per-agent assignment.** The `audio_transcript` skill on each agent has two modes:
+
+- **`openai`** — call the OpenAI Whisper API directly (requires the OpenAI key in the tenant Hub).
+- **`instance`** — pin a specific tenant-owned local ASR instance (requires `asr_instance_id`).
+
+Both Audio Agents Wizard and the agent's Skills tab show a list of every active tenant ASR instance so you can pick which one this agent uses. There is **no global Settings → ASR page** and **no tenant-default ASR** in v0.7.0 — assignment is always explicit at the agent level.
+
+**Cascade-aware delete.** Deleting an ASR instance shows a banner enumerating every agent currently pinned to it. The delete reconciles those agents in the same transaction: pinned skills are repointed to another active ASR instance if one exists; otherwise they are disabled (so the agent stops trying to transcribe via a now-deleted endpoint). The cascade summary appears in the response so the UI surfaces "3 agents reassigned to OpenAI Whisper QA" instead of failing silently.
+
+**Failure-mode honesty (2026-05-06).** If you pin an agent to a local instance, the runtime does **not** silently fall back to the OpenAI cloud Whisper API on failure. The local provider's error surfaces directly so you find out about a stalled or unhealthy local container instead of leaking voice data to a third-party cloud. To use the cloud path explicitly, set `asr_mode='openai'` on the agent.
+
 #### MCP Server Registration
 
 Connect external MCP (Model Context Protocol) tool servers under **Hub > MCP Servers**. Choose SSE (HTTP) or Stdio (local command-line) transport.
@@ -228,10 +258,26 @@ On the **Channels** tab:
 
 ### Conversational vs Continuous Agents
 
-Create agents from **Studio > Agents**. The New Agent flow lets you choose the wake mode:
+Create agents from **Studio**. The Studio Agents page exposes a unified create surface with three options:
 
-- **Conversational** agents respond when a person messages through a channel.
-- **Continuous** agents are configured with a purpose and action kind after the base agent is created, then wake from trigger subscriptions. Watcher shows their runs and wake-event evidence; Studio remains the creation entry point.
+- **Agent** (on-demand) — configurable persona + skills + model that replies when you message it. The foundation for the other two.
+- **Continuous Agent** (always-on) — wraps an existing Agent so it wakes on a trigger event with daily budget caps. Reactive single-agent execution.
+- **Team** (multi-agent) — coordinate multiple agents on one task, sequential (LINE) or collaborative (MESH).
+
+Click **"Compare options"** next to the Create button (or pick directly from the SplitButton dropdown) to open the **kind chooser** modal — a side-by-side card view that explains each surface's bullets, an example use case, and routes you to the correct creation flow. Studio also has a dedicated **Continuous Agents** tab between Personas and Teams for direct creation/management.
+
+The legacy "wake mode" picker in the Agent Wizard still works: choosing **Continuous** during agent creation hands off to the **Continuous Agent setup** screen with the agent pre-selected. There you must provide:
+
+| Field | Required? | What It Does |
+|---|---|---|
+| **Purpose** | Yes | A 1-2 sentence statement of what the agent is supposed to accomplish per run. Surfaces in Watcher and in the trigger detail. |
+| **Action kind** | Yes | What the agent is allowed to do at the end of its run — `notify_only`, `reply`, `tool_use`, `flow_dispatch`. The runtime enforces this; an action_kind=`notify_only` agent cannot accidentally fire arbitrary tools. |
+| **Trigger subscriptions** | At least one | Bind the agent to one or more Email/Webhook/Jira/GitHub/Schedule triggers (or wake events) — the agent only runs when one of these fires. |
+| **Delivery + budget policy** | Optional | Per-run token / wall-clock / cost ceilings; aggregation rules if multiple wake events arrive close together. |
+
+**Watching Continuous Agent runs.** Open **Watcher → Agents → Continuous Agents** for the tenant-wide run history. Each row shows the wake event that triggered the run, the run status (`pending`, `running`, `completed`, `failed`, `sentinel_blocked`, `cancelled`), input summary, output, token + cost, and links to the originating trigger and dispatched flow (if any). The Watcher Agents tab nests five related run-time surfaces — Continuous Agents, Wake Events, Conversations, Team Runs, and A2A Comms — so you can move between agent inventory and recent activity without leaving the page.
+
+**Deleting a Continuous Agent.** If subscriptions or active runs still reference the agent, the delete attempt returns a structured `409 Conflict` with a JSON body that names the blockers and surfaces an actionable cleanup prompt in the UI ("Detach 2 trigger subscriptions and cancel 1 active run, then retry"). The wizard offers to do the cleanup for you instead of failing silently.
 
 ### Memory Configuration
 
@@ -272,6 +318,63 @@ Two built-in skills for agents to work together:
 - **Agent Communication (A2A)** -- allows agents to ask other agents questions, discover agents, or delegate tasks.
 
 Manage inter-agent messaging from **Studio > Agent Communication**.
+
+---
+
+## 3a. Agent Teams
+
+An **Agent Team** is a group of agents that work together on a single goal under one of two topologies. Agent Teams ship in v0.7.0 (Phases 1-10) and are reachable from **Studio > Teams**.
+
+### Why Teams (vs. a single agent)?
+
+- A single agent does one thing well; a team can split work across specialists (e.g., a researcher, an analyst, a writer).
+- The team has its own Sentinel profile override so you can dial security up for sensitive multi-step workflows without touching the underlying agents.
+- Watcher shows the **Team Run** as a single audited unit with member-run breakdown, so you can answer "what did the team do for that ticket" with one click instead of cross-referencing per-agent logs.
+
+### Topologies
+
+- **Line** — members run in a fixed order. Each member sees the prior summary; the final member produces the team output. Predictable, deterministic, easy to debug. Use this when the workflow is "research → analyze → write" or any sequential pipeline.
+- **Mesh** — a hidden internal **coordinator** agent decides which member to dispatch next from a JSON command (`dispatch`, `finish`, or `escalate`). The coordinator is `is_internal=true` and never shows up in agent lists, agent palettes, or A2A surfaces. Use mesh when the workflow is dynamic ("triage this ticket and pick the right specialist") or when you need branching.
+
+### Creating a Team
+
+From **Studio > Teams** click **+ New Team** to open the Team Wizard:
+
+1. **Custom or Template** — start from scratch or pick a preset (e.g., "Triage + Reply", "Research → Write").
+2. **Basics** — name, description, topology (line vs mesh), `max_concurrent_runs`, `max_steps`, `max_total_tokens`, wall-clock timeout.
+3. **Topology** — confirm the topology; mesh teams render the hidden coordinator on the canvas with a lock icon.
+4. **Members** — drag agents from the global agent palette (internal coordinators are filtered out). For line teams set `execution_order`; for mesh set `is_required` per member.
+5. **Triggers** — bind active Webhook, GitHub, Jira, or Gmail trigger instances. (The Phase 6 restriction that excluded Gmail was lifted on 2026-05-07.)
+6. **Review** — summary cards for every prior step.
+7. **Create** — persists the team, its members, and trigger bindings in one transaction. You land on the new Team Builder.
+
+### Editing in the Team Builder
+
+`/studio/teams/{id}` is a five-tab Team Builder shell:
+
+- **Topology** — React Flow canvas with line and mesh layouts, coordinator/member nodes with expandable details, drag-to-add agent membership, line reordering, node position persistence, remove/toggle-required actions. Read-only while a run is active.
+- **Triggers** — add, edit, or remove trigger bindings after creation. Useful when a team was created without triggers in the wizard or when you need to swap the bound instance.
+- **Sentinel** — choose a team-level Sentinel profile that overrides the per-member or tenant default during team-run start and handoff checks. Clearing the field falls back to the existing inherited profile chain.
+- **Runs** — manual run start (with goal text), run history, run drilldown with member-run timeline, output summaries, token/cost metadata, Sentinel decision JSON, mesh coordinator command log, and cancel actions.
+- **Settings** — name/description editing, topology guardrails, archive (soft-delete; preserves run history) and **Delete permanently** (only available on archived teams; requires retyping the team name).
+
+### Watching Team Runs
+
+Open **Watcher → Agents → Team Runs** for the tenant-wide run history across every team you can see. The page filters by team, status (`pending`, `running`, `completed`, `failed`, `sentinel_blocked`, `cancelled`), and date range. Each row updates live via WebSocket — start a manual run from Team Builder and watch the row tick from `pending` to `running` to a final status without a refresh.
+
+Click a row for the detail panel:
+- Ordered run timeline + member-run cards (each with input, output, token usage, Sentinel decision).
+- Mesh coordinator command log when applicable.
+- Trigger or wake-event origin (so you can jump to the bound trigger).
+- Final output, errors, token + cost summary.
+
+### Trigger payload context (2026-05-07)
+
+The orchestrator now loads the originating wake event's payload doc plus a short summary string at the start of every team run and threads them into member-step inputs. Member agents reason about the event that woke them up, not just the team's `goal_text`.
+
+### Reference
+
+For the implementation contract, schema migrations, and the per-phase surface contract, see [documentation.md §§ 2.4.1 - 2.4.10](documentation.md#241-v070-agent-teams-phase-1-db-foundation).
 
 ---
 
@@ -390,6 +493,50 @@ Security and utility tools running in isolated Docker containers. Invoke with:
 | **sqlmap** | `scan` | `/tool sqlmap scan target=http://example.com/page?id=1` |
 
 For full parameter details, see [documentation.md §9.4](documentation.md#94-sandboxed-tools).
+
+### Code Repository skill (GitHub) — v0.7.0
+
+The `code_repository` skill lets agents read from and (optionally) act on GitHub. It's backed by a tenant-scoped **GitHubIntegration** in **Hub > Tool APIs**.
+
+**Setup:**
+
+1. Go to **Hub > Tool APIs > GitHub** and add an integration: paste the GitHub App / fine-grained PAT credentials, select the repositories the integration can see, and click **Test**.
+2. Open an agent's **Skills** tab, click **Add Skill**, pick **Code Repository**, and select the GitHub integration you just created.
+3. The capability matrix has 12 actions split into **read** (default ON) and **write** (default OFF) groups:
+   - **Read:** `list_repos`, `get_repo`, `list_pull_requests`, `get_pull_request`, `list_issues`, `get_issue`, `list_commits`, `read_file`.
+   - **Write:** `create_issue`, `comment_pull_request`, `create_pull_request`, `merge_pull_request`.
+4. Toggle write capabilities on only when you intend to grant them. The agent UI shows red **WRITE** badges next to active write capabilities; the `code_repository` tool spec the LLM sees never includes disabled actions, so the model cannot accidentally call something you've forbidden.
+
+**Trigger pairing.** A `pull_request` GitHub trigger can pre-filter on event types (`opened`, `reopened`, `closed`, `synchronize`), draft state, branch patterns, label patterns, and author patterns. The matched payload is delivered to the bound agent or flow with the full PR envelope so the `code_repository` skill can act on it.
+
+### Ticket Management skill (Jira) — v0.7.0
+
+The `ticket_management` skill exposes Jira through the `ticket_operation` tool with the same capability-gating contract as `code_repository`.
+
+**Setup:**
+
+1. Go to **Hub > Tool APIs > Jira** and add an integration with your Atlassian site URL, email, and API token. Click **Test**.
+2. On an agent's Skills tab, **Add Skill > Ticket Management**, pick the Jira integration.
+3. Capability matrix:
+   - **Read (default ON):** `search`, `get_issue`, `list_projects`.
+   - **Write (default OFF):** `update`, `add_comment`, `transition`.
+4. Disabled actions are filtered out of the LLM's tool spec; the WRITE badges in the UI mirror the active capabilities.
+
+**Trigger pairing.** The Jira trigger runs live JQL polling on Jira Cloud's enhanced JQL search endpoint, dedupes once-per-issue per matched event, and routes the matched payload through the auto-generated FlowDefinition's Source step.
+
+### Granular Gmail send capability — v0.7.0
+
+The Gmail skill is no longer all-or-nothing. The capability set is split into:
+
+| Capability | Default |
+|---|---|
+| `search` | ON |
+| `read_message` | ON |
+| `send` | OFF |
+| `reply` | OFF |
+| `draft` | OFF |
+
+Toggle send/reply/draft on per agent in the Skills tab when you trust that agent to send mail on the connected Gmail account. The capability config is enforced end-to-end — `SkillManager` honors it, the tool spec only includes enabled actions, and the live gate ("outbound upgrade incomplete") surfaces a warning if you connected a Gmail account but have not yet enabled any outbound capability.
 
 ---
 
@@ -521,6 +668,44 @@ When the trigger fires on issue `JSM-12345` with summary `Customer can't log in`
 ```
 Jira issue JSM-12345: Customer can't log in (status: In Progress)
 ```
+
+### Where each part of the trigger lives in the Hub
+
+v0.7.0 split the Hub into four roles so the right surface owns each concern:
+
+| Hub area | What lives there |
+|---|---|
+| **Hub > Channels** | WhatsApp / Telegram / Slack / Discord / Playground — bidirectional conversational transports. |
+| **Hub > Triggers** | Email / Webhook / Jira / GitHub trigger instances. |
+| **Hub > Tool APIs** | Programmatic credentials reused by triggers and skills: Jira API token, GitHub integration, Password Vault (1Password), Asana OAuth, etc. The Email trigger reuses the Hub > Google connection for Gmail. |
+| **Hub > Local Services** | Auto-provisioned containers — Whisper / Speaches (ASR), Kokoro (TTS), Ollama (LLM), Qdrant (vector store). Lifecycle controls (start/stop/restart/logs/status) live here. |
+
+**Wake Events** moved under **Watcher**. The standalone Schedule Trigger was retired; cron-based execution now lives only on the FlowDefinition (Flows > Create > Scheduled or Recurring).
+
+### Aggregating outputs on the trigger detail page
+
+The trigger detail page lists every binding kind that can fan out from a single trigger event:
+
+- **Wired Flows** — every `flow_trigger_binding` for this trigger.
+- **Wired Teams** — every `agent_team_trigger` (Webhook/GitHub/Jira; Gmail since 2026-05-07).
+- **Wired Continuous Agents** — every `continuous_subscription`.
+
+Each card supports pause/resume and unbind, gated on `agents.write`. System-owned subscriptions render disabled controls with an explanatory tooltip. Use this page when you need to understand "what will fire when this trigger runs?" without reverse-engineering it from per-team or per-flow surfaces.
+
+### Trigger Case Memory v2 (default-off, experimental)
+
+When **Case Memory** is enabled for your tenant (Core > Organization > Case Memory), each trigger can carry a per-trigger **Memory Recap** config. The recap pulls similar past cases (by query template, scope, k, similarity floor, vector kind) and injects a short summary into the dispatched flow or continuous agent at the position you choose.
+
+To enable for a trigger:
+
+1. Confirm Case Memory is on for the tenant: Core > Organization > Case Memory > **Indexing enabled**. Trigger Recap can be enabled independently.
+2. In the trigger creation wizard or detail page, open **Memory Recap**.
+3. Configure the query template (e.g., `{{source.payload.issue.fields.summary}}`), scope (`tenant` / `agent` / `team`), k (default 3), similarity floor (default 0.5), vector kind (Tsushin default vs Gemini external), failed-case inclusion, injection position (system prompt vs user message), and max recap length.
+4. Save. Live preview is available from the same panel via `/api/triggers/{kind}/{id}/test-recap`.
+
+Recap output appears in the run timeline as `trigger_context.source.memory_recap` and surfaces in the Watcher trigger detail.
+
+> Trigger Case Memory v2 is experimental and gated behind tenant-scoped feature flags (`Tenant.case_memory_enabled` and `Tenant.case_memory_recap_enabled`). Reach out before turning it on for production triggers.
 
 ---
 
@@ -663,6 +848,25 @@ Financial templates should remain editable like any other Flow. Open a browser s
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 
+### System-managed (auto-generated) trigger flows
+
+When you create a Hub trigger, Tsushin auto-generates a four-step **system-managed flow** wired to that trigger via a `flow_trigger_binding`. The flow editor is intentionally tailored when you open a system-managed flow:
+
+- **Banner at the top of the Edit modal** reorients you: *edit the trigger to change what fires, edit the steps to change what happens after*. Includes a deep link back to the Hub trigger detail page.
+- **Source step** shows a read-only **Trigger configuration** card with kind-specific inputs — JQL + project key for Jira, inbox + search query for Email, repo + events + path/branch filters for GitHub — plus a `trigger_criteria.filters` JSON preview and an **Edit in Hub** deep link. Filters are managed on the trigger, not on the flow.
+- **Criteria gate** prepends an **upstream-filter callout** explaining the trigger's criteria already gated the event, so anything you add on the gate is a *secondary* filter. Empty gate is the canonical default.
+- **Default agent** step (a `conversation` step) hides the outbound-message fields (channel, recipient, initial prompt) and shows an **Inbound step** note instead — the conversation receives the trigger payload and the agent processes it according to the objective.
+- **Sample data preview** — every non-source step has a "Sample data this step receives" expander that fetches the most-recent wake event for the bound trigger and shows the JSON payload + a count badge of `{{source.payload.X}}` references in your step's config. Use this to author template references with confidence.
+
+### Trigger fan-out: parallel-fire vs flow-only
+
+A single trigger event can fan out to three independent runtimes in parallel: bound flows (`FlowRun`), continuous-agent subscriptions (`ContinuousRun`), and agent-team triggers (`AgentTeamRun`). On the Hub trigger detail page the **Wired Flows** card shows a pill toggle per binding:
+
+- **● Parallel fire** (amber, default) — both this flow AND any wired continuous agent fire on each event. Safe migration mode.
+- **● Flow-only** (emerald) — this flow takes over and the legacy continuous-agent path is suppressed for this trigger.
+
+Click the pill to flip between the two states. Toast confirms the change. Wired Agent Teams fire independently of this toggle.
+
 ### Template Variables
 
 Reference previous step outputs:
@@ -787,16 +991,36 @@ Structured memory that stores facts with relationships. Memory types: `fact`, `e
 
 Includes **MemGuard** security validation to protect against memory poisoning.
 
+### Trigger Case Memory v2 (experimental, default-off) — v0.7.0
+
+Trigger Case Memory is an opt-in long-term store that captures the recap of every trigger run (Email/Webhook/Jira/GitHub) so future runs can pull a short summary of similar past cases into the dispatched flow or continuous agent. See [§ 6a](#6a-setting-up-event-triggers-v070) for trigger-side configuration. Tenant-level toggles live in **Core > Organization > Case Memory**:
+
+- **Indexing enabled** — populates the case memory store. Requires the optional Gemini external embedder if you don't want to spend tokens on the default embedder.
+- **Recap injection enabled** — independently controls whether saved configs actually inject recap output into runs. Useful when you want to start indexing but defer recap injection until you've validated the recap quality.
+
 ### Configuring Vector Stores
 
-Go to **Settings > Vector Stores**:
+Go to **Settings > Vector Stores**. Tsushin supports four vector store backends:
 
 - **Chroma** (default) -- built-in, no external setup.
 - **Pinecone** -- cloud-hosted. Requires API key and index name.
-- **Qdrant** -- self-hosted or cloud. Requires URL and collection name.
+- **Qdrant** -- self-hosted (auto-provisioned during setup when available) or cloud. Requires URL and collection name.
 - **MongoDB Atlas** -- requires connection string and Atlas Vector Search.
 
-Individual agents can override the default with three modes: **Override**, **Complement**, or **Shadow**.
+**Multi-index per surface (v0.7.0).** Tsushin distinguishes three vector-store *surfaces*:
+
+| Surface | What it stores | Where to attach |
+|---|---|---|
+| **Long-term memory** | Tenant-level memory (semantic search across conversations) | Settings > Vector Stores > **Default for memory** |
+| **Agent KB** | Per-agent knowledge base documents | Agent > Knowledge Base tab > **Vector store** |
+| **Project KB** | Per-project (Studio Projects) knowledge base | Project > Knowledge Base tab > **Vector store** |
+
+Each surface can pick a different index (and even a different backend), and each surface can pick its own **embedding provider** (default vs Gemini external). This lets you, for example, keep long-term memory on built-in Chroma + default embeddings while putting Project KB on a tenant-owned Qdrant collection with Gemini embeddings.
+
+**Per-agent vector store override.** Individual agents can still override the default with three modes:
+- **Override** — the agent ignores the default and uses only its own store.
+- **Complement** — the agent reads from both its store and the default, merging results.
+- **Shadow** — the agent reads from the default but writes to both, allowing offline migration.
 
 ---
 
@@ -833,6 +1057,34 @@ Go to **Watcher > Security** tab to see blocked threats, warnings, and detection
 ### Exceptions and Allowlists
 
 Go to **Settings > Sentinel Security > Exceptions** to add pattern-based, domain-based, or other exceptions to prevent false positives.
+
+---
+
+## 13a. Watcher Reference
+
+Watcher is the **observability** surface — read-only insight into what's running and what's recently happened. Configuration belongs in **Studio** and **Hub**; Watcher only watches.
+
+| Top-level tab | What It Shows |
+|---|---|
+| **Dashboard** | KPIs (messages, agent runs, success rate, avg response) and the live Activity Timeline. |
+| **Graph View** *(admin)* | Network visualization of agents, contacts, and channels. |
+| **Agents** | Run-time view of agents — see sub-tabs below. |
+| **Flows** | Flow execution history, status pills, per-step timing, last-run links. |
+| **Security** | Sentinel detections — blocked threats, warnings, severity, type. |
+| **Channel Health** | Per-instance circuit-breaker state and inbound channel readiness. |
+| **Billing** | AI cost and token consumption breakdown per provider/model. |
+
+The **Agents** tab nests five related run-time surfaces under one menu so you can pivot between agent inventory and recent activity without leaving the page:
+
+| Sub-tab | What It Shows |
+|---|---|
+| **Continuous Agents** *(default landing)* | Always-on inventory: each Continuous Agent, its monitored triggers, mode (`autonomous`/`hybrid`/`notify_only`), latest run status, daily-budget consumption. |
+| **Wake Events** | Trigger-event browser — every event that fired (status, kind, instance, occurred-at) with click-through to the raw payload. |
+| **Conversations** | Message and agent-run threads across channels (Playground, WhatsApp, Telegram, Slack, Discord). |
+| **Team Runs** | Agent Team executions with progress (`N/M steps`), status, and per-team filtering. |
+| **A2A Comms** | Inter-agent messaging sessions, depth, message count. |
+
+Continuous Agent **creation** lives in Studio (**Studio → Continuous Agents**), not Watcher — Watcher only displays inventory + history.
 
 ---
 
