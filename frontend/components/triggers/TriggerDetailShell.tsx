@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
+import DetailShellHeader from '@/components/ui/DetailShell'
 import {
   api,
   authenticatedFetch,
@@ -950,29 +951,26 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/hub?tab=triggers" className="hover:text-white">Hub</Link>
-            <span>/</span>
-            <span>{config.label}</span>
-          </div>
-          <h1 className="flex items-center gap-3 text-3xl font-display font-bold text-white">
-            <Icon size={26} className={config.iconClass} />
-            {trigger?.integration_name || `${config.label} #${triggerId}`}
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">{config.description}</p>
-        </div>
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading || saving}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
-        >
-          <RefreshIcon size={16} />
-          Refresh
-        </button>
-      </div>
+      <DetailShellHeader
+        breadcrumb={[
+          { label: 'Hub', href: '/hub?tab=triggers' },
+          { label: config.label },
+        ]}
+        icon={<Icon size={26} className={config.iconClass} />}
+        title={trigger?.integration_name || `${config.label} #${triggerId}`}
+        description={config.description}
+        actions={
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loading || saving}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-4 py-2 text-sm text-tsushin-fog hover:text-white disabled:opacity-50"
+          >
+            <RefreshIcon size={16} />
+            Refresh
+          </button>
+        }
+      />
 
       {success && (
         <div className="mb-5 rounded-xl border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-200">
