@@ -570,7 +570,7 @@ function BasicsStep({
           value={draft.description}
           onChange={(event) => patchDraft({ description: event.target.value })}
           className={inputClass}
-          placeholder="Short operator-facing summary"
+          placeholder="Short summary that shows in the team listing"
         />
       </label>
       <label className="space-y-2 md:col-span-2">
@@ -615,7 +615,9 @@ function TopologyStep({
                 <div>
                   <div className="font-semibold text-white">{formatLabel(topology)}</div>
                   <div className="mt-1 text-sm text-tsushin-slate">
-                    {topology === 'line' ? 'Ordered handoff between members.' : 'Parallel member execution with shared context.'}
+                    {topology === 'line'
+                      ? 'Members run one after another, passing the result down the chain. Best when each step depends on the previous one (e.g. intake → diagnose → summarize).'
+                      : 'A coordinator dispatches work to multiple members in parallel and merges their answers. Best for cross-checking or gathering different perspectives.'}
                   </div>
                 </div>
               </div>
@@ -624,10 +626,25 @@ function TopologyStep({
         })}
       </div>
       <div className="grid gap-4 md:grid-cols-3">
-        <NumberField label="Max steps" value={draft.max_steps} min={1} max={100} onChange={(value) => patchDraft({ max_steps: value })} />
-        <NumberField label="Concurrent runs" value={draft.max_concurrent_runs} min={1} max={10} onChange={(value) => patchDraft({ max_concurrent_runs: value })} />
         <NumberField
-          label="Token cap"
+          label="Max steps"
+          hint="The team stops after this many member turns. Prevents runaway loops."
+          value={draft.max_steps}
+          min={1}
+          max={100}
+          onChange={(value) => patchDraft({ max_steps: value })}
+        />
+        <NumberField
+          label="Concurrent runs"
+          hint="How many team runs can be in flight at the same time."
+          value={draft.max_concurrent_runs}
+          min={1}
+          max={10}
+          onChange={(value) => patchDraft({ max_concurrent_runs: value })}
+        />
+        <NumberField
+          label="Token cap (optional)"
+          hint="Run is cut off after this many total tokens are spent. Leave blank for no cap."
           value={draft.max_total_tokens ?? ''}
           min={1}
           max={10000000}
@@ -640,12 +657,14 @@ function TopologyStep({
 
 function NumberField({
   label,
+  hint,
   value,
   min,
   max,
   onChange,
 }: {
   label: string
+  hint?: string
   value: number | ''
   min: number
   max: number
@@ -665,6 +684,7 @@ function NumberField({
         }}
         className={inputClass}
       />
+      {hint && <span className="block text-xs text-tsushin-slate">{hint}</span>}
     </label>
   )
 }

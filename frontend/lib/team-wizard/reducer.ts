@@ -95,11 +95,11 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
   {
     id: 'incident_triage',
     name: 'Incident triage',
-    description: 'Line topology for intake, diagnosis, and final operator-ready summary.',
+    description: 'Sequential team — intake → diagnosis → easy-to-read summary.',
     draft: {
       template_id: 'incident_triage',
       name: 'Incident Triage Team',
-      description: 'Coordinates alert intake, investigation, and operator summary.',
+      description: 'Coordinates alert intake, investigation, and a final summary.',
       goal_text: 'Triage incoming incidents, identify likely impact, and produce a concise next-action summary.',
       topology: 'line',
       status: 'active',
@@ -110,11 +110,11 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
   {
     id: 'release_review',
     name: 'Release review',
-    description: 'Mesh topology for cross-checking regressions, docs, and launch readiness.',
+    description: 'Parallel team — multiple reviewers cross-check the same release for bugs, docs, and launch readiness.',
     draft: {
       template_id: 'release_review',
       name: 'Release Review Team',
-      description: 'Reviews implementation, regression signals, and release readiness.',
+      description: 'Reviews implementation, bug signals, and release readiness.',
       goal_text: 'Review a release candidate, identify blocking risks, and summarize readiness with evidence.',
       topology: 'mesh',
       status: 'active',
@@ -125,7 +125,7 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
   {
     id: 'research_synthesis',
     name: 'Research synthesis',
-    description: 'Line topology for gathering context, comparing sources, and drafting conclusions.',
+    description: 'Sequential team — gather context → compare sources → draft conclusions.',
     draft: {
       template_id: 'research_synthesis',
       name: 'Research Synthesis Team',
