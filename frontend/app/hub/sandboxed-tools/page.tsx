@@ -668,8 +668,14 @@ export default function CustomToolsPage() {
               </div>
               <div>
                 <h2 className="text-xl font-display font-semibold text-white">Toolbox Container</h2>
+                {/* Pre-fix the subtitle rendered the raw Docker container
+                    name (e.g. tsushin-toolbox-tenant_<encoded-tenant-id>),
+                    leaking the tenant ID in plain UI text. The exact
+                    container name still ships in API responses for debug
+                    use; the visible UI now says either "Ready" or the
+                    plain "Not created" copy without the internal id. */}
                 <p className="text-sm text-tsushin-slate">
-                  {containerStatus?.container_name || 'Not created'}
+                  {containerStatus?.container_name ? 'Sandboxed runtime ready' : 'Not created'}
                 </p>
               </div>
             </div>

@@ -41,8 +41,12 @@ function statusClasses(status?: string | null): string {
 
 function draftFromTarget(target: BrowserSessionProfile | null): BrowserSessionDraft {
   return {
-    integration_name: target?.integration_name || 'EDP browser session',
-    profile_name: target?.profile_name || 'edp',
+    // Pre-fix the create-form defaults included an operator-specific
+    // example value ("EDP browser session", "edp") leaking a real
+    // customer name into the public UI. Replaced with neutral
+    // placeholders.
+    integration_name: target?.integration_name || 'My saved login',
+    profile_name: target?.profile_name || 'my_login',
     provider_type: target?.provider_type || 'playwright',
     mode: target?.mode || 'container',
     browser_type: target?.browser_type || 'chromium',
@@ -144,7 +148,7 @@ export function BrowserSessionProfileModal({
               value={draft.integration_name}
               onChange={(event) => setDraft((current) => ({ ...current, integration_name: event.target.value }))}
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
-              placeholder="EDP browser session"
+              placeholder="My saved login"
             />
           </div>
           <div>
@@ -302,8 +306,10 @@ export function BrowserSessionProfilesPanel({
             <GlobeIcon size={20} className="text-cyan-300" />
           </div>
           <div>
-            <h3 className="font-semibold text-white">Browser Session Profiles</h3>
-            <p className="text-xs text-tsushin-slate">Reusable authenticated browser state for UI-authored flow steps</p>
+            <h3 className="font-semibold text-white">Saved Browser Logins</h3>
+            <p className="text-xs text-tsushin-slate">
+              Capture a logged-in browser session once, reuse it from any Browser Automation flow step — so the flow doesn&apos;t need to log in every run.
+            </p>
           </div>
         </div>
         {canWriteHub ? (
@@ -317,7 +323,7 @@ export function BrowserSessionProfilesPanel({
         <div className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4 text-center text-xs text-tsushin-slate">Loading...</div>
       ) : profiles.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border/60 bg-tsushin-ink/30 p-4 text-sm text-tsushin-slate">
-          Create a profile, import storage state, then reference its profile name in browser automation steps.
+          Click <strong className="text-white">+ Add</strong> to capture a browser session you&apos;re already logged into, then pick this saved login by name from any Browser Automation flow step.
         </div>
       ) : (
         <div className="space-y-3">
