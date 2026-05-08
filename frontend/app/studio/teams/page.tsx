@@ -89,8 +89,8 @@ export default function StudioTeamsPage() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Teams</h1>
-            <p className="text-tsushin-slate">Coordinate multi-agent runs from one Studio surface.</p>
+            <h1 className="text-3xl font-display font-bold text-white mb-2">Teams</h1>
+            <p className="text-tsushin-slate">Coordinate multiple agents on one task — sequential (LINE) or collaborative (MESH).</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-3 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white">

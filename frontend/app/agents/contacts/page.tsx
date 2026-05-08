@@ -359,8 +359,8 @@ export default function ContactsPage() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Agent Studio</h1>
-            <p className="text-tsushin-slate">Manage contacts and agent assignments</p>
+            <h1 className="text-3xl font-bold text-white mb-2">Contacts</h1>
+            <p className="text-tsushin-slate">People and inboxes your agents talk to. Assign default agents per contact.</p>
           </div>
           <div className="flex gap-3">
             <button
