@@ -202,6 +202,81 @@ class PlaygroundService:
             return False
         return True
 
+    @staticmethod
+    def _coerce_bool_default_true(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"false", "0", "no", "n", "off"}:
+                return False
+            if normalized in {"true", "1", "yes", "y", "on"}:
+                return True
+            return True
+        return bool(value)
+
+    async def _transcript_memory_safety_allows(
+        self,
+        *,
+        agent_id: int,
+        tenant_id: Optional[str],
+        sender_key: str,
+        transcript: str,
+    ) -> tuple[bool, Optional[dict]]:
+        """Run transcript text through the same pre-memory Sentinel gate."""
+        if not tenant_id:
+            self.logger.warning(
+                "Skipping Playground transcript memory persistence for agent %s because tenant_id is unavailable",
+                agent_id,
+            )
+            return False, {
+                "status": "error",
+                "error": "Transcript memory unavailable: tenant context is missing",
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+        try:
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self.db, tenant_id)
+
+            skill_context_str = None
+            try:
+                from services.skill_context_service import SkillContextService
+                skill_ctx_service = SkillContextService(self.db)
+                skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                skill_context_str = skill_ctx.get("formatted_context")
+            except Exception as skill_e:
+                self.logger.warning(f"Failed to load transcript skill context for Sentinel: {skill_e}")
+
+            sentinel_result = await sentinel.analyze_prompt(
+                prompt=transcript,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                source=None,
+                skill_context=skill_context_str,
+            )
+
+            if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":
+                self.logger.warning(
+                    "Sentinel blocked Playground transcript before memory storage - %s: %s",
+                    sentinel_result.detection_type,
+                    sentinel_result.threat_reason,
+                )
+                return False, {
+                    "status": "blocked",
+                    "message": sentinel_result.threat_reason or "Message blocked for security reasons.",
+                    "response_mode": "transcript_only",
+                    "security_blocked": True,
+                    "threat_type": sentinel_result.detection_type,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                }
+        except Exception as e:
+            self.logger.warning(f"Playground transcript Sentinel pre-check failed, allowing message: {e}")
+
+        return True, None
+
     def _resolve_chat_id(self, user_id: int, chat_id_override: Optional[str] = None) -> str:
         """Resolve the logical channel identifier used for channel-scoped memory."""
         return chat_id_override or build_playground_channel_id(user_id)
@@ -2109,6 +2184,64 @@ class PlaygroundService:
             response_mode = skill_config.get("response_mode", "conversational")
 
             if response_mode == "transcript_only":
+                if self._coerce_bool_default_true(skill_config.get("remember_transcript")):
+                    safety_allowed, safety_response = await self._transcript_memory_safety_allows(
+                        agent_id=agent_id,
+                        tenant_id=agent.tenant_id,
+                        sender_key=sender_key,
+                        transcript=transcript,
+                    )
+                    if not safety_allowed:
+                        return safety_response
+
+                    from agent.memory.multi_agent_memory import MultiAgentMemoryManager
+
+                    config_dict = {
+                        "agent_id": agent.id,
+                        "agent_name": getattr(agent, "name", None) or getattr(agent, "display_name", None) or str(agent.id),
+                        "model_provider": agent.model_provider,
+                        "model_name": agent.model_name,
+                        "system_prompt": agent.system_prompt,
+                        "memory_size": agent.memory_size or 1000,
+                        "enabled_tools": [],
+                        "response_template": agent.response_template,
+                        "enable_semantic_search": agent.enable_semantic_search,
+                        "context_message_count": agent.context_message_count or 10,
+                        "memory_isolation_mode": agent.memory_isolation_mode or "isolated",
+                        "semantic_search_results": agent.semantic_search_results or 10,
+                        "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
+                        "provider_instance_id": agent.provider_instance_id,
+                    }
+                    memory_manager = MultiAgentMemoryManager(self.db, config_dict)
+                    transcript_metadata = dict(transcript_result.metadata or {})
+                    memory_metadata = {
+                        "source": "audio_transcript",
+                        "response_mode": "transcript_only",
+                        "provider": transcript_metadata.get("provider"),
+                        "model": transcript_metadata.get("model"),
+                        "language": transcript_metadata.get("language"),
+                        "original_message_id": transcript_metadata.get("original_message_id") or inbound_msg.id,
+                        "agent_id": agent_id,
+                        "user_id": user_id,
+                    }
+                    memory_metadata = {
+                        key: value for key, value in memory_metadata.items()
+                        if value is not None
+                    }
+                    await memory_manager.add_message(
+                        agent_id=agent_id,
+                        sender_key=sender_key,
+                        role="user",
+                        content=transcript,
+                        chat_id=inbound_msg.chat_id,
+                        message_id=inbound_msg.id,
+                        metadata=memory_metadata,
+                        use_contact_mapping=self._should_use_contact_mapping(sender_key),
+                    )
+                    self.logger.info(
+                        "Remembered Playground transcript-only audio as user memory for agent %s",
+                        agent_id,
+                    )
                 # Return only the transcript, don't send to agent
                 return {
                     "status": "success",

@@ -64,6 +64,7 @@ export interface AudioConfig {
   asrMode: ASRUsageMode
   asrInstanceId: number | null
   transcriptModel: string
+  rememberTranscript: boolean
 }
 
 export interface SkillsConfig {
@@ -116,6 +117,7 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   asrMode: 'openai',
   asrInstanceId: null,
   transcriptModel: 'whisper-1',
+  rememberTranscript: true,
 }
 
 export const EMPTY_DRAFT: WizardDraft = {

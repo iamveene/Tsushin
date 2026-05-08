@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import ToggleSwitch from '@/components/ui/ToggleSwitch'
 import { api } from '@/lib/client'
 import type { ASRInstance, TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
@@ -445,6 +446,7 @@ export interface AudioTranscriptFieldsValue {
   model: string
   asrMode: ASRUsageMode
   asrInstanceId: number | null
+  rememberTranscript?: boolean
 }
 
 export interface AudioTranscriptFieldsProps {
@@ -516,6 +518,19 @@ export function AudioTranscriptFields({
           </div>
         </div>
       )}
+
+      <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/5">
+        <div>
+          <div className="text-sm font-medium text-white">Remember audio transcripts</div>
+          <div className="text-xs text-gray-400 mt-1">Store each transcript in the conversation so later replies can use it as context.</div>
+        </div>
+        <ToggleSwitch
+          checked={value.rememberTranscript !== false}
+          onChange={(checked) => onChange({ rememberTranscript: checked })}
+          size="md"
+          title={value.rememberTranscript !== false ? 'Disable transcript memory' : 'Enable transcript memory'}
+        />
+      </div>
 
       <div>
         <label className="block text-sm font-medium mb-3">ASR backend</label>
