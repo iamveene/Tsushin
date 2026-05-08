@@ -117,12 +117,12 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
       } as any)
       setShowCreateModal(false); setNewAgentName('')
       // v0.7.0-fix Phase 6b: when the user picks Continuous wake mode,
-      // hand off to /continuous-agents with the agent_id pre-filled so the
+      // hand off to Studio → Continuous Agents with the agent_id pre-filled so the
       // setup modal opens with the base agent already selected — closes
       // the loop the user complained about ("Why is this not a wizard
       // option for new agent created via Studio?").
       if (newWakeMode === 'continuous') {
-        router.push(`/continuous-agents?new=1&agent_id=${agent.id}`)
+        router.push(`/studio/continuous-agents?new=1&agent_id=${agent.id}`)
         setNewWakeMode('conversational')
         return
       }
@@ -218,7 +218,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
           </div>
           {/* v0.7.0-fix Phase 6b: wake mode picker so users can declare
               Continuous at agent-creation time instead of discovering it
-              later under Watcher → Continuous Agents. */}
+              later under Studio → Continuous Agents. */}
           <div>
             <label className="block text-sm font-medium text-tsushin-slate mb-2">Wake mode</label>
             <div className="grid grid-cols-2 gap-2">

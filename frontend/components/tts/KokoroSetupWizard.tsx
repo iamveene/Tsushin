@@ -148,7 +148,7 @@ export default function KokoroSetupWizard({ isOpen, onClose, onComplete }: Kokor
           if (pollTimer.current) clearInterval(pollTimer.current)
           pollTimer.current = null
           setProvisionStatus('error')
-          setProvisionMessage('Container failed to start. Check Hub > Local Services logs for details.')
+          setProvisionMessage('Container failed to start. Check Hub → AI Providers → Kokoro for details.')
         } else if (state === 'creating' || state === 'provisioning') {
           setProvisionMessage('Pulling image and starting container (30–90s)...')
         } else if (state === 'stopped') {
@@ -161,7 +161,7 @@ export default function KokoroSetupWizard({ isOpen, onClose, onComplete }: Kokor
         if (pollTimer.current) clearInterval(pollTimer.current)
         pollTimer.current = null
         setProvisionStatus('error')
-        setProvisionMessage('Provisioning timed out after 6 minutes. Check Hub > Local Services.')
+        setProvisionMessage('Provisioning timed out after 6 minutes. Check Hub → AI Providers → Kokoro.')
       }
     }, 3000)
   }
@@ -528,7 +528,10 @@ export default function KokoroSetupWizard({ isOpen, onClose, onComplete }: Kokor
               using the voice you picked above.
             </p>
             <p className="text-xs text-gray-500 mt-2">
-              Skip this if you just want to create the instance — you can link agents later from Agent Studio.
+              Skip this if you just want to create the instance — you can link agents later from{' '}
+              <a href="/agents" className="text-emerald-300 underline hover:text-white">
+                Agent Studio
+              </a>.
             </p>
           </div>
 

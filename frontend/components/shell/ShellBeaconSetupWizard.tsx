@@ -662,8 +662,11 @@ export default function ShellBeaconSetupWizard({ isOpen, onClose, onComplete }: 
           ))}
         </div>
         <div className="text-xs text-gray-400 bg-teal-500/5 border border-teal-500/20 rounded-lg p-3">
-          Unless YOLO mode is on, the first run of each unique command goes through the approval queue at
-          Hub → Shell → Approvals. Approve it once and subsequent identical runs will be faster.
+          Unless YOLO mode is on, the first run of each unique command goes through the approval queue at{' '}
+          <a href="/hub/shell?tab=approvals" className="text-teal-300 underline hover:text-white">
+            Hub → Shell → Approvals
+          </a>
+          . Approve it once and subsequent identical runs will be faster.
         </div>
       </div>
     </Modal>

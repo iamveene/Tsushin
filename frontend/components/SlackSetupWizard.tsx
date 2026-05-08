@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, react/no-unescaped-entities */
 
 /**
- * Slack Setup Wizard (v0.6.0 V060-CHN-002).
+ * Slack Setup Wizard.
  *
  * Replaces the bare-form SlackSetupModal with a guided 5-step wizard that
  * walks the user through:
@@ -231,9 +231,15 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
             <AlertTriangleIcon size={14} className="mt-0.5 flex-shrink-0" />
             <span>
               {ingressWarning ? (
-                <>Tenant override is set but invalid: {ingressWarning}. Fix it in Hub → Channels, or ask your admin to enable Remote Access.</>
+                <>
+                  Tenant override is set but invalid: {ingressWarning}. Fix it in{' '}
+                  <a href="/hub?tab=channels" className="underline hover:text-white">Hub → Channels</a>, or ask your admin to enable Remote Access.
+                </>
               ) : (
-                <>No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in Hub → Channels.</>
+                <>
+                  No public ingress configured. Ask a global admin to enable Remote Access for this tenant, or set an <strong>Ingress Override</strong> in{' '}
+                  <a href="/hub?tab=channels" className="underline hover:text-white">Hub → Channels</a>.
+                </>
               )}
             </span>
           </p>
@@ -494,7 +500,10 @@ export default function SlackSetupWizard({ isOpen, onClose, onSubmit, saving }: 
         <h4 className="text-sm font-semibold text-white mb-3">Next steps:</h4>
         <ol className="text-sm text-tsushin-slate space-y-2 list-decimal list-inside">
           <li>Open the channel where you want the bot. Type <code className="bg-gray-800 px-1 rounded text-purple-300">/invite @{`{your-bot-name}`}</code> and confirm.</li>
-          <li>Go to <strong>Agents → {`{your agent}`} → Channels</strong>, enable <strong>Slack</strong>, and pick this workspace.</li>
+          <li>
+            Go to <a href="/agents" className="text-purple-300 underline hover:text-white">Agents</a> → <strong>{`{your agent}`}</strong> → <strong>Channels</strong>,
+            enable <strong>Slack</strong>, and pick this workspace.
+          </li>
           <li>Send a message in the channel — the bot will reply (and thread if it was a channel mention).</li>
         </ol>
       </div>

@@ -94,6 +94,44 @@ def _build_agent_name_map(db: Session, agent_ids: set, tenant_id: str = None) ->
     return name_map
 
 
+def _cleanup_orphan_permissions(db: Session, tenant_id: str) -> int:
+    """Remove tenant-owned A2A rules whose endpoints no longer belong to the tenant."""
+    permissions = (
+        db.query(AgentCommunicationPermission)
+        .filter(AgentCommunicationPermission.tenant_id == tenant_id)
+        .all()
+    )
+    if not permissions:
+        return 0
+
+    agent_ids = set()
+    for perm in permissions:
+        agent_ids.add(perm.source_agent_id)
+        agent_ids.add(perm.target_agent_id)
+
+    owned_agent_ids = {
+        row[0]
+        for row in (
+            db.query(Agent.id)
+            .filter(
+                Agent.tenant_id == tenant_id,
+                Agent.id.in_(agent_ids),
+            )
+            .all()
+        )
+    }
+
+    deleted = 0
+    for perm in permissions:
+        if perm.source_agent_id not in owned_agent_ids or perm.target_agent_id not in owned_agent_ids:
+            db.delete(perm)
+            deleted += 1
+    if deleted:
+        db.commit()
+        logger.info("Cleaned up %s orphan A2A permission rule(s) for tenant=%s", deleted, tenant_id)
+    return deleted
+
+
 # Valid session statuses for query validation
 VALID_SESSION_STATUSES = {"pending", "in_progress", "completed", "failed", "timeout", "blocked"}
 
@@ -374,6 +412,7 @@ async def list_permissions(
     db: Session = Depends(get_db),
 ):
     """List all agent communication permission rules for the tenant."""
+    _cleanup_orphan_permissions(db, ctx.tenant_id)
     svc = AgentCommunicationService(db, ctx.tenant_id)
     perms = [
         perm

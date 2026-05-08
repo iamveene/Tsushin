@@ -967,7 +967,10 @@ export default function AddIntegrationWizard({
         {stepIndicator}
         {noAssignmentsNeeded ? (
           <div className="py-6 text-sm text-gray-300 text-center">
-            Credentials saved. You can link agents to this integration any time from Agent Studio.
+            Credentials saved. You can link agents to this integration any time from{' '}
+            <a href="/agents" className="text-teal-300 underline hover:text-white">
+              Agent Studio
+            </a>.
           </div>
         ) : assignmentResults.length === 0 ? (
           <div className="py-10 text-center text-sm text-gray-400">Starting…</div>

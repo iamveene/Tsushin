@@ -212,7 +212,7 @@ export default function WiredContinuousCard({ channelType, channelInstanceId, on
               No continuous agents are subscribed to this trigger yet.
             </p>
             <Link
-              href="/continuous-agents"
+              href="/studio/continuous-agents"
               className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
             >
               <ExternalLinkIcon size={14} /> Browse Continuous Agents
@@ -222,7 +222,7 @@ export default function WiredContinuousCard({ channelType, channelInstanceId, on
 
         {!loading && !loadError && bindings.map((b) => {
           const pill = statusPill(b)
-          const editHref = `/continuous-agents/${b.continuous_agent_id}`
+          const editHref = `/studio/continuous-agents/${b.continuous_agent_id}`
           const busy = busyId === b.id
           const isPaused = b.status !== 'active'
           const lockReason = b.is_system_owned

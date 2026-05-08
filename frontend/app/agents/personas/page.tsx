@@ -232,7 +232,7 @@ export default function PersonasPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-5 border-l-4 border-l-tsushin-indigo">
+          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-5 border-l-4 border-l-green-500">
             <p className="text-sm font-medium text-tsushin-slate">Total Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{personas.length}</p>
           </div>
@@ -240,10 +240,17 @@ export default function PersonasPage() {
             <p className="text-sm font-medium text-tsushin-slate">System Templates</p>
             <p className="text-2xl font-bold text-white mt-1">{systemPersonas.length}</p>
           </div>
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-5 border-l-4 border-l-green-500">
+          <button
+            type="button"
+            onClick={handleOpenCreateModal}
+            className="rounded-lg border border-gray-800 border-l-4 border-l-green-500 bg-gray-900/50 p-5 text-left shadow transition-colors hover:border-green-500/60"
+          >
             <p className="text-sm font-medium text-tsushin-slate">Custom Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{customPersonas.length}</p>
-          </div>
+            {customPersonas.length === 0 && (
+              <p className="mt-1 text-xs text-green-300">Create your own from a template below.</p>
+            )}
+          </button>
         </div>
 
         {/* System Persona Templates */}

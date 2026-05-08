@@ -391,7 +391,10 @@ export default function ContactsPage() {
             <p className="text-sm font-medium text-tsushin-slate">Agent Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{agentContacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-green-500">
+          <div
+            className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-green-500"
+            title="Contacts that trigger an agent when they send a direct message."
+          >
             <p className="text-sm font-medium text-tsushin-slate">DM Triggers</p>
             <p className="text-2xl font-bold text-white mt-1">{dmTriggerContacts.length}</p>
           </div>
@@ -423,10 +426,13 @@ export default function ContactsPage() {
                             ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                             : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                         }`}>
-                          {contact.role}
+                          {contact.role === 'agent' ? 'Agent' : contact.role === 'external' ? 'External' : 'User'}
                         </span>
                         {contact.is_dm_trigger && (
-                          <span className="px-2 py-1 text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20 rounded-full">
+                          <span
+                            className="px-2 py-1 text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20 rounded-full"
+                            title="Triggers when someone DMs this contact."
+                          >
                             DM Trigger
                           </span>
                         )}
@@ -510,7 +516,10 @@ export default function ContactsPage() {
                         <td className="py-3 px-4">
                           <div className="font-medium text-white">{contact.friendly_name}</div>
                           {contact.is_dm_trigger && (
-                            <span className="inline-block px-2 py-0.5 text-xs bg-green-500/10 text-green-400 rounded mt-1">
+                            <span
+                              className="inline-block px-2 py-0.5 text-xs bg-green-500/10 text-green-400 rounded mt-1"
+                              title="Triggers when someone DMs this contact."
+                            >
                               DM Trigger
                             </span>
                           )}

@@ -190,7 +190,7 @@ export default function A2APermissionsManager() {
               <tr className="border-b border-tsushin-border/30">
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Source Agent</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Target Agent</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Max Depth</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider" title="How many delegation hops are allowed before the chain stops.">Max Depth</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Rate Limit</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider" title="Allow the target agent to use its own skills (gmail, sandboxed_tools, …) when invoked via A2A">Target Skills</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Status</th>
@@ -207,7 +207,9 @@ export default function A2APermissionsManager() {
                     {perm.target_agent_name || `Agent #${perm.target_agent_id}`}
                   </td>
                   <td className="px-6 py-4 text-sm text-tsushin-slate">{perm.max_depth}</td>
-                  <td className="px-6 py-4 text-sm text-tsushin-slate">{perm.rate_limit_rpm} RPM</td>
+                  <td className="px-6 py-4 text-sm text-tsushin-slate" title={`${perm.rate_limit_rpm} requests per minute`}>
+                    {perm.rate_limit_rpm} / minute
+                  </td>
                   <td className="px-6 py-4">
                     <button
                       onClick={() => handleToggleTargetSkills(perm)}
@@ -311,11 +313,11 @@ export default function A2APermissionsManager() {
                   onChange={(e) => setNewPermission({ ...newPermission, max_depth: parseInt(e.target.value) || 3 })}
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                 />
-                <p className="text-xs text-tsushin-muted mt-1">Maximum chain depth for recursive agent calls (1-10)</p>
+                <p className="text-xs text-tsushin-muted mt-1">How many delegation hops are allowed before the chain stops (1-10).</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Rate Limit (RPM)</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Rate limit per minute</label>
                 <input
                   type="number"
                   min={1}

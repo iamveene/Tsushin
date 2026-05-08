@@ -411,7 +411,10 @@ export default function MCPServerWizard({ isOpen, onClose, mcpServer, onComplete
         )}
 
         <div className="text-xs text-gray-500 text-center">
-          You can also assign skills later in Studio &gt; Agent &gt; Custom Skills.
+          You can also assign skills later in{' '}
+          <a href="/agents/custom-skills" className="text-emerald-300 underline hover:text-white">
+            Studio → Custom Skills
+          </a>.
         </div>
       </div>
     </Wizard>
