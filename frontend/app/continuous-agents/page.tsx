@@ -52,7 +52,12 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 export default function ContinuousAgentsPage() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const isEmbeddedInWatcher = pathname === '/'
+  // True when this component is mounted inside a parent surface that
+  // already provides its own header / breadcrumb / create-button —
+  // either Watcher (root '/') or Studio ('/studio/continuous-agents').
+  // In both cases the standalone-page header (breadcrumb + h1 +
+  // subtitle + page-level "+ New" button) is redundant noise.
+  const isEmbedded = pathname === '/' || pathname === '/studio/continuous-agents'
   const [agentsPage, setAgentsPage] = useState<PageResponse<ContinuousAgent> | null>(null)
   const [runsPage, setRunsPage] = useState<PageResponse<ContinuousRun> | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
@@ -165,22 +170,23 @@ export default function ContinuousAgentsPage() {
   const systemOwnedCount = agents.filter(agent => agent.is_system_owned).length
 
   return (
-    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
-      <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-8'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
-        <div>
-          {!isEmbeddedInWatcher && (
+    <div className={isEmbedded ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+      {!isEmbedded && (
+        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
             <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
               <Link href="/" className="hover:text-white">Watcher</Link>
               <span>/</span>
               <span>Continuous Agents</span>
             </div>
-          )}
-          <h1 className="text-3xl font-display font-bold text-white">Continuous Agents</h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Always-on wrappers around Studio agents — wake on trigger events, run with daily budget caps, and persist run history.
-          </p>
+            <h1 className="text-3xl font-display font-bold text-white">Continuous Agents</h1>
+            <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
+              Always-on wrappers around Studio agents — wake on trigger events, run with daily budget caps, and persist run history.
+            </p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+      )}
+      <div className={`${isEmbedded ? 'mb-6' : 'mb-8'} flex flex-wrap items-center justify-end gap-2`}>
           <button
             type="button"
             onClick={loadData}
@@ -190,6 +196,11 @@ export default function ContinuousAgentsPage() {
             <RefreshIcon size={16} />
             Refresh
           </button>
+          {/* Hide the page-level "+ New Continuous Agent" when embedded
+              under a parent surface that already provides a centralized
+              Create button (Studio). Watcher embed keeps it because
+              Watcher is observability and doesn't expose a Create. */}
+          {pathname !== '/studio/continuous-agents' && (
           <button
             type="button"
             onClick={() => {
@@ -200,8 +211,8 @@ export default function ContinuousAgentsPage() {
           >
             + New Continuous Agent
           </button>
+          )}
         </div>
-      </div>
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
         <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
