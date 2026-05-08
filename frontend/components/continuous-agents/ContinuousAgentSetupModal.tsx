@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import AgentVsFlowExplainer from '@/lib/copy/agent-vs-flow-explainer'
 import {
   api,
   type Agent,
@@ -195,9 +194,13 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
           </div>
         )}
 
+        {/* Agent-vs-Flow explainer used to render here for first-time
+            users. It's redundant now: the user reaches this modal AFTER
+            picking "Continuous Agent" in the Studio kind chooser, so
+            re-explaining "vs Flow" inside the create modal teaches a
+            decision they've already made. The explainer file is kept
+            for the chooser modal itself. */}
         <form onSubmit={handleSubmit} className="space-y-4">
-          {!isEdit && <AgentVsFlowExplainer kind="agent" />}
-
           <div>
             <label className="mb-1 block text-sm font-medium text-tsushin-fog">Base agent</label>
             <select
