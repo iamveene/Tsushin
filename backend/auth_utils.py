@@ -7,6 +7,7 @@ Provides JWT token generation/validation and password hashing utilities.
 
 import hashlib
 import logging
+import os
 import secrets
 import warnings
 from datetime import datetime, timedelta
@@ -19,12 +20,35 @@ from services.secret_provider import get_secret_provider
 
 logger = logging.getLogger(__name__)
 
+
+def _looks_like_production() -> bool:
+    """Heuristic shared with the CORS guard in app.py."""
+    if (os.getenv("TSN_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower() in (
+        "production",
+        "prod",
+    ):
+        return True
+    if (os.getenv("TSN_ENABLE_HSTS") or "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if (os.getenv("SSL_MODE") or "").strip().lower() not in ("", "disabled", "off"):
+        return True
+    return False
+
+
 # JWT Configuration
-# BUG-054 FIX: Warn loudly when JWT_SECRET_KEY is not set instead of silently
-# generating an ephemeral key that invalidates all sessions on restart.
-# Fetched via SecretProvider so it works with both env vars and GCP Secret Manager.
+# BUG-054 FIX + SEC-AUDIT-2026-05: Refuse to boot in production when
+# JWT_SECRET_KEY is unset. In dev we keep the ephemeral-key fallback (with a
+# loud warning) so first-time setup still works, but a missing secret in prod
+# is a deploy-time error — silent fallback masked the misconfig and rotated
+# every operator's sessions on every restart.
 JWT_SECRET_KEY = get_secret_provider().get_secret("JWT_SECRET_KEY")
 if not JWT_SECRET_KEY:
+    if _looks_like_production():
+        raise RuntimeError(
+            "JWT_SECRET_KEY is required in production. Generate one with "
+            "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"` "
+            "and set it in your environment / secret manager."
+        )
     JWT_SECRET_KEY = secrets.token_urlsafe(32)
     warnings.warn(
         "JWT_SECRET_KEY not set — using ephemeral key. All sessions will be lost on restart. "
