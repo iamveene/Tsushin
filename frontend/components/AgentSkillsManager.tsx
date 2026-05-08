@@ -145,6 +145,7 @@ interface TranscriptSkillConfig extends Record<string, unknown> {
   response_mode: TranscriptResponseMode
   asr_mode: TranscriptASRMode
   asr_instance_id: number | null
+  remember_transcript: boolean
 }
 
 interface SkillCardFact {
@@ -392,6 +393,7 @@ function normalizeTranscriptConfig(
     response_mode: raw.response_mode === 'transcript_only' ? 'transcript_only' : 'conversational',
     asr_mode: asrMode,
     asr_instance_id: typeof raw.asr_instance_id === 'number' ? raw.asr_instance_id : null,
+    remember_transcript: raw.remember_transcript !== false,
   }
   if (normalized.asr_mode !== 'instance') {
     normalized.asr_instance_id = null
@@ -1609,7 +1611,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               <div className="text-xs text-tsushin-muted">
                 {transcriptConfigData.asr_mode === 'instance'
                   ? 'Pinned local ASR'
-                  : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'}
+                  : 'OpenAI Whisper'} • {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript only' : 'Conversational'} • {transcriptConfigData.remember_transcript === false ? 'Immediate only' : 'Remembered'}
               </div>
             )}
           </div>
@@ -1648,6 +1650,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     <div className="text-xs text-tsushin-muted mb-1">STT Mode</div>
                     <div className="font-medium text-sm text-white">
                       {transcriptConfigData.response_mode === 'transcript_only' ? 'Transcript' : 'AI Chat'}
+                    </div>
+                  </div>
+                  <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
+                    <div className="text-xs text-tsushin-muted mb-1">Transcript Memory</div>
+                    <div className="font-medium text-sm text-white">
+                      {transcriptConfigData.remember_transcript === false ? 'Off' : 'On'}
                     </div>
                   </div>
                 </>
@@ -2643,6 +2651,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       model: transcriptConfig.model || 'whisper-1',
                       asrMode: transcriptConfig.asr_mode || 'openai',
                       asrInstanceId: transcriptConfig.asr_instance_id ?? null,
+                      rememberTranscript: transcriptConfig.remember_transcript,
                     }}
                     onChange={(patch) => setTranscriptConfig(prev => normalizeTranscriptConfig({
                       ...prev,
@@ -2651,6 +2660,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       model: patch.model !== undefined ? patch.model : prev.model,
                       asr_mode: patch.asrMode !== undefined ? patch.asrMode : prev.asr_mode,
                       asr_instance_id: patch.asrInstanceId !== undefined ? patch.asrInstanceId : prev.asr_instance_id,
+                      remember_transcript: patch.rememberTranscript !== undefined ? patch.rememberTranscript : prev.remember_transcript,
                     }))}
                   />
 

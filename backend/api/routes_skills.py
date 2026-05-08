@@ -126,6 +126,7 @@ def _normalize_audio_transcript_config(
     normalized = dict(config or {})
     asr_mode = normalized.get("asr_mode")
     asr_instance_id = normalized.get("asr_instance_id")
+    remember_transcript = normalized.get("remember_transcript", True)
 
     if asr_mode is None:
         asr_mode = "instance" if asr_instance_id else "openai"
@@ -155,6 +156,16 @@ def _normalize_audio_transcript_config(
         normalized["asr_instance_id"] = None
 
     normalized["asr_mode"] = asr_mode
+    if isinstance(remember_transcript, str):
+        normalized["remember_transcript"] = remember_transcript.strip().lower() not in {
+            "false",
+            "0",
+            "no",
+            "n",
+            "off",
+        }
+    else:
+        normalized["remember_transcript"] = bool(remember_transcript) if remember_transcript is not None else True
     return normalized
 
 

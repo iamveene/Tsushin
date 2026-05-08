@@ -21,6 +21,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _coerce_bool(value: Any, *, default: bool = True) -> bool:
+    """Normalize boolean-ish config values without treating "false" as true."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
 class AudioTranscriptSkill(BaseSkill):
     """
     Transcribes audio messages to text using OpenAI Whisper API.
@@ -360,23 +376,34 @@ class AudioTranscriptSkill(BaseSkill):
 
             # Check response mode
             response_mode = config.get("response_mode", "conversational")
+            remember_transcript = _coerce_bool(config.get("remember_transcript"), default=True)
             logger.info(f"DEBUG: response_mode from config = '{response_mode}'")
             logger.info(f"DEBUG: full config = {config}")
 
+            base_metadata = {
+                "skill_type": self.skill_type,
+                "source": self.skill_type,
+                "transcript_length": len(transcript),
+                "audio_path": audio_path,
+                "language": language,
+                "model": provider_model,
+                "provider": provider_name,
+                "response_mode": response_mode,
+                "remember_transcript": remember_transcript,
+                "original_message_id": getattr(message, "id", None),
+            }
+
             if response_mode == "transcript_only":
                 # Return transcript only - this will be sent directly to user (no AI processing)
+                metadata = dict(base_metadata)
+                metadata.update({
+                    "transcript": transcript,
+                    "skip_ai": True,  # Signal to skip AI processing
+                })
                 return SkillResult(
                     success=True,
                     output=f"📝 Transcript:\n\n{transcript}",
-                    metadata={
-                        "transcript_length": len(transcript),
-                        "audio_path": audio_path,
-                        "language": language,
-                        "model": provider_model,
-                        "provider": provider_name,
-                        "response_mode": response_mode,
-                        "skip_ai": True  # Signal to skip AI processing
-                    },
+                    metadata=metadata,
                     processed_content=None  # Don't pass to AI
                 )
             else:
@@ -384,14 +411,7 @@ class AudioTranscriptSkill(BaseSkill):
                 return SkillResult(
                     success=True,
                     output=f"🎤 Audio transcribed:\n\n{transcript}",
-                    metadata={
-                        "transcript_length": len(transcript),
-                        "audio_path": audio_path,
-                        "language": language,
-                        "model": provider_model,
-                        "provider": provider_name,
-                        "response_mode": response_mode
-                    },
+                    metadata=base_metadata,
                     processed_content=transcript  # Pass to AI for processing
                 )
 
@@ -423,7 +443,8 @@ class AudioTranscriptSkill(BaseSkill):
             "asr_instance_id": None,  # Pin a specific local Whisper/Speaches/openai_whisper instance when set
             "language": "auto",  # Auto-detect language
             "model": "whisper-1",  # OpenAI Whisper model
-            "response_mode": "conversational"  # "conversational" or "transcript_only"
+            "response_mode": "conversational",  # "conversational" or "transcript_only"
+            "remember_transcript": True,  # Store transcript-only audio as user memory by default
         }
 
     @classmethod
@@ -470,6 +491,11 @@ class AudioTranscriptSkill(BaseSkill):
                     "description": "Response mode: 'conversational' (AI processes transcript) or 'transcript_only' (return raw transcript)",
                     "default": "conversational",
                     "enum": ["conversational", "transcript_only"]
+                },
+                "remember_transcript": {
+                    "type": "boolean",
+                    "description": "Store transcript-only audio as a user memory entry",
+                    "default": True
                 }
             },
             "required": []

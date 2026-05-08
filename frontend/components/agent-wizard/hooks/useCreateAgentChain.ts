@@ -35,6 +35,7 @@ interface TranscriptSkillPayload {
   model: string
   asr_mode: AudioConfig['asrMode']
   asr_instance_id?: number
+  remember_transcript: boolean
 }
 
 const PROVIDER_SKILLS_WITH_INTEGRATION = new Set(['password_vault'])
@@ -91,6 +92,7 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
       language: audio.language,
       model: audio.transcriptModel || 'whisper-1',
       asr_mode: audio.asrMode,
+      remember_transcript: audio.rememberTranscript !== false,
     }
     if (audio.asrMode === 'instance' && audio.asrInstanceId) {
       transcriptConfig.asr_instance_id = audio.asrInstanceId

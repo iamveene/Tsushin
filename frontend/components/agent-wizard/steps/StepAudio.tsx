@@ -129,6 +129,7 @@ export default function StepAudio() {
               model: audio.transcriptModel,
               asrMode: audio.asrMode,
               asrInstanceId: audio.asrInstanceId,
+              rememberTranscript: audio.rememberTranscript,
             }}
             onChange={(patch) => {
               const next: Partial<AudioConfig> = {}
@@ -136,6 +137,7 @@ export default function StepAudio() {
               if (patch.model !== undefined) next.transcriptModel = patch.model
               if (patch.asrMode !== undefined) next.asrMode = patch.asrMode
               if (patch.asrInstanceId !== undefined) next.asrInstanceId = patch.asrInstanceId
+              if (patch.rememberTranscript !== undefined) next.rememberTranscript = patch.rememberTranscript
               patchAudio(next)
             }}
             showResponseMode={false}
