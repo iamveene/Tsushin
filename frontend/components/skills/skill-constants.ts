@@ -140,8 +140,8 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
     icon: BotIcon,
   },
   okg_term_memory: {
-    displayName: 'OKG Term Memory',
-    description: 'Structured long-term memory with ontological metadata (subject/relation/type).',
+    displayName: 'Knowledge Graph Memory',
+    description: 'Long-term memory that links related concepts together — the agent can answer "what do I know about X?" with structured connections, not just keyword recall.',
     category: 'intelligence',
     configType: 'standard',
     icon: BrainIcon,
@@ -155,7 +155,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   ticket_management: {
     displayName: 'Ticket Management',
-    description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.',
+    description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Currently supports Atlassian Jira.',
     category: 'automation_tools',
     configType: 'provider',
     icon: WrenchIcon,
@@ -163,7 +163,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   code_repository: {
     displayName: 'Code Repository',
-    description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.',
+    description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Currently supports GitHub.',
     category: 'automation_tools',
     configType: 'provider',
     icon: GitHubIcon,
@@ -171,7 +171,7 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   password_vault: {
     displayName: 'Password Vault',
-    description: 'Resolve approved vault references for agents and flows with redacted outputs. Today: 1Password via Hub Tool APIs.',
+    description: 'Look up approved credentials from a password manager and use them in flows — outputs are redacted before they touch logs. Currently supports 1Password.',
     category: 'automation_tools',
     configType: 'provider',
     icon: LockIcon,

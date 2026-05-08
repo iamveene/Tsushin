@@ -30,9 +30,9 @@ export default function StepMemory() {
 
       <div className="space-y-2">
         {([
-          { id: 'builtin', title: 'Built-in memory', desc: 'Lightweight ring buffer of recent turns. Fastest to set up.' },
-          { id: 'semantic', title: 'Built-in + semantic', desc: 'Adds semantic search over learned facts (ChromaDB). Recommended for most agents.' },
-          { id: 'vector', title: 'External vector store', desc: 'Use an external vector store (Pinecone, Qdrant, MongoDB) as the primary knowledge layer.' },
+          { id: 'builtin', title: 'Recent messages only', desc: 'Remembers the last few turns of each conversation. Fastest to set up — no extra storage needed.' },
+          { id: 'semantic', title: 'Recent messages + meaning search', desc: 'Adds search-by-meaning over things the agent has learned. Recommended for most agents.' },
+          { id: 'vector', title: 'External knowledge store', desc: 'Use a connected vector database (Pinecone, Qdrant, MongoDB Atlas) as the agent\'s primary memory.' },
         ] as const).map(opt => {
           const selected = mem.mode === opt.id
           return (
@@ -52,7 +52,7 @@ export default function StepMemory() {
       </div>
 
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Remember last N turns: <span className="text-teal-400 font-mono">{mem.memory_size}</span></label>
+        <label className="block text-xs text-gray-400 mb-1">How many recent messages to keep in mind: <span className="text-teal-400 font-mono">{mem.memory_size}</span></label>
         <input
           type="range"
           min={1}
