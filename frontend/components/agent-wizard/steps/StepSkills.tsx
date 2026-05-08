@@ -64,12 +64,19 @@ function rowsFromBackend(skills: SkillDefinition[]): WizardSkillRow[] {
   return skills
     .filter(s => s.wizard_visible !== false)
     .filter(s => !HIDDEN_SKILLS.has(s.skill_type))
+    // Built-in catalog only — drop tenant-installed custom/MCP skills, which
+    // are rendered separately under the CUSTOM section. A skill is treated as
+    // built-in iff it has a SKILL_DISPLAY_INFO entry (the canonical registry of
+    // built-in skill types). Without this filter the same custom skill could
+    // appear twice — once with a raw machine name in BUILT-IN, once under
+    // CUSTOM.
+    .filter(s => SKILL_DISPLAY_INFO[s.skill_type] !== undefined)
     .map(s => {
-      const display = SKILL_DISPLAY_INFO[s.skill_type]
+      const display = SKILL_DISPLAY_INFO[s.skill_type]!
       return {
         type: s.skill_type,
-        label: display?.displayName || s.skill_name,
-        description: display?.description || s.skill_description,
+        label: display.displayName,
+        description: display.description,
         appliesTo: s.applies_to || ['text', 'audio', 'hybrid'],
         autoEnabledFor: s.auto_enabled_for || [],
       }

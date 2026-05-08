@@ -133,7 +133,16 @@ export default function StepPersonality() {
       )}
 
       <div>
-        <label className="block text-xs text-gray-400 mb-1">System prompt {state.draft.personality.skip_persona ? '*' : '(optional)'}</label>
+        {(() => {
+          const promptRequired =
+            state.draft.personality.skip_persona ||
+            state.draft.personality.persona_id == null
+          return (
+            <label className="block text-xs text-gray-400 mb-1">
+              System prompt {promptRequired ? '*' : '(optional — persona will define personality)'}
+            </label>
+          )
+        })()}
         {presets.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2">
             {presets.map(preset => (
