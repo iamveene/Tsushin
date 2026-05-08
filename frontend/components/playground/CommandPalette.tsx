@@ -9,6 +9,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { SlashCommand } from '@/lib/client'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import {
   BotIcon,
   FolderIcon,
@@ -151,12 +152,14 @@ export default function CommandPalette({
     }
   }, [commandItems, selectedIndex, onCommandSelect, onClose, query])
 
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   if (!isOpen) return null
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm animate-fade-in"
-      onClick={onClose}
+      {...backdropDismiss}
     >
       <div
         className="w-full max-w-[600px] bg-tsushin-ink border border-white/10 rounded-2xl overflow-hidden shadow-2xl animate-slide-up"

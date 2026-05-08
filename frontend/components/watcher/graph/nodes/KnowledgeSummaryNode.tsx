@@ -9,6 +9,7 @@
 import { memo, useState, useEffect, useRef } from 'react'
 import { NodeProps, Handle, Position } from '@xyflow/react'
 import { KnowledgeSummaryNodeData } from '../types'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 // Format file size
 function formatFileSize(bytes?: number): string {
@@ -21,6 +22,7 @@ function formatFileSize(bytes?: number): string {
 function KnowledgeSummaryNode(props: NodeProps<KnowledgeSummaryNodeData>) {
   const { data, selected } = props
   const [showDetail, setShowDetail] = useState(false)
+  const detailBackdropDismiss = useBackdropDismiss(() => setShowDetail(false))
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
@@ -117,7 +119,7 @@ function KnowledgeSummaryNode(props: NodeProps<KnowledgeSummaryNodeData>) {
       {showDetail && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
-          onClick={() => setShowDetail(false)}
+          {...detailBackdropDismiss}
           role="presentation"
         >
           <div

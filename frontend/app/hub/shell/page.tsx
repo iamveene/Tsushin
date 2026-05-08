@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import api, { authenticatedFetch, SecurityPattern, SecurityPatternCreate, SecurityPatternUpdate, PatternTestResult, SentinelConfig, SentinelLog, SentinelStats, SentinelConfigUpdate } from '@/lib/client'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 const ShellBeaconSetupWizard = dynamic(
   () => import('@/components/shell/ShellBeaconSetupWizard'),
@@ -124,11 +125,13 @@ export default function ShellDashboardPage() {
   const [patterns, setPatterns] = useState<SecurityPattern[]>([])
   const [patternsLoading, setPatternsLoading] = useState(false)
   const [showPatternModal, setShowPatternModal] = useState(false)
+  const patternModalBackdropDismiss = useBackdropDismiss(() => setShowPatternModal(false))
   const [editingPattern, setEditingPattern] = useState<SecurityPattern | null>(null)
   const [patternForm, setPatternForm] = useState<PatternFormData>(DEFAULT_PATTERN_FORM)
   const [patternError, setPatternError] = useState<string | null>(null)
   const [savingPattern, setSavingPattern] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{id: number, description: string} | null>(null)
+  const deleteConfirmBackdropDismiss = useBackdropDismiss(() => setDeleteConfirm(null))
   const [patternSearchQuery, setPatternSearchQuery] = useState('')
   const [patternTypeFilter, setPatternTypeFilter] = useState<string>('')
   const [patternCategoryFilter, setPatternCategoryFilter] = useState<string>('')
@@ -138,6 +141,7 @@ export default function ShellDashboardPage() {
   const [testPattern, setTestPattern] = useState('')
   const [testCommands, setTestCommands] = useState<string[]>([''])
   const [testResults, setTestResults] = useState<PatternTestResult | null>(null)
+  const patternTesterBackdropDismiss = useBackdropDismiss(() => { setShowPatternTester(false); setTestResults(null) })
   const [testingPattern, setTestingPattern] = useState(false)
 
   // Phase 20: Sentinel Security State
@@ -1277,7 +1281,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Create/Edit Modal */}
       {showPatternModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowPatternModal(false)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...patternModalBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4">
               {editingPattern ? 'Edit Pattern' : 'Create New Pattern'}
@@ -1391,7 +1395,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Delete Confirmation */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setDeleteConfirm(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...deleteConfirmBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4">Delete Pattern?</h2>
             <p className="text-gray-400 mb-4">Are you sure you want to delete this pattern?</p>
@@ -1416,7 +1420,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Tester Modal */}
       {showPatternTester && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setShowPatternTester(false); setTestResults(null) }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...patternTesterBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4 inline-flex items-center gap-2"><BeakerIcon size={20} /> Pattern Tester</h2>
 

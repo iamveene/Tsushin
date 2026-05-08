@@ -22,6 +22,7 @@
 import type { ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { BotIcon, LightningIcon, UsersIcon } from '@/components/ui/icons'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 export type ChosenKind = 'agent' | 'continuous-agent' | 'team'
 
@@ -87,6 +88,7 @@ function OptionCard({ Icon, iconColorClass, title, badge, tagline, bullets, exam
 
 export default function CreateChooserModal({ open, onClose, onSelect }: Props) {
   const router = useRouter()
+  const backdropDismiss = useBackdropDismiss(onClose)
   if (!open) return null
 
   function pick(kind: ChosenKind) {
@@ -108,7 +110,7 @@ export default function CreateChooserModal({ open, onClose, onSelect }: Props) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-      onClick={onClose}
+      {...backdropDismiss}
     >
       <div
         className="w-full max-w-5xl rounded-2xl border border-tsushin-border bg-tsushin-surface shadow-2xl"

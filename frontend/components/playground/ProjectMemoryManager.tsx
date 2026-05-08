@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { api, ProjectFact, ProjectSemanticMemoryEntry, ProjectMemoryStats, PlaygroundDocument } from '@/lib/client'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import {
   BookIcon,
   BrainIcon,
@@ -161,12 +162,14 @@ export default function ProjectMemoryManager({
     }
   }
 
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   if (!isOpen) return null
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      {...backdropDismiss}
     >
       <div
         className="w-full max-w-4xl max-h-[80vh] bg-tsushin-ink border border-white/10 rounded-2xl overflow-hidden shadow-2xl"

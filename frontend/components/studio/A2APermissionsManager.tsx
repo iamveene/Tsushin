@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useToast } from '@/contexts/ToastContext'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import {
   api,
   Agent,
@@ -30,6 +31,7 @@ export default function A2APermissionsManager() {
   const [permissionsLoading, setPermissionsLoading] = useState(false)
 
   const [showAddModal, setShowAddModal] = useState(false)
+  const addModalBackdropDismiss = useBackdropDismiss(() => setShowAddModal(false))
   const [newPermission, setNewPermission] = useState({
     source_agent_id: 0,
     target_agent_id: 0,
@@ -257,7 +259,7 @@ export default function A2APermissionsManager() {
       {showAddModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowAddModal(false)}
+          {...addModalBackdropDismiss}
         >
           <div
             className="bg-tsushin-elevated rounded-xl max-w-md w-full shadow-xl"

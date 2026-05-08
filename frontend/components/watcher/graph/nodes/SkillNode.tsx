@@ -11,6 +11,7 @@
 import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import { NodeProps, Handle, Position } from '@xyflow/react'
 import { SkillNodeData } from '../types'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 // Category configuration with colors and icons
 const categoryConfig: Record<string, { color: string; bgColor: string; borderColor: string }> = {
@@ -186,6 +187,7 @@ function formatSkillName(skillType: string): string {
 function SkillNode(props: NodeProps<SkillNodeData>) {
   const { data, selected } = props
   const [showDetail, setShowDetail] = useState(false)
+  const detailBackdropDismiss = useBackdropDismiss(() => setShowDetail(false))
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
@@ -328,7 +330,7 @@ function SkillNode(props: NodeProps<SkillNodeData>) {
       {showDetail && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
-          onClick={() => setShowDetail(false)}
+          {...detailBackdropDismiss}
           role="presentation"
         >
           <div

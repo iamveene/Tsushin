@@ -19,6 +19,7 @@ import { useGraphData } from './graph/hooks'
 import GraphLeftPanel from './graph/GraphLeftPanel'
 import type { GraphCanvasRef } from './graph/GraphCanvas'
 import { useWatcherActivity } from '@/hooks/useWatcherActivity'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import './graph/graph.css'
 
 // Dynamic import to avoid SSR issues with React Flow
@@ -99,6 +100,7 @@ export default function GraphViewTab() {
 
   // Phase 10: Fullscreen mode
   const [isMaximized, setIsMaximized] = useState(false)
+  const maximizedBackdropDismiss = useBackdropDismiss(() => setIsMaximized(false))
 
   // Fetch data based on view type
   const { nodes, edges, a2aEdges, loading, error, refetch } = useGraphData({
@@ -419,7 +421,7 @@ export default function GraphViewTab() {
       {isMaximized && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-          onClick={() => setIsMaximized(false)}
+          {...maximizedBackdropDismiss}
         />
       )}
 

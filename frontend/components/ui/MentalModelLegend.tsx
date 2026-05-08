@@ -8,6 +8,7 @@ import {
   PlayIcon,
   SettingsIcon,
 } from '@/components/ui/icons'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface Section {
   href: string
@@ -78,12 +79,14 @@ interface Props {
 }
 
 export default function MentalModelLegend({ open, onClose }: Props) {
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   if (!open) return null
 
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-      onClick={onClose}
+      {...backdropDismiss}
     >
       <div
         className="relative w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl border border-tsushin-border bg-tsushin-ink shadow-2xl"
