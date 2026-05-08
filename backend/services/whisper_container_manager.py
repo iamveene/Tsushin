@@ -680,8 +680,16 @@ class WhisperContainerManager:
                 return resp.status_code == 200
 
             # speaches / OpenAI-compatible /v1/audio/transcriptions
-            wav_bytes = _build_silent_wav_bytes()
             headers = {"Authorization": f"Bearer {token}"}
+            # The PRELOAD_MODELS env var is not honored by
+            # ghcr.io/speaches-ai/speaches:latest-cpu — model assets are
+            # only fetched when the OpenAI-compatible /v1/models/{name}
+            # endpoint is hit. Without this call, the silent-WAV warm-up
+            # below 404s with "Model '<name>' is not installed locally"
+            # and the container is marked unhealthy forever.
+            self._ensure_speaches_model(base_url=base_url, headers=headers, model=model)
+
+            wav_bytes = _build_silent_wav_bytes()
             files = {"file": ("warmup.wav", wav_bytes, "audio/wav")}
             data = {"model": model, "language": "en"}
             resp = requests.post(
@@ -694,6 +702,31 @@ class WhisperContainerManager:
             return resp.status_code == 200
         except Exception:
             return False
+
+    @staticmethod
+    def _ensure_speaches_model(*, base_url: str, headers: Dict[str, str], model: str) -> bool:
+        try:
+            resp = requests.post(
+                f"{base_url.rstrip('/')}/v1/models/{model}",
+                headers=headers,
+                timeout=300,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Speaches model download request failed for %s: %s",
+                model,
+                exc,
+            )
+            return False
+        if resp.status_code not in (200, 201, 204, 409):
+            logger.warning(
+                "Speaches model download returned %s for %s: %s",
+                resp.status_code,
+                model,
+                (resp.text or "")[:200],
+            )
+            return False
+        return True
 
     def _get_instance(self, instance_id: int, tenant_id: str, db: Session):
         from models import ASRInstance
