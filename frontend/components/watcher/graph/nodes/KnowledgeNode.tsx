@@ -8,6 +8,7 @@
 import { memo, useState } from 'react'
 import { NodeProps, Handle, Position } from '@xyflow/react'
 import { KnowledgeNodeData, KnowledgeStatus } from '../types'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 // Document type icon mapping
 const docTypeIcons: Record<string, JSX.Element> = {
@@ -68,6 +69,7 @@ function formatDate(dateStr?: string): string {
 function KnowledgeNode(props: NodeProps<KnowledgeNodeData>) {
   const { data, selected } = props
   const [showDetail, setShowDetail] = useState(false)
+  const detailBackdropDismiss = useBackdropDismiss(() => setShowDetail(false))
 
   const docIcon = docTypeIcons[data.documentType.toLowerCase()] || docTypeIcons.default
   const status = statusConfig[data.status] || statusConfig.pending
@@ -119,7 +121,7 @@ function KnowledgeNode(props: NodeProps<KnowledgeNodeData>) {
       {showDetail && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
-          onClick={() => setShowDetail(false)}
+          {...detailBackdropDismiss}
         >
           <div
             className="bg-tsushin-deep border border-tsushin-border rounded-xl p-4 shadow-2xl min-w-[300px] max-w-[400px] animate-fade-in"

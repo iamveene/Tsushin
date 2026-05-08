@@ -9,6 +9,7 @@ import {
   type ContinuousAgentCreate,
   type ContinuousAgentUpdate,
 } from '@/lib/client'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 type ExecutionMode = 'autonomous' | 'hybrid' | 'notify_only'
 type AgentStatus = 'active' | 'paused' | 'disabled'
@@ -62,6 +63,8 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
   const [loadingAgents, setLoadingAgents] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const backdropDismiss = useBackdropDismiss(() => { if (!submitting) onClose() })
 
   useEffect(() => {
     if (!isOpen) return
@@ -162,9 +165,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       role="dialog"
       aria-modal="true"
-      onClick={(event) => {
-        if (event.target === event.currentTarget && !submitting) onClose()
-      }}
+      {...backdropDismiss}
     >
       <div className="w-full max-w-2xl rounded-2xl border border-tsushin-border bg-tsushin-surface p-6 shadow-2xl text-white max-h-[90vh] overflow-y-auto">
         <div className="mb-4 flex items-start justify-between">
@@ -288,22 +289,35 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
           <div>
             <label className="mb-1 block text-sm font-medium text-tsushin-fog">Execution mode</label>
             <div className="flex flex-wrap gap-2">
-              {EXECUTION_MODES.map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setForm((prev) => ({ ...prev, executionMode: mode }))}
-                  disabled={submitting}
-                  className={`rounded-lg border px-3 py-1.5 text-sm capitalize transition-colors ${
-                    form.executionMode === mode
-                      ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
-                      : 'border-tsushin-border text-tsushin-slate hover:text-white'
-                  }`}
-                >
-                  {mode.replace('_', ' ')}
-                </button>
-              ))}
+              {EXECUTION_MODES.map((mode) => {
+                const tooltip = (() => {
+                  if (mode === 'autonomous') return 'Agent acts on every wake event without asking — fastest, requires trust.'
+                  if (mode === 'hybrid') return 'Agent acts on most wakes but pauses for confirmation on risky actions. Default.'
+                  return 'Agent only sends notifications — never takes external actions. Good for monitoring use cases.'
+                })()
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, executionMode: mode }))}
+                    disabled={submitting}
+                    title={tooltip}
+                    className={`rounded-lg border px-3 py-1.5 text-sm capitalize transition-colors ${
+                      form.executionMode === mode
+                        ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                        : 'border-tsushin-border text-tsushin-slate hover:text-white'
+                    }`}
+                  >
+                    {mode.replace('_', ' ')}
+                  </button>
+                )
+              })}
             </div>
+            <p className="mt-1 text-xs text-tsushin-slate">
+              {form.executionMode === 'autonomous' && 'Acts on every wake event without asking.'}
+              {form.executionMode === 'hybrid' && 'Acts on most wakes but pauses for confirmation on risky actions.'}
+              {form.executionMode === 'notify_only' && 'Only sends notifications — never takes external actions.'}
+            </p>
           </div>
 
           {isEdit && (

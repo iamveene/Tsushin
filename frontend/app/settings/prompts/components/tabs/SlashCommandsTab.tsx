@@ -3,6 +3,7 @@
 import React, { useState, useEffect, FormEvent } from 'react'
 import client, { SlashCommandDetail } from '@/lib/client'
 import { ConfirmDialog, RegexTester, Tooltip, InfoIcon } from '../ui'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface SlashCommandFormData {
   category: string
@@ -35,6 +36,7 @@ export function SlashCommandsTab({ canWrite, showToast }: SlashCommandsTabProps)
 
   // Modal state
   const [showModal, setShowModal] = useState(false)
+  const showModalBackdropDismiss = useBackdropDismiss(() => setShowModal(false))
   const [editingCommand, setEditingCommand] = useState<SlashCommandDetail | null>(null)
   const [formData, setFormData] = useState<SlashCommandFormData>({
     category: 'project',
@@ -318,7 +320,7 @@ export function SlashCommandsTab({ canWrite, showToast }: SlashCommandsTabProps)
 
       {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8" onClick={() => setShowModal(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto py-8" {...showModalBackdropDismiss}>
           <div className="glass-card rounded-xl p-6 max-w-2xl w-full mx-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-white mb-4">
               {editingCommand ? 'Edit Slash Command' : 'Create Slash Command'}
