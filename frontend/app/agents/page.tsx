@@ -483,43 +483,45 @@ export default function AgentsPage() {
             <p className="text-tsushin-slate">Configure AI agents with different personalities and capabilities</p>
           </div>
           {canWriteAgents && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowKindChooser(true)}
-                className="text-xs text-tsushin-slate hover:text-cyan-300 underline-offset-2 hover:underline"
-              >
-                Compare options
-              </button>
-              <SplitButton
-                primaryLabel="Create Agent"
-                primaryIcon={<PlusIcon size={16} />}
-                onPrimaryClick={openCreateUI}
-                options={[
-                  {
-                    id: 'agent',
-                    label: 'Agent',
-                    description: 'Open the guided agent wizard.',
-                    icon: <BotIcon size={16} />,
-                    onSelect: openCreateUI,
-                  },
-                  {
-                    id: 'continuous-agent',
-                    label: 'Continuous Agent',
-                    description: 'Wrap an agent so it wakes on inbound events.',
-                    icon: <LightningIcon size={16} />,
-                    onSelect: openContinuousAgentUI,
-                  },
-                  {
-                    id: 'team',
-                    label: 'Team',
-                    description: 'Multi-agent coordination (LINE/MESH).',
-                    icon: <UsersIcon size={16} />,
-                    onSelect: openTeamsUI,
-                  },
-                ]}
-              />
-            </div>
+            // The primary "Create" click opens the kind-chooser modal so
+            // first-time operators see all three options side-by-side.
+            // The chevron exposes direct shortcuts for power users who
+            // already know what they want.
+            <SplitButton
+              primaryLabel="Create"
+              primaryIcon={<PlusIcon size={16} />}
+              onPrimaryClick={() => setShowKindChooser(true)}
+              options={[
+                {
+                  id: 'compare',
+                  label: 'Compare options…',
+                  description: 'Side-by-side: Agent / Continuous Agent / Team.',
+                  icon: <PlusIcon size={16} />,
+                  onSelect: () => setShowKindChooser(true),
+                },
+                {
+                  id: 'agent',
+                  label: 'Agent (skip chooser)',
+                  description: 'Open the guided agent wizard directly.',
+                  icon: <BotIcon size={16} />,
+                  onSelect: openCreateUI,
+                },
+                {
+                  id: 'continuous-agent',
+                  label: 'Continuous Agent (skip chooser)',
+                  description: 'Wrap an agent so it wakes on inbound events.',
+                  icon: <LightningIcon size={16} />,
+                  onSelect: openContinuousAgentUI,
+                },
+                {
+                  id: 'team',
+                  label: 'Team (skip chooser)',
+                  description: 'Multi-agent coordination (LINE/MESH).',
+                  icon: <UsersIcon size={16} />,
+                  onSelect: openTeamsUI,
+                },
+              ]}
+            />
           )}
         </div>
       </div>
