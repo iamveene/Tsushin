@@ -14,7 +14,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { Input } from '@/components/ui/form-input'
 import UsageLimitCard from '@/components/rbac/UsageLimitCard'
 import DangerZone from '@/components/rbac/DangerZone'
-import { api, OrganizationData, OrganizationStats } from '@/lib/client'
+import { api } from '@/lib/client'
 import { SparklesIcon } from '@/components/ui/icons'
 
 interface OrgState {
@@ -35,7 +35,7 @@ interface OrgState {
 }
 
 export default function OrganizationSettingsPage() {
-  const { user, hasPermission } = useAuth()
+  const { hasPermission } = useAuth()
   const [orgData, setOrgData] = useState<OrgState | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -246,13 +246,6 @@ export default function OrganizationSettingsPage() {
                 onChange={(e) => setOrgData({ ...orgData, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
                 disabled={!canEdit}
                 helperText="URL-safe identifier for your organization (lowercase, alphanumeric, hyphens)"
-              />
-
-              <Input
-                label="Organization ID"
-                value={orgData.id}
-                disabled
-                helperText="Unique system identifier (read-only)"
               />
 
               <div>

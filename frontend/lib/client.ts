@@ -808,6 +808,8 @@ export interface SentinelProfileAssignment {
   id: number
   tenant_id: string
   agent_id: number | null
+  agent_name?: string | null
+  agent_deleted?: boolean
   skill_type: string | null
   profile_id: number
   assigned_by: number | null
@@ -2853,6 +2855,7 @@ export interface ConversationThread {
   flow_step_run_id: number
   flow_definition_id?: number | null  // Added for UI badges
   flow_name?: string | null  // Added for display
+  agent_name?: string | null
   status: 'active' | 'paused' | 'completed' | 'timeout' | 'goal_achieved'
   current_turn: number
   max_turns: number
@@ -3188,6 +3191,11 @@ export function editableToCreatePayload(step: EditableStepData): Record<string, 
 export interface FlowRun {
   id: number
   flow_definition_id: number
+  flow_name?: string | null
+  flow_display_name?: string | null
+  flow_definition_name?: string | null
+  duration_ms?: number | null
+  duration_label?: string | null
   status: string
   started_at: string
   completed_at: string | null
@@ -4492,6 +4500,7 @@ export interface VectorStoreIndex {
   id: number
   tenant_id?: string
   vector_store_instance_id?: number | null
+  display_name?: string | null
   purpose?: string | null
   owner_type?: string | null
   owner_id?: number | null
@@ -4545,6 +4554,7 @@ export interface VectorStoreInstance {
   instance_name: string
   description?: string | null
   base_url?: string | null
+  display_url?: string | null
   credentials_configured: boolean
   credentials_preview: string
   extra_config: Record<string, any>

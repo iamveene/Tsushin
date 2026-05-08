@@ -162,13 +162,16 @@ export function getDefaultVectorStoreIndex(store: VectorStoreInstance | null | u
 }
 
 export function formatVectorStoreIndex(index: VectorStoreIndex): string {
-  const location = index.index_name
+  const rawLocation = index.index_name
     || index.physical_index_name
     || index.collection_name
     || index.physical_collection_name
     || index.namespace
     || index.physical_namespace
     || `Index ${index.id}`
+  const location = /^case_memory_tenant_/i.test(rawLocation) || /^tsn_[a-z0-9]+_/i.test(rawLocation)
+    ? 'Default collection'
+    : rawLocation
   const provider = index.embedding_provider || DEFAULT_PROVIDER
   const model = index.embedding_model || DEFAULT_MODEL
   const dims = index.embedding_dims || DEFAULT_DIMS

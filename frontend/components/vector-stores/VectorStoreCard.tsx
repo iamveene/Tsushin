@@ -14,6 +14,16 @@ function getVendorBadge(instance: VectorStoreInstance): string {
   return badges[instance.vendor] || instance.vendor
 }
 
+function isInternalVectorUrl(value: string | null | undefined): boolean {
+  return Boolean(value && /^https?:\/\/vs-[a-z0-9-]+:\d+/i.test(value))
+}
+
+function displayCollectionName(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (/^case_memory_tenant_/i.test(value) || /^tsn_[a-z0-9]+_/i.test(value)) return 'Default collection'
+  return value
+}
+
 const STATUS_STYLES: Record<string, { dot: string; dotColor: string; label: string }> = {
   healthy: { dot: 'bg-emerald-400 animate-pulse', dotColor: 'bg-emerald-400', label: 'Connected' },
   unknown: { dot: 'bg-gray-400', dotColor: 'bg-gray-400', label: 'Not tested' },
@@ -80,14 +90,14 @@ export default function VectorStoreCard({
           </span>
           {instance.is_default && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-400 flex-shrink-0">
-              DEFAULT
+              Default
             </span>
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
           {instance.is_auto_provisioned && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-400/10 text-purple-400">
-              Provisioned
+              <span title="Created and managed by Tsushin on this server.">Provisioned</span>
             </span>
           )}
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400">
@@ -111,14 +121,14 @@ export default function VectorStoreCard({
 
       {/* Info */}
       <div className="space-y-1.5 mb-3">
-        {instance.base_url && (
+        {instance.base_url && !instance.is_auto_provisioned && !isInternalVectorUrl(instance.base_url) && (
           <div className="text-xs text-gray-400 truncate" title={instance.base_url}>
             {instance.base_url}
           </div>
         )}
         {instance.extra_config?.collection_name && (
           <div className="text-xs text-gray-500">
-            Collection: {instance.extra_config.collection_name}
+            Collection: {displayCollectionName(instance.extra_config.collection_name)}
           </div>
         )}
         {instance.extra_config?.index_name && (

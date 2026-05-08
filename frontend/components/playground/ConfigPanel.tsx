@@ -24,6 +24,11 @@ import {
   LinkIcon
 } from '@/components/ui/icons'
 
+function redactPromptPreview(prompt?: string | null): string {
+  if (!prompt?.trim()) return 'No system instructions configured'
+  return 'Hidden by default. Use Show to inspect the agent instructions.'
+}
+
 // Model pricing per 1M tokens (USD) - synced with backend TokenTracker
 // Format: { prompt: input cost, completion: output cost }
 const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
@@ -618,11 +623,11 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
               </div>
             </div>
 
-            {/* System Prompt */}
+            {/* Agent Instructions */}
             <div className="bg-white/[0.02] rounded-xl border border-white/[0.06] p-4">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider flex items-center gap-2">
-                  <DocumentIcon size={14} /> System Prompt
+                  <DocumentIcon size={14} /> Agent Instructions
                 </h4>
                 <button
                   onClick={() => setShowPrompt(!showPrompt)}
@@ -635,17 +640,14 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
               {showPrompt && (
                 <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-3 max-h-[200px] overflow-auto">
                   <pre className="text-xs text-white/70 whitespace-pre-wrap font-mono">
-                    {agent.system_prompt || 'No system prompt configured'}
+                    {agent.system_prompt || 'No system instructions configured'}
                   </pre>
                 </div>
               )}
 
               {!showPrompt && (
                 <div className="text-xs text-white/40">
-                  {agent.system_prompt
-                    ? `${agent.system_prompt.slice(0, 100)}${agent.system_prompt.length > 100 ? '...' : ''}`
-                    : 'No system prompt configured'
-                  }
+                  {redactPromptPreview(agent.system_prompt)}
                 </div>
               )}
             </div>

@@ -18,6 +18,18 @@ import {
   LinkIcon,
   RefreshIcon,
 } from '@/components/ui/icons'
+import DetailShellHeader from '@/components/ui/DetailShell'
+
+const STUDIO_CONTINUOUS_AGENTS_PATH = '/studio/continuous-agents'
+
+function formatExecutionMode(mode: string): string {
+  if (mode === 'notify_only') return 'Notify only'
+  return mode
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
@@ -126,7 +138,7 @@ export default function ContinuousAgentDetailPage() {
 
   useEffect(() => {
     if (!hasValidId) {
-      router.replace('/continuous-agents')
+      router.replace(STUDIO_CONTINUOUS_AGENTS_PATH)
       return
     }
     loadData()
@@ -160,7 +172,7 @@ export default function ContinuousAgentDetailPage() {
           throw firstErr
         }
       }
-      router.replace('/continuous-agents')
+      router.replace(STUDIO_CONTINUOUS_AGENTS_PATH)
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Failed to delete continuous agent'))
     } finally {
@@ -222,21 +234,16 @@ export default function ContinuousAgentDetailPage() {
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
-            <Link href="/continuous-agents" className="hover:text-white">Continuous Agents</Link>
-            <span>/</span>
-            <span>#{agentId}</span>
-          </div>
-          <h1 className="text-3xl font-display font-bold text-white">
-            {agent?.name || agent?.agent_name || `Continuous Agent #${agentId}`}
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
-            Detail view for this Studio-created continuous agent, its monitored triggers, and recent run history.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <DetailShellHeader
+        breadcrumb={[
+          { label: 'Studio', href: '/studio' },
+          { label: 'Continuous Agents', href: STUDIO_CONTINUOUS_AGENTS_PATH },
+          { label: `#${agentId}` },
+        ]}
+        title={agent?.name || agent?.agent_name || `Continuous Agent #${agentId}`}
+        description="Detail view for this Studio-created continuous agent, its monitored triggers, and recent run history."
+        actions={(
+          <>
           <button
             type="button"
             onClick={loadData}
@@ -265,8 +272,9 @@ export default function ContinuousAgentDetailPage() {
               {deleting ? 'Deleting…' : 'Delete'}
             </button>
           )}
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {error && (
         <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
@@ -309,7 +317,7 @@ export default function ContinuousAgentDetailPage() {
               <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
                 <EyeIcon size={14} /> Mode
               </div>
-              <div className="mt-2 text-sm font-semibold text-white">{agent.execution_mode}</div>
+              <div className="mt-2 text-sm font-semibold text-white">{formatExecutionMode(agent.execution_mode)}</div>
               <div className="text-xs text-tsushin-slate">{agent.is_system_owned ? 'System-owned' : 'Tenant-owned'}</div>
             </div>
           </div>

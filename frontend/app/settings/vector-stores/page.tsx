@@ -20,6 +20,14 @@ const STATUS_COLORS: Record<string, string> = {
   degraded: 'bg-yellow-400',
 }
 
+function isInternalVectorUrl(value: string | null | undefined): boolean {
+  return Boolean(value && /^https?:\/\/vs-[a-z0-9-]+:\d+/i.test(value))
+}
+
+function isInternalVectorName(value: string | null | undefined): boolean {
+  return Boolean(value && (/^case_memory_tenant_/i.test(value) || /^tsn_[a-z0-9]+_/i.test(value)))
+}
+
 export default function VectorStoresSettingsPage() {
   const { isLoading: authLoading, hasPermission } = useRequireAuth()
   const canEdit = hasPermission('org.settings.write')
@@ -184,7 +192,7 @@ export default function VectorStoresSettingsPage() {
           disabled={!canEdit}
           className="w-full px-3 py-2.5 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm focus:border-teal-500/50 focus:outline-none"
         >
-          <option value="">ChromaDB (built-in)</option>
+          <option value="">Built-in store</option>
           {instances.map(inst => (
             <option key={inst.id} value={inst.id}>
               {inst.instance_name} ({VENDOR_LABELS[inst.vendor] || inst.vendor})
@@ -233,9 +241,13 @@ export default function VectorStoresSettingsPage() {
             )}
           </div>
           <div className="space-y-1 text-sm text-gray-400">
-            {selectedInstance.base_url && <p>Endpoint: <span className="text-gray-300">{selectedInstance.base_url}</span></p>}
+            {selectedInstance.base_url && !selectedInstance.is_auto_provisioned && !isInternalVectorUrl(selectedInstance.base_url) && (
+              <p>Endpoint: <span className="text-gray-300">{selectedInstance.base_url}</span></p>
+            )}
             {selectedInstance.extra_config?.collection_name && (
-              <p>Collection: <span className="text-gray-300">{selectedInstance.extra_config.collection_name}</span></p>
+              <p>Collection: <span className="text-gray-300">
+                {isInternalVectorName(selectedInstance.extra_config.collection_name) ? 'Default collection' : selectedInstance.extra_config.collection_name}
+              </span></p>
             )}
             {selectedInstance.container_port && (
               <p>Port: <span className="text-gray-300">{selectedInstance.container_port}</span></p>
@@ -268,7 +280,10 @@ export default function VectorStoresSettingsPage() {
                       )}
                     </div>
                     <div className="text-[11px] text-gray-500">
-                      {[index.collection_name, index.namespace].filter(Boolean).join(' / ') || 'No collection namespace reported'}
+                      {[index.collection_name, index.namespace]
+                        .filter(Boolean)
+                        .map((value) => isInternalVectorName(value) ? 'Default collection' : value)
+                        .join(' / ') || 'No collection namespace reported'}
                     </div>
                   </div>
                 ))}
@@ -325,7 +340,7 @@ export default function VectorStoresSettingsPage() {
         <div className="text-xs text-gray-500 space-y-1">
           <p>1. If an agent has a per-agent vector store override (Agent Builder), it uses that.</p>
           <p>2. Otherwise, it uses the tenant default selected above.</p>
-          <p>3. If no default is set, ChromaDB (built-in) is used automatically.</p>
+          <p>3. If no default is set, the built-in store is used automatically.</p>
           <p className="mt-2 text-gray-400">Configure vector store connections in <Link href="/hub" className="text-teal-400 hover:underline">Hub &gt; Vector Stores</Link>.</p>
         </div>
       </div>

@@ -13,10 +13,8 @@
  * BUG-323: Channels step navigates to the Hub Channels tab, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
- * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
- *           custom skills/MCP, and A2A + long-term memory (vector stores).
- * v0.7.0 showcase: Total steps is now 16, with voice, Playground Mini, Sentinel,
- *           and a Triggers & Continuous Agents step before the finale.
+ * v0.7.0 getting-started path: Total steps is now 16, covering providers,
+ * agents, channels, flows, voice, Sentinel, triggers, and final next steps.
  */
 
 import React, { useEffect, useCallback, useMemo, useState } from 'react'
@@ -253,17 +251,15 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 2 — v0.6.0 showcase: Expanded AI providers
-      title: "What's New in v0.6.0 — Nine AI Providers, One Hub",
+      // Step 2 — v0.7.0 getting-started path: AI providers
+      title: 'Set Up AI Providers',
       targetSelector: null,
-      content: 'Tsushin v0.6.0 speaks to nine LLM providers and three TTS engines out of the box. Each provider supports multiple instances per tenant (think: two OpenAI orgs, three Ollama servers) with per-instance base URLs, encrypted keys, live Test Connection, automatic model discovery, and a full ProviderConnectionAudit trail. A dedicated System AI routes intent classification and skill selection independently of your per-agent model choice, and model-pricing tables keep cost tracking honest across vendors.',
+      content: 'Start in Hub with the provider your agents will use for chat, tools, images, voice, or embeddings. Tsushin can keep separate providers for system tasks, agent replies, and specialized skills, so you can begin with one and add more later.',
       highlightFeatures: [
-        'Text LLMs: Anthropic, OpenAI, Google Gemini, Vertex AI (multi-publisher — Google + Claude + Mistral), Groq, Grok (xAI), DeepSeek, OpenRouter, and self-hosted Ollama',
-        'Voice / TTS: OpenAI TTS (MP3/opus/aac/flac/wav), Kokoro (free, open-source, PTBR + multilingual), and ElevenLabs',
-        'Multi-instance per vendor — run multiple endpoints in parallel for failover, A/B, or region routing',
-        'Separate System AI for intent classification & skill routing — pick a cheaper/faster model than your agents use',
-        'Tenant-scoped Fernet-encrypted credentials, SSRF-validated URLs, model discovery, and full connection audit log',
-        'Per-model pricing tables drive the Billing dashboard across every provider'
+        'Language models: OpenAI, Anthropic, Gemini, Vertex AI, Groq, Grok, DeepSeek, OpenRouter, or local Ollama',
+        'Voice and image providers are configured in the same Hub area when you need them',
+        'Use Test Connection before assigning a provider to agents',
+        'Keep the System AI separate if you want lightweight routing and classification'
       ],
       actionButton: {
         label: 'Open Hub → AI Providers',
@@ -271,19 +267,15 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 3 — v0.6.0 showcase: New communication channels
-      title: "What's New in v0.6.0 — Slack, Discord, Webhook Triggers & More",
+      // Step 3 — v0.7.0 getting-started path: channels vs triggers
+      title: 'Understand Channels and Triggers',
       targetSelector: null,
-      content: 'Tsushin now speaks through a unified entry-point layer. Conversational channels route chats from WhatsApp, Telegram, Slack, and Discord, while signed webhook events live under Triggers. Agents, skills, flows, and Sentinel use the same normalized shape no matter where the event starts.',
+      content: 'Channels are for conversations. Triggers are for events that wake an agent or flow. Keeping those two paths separate makes setup easier: connect chat apps in Hub → Channels, and configure event sources in Hub → Triggers.',
       highlightFeatures: [
-        'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
-        'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
-        'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
-        'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
-        'Webhook triggers — HMAC-signed HTTP events with timestamp replay guard, IP allowlist, and rate limits',
-        'Playground — built-in internal WebSocket channel for safe testing',
-        'Per-agent channel routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
-        'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
+        'Channels: WhatsApp, Telegram, Slack, Discord, and Playground testing',
+        'Triggers: Gmail, Jira, GitHub, and signed webhooks',
+        'Inbound services may need a public HTTPS URL through Remote Access or an ingress override',
+        'Route each connected channel or trigger to the agent that should handle it'
       ],
       actionButton: {
         label: 'Open Hub → Channels',
@@ -291,19 +283,15 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 4 — v0.6.0 showcase: Custom Skills & MCP Servers
-      title: "What's New in v0.6.0 — Custom Skills & MCP Servers",
+      // Step 4 — v0.7.0 getting-started path: skills
+      title: 'Add Skills When Agents Need Tools',
       targetSelector: null,
-      content: 'Three ways to extend any agent: write a markdown-only Instruction skill (no code), drop in a Python / Bash / Node Script that runs inside the sandboxed Toolbox container, or wire an external MCP Server over SSE, HTTP-streamable, or stdio. Every skill is semantically versioned, Sentinel-scanned before it goes live, timeout-bounded, and fully auditable — and the same machinery powers the built-in /tool runner (dig, nmap, and friends) you can invoke directly from any channel.',
+      content: 'Skills give agents specific capabilities beyond normal chat. Start with instruction skills for behavior, script skills for controlled actions, or MCP servers when you already have an external tool surface to expose.',
       highlightFeatures: [
-        'Instruction skills — pure markdown with template substitution, zero code, shipped in seconds',
-        'Script skills — Python / Bash / Node.js in the sandboxed Toolbox container with JSON in/out and per-skill timeout',
-        'MCP Server skills — SSE, HTTP-streamable, or stdio transports with bearer / custom-header / API-key auth',
-        'Execution modes: tool (LLM-callable), hybrid (keyword + LLM), passive (response post-processor), instruction (static)',
-        'Semantic versioning, Sentinel security scan (pending → clean / rejected), trust levels (system / verified / untrusted)',
-        'Tool discovery namespaces MCP tools as {server}__{tool} with per-server health history',
-        'Per-tenant isolation — custom skills, MCP containers, and tool executions never leak across tenants',
-        'Sandboxed /tool runner ships ready-to-use: /tool dig lookup, /tool nmap quick_scan, and more'
+        'Instruction skills: reusable guidance and response patterns',
+        'Script skills: Python, Bash, or Node actions in the toolbox environment',
+        'MCP servers: connect existing tool APIs to selected agents',
+        'Sentinel scans skills before they become available'
       ],
       actionButton: {
         label: 'Open Custom Skills',
@@ -311,23 +299,15 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 5 — v0.6.0 showcase: A2A + Long-term Memory via Vector Stores
-      title: "What's New in v0.6.0 — A2A & Long-Term Memory",
+      // Step 5 — v0.7.0 getting-started path: memory
+      title: 'Prepare Memory and Knowledge',
       targetSelector: null,
-      content: 'Agents in v0.6.0 can talk to each other and remember across conversations. A2A (Agent-to-Agent) turns any agent into a callable teammate — ask questions, list accessible peers, or delegate an entire task with a configurable depth guard. Long-term memory is backed by four pluggable vector stores; Qdrant and MongoDB are auto-provisioned locally in Docker on fresh installs, while MongoDB Atlas and Pinecone are one connection string away. Every recall is scored, decayed, and MMR-reranked — all without a line of code from you.',
+      content: 'Use Knowledge Base and Vector Stores when agents need durable context from documents, prior cases, or shared memory. In v0.7.0, embedding providers and vector indexes are explicit choices, so pick them before loading important data.',
       highlightFeatures: [
-        'A2A skill: ask / list_agents / delegate — same-tenant discovery, per-call timeouts, infinite-loop depth guard',
-        'Four vector store vendors: Qdrant (local Docker or cloud), MongoDB (local Docker or Atlas with $vectorSearch), Pinecone (BYO), ChromaDB (built-in fallback)',
-        'Auto-provisioned in Docker on fresh installs — Qdrant + MongoDB both get containers, volumes, and dynamic ports',
-        'OKG memory types — fact, episodic, semantic, procedural, belief — with MemGuard blocking + full audit log',
-        'SharedMemory pool with explicit accessible_to ACL (empty = all agents; listed = allowlist), topic categorisation',
-        'Semantic recall with configurable top-k + similarity threshold, MMR reranking (lambda 0.5), exponential temporal decay (~69-day half-life)',
-        'Memory isolation modes — isolated (per-agent), shared (cross-agent), channel_isolated (per-channel)',
-        'Knowledge Base document ingestion — PDF, DOCX, TXT, CSV, JSON — chunked, embedded, and indexed per agent',
-        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default',
-        'NEW in v0.7.0: pluggable embedding providers — OpenAI text-embedding-3 (256/512/1024/1536d), Google Gemini embedding-2 (768/1536/3072d), and self-hosted Ollama; legacy MiniLM-L6-v2 still ships as the default',
-        'NEW in v0.7.0: per-surface embedding contracts — pick provider/model/dimensions independently for Knowledge Base, Project KB, agent Long-Term Memory, and any Vector Store; contracts are immutable once data is written',
-        'NEW in v0.7.0: multi-index Vector Stores — one Qdrant/Mongo instance can host multiple collections at different dimensions, isolated per (owner, contract_hash) so a 1536d KB and a 768d project KB never collide'
+        'Upload documents to Knowledge Base for agent-ready context',
+        'Choose embedding provider, model, and dimensions before indexing',
+        'Use separate vector indexes for different data shapes or sensitivity levels',
+        'Assign memory intentionally: per-agent, shared, or channel-aware'
       ],
       actionButton: {
         label: 'Open Vector Stores',
@@ -404,10 +384,11 @@ export default function OnboardingWizard() {
         'Visual flow builder with agentic, programmatic, and hybrid step families, including conversation, skill, notification, tool, password vault, browser automation, transform, storage, gate, source, and subflow nodes',
         'Password Vault, browser automation, transform, storage/dedupe, gate, and notification nodes can be edited from scratch for UI-first financial workflows',
         'Five built-in templates ready to instantiate: Daily Email Digest, Weekly Calendar Summary, New Contact Welcome, Jira Weekly Triage, GitHub Release Notes',
-        'NEW in v0.7.0: source step lock — flows bound to a trigger always start from a position-1 source node carrying the wake event payload; downstream steps reference {{source.payload.*}} and prior step outputs via Jinja2',
-        'NEW in v0.7.0: system-managed auto-flows generated from every trigger — a Webhook/Email/Jira/GitHub trigger spawns a 4-node flow (source → gate → conversation → notification) with the is_system_owned flag, kept in sync with the trigger',
-        'Execution methods: immediate, scheduled, recurring (cron-like), keyword-matched, or wake-event-triggered',
-        'Per-step retry, timeout, on_failure routing, and full token-usage / latency traces in the run history'
+        'Build flows from agent, tool, notification, transform, storage, gate, source, and subflow steps',
+        'Use templates for common work such as email digests, calendar summaries, and release notes',
+        'Attach flows to schedules, keywords, manual runs, or triggers',
+        'Trigger-bound flows start from a locked source step so incoming event data is available downstream',
+        'Review run history for retries, latency, and token usage'
       ],
       actionButton: {
         label: 'Explore Flows',
@@ -451,7 +432,7 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 13 — v0.6.0: Playground Mini floating bubble
+      // Step 13 — Playground Mini floating bubble
       title: 'New: Playground Mini',
       targetSelector: '[data-testid="playground-mini"]',
       content: 'Test any agent from any page without leaving. Pick an agent, project, or thread, fire a quick message — then hit Expand if you want to continue in the full Playground. The conversation carries over intact.',
@@ -476,7 +457,7 @@ export default function OnboardingWizard() {
       // Step 14 — v0.7.0-preview: Sentinel / MemGuard block-mode nudge before the finale.
       title: 'Sentinel — Security Layer',
       targetSelector: null,
-      content: "Sentinel is Tsushin's built-in security agent. It scans every prompt, tool call, and shell command before agents act on them, and can block prompt injection, agent takeover attempts, and memory poisoning (MemGuard). Start with it ON (block mode) — you can always relax it later.",
+      content: "Sentinel is Tsushin's built-in security layer. It reviews prompts, tool calls, and shell commands before agents act on them, and can block prompt injection, agent takeover attempts, and memory poisoning. Start with it ON in block mode; you can relax it later for development.",
       highlightFeatures: [
         'Prompt injection + agent takeover detection on every message',
         'Tool / shell / slash-command analysis before execution',
@@ -489,15 +470,14 @@ export default function OnboardingWizard() {
       // Step 15 — v0.7.0: Trigger/continuous-agent readiness before the finale.
       title: 'New in v0.7.0 - Triggers & Continuous Agents',
       targetSelector: '[data-testid="hub-triggers-section"]',
-      content: 'Triggers are separate from conversational channels, and continuous agents expose the Watcher control plane for always-on work. Four trigger kinds — Email/Gmail, Jira, GitHub, and Webhook — live in Hub → Triggers; Wake Events and Continuous Agents live under Watcher.',
+      content: 'Triggers are separate from conversational channels. Use Hub → Triggers when Gmail, Jira, GitHub, or an external webhook should wake an agent or flow. Continuous Agents and Wake Events live under Watcher for monitoring always-on work.',
       highlightFeatures: [
-        'Four trigger kinds: Email (Gmail OAuth + IMAP-style query), Jira (API token + JQL), GitHub (PAT + repo/PR criteria), and Webhook (HMAC-signed inbound HTTP with rotatable secret)',
-        'Dry-run from the UI without firing live: test-query for Email/Jira, test-criteria for GitHub/Webhook, plus poll-now to force an immediate fetch',
-        'Per-trigger Memory Recap (optional, default-off): inject a Jinja2-templated case-memory recap into the agent context at dispatch time, with configurable scope, top-k, similarity threshold, and inject position',
-        'System-managed auto-flow generation: every new trigger spawns a 4-node flow (source → gate → conversation → notification) wired through a flow_trigger_binding row with is_system_managed=true — visible in the trigger detail "Wired Flows" panel',
-        'Trigger detail pages use the new /api/triggers/{kind}/{id} namespace',
-        'Wake Events browser shows payload_ref instead of raw payload JSON; Continuous Agents list and detail pages read from /api/continuous-agents and /api/continuous-runs',
-        'Conversational channel routing (WhatsApp/Telegram/Slack/Discord) stays separate from trigger event routing — same agents, two distinct entry-point layers'
+        'Email: watch Gmail using saved OAuth accounts and search criteria',
+        'Jira: poll issues with JQL and route matching work',
+        'GitHub: receive repository events through a configured webhook',
+        'Webhook: receive signed events from external systems',
+        'Use dry-runs and poll-now actions before depending on live automation',
+        'Generated flows can be reviewed and adjusted after save'
       ],
       actionButton: {
         label: 'Open Hub Triggers',

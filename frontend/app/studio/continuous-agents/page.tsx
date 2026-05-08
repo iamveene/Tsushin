@@ -7,12 +7,9 @@
  * always-on wrapper that wakes a single agent on a trigger event with
  * daily budget caps).
  *
- * Renders the same component as `/continuous-agents` (which now lives
- * under Watcher → Agents → Continuous Agents for run-history /
- * observability). The page intentionally re-mounts the same component
- * here so creation lives next to Agents and Teams in Studio (where
- * configuration belongs) while observability stays in Watcher (run
- * history, wake events).
+ * Renders the canonical Continuous Agents component under Studio so
+ * creation lives next to Agents and Teams, while Watcher keeps the
+ * embedded run-history view under Watcher → Agents.
  *
  * Header parity with /agents — the centralized Create SplitButton
  * (chooser modal as the primary click + power-user direct routes on
@@ -22,9 +19,7 @@
  * there is exactly ONE create surface visible.
  *
  * If you find yourself wanting to fork behaviour for the Studio mount,
- * push the difference into the underlying component as a prop instead
- * — the dual entry point is intentional and the two pages should stay
- * in lockstep.
+ * push the difference into the underlying component as a prop instead.
  */
 
 import { useState } from 'react'

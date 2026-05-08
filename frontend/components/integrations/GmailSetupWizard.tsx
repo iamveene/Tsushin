@@ -489,7 +489,10 @@ export default function GmailSetupWizard({ isOpen, onClose, onComplete }: Props)
           <div>
             <p className="text-sm text-gray-300 leading-relaxed">
               We'll enable the <span className="text-red-400">Gmail</span> skill on each selected agent
-              and link it to the account you picked. You can change this later in Agent Studio.
+              and link it to the account you picked. You can change this later in{' '}
+              <a href="/agents" className="text-red-300 underline hover:text-white">
+                Agent Studio
+              </a>.
             </p>
           </div>
 

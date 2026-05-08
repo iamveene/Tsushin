@@ -60,7 +60,13 @@ export default function StepContainerProvision() {
           Tsushin will provision a dedicated <span className="text-white font-medium">{isOllama ? 'Ollama' : isKokoro ? 'Kokoro' : isOpenAIWhisper ? 'OpenAI Whisper' : isSpeaches ? 'Speaches' : vendor}</span> container
           for this tenant. These settings can be adjusted later.
           {isOpenAIWhisper && (
-            <> The <span className="font-mono text-white">base</span> model is loaded at boot and kept warm; switch to <span className="font-mono text-white">small</span>/<span className="font-mono text-white">large-v3</span>/<span className="font-mono text-white">turbo</span> later in Settings → ASR.</>
+            <>
+              {' '}The <span className="font-mono text-white">base</span> model is loaded at boot and kept warm; create another Speech-to-Text local provider from{' '}
+              <a href="/hub?tab=ai-providers" className="text-teal-300 underline hover:text-teal-100">
+                Hub → AI Providers
+              </a>{' '}
+              if you need a different model size.
+            </>
           )}
         </p>
       </div>

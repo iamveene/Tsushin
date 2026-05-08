@@ -10,7 +10,7 @@
 import AnimatedCounter from '@/components/charts/AnimatedCounter'
 import SparklineChart, { generateSparklineData } from '@/components/charts/SparklineChart'
 import RadialProgressChart from '@/components/charts/RadialProgressChart'
-import { CHART_COLORS } from '@/components/charts/chartTheme'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 
 // SVG Icons
 const MessageIcon = () => (
@@ -64,6 +64,12 @@ export default function HeroKPISection({
   // Generate sparkline data if not provided
   const messagesSparkline = recentMessages || generateSparklineData(totalMessages, 12, 'up')
   const agentRunsSparkline = recentAgentRuns || generateSparklineData(totalAgentRuns, 12, 'up')
+  const labelWithTooltip = (label: string, tooltip: string) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{label}</span>
+      <InfoTooltip text={tooltip} position="top" />
+    </span>
+  )
 
   return (
     <div className="glass-card rounded-xl p-6 border-t-2 border-t-tsushin-indigo/50 animate-fade-in">
@@ -82,7 +88,9 @@ export default function HeroKPISection({
             />
           </div>
           <div className="space-y-1">
-            <p className="text-sm font-medium text-tsushin-slate">Total Messages</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Messages', 'All messages recorded for the current tenant, including channel and Playground traffic.')}
+            </p>
             <p className="text-3xl font-display font-bold text-white">
               <AnimatedCounter value={totalMessages} />
             </p>
@@ -105,7 +113,9 @@ export default function HeroKPISection({
             />
           </div>
           <div className="space-y-1">
-            <p className="text-sm font-medium text-tsushin-slate">Agent Runs</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Agent Runs', 'Agent execution records counted across recent and historical activity.')}
+            </p>
             <p className="text-3xl font-display font-bold text-white">
               <AnimatedCounter value={totalAgentRuns} />
             </p>
@@ -117,13 +127,15 @@ export default function HeroKPISection({
         <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-success/30 transition-all">
           <div className="flex items-center justify-between h-full">
             <div className="space-y-1">
-              <p className="text-sm font-medium text-tsushin-slate">Success Rate</p>
+              <p className="text-sm font-medium text-tsushin-slate">
+                {labelWithTooltip('Success Rate', 'Share of the loaded recent agent runs that completed successfully.')}
+              </p>
               <div className="flex items-center gap-2 mt-2">
                 <div className="w-8 h-8 rounded-lg bg-tsushin-success/10 flex items-center justify-center text-tsushin-success">
                   <FilterIcon />
                 </div>
                 <span className="text-xs text-tsushin-muted">
-                  {matchedFilters} matched
+                  {matchedFilters} filter match{matchedFilters !== 1 ? 'es' : ''}
                 </span>
               </div>
             </div>
@@ -145,7 +157,9 @@ export default function HeroKPISection({
             </div>
           </div>
           <div className="space-y-1">
-            <p className="text-sm font-medium text-tsushin-slate">Avg Response</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Avg Response', 'Average execution time for loaded recent runs that reported a duration.')}
+            </p>
             <p className="text-3xl font-display font-bold text-white">
               {avgExecutionTime > 0 ? (
                 <AnimatedCounter

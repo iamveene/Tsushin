@@ -227,6 +227,10 @@ class LegacyFlowRunCreate(BaseModel):
 class LegacyFlowRunResponse(BaseModel):
     id: int
     flow_definition_id: int
+    flow_name: Optional[str] = None
+    flow_display_name: Optional[str] = None
+    duration_ms: Optional[int] = None
+    duration_label: Optional[str] = None
     status: str
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
@@ -242,6 +246,49 @@ class LegacyFlowRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _flow_run_duration_ms(run: FlowRun) -> Optional[int]:
+    if not run.started_at or not run.completed_at:
+        return None
+    duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+    return max(duration_ms, 0)
+
+
+def _flow_run_duration_label(run: FlowRun) -> Optional[str]:
+    duration_ms = _flow_run_duration_ms(run)
+    if duration_ms is None:
+        return None
+    if duration_ms < 1000:
+        return "<1s"
+    seconds = duration_ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s" if duration_ms % 1000 else f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    remainder = int(seconds % 60)
+    return f"{minutes}m {remainder}s"
+
+
+def _legacy_flow_run_response(run: FlowRun, flow_name: Optional[str] = None) -> LegacyFlowRunResponse:
+    return LegacyFlowRunResponse(
+        id=run.id,
+        flow_definition_id=run.flow_definition_id,
+        flow_name=flow_name,
+        flow_display_name=flow_name or f"Flow #{run.flow_definition_id}",
+        duration_ms=_flow_run_duration_ms(run),
+        duration_label=_flow_run_duration_label(run),
+        status=run.status,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        initiator=run.initiator,
+        trigger_context_json=run.trigger_context_json,
+        final_report_json=run.final_report_json,
+        error_text=run.error_text,
+        created_at=run.created_at,
+        total_steps=run.total_steps or 0,
+        completed_steps=run.completed_steps or 0,
+        failed_steps=run.failed_steps or 0,
+    )
 
 
 class FlowNodeRunResponse(BaseModel):
@@ -827,22 +874,12 @@ def list_runs(
             query = query.filter(FlowRun.status == status)
 
         runs = query.order_by(FlowRun.created_at.desc()).limit(limit).all()
+        flow_ids = {run.flow_definition_id for run in runs}
+        flow_name_query = db.query(FlowDefinition.id, FlowDefinition.name).filter(FlowDefinition.id.in_(flow_ids))
+        flow_name_query = tenant_context.filter_by_tenant(flow_name_query, FlowDefinition.tenant_id)
+        flow_names = {flow_id: name for flow_id, name in flow_name_query.all()} if flow_ids else {}
 
-        return [LegacyFlowRunResponse(
-            id=run.id,
-            flow_definition_id=run.flow_definition_id,
-            status=run.status,
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-            initiator=run.initiator,
-            trigger_context_json=run.trigger_context_json,
-            final_report_json=run.final_report_json,
-            error_text=run.error_text,
-            created_at=run.created_at,
-            total_steps=run.total_steps or 0,
-            completed_steps=run.completed_steps or 0,
-            failed_steps=run.failed_steps or 0
-        ) for run in runs]
+        return [_legacy_flow_run_response(run, flow_names.get(run.flow_definition_id)) for run in runs]
 
     except Exception as e:
         logger.exception("Error listing flow runs")
@@ -865,21 +902,13 @@ def get_run(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        return LegacyFlowRunResponse(
-            id=run.id,
-            flow_definition_id=run.flow_definition_id,
-            status=run.status,
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-            initiator=run.initiator,
-            trigger_context_json=run.trigger_context_json,
-            final_report_json=run.final_report_json,
-            error_text=run.error_text,
-            created_at=run.created_at,
-            total_steps=run.total_steps or 0,
-            completed_steps=run.completed_steps or 0,
-            failed_steps=run.failed_steps or 0
+        flow = (
+            tenant_context
+            .filter_by_tenant(db.query(FlowDefinition), FlowDefinition.tenant_id)
+            .filter(FlowDefinition.id == run.flow_definition_id)
+            .first()
         )
+        return _legacy_flow_run_response(run, flow.name if flow else None)
 
     except HTTPException:
         raise
@@ -2551,21 +2580,7 @@ async def execute_flow(
 
         logger.info(f"Flow run {run_id} created (pending), background execution started")
 
-        return LegacyFlowRunResponse(
-            id=flow_run.id,
-            flow_definition_id=flow_run.flow_definition_id,
-            status=flow_run.status,
-            started_at=flow_run.started_at,
-            completed_at=flow_run.completed_at,
-            initiator=flow_run.initiator,
-            trigger_context_json=flow_run.trigger_context_json,
-            final_report_json=flow_run.final_report_json,
-            error_text=flow_run.error_text,
-            created_at=flow_run.created_at,
-            total_steps=flow_run.total_steps or 0,
-            completed_steps=flow_run.completed_steps or 0,
-            failed_steps=flow_run.failed_steps or 0
-        )
+        return _legacy_flow_run_response(flow_run, flow.name)
 
     except HTTPException:
         raise

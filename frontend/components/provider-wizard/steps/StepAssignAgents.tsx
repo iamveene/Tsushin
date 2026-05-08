@@ -100,7 +100,10 @@ export default function StepAssignAgents() {
         <h3 className="text-base font-semibold text-white mb-1">Link to agents</h3>
         <p className="text-xs text-tsushin-slate">
           Optional — switch existing agents over to this new <span className="font-mono text-tsushin-accent">{vendor}</span> instance now.
-          You can always do this later from Agent Studio.
+          You can always do this later from{' '}
+          <a href="/agents" className="text-teal-300 underline hover:text-white">
+            Agent Studio
+          </a>.
         </p>
         <p className="text-[11px] text-amber-300/80 mt-1.5">
           Note: this <strong>replaces</strong> each selected agent's current LLM (provider + model). It doesn't stack.
@@ -139,7 +142,13 @@ export default function StepAssignAgents() {
         {loading ? (
           <p className="text-xs text-tsushin-slate italic">Loading agents…</p>
         ) : !agents || agents.length === 0 ? (
-          <p className="text-xs text-tsushin-slate italic">No agents yet — create one in Agent Studio, then link this instance to it.</p>
+          <p className="text-xs text-tsushin-slate italic">
+            No agents yet — create one in{' '}
+            <a href="/agents" className="text-teal-300 underline hover:text-white">
+              Agent Studio
+            </a>
+            , then link this instance to it.
+          </p>
         ) : (
           <div className="space-y-1.5 max-h-80 overflow-y-auto">
             {agents.map(a => {

@@ -128,8 +128,8 @@ export default function StepReview() {
   const cloudTtsViaApiKey = draft.modality === 'tts' && (
     draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini'
   )
-  // ASR doesn't surface a default-instance toggle in the wizard; the tenant
-  // default ASR instance is managed under Settings > ASR.
+  // ASR doesn't surface a default-instance toggle in the wizard; local
+  // Speech-to-Text instances are managed from Hub → AI Providers.
   if (!cloudTtsViaApiKey && draft.modality !== 'asr') {
     rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
   }

@@ -424,7 +424,10 @@ export function AudioVoiceFields({
 
       {!wantsTTS && (
         <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
-          Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in Hub → AI Providers.
+          Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in{' '}
+          <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+            Hub → AI Providers
+          </a>.
           {!hasOpenAIKey && (
             <div className="mt-2 text-amber-200">⚠ No OpenAI API key detected.</div>
           )}
@@ -566,7 +569,13 @@ export function AudioTranscriptFields({
               >
                 + Create an ASR instance now
               </button>
-              <span className="text-gray-400">{' '}or go to Hub → Add Provider → Speech-to-Text → Local.</span>
+              <span className="text-gray-400">
+                {' '}or go to{' '}
+                <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+                  Hub → AI Providers
+                </a>{' '}
+                and add a local Speech-to-Text provider.
+              </span>
             </div>
           )}
         </div>
@@ -623,7 +632,13 @@ export function AudioTranscriptFields({
 
       <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
         {value.asrMode === 'openai' && (
-          <div>Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under Hub → AI Providers → OpenAI.</div>
+          <div>
+            Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under{' '}
+            <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+              Hub → AI Providers
+            </a>{' '}
+            → OpenAI.
+          </div>
         )}
         {value.asrMode === 'instance' && (
           <div>

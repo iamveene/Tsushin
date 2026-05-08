@@ -257,6 +257,8 @@ class SentinelProfileAssignmentResponse(BaseModel):
     id: int
     tenant_id: str
     agent_id: Optional[int] = None
+    agent_name: Optional[str] = None
+    agent_deleted: bool = False
     skill_type: Optional[str] = None
     profile_id: int
     assigned_by: Optional[int] = None
@@ -371,10 +373,34 @@ def _build_assignment_response(
 ) -> SentinelProfileAssignmentResponse:
     """Build enriched assignment response with profile info."""
     profile = service.get_profile(assignment.profile_id)
+    agent_name = None
+    agent_deleted = False
+    if assignment.agent_id is not None:
+        row = (
+            service.db.query(Agent)
+            .filter(
+                Agent.id == assignment.agent_id,
+                Agent.tenant_id == assignment.tenant_id,
+            )
+            .first()
+        )
+        if row:
+            contact = getattr(row, "contact", None)
+            agent_name = getattr(contact, "friendly_name", None) if contact else None
+            if not agent_name:
+                from models import Contact
+
+                contact = service.db.query(Contact).filter(Contact.id == row.contact_id).first()
+                agent_name = contact.friendly_name if contact else None
+        else:
+            agent_name = "[deleted agent]"
+            agent_deleted = True
     return SentinelProfileAssignmentResponse(
         id=assignment.id,
         tenant_id=assignment.tenant_id,
         agent_id=assignment.agent_id,
+        agent_name=agent_name,
+        agent_deleted=agent_deleted,
         skill_type=assignment.skill_type,
         profile_id=assignment.profile_id,
         assigned_by=assignment.assigned_by,
@@ -400,6 +426,14 @@ async def list_assignments(
 ):
     """List profile assignments for this tenant."""
     service = SentinelProfilesService(db, ctx.tenant_id)
+    if agent_id is not None:
+        agent = (
+            db.query(Agent)
+            .filter(Agent.id == agent_id, Agent.tenant_id == ctx.tenant_id)
+            .first()
+        )
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
     assignments = service.list_assignments(agent_id=agent_id, skill_type=skill_type)
     return [_build_assignment_response(a, service) for a in assignments]
 
@@ -425,10 +459,12 @@ async def assign_profile(
 
     # Validate agent belongs to tenant
     if data.agent_id:
-        agent = db.query(Agent).filter(Agent.id == data.agent_id).first()
+        agent = (
+            db.query(Agent)
+            .filter(Agent.id == data.agent_id, Agent.tenant_id == ctx.tenant_id)
+            .first()
+        )
         if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        if not ctx.can_access_resource(agent.tenant_id):
             raise HTTPException(status_code=404, detail="Agent not found")
 
     try:
@@ -478,10 +514,12 @@ async def get_effective_config(
 
     # Validate agent access
     if agent_id:
-        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        agent = (
+            db.query(Agent)
+            .filter(Agent.id == agent_id, Agent.tenant_id == ctx.tenant_id)
+            .first()
+        )
         if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        if not ctx.can_access_resource(agent.tenant_id):
             raise HTTPException(status_code=404, detail="Agent not found")
 
     effective = service.get_effective_config(agent_id=agent_id, skill_type=skill_type)

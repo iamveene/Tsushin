@@ -10,12 +10,30 @@ import {
   type ContinuousAgentUpdate,
 } from '@/lib/client'
 import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 
 type ExecutionMode = 'autonomous' | 'hybrid' | 'notify_only'
 type AgentStatus = 'active' | 'paused' | 'disabled'
 
 const EXECUTION_MODES: ExecutionMode[] = ['autonomous', 'hybrid', 'notify_only']
 const STATUSES: AgentStatus[] = ['active', 'paused', 'disabled']
+const EXECUTION_MODE_COPY: Record<ExecutionMode, { label: string; tooltip: string; caption: string }> = {
+  autonomous: {
+    label: 'Autonomous',
+    tooltip: 'Agent acts on every wake event without asking. Fastest mode; use when the action is trusted.',
+    caption: 'Acts on every wake event without asking.',
+  },
+  hybrid: {
+    label: 'Hybrid',
+    tooltip: 'Agent handles routine wakes and pauses for confirmation on risky actions.',
+    caption: 'Handles routine wakes and pauses for confirmation on risky actions.',
+  },
+  notify_only: {
+    label: 'Notify only',
+    tooltip: 'Agent records or notifies about events, but never takes external actions.',
+    caption: 'Only sends notifications or records the event.',
+  },
+}
 
 const ACTION_KINDS: { id: ContinuousAgentActionKind; label: string; hint: string }[] = [
   { id: 'tool_run',           label: 'Run a tool',          hint: 'Execute a sandboxed skill / tool when triggered.' },
@@ -287,36 +305,36 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-tsushin-fog">Execution mode</label>
+            <label className="mb-1 flex items-center gap-2 text-sm font-medium text-tsushin-fog">
+              Execution mode
+              <InfoTooltip
+                text="Choose how much the continuous agent can do after a trigger wakes it."
+                position="right"
+              />
+            </label>
             <div className="flex flex-wrap gap-2">
               {EXECUTION_MODES.map((mode) => {
-                const tooltip = (() => {
-                  if (mode === 'autonomous') return 'Agent acts on every wake event without asking — fastest, requires trust.'
-                  if (mode === 'hybrid') return 'Agent acts on most wakes but pauses for confirmation on risky actions. Default.'
-                  return 'Agent only sends notifications — never takes external actions. Good for monitoring use cases.'
-                })()
+                const copy = EXECUTION_MODE_COPY[mode]
                 return (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setForm((prev) => ({ ...prev, executionMode: mode }))}
                     disabled={submitting}
-                    title={tooltip}
-                    className={`rounded-lg border px-3 py-1.5 text-sm capitalize transition-colors ${
+                    title={copy.tooltip}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                       form.executionMode === mode
                         ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
                         : 'border-tsushin-border text-tsushin-slate hover:text-white'
                     }`}
                   >
-                    {mode.replace('_', ' ')}
+                    {copy.label}
                   </button>
                 )
               })}
             </div>
             <p className="mt-1 text-xs text-tsushin-slate">
-              {form.executionMode === 'autonomous' && 'Acts on every wake event without asking.'}
-              {form.executionMode === 'hybrid' && 'Acts on most wakes but pauses for confirmation on risky actions.'}
-              {form.executionMode === 'notify_only' && 'Only sends notifications — never takes external actions.'}
+              {EXECUTION_MODE_COPY[form.executionMode].caption}
             </p>
           </div>
 
