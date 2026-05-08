@@ -847,7 +847,7 @@ export default function TriggerCreationWizard({
             ? selectedJiraIntegration.site_url || selectedJiraIntegration.integration_name || selectedJiraIntegration.name || `Connection #${selectedJiraIntegration.id}`
             : jiraIntegrationsLoading
               ? 'Loading available Jira connections.'
-              : 'Required. Create a Jira connection in Hub > Tool APIs if none appear.',
+              : 'Required. Use Open Tool APIs below if no Jira connection appears.',
           tone: selectedJiraIntegration ? 'ready' : 'required',
           action: selectedJiraIntegration ? null : (
             <a href="/hub?tab=tool-apis" target="_blank" rel="noopener noreferrer">
@@ -888,7 +888,7 @@ export default function TriggerCreationWizard({
           ? selectedGithubIntegration.integration_name || selectedGithubIntegration.name || `GitHub connection #${selectedGithubIntegration.id}`
           : githubIntegrationsLoading
             ? 'Loading available GitHub connections.'
-            : 'Required. Create a GitHub connection in Hub > Developer Tools if none appear.',
+            : 'Required. Use Open Developer Tools below if no GitHub connection appears.',
         tone: selectedGithubIntegration ? 'ready' : 'required',
         action: selectedGithubIntegration ? null : (
           <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
@@ -2737,7 +2737,15 @@ function JiraSourceBody({
           <p className="text-xs text-tsushin-slate">
             {selected
               ? selected.site_url
-              : 'Add a Jira connection in Hub > Tool APIs, then return here and refresh the wizard.'}
+              : (
+                <>
+                  Add a Jira connection in{' '}
+                  <a href="/hub?tab=tool-apis" target="_blank" rel="noopener noreferrer" className="text-blue-300 hover:text-white">
+                    Hub → Tool APIs
+                  </a>
+                  , then return here and refresh the wizard.
+                </>
+              )}
           </p>
         </div>
 

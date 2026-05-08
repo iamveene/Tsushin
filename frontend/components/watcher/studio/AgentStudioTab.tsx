@@ -30,7 +30,7 @@ const StudioCanvasComponent = dynamic(() => import('./StudioCanvas'), {
           <div className="absolute inset-0 rounded-full border-4 border-tsushin-surface"></div>
           <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-tsushin-indigo animate-spin"></div>
         </div>
-        <p className="text-tsushin-slate font-medium">Loading Agent Studio...</p>
+        <p className="text-tsushin-slate font-medium">Loading Studio builder...</p>
       </div>
     </div>
   ),

@@ -393,7 +393,7 @@ export default function DefaultAgentsSettingsPage() {
           <div className="mb-6 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-tsushin-slate">
             No active agents are available for assignment yet. Create an agent in{' '}
             <Link href="/agents" className="text-teal-400 hover:underline">
-              Agent Studio
+              Studio → Agents
             </Link>{' '}
             before saving new defaults.
           </div>

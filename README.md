@@ -25,15 +25,15 @@
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
 - **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph) and experimental Trigger Case Memory v2.
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas, with **multi-index per surface** (Agent KB, Project KB, long-term memory) and pluggable embedding providers.
-- **20 built-in skills** — audio TTS/transcription, web search, scraping, browser automation, Password Vault, Gmail (with granular send capability), Code Repository (GitHub), Ticket Management (Jira), flight search, scheduler, knowledge sharing, OKG terms, sandboxed shell/network tools, and more.
+- **22 built-in skills** — audio TTS/transcription, web search, image analysis + generation/editing, browser automation, Password Vault (1Password), Gmail (with granular send/reply/draft capabilities), Code Repository (GitHub), Ticket Management (Jira), flight search, scheduler, flows, automation, knowledge sharing, OKG terms, agent switcher, A2A agent communication, sandboxed shell/network tools, and more.
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
 - **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
 - **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, recurring, keyword, or triggered execution. Triggered flows select an existing Hub trigger and get a locked Source step plus `flow_trigger_binding`; Source is not manually addable.
-- **Sentinel security** — AI-powered detection of prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), browser SSRF, and vector-store poisoning. Per-tenant, per-agent, and per-team profiles with block / warn-only / detect-only / off modes.
+- **Sentinel security** — AI-powered detection across 9 threat types: prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), agent privilege escalation, browser SSRF, vector-store poisoning, and continuous-agent action approval. Per-tenant, per-agent, and per-team profiles with block / warn-only / detect-only / off modes; dynamic threat-type derivation from `DETECTION_REGISTRY`.
 - **Studio** — visual agent builder, personas, contacts, projects (knowledge isolation), custom skills, agent-to-agent communication, and Agent Teams.
 - **Playground** — real-time streaming chat, audio recording + Whisper transcription, document-only uploads, command palette, memory inspector, expert mode. Plus **Playground Mini**, a floating quick-test bubble available on every authenticated page with markdown-rendered replies and a one-click expand-to-full-Playground handover that preserves the conversation.
-- **Watcher** — observability dashboard with conversations, flows, security events, channel health, billing, and a graph view.
+- **Watcher** — observability dashboard with 7 top-level tabs (Dashboard · Graph View · Agents · Flows · Security · Channel Health · Billing); the **Agents** tab nests 5 agent-runtime sub-tabs (Continuous Agents · Wake Events · Conversations · Team Runs · A2A Comms).
 - **Public API v1** — OAuth2 client credentials + direct API key, rate-limited, 40+ endpoints (agents, chat, flows, hub, studio, resources).
 - **Multi-tenancy & RBAC** — 4 built-in roles (owner / admin / member / readonly), 47 permission scopes, per-tenant isolation, envelope-encrypted per-service keys.
 - **Audit & compliance** — tenant-scoped audit events, CSV export, per-tenant retention, RFC 5424 syslog streaming (TCP / UDP / TLS).
@@ -41,55 +41,7 @@
 
 ---
 
-## Previously in v0.6.0
-
-v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes since the last `main` release:
-
-**Channels & Communication**
-- **Slack and Discord — first complete end-to-end** (V060-CHN-001/002/031). Slack runs on both Socket Mode (self-managed `SocketModeClient` per integration) and HTTP Events; Discord runs on HTTP Interactions with per-tenant Ed25519 signature verification. Threaded replies are preserved (`thread_ts`), bot-authored messages are filtered to prevent reply loops, and every saved token uses per-tenant PBKDF2-derived Fernet encryption (closes a silent token-decrypt regression).
-- **Guided setup wizards** — `SlackSetupWizard` (5 steps, pre-filled Slack app manifest JSON) and `DiscordSetupWizard` (6 steps, including user-install fallback for accounts without Manage Server permission). Replaces the old bare-token modals that had users hunting the Slack/Discord portals blind.
-- **Tenant Public Base URL** — new `tenant.public_base_url` setting (migration `0034`) surfaces the exact webhook URLs to paste back into the Slack Events / Discord Interactions portals, with inline `cloudflared tunnel --url http://localhost:8081` guidance when unset.
-- **Remote Access via Cloudflare Tunnel** — per-tenant gated public exposure for HTTP-path channel integrations.
-- **Agent ↔ Channel binding UI** — `AgentChannelsManager` now renders Slack and Discord cards alongside Playground/WhatsApp/Telegram/Webhook, with an instance selector per channel.
-
-**Memory & Knowledge**
-- **Vector Stores** — per-agent override/complement/shadow modes with a creation wizard that can attach the new store to existing agents in one flow. Chroma (built-in), Qdrant (auto-provisioned when available), Pinecone, MongoDB Atlas.
-- **Own Knowledge Graph (OKG)** — `okg_store` / `okg_recall` / `okg_forget` multi-tool registration; LLM-argument coercion handles common string↔array and string↔boolean mismatches so tool calls don't fail on shape.
-- **Memory tenant-scoping** — defense-in-depth `tenant_id` filter added to every read/delete path (`agent_memory_system`, `memory_management_service`, `routes_memory`, playground services) in addition to the write-side column that shipped in 0.5.0.
-
-**AI Provider Efficiency**
-- **Anthropic prompt caching** — 3 breakpoint `cache_control` with a relocation trick for the dynamic tail; 40–65% token-cost reduction for chat-heavy workloads.
-- **Default Anthropic model** bumped to `claude-haiku-4-5`.
-
-**Security & Sentinel**
-- **Sentinel parser** now derives valid threat types dynamically from `DETECTION_REGISTRY` instead of a hard-coded 5-entry allowlist. Regression tests (`test_sentinel_unified_parse.py`, 10 cases) guard against future re-introduction.
-- **Docker hardening, per-client rate limits, PostgreSQL password rotation** (BUG-055/057/062).
-- **BUG-LOG-015** — memory tenant-scoping read-path bypass fully closed, with `test_memory_tenant_scoping.py` (7 cases) asserting tenant isolation at query level.
-
-**Installer & Deployment**
-- **IP-address installs** — self-signed SAN now emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (previously invalid `DNS:<IP>`, rejected by browsers/curl). Stale-SAN auto-detection and regeneration on installer re-runs.
-- **Let's Encrypt staging mode** (`--le-staging`) — uses the LE staging directory so operators can rehearse the full ACME flow without burning production rate-limit budget.
-- **Manual-cert pre-flight validation** — key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves deployments behind Sectigo/GoDaddy).
-- **SSL config persistence** across installer re-runs (`SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH`).
-- **Frontend rebuild on `NEXT_PUBLIC_API_URL` change** — the installer diffs the previous `.env` and rebuilds the image no-cache instead of silently shipping a stale cached bundle.
-- **Stack-scoped frontend proxy builds** — compose passes `${TSN_STACK_NAME}-backend:8081` into the frontend image build and runtime env, so HTTP installs stay pinned to their own backend even when another Tsushin stack shares `tsushin-network`.
-
-**Platform & Tooling**
-- **Next.js 16** upgrade — `outputFileTracingRoot`, `turbopack.root`, typed-routes reference in `next-env.d.ts`.
-- **Flows integration** — `flows_skill` now queries `AgentSkillIntegration` first (fixes Google Calendar provider being ignored in favor of config defaults). BUG-559 fully resolved.
-- **Automation skill** — strips embedded `"\"…\""` quotes around `flow_identifier` before lookup so LLM-formatted tool arguments stop failing with "Flow not found".
-- **Agent switcher** default execution mode → `hybrid` (keyword + LLM tool paths both active).
-- **WhatsApp LID migration** — Contact auto-linking, UserAgentSession fallback via phone number, and ContactAgentMapping dual-key lookup handle WhatsApp's phone-ID → Linked-ID transition.
-- **TTS pipeline** — `tenant_id` now propagates end-to-end (router → TTS skill → provider → `get_api_key`). Provider-instance fallback means tenants no longer need a duplicate "Service API Key" row just for TTS.
-- **Web search provider switching** (Brave ↔ Google/SerpAPI), **Flight search** (Google Flights via SerpAPI), **Gmail + Google Calendar** skills — all verified end-to-end against live providers.
-- **Logout spinner fix (BUG-544)** — hard navigation replaces the async `router.push('/auth/login')` that could leave `/` stuck on the loading screen.
-- **Graph View** — WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, target-node pulse during A2A, stale A2A-edge auto-cleanup.
-
-**Full change log**: [docs/changelog.md](docs/changelog.md) contains ~50 detailed entries for every fix, migration, wizard step, and regression-test suite that shipped in this release.
-
----
-
-## What's New in v0.7.0
+## v0.7.0 Highlights
 
 v0.7.0 reshapes the Hub around four roles — **Channels** (conversational), **Triggers** (event sources), **Tool APIs** (programmatic credentials), and **Local Services** (auto-provisioned Whisper/Speaches/Kokoro/Ollama) — and adds Agent Teams, Continuous Agents, multi-index vector stores, and a self-hosted ASR engine. The v0.7.x sweeps further consolidate Watcher into 7 top-level tabs (with 5 agent-runtime sub-tabs nested under **Agents**) and introduce a Studio **Continuous Agents** tab plus a kind-chooser modal so the three creation surfaces (Agent / Continuous Agent / Team) are discoverable side-by-side. Configuration lives in Studio + Hub; observability lives in Watcher.
 
@@ -102,7 +54,7 @@ v0.7.0 reshapes the Hub around four roles — **Channels** (conversational), **T
 - **Continuous Agents** — wake-mode selector in the Studio New Agent modal (`Conversational` vs `Continuous`), required Purpose + action_kind contract, queue-driven runs, structured 409 detail surfaces actionable delete prompts, Watcher run history with wake-event evidence. v0.7.x adds a dedicated **Studio → Continuous Agents** tab plus a 3-way kind-chooser ("Compare options") modal that explains Agent / Continuous Agent / Team side-by-side so first-time users can pick the right surface up front.
 - **Multi-index vector stores + pluggable embedding providers** — Agent KB, Project KB, and long-term memory now select an index per surface; per-surface contracts let each subsystem pick its own embedding provider (default, Gemini external, etc.).
 - **Self-hosted Whisper as 2nd ASR engine + Hub ASR card** — Whisper and Speaches now ship as auto-provisioned local containers under Hub → Local Services, configured via the Hub > Add Provider > Speech-to-Text wizard, deletable through a cascade-aware banner that warns when the instance is still attached to agents. `/settings/asr` retired in favor of per-agent assignment from the Skills tab.
-- **Password Vault foundation + UI-first financial workflow migration** — Hub → Tool APIs now supports a provider-neutral Password Vault integration with 1Password as the first provider; setup remains UI-first through Hub pickers. Agents can attach the Password Vault skill, and Flows can resolve explicit vault references through visible Flow steps while persisting only redacted outputs. Migrated financial workflows are accepted only when they can be recreated and edited from scratch in the UI with primitive nodes for vault credentials, HTTP/browser automation, extraction/transform, storage/dedupe, gates, and notifications. The `financial_utility_automation` compatibility step can run existing canaries, but it is not sufficient by itself for migrated workflow acceptance. Notification-state classifier with per-state templates landed in the v0.7.x patch series.
+- **Password Vault foundation + UI-first financial workflow migration** — Hub → Tool APIs supports a provider-neutral Password Vault integration with 1Password as the first provider; setup is UI-first through Hub pickers. Agents can attach the Password Vault skill, and Flows can resolve explicit vault references through visible Flow steps while persisting only redacted outputs. Migrated financial workflows are accepted only when they can be recreated and edited from scratch in the UI with primitive nodes for vault credentials, HTTP/browser automation, extraction/transform, storage/dedupe, gates, and notifications. The legacy opaque `financial_utility_automation` step type was **removed in v0.7.x (2026-05-07)** along with its frontend templates, config panel, backend handler, and three site-specific runners — the 6 migrated `Finan | …` flows already use only generic primitives. Notification-state classifier (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `paid`, …) with per-state templates and `in` / `not_in` Gate operators landed in the v0.7.x patch series.
 - **Variable Reference panel everywhere** — every templated step-config field (skill prompt, conversation objective, agentic gate prompt, slash-command body, gate-fail notification, etc.) gets the live Variable Reference panel with previous-step outputs + per-trigger-kind deep payload paths (Jira `payload.issue.key`, GitHub `payload.pull_request.title`, etc.). Drag-and-drop chips into any field.
 - **Code Repository skill (GitHub)** — 12-action capability-gated skill (read on by default, write off by default) with a reusable encrypted `GitHubIntegration` Hub row and `pull_request` trigger criteria envelope. Same contract as `ticket_management` (Jira) — same `WRITE` badges in the agent UI, same tool-spec gating so the LLM never even sees disabled actions.
 - **Ticket Management skill (Jira) + final Jira trigger slice** — agents can search/read/act on tickets via the `ticket_operation` tool. Capability-gated; write actions (`update`, `add_comment`, `transition`) off by default and filtered out of the LLM's tool spec. The trigger slice runs live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted Hub → Tool APIs Jira credentials, and notification output configured through the generated Flow.
@@ -223,9 +175,9 @@ The committed baselines live under `frontend/tests/visual/`; private reports, tr
 │  ┌──────────────┐     ┌───────────────┐     ┌─────────────────────┐         │
 │  │    FLOWS     │     │    MEMORY     │     │      WATCHER        │         │
 │  │ 4 types      │     │ Working       │     │ Dashboard  Billing  │         │
-│  │ 7 step types │     │ Episodic      │     │ Convos     Security │         │
-│  │ Scheduler    │     │ Semantic      │     │ Flows   Graph View  │         │
-│  │ Templates    │     │ Shared        │     │                     │         │
+│  │ 15+ step     │     │ Episodic      │     │ Agents     Security │         │
+│  │ Source/Gate  │     │ Semantic      │     │ Flows   Graph View  │         │
+│  │ Templates    │     │ Shared        │     │ Channel Health      │         │
 │  └──────────────┘     └───────────────┘     └─────────────────────┘         │
 │                                                                              │
 │  ┌──────────────────────────────┐     ┌──────────────────────────────────┐   │

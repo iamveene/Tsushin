@@ -5,7 +5,6 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
@@ -37,15 +36,16 @@ export interface TeamCanvasProps {
   onReorderMembers: (orderedMembers: TeamMemberResponse[]) => void | Promise<void>
   onUpdateMemberPosition: (member: TeamMemberResponse, position: { x: number; y: number }) => void | Promise<void>
   onToggleRequired?: (member: TeamMemberResponse) => void | Promise<void>
+  onResetLayout?: () => void | Promise<void>
 }
 
 const MEMBER_WIDTH = 260
 const MEMBER_GAP = 90
 const LINE_Y = 160
 const COORDINATOR_X = 0
-const COORDINATOR_Y = -120
-const MESH_RADIUS_X = 360
-const MESH_RADIUS_Y = 210
+const COORDINATOR_Y = -180
+const MESH_MEMBER_Y = 160
+const MESH_ROW_GAP = 320
 
 function orderedMembers(team: TeamDetail) {
   return [...team.members]
@@ -73,11 +73,17 @@ function defaultLinePosition(index: number, total: number): TeamCanvasPosition {
 }
 
 function defaultMeshPosition(index: number, total: number): TeamCanvasPosition {
-  if (total <= 1) return { x: 0, y: 180 }
-  const angle = (Math.PI * 2 * index) / total - Math.PI / 2
+  if (total <= 1) return { x: 0, y: MESH_MEMBER_Y }
+  const perRow = Math.min(total, 4)
+  const row = Math.floor(index / perRow)
+  const col = index % perRow
+  const rowCount = Math.ceil(total / perRow)
+  const lastRowSize = total - (rowCount - 1) * perRow
+  const colsThisRow = row === rowCount - 1 ? lastRowSize : perRow
+  const step = MEMBER_WIDTH + MEMBER_GAP
   return {
-    x: Math.cos(angle) * MESH_RADIUS_X,
-    y: Math.sin(angle) * MESH_RADIUS_Y + 150,
+    x: (col - (colsThisRow - 1) / 2) * step,
+    y: MESH_MEMBER_Y + row * MESH_ROW_GAP,
   }
 }
 
@@ -97,9 +103,6 @@ function makeOrderedEdge(source: string, target: string, index: number): Edge {
     id: `team-line-${source}-${target}-${index}`,
     source,
     target,
-    type: 'smoothstep',
-    className: 'team-edge-line',
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#3c5afe' },
   }
 }
 
@@ -108,9 +111,6 @@ function makeMeshEdge(target: string, index: number): Edge {
     id: `team-mesh-coordinator-${target}-${index}`,
     source: 'team-coordinator',
     target,
-    type: 'smoothstep',
-    className: 'team-edge-mesh',
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#14b8a6' },
   }
 }
 
@@ -124,6 +124,7 @@ function TeamCanvasInner({
   onReorderMembers,
   onUpdateMemberPosition,
   onToggleRequired,
+  onResetLayout,
 }: TeamCanvasProps) {
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [isDragOver, setIsDragOver] = useState(false)
@@ -303,7 +304,19 @@ function TeamCanvasInner({
               <p className="text-xs text-tsushin-slate">{topologyDescription}</p>
             </div>
           </div>
-          <span className="badge badge-neutral">{members.length} members</span>
+          <div className="flex items-center gap-2">
+            {!readOnly && onResetLayout && members.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onResetLayout()}
+                className="team-toggle-btn"
+                title="Reset all member positions to the default layout"
+              >
+                Auto arrange
+              </button>
+            )}
+            <span className="badge badge-neutral">{members.length} members</span>
+          </div>
         </div>
 
         <div
@@ -325,6 +338,7 @@ function TeamCanvasInner({
             nodesConnectable={false}
             elementsSelectable
             selectNodesOnDrag={false}
+            defaultEdgeOptions={{ type: 'straight', animated: false, style: { stroke: '#484F58', strokeWidth: 2 } }}
             proOptions={{ hideAttribution: true }}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="rgba(139, 146, 158, 0.16)" />

@@ -421,12 +421,12 @@ export default function ConversationsTab() {
                                       </div>
                                       <p className="text-xs text-tsushin-slate">
                                         This agent run used semantic search to find relevant past messages.
-                                        The AI received context from both recent conversation (ring buffer) and
+                                        The AI received context from both recent messages and
                                         semantically similar messages from history.
                                       </p>
                                       <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-gray-700">
                                         <div className="text-xs">
-                                          <span className="text-tsushin-slate">Ring Buffer:</span>
+                                          <span className="text-tsushin-slate">Recent Messages:</span>
                                           <span className="font-semibold text-white ml-1">{memoryStats.ring_buffer_size} msgs</span>
                                         </div>
                                         <div className="text-xs">

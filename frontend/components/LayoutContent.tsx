@@ -253,7 +253,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   }
 
   return (
-    <div className={`flex flex-col h-screen ${isPlaygroundPage ? 'overflow-hidden' : ''}`}>
+    <div className={`flex flex-col h-screen w-full max-w-full overflow-x-hidden ${isPlaygroundPage ? 'overflow-hidden' : ''}`}>
       {/* Header with glass effect */}
       <header className="flex-shrink-0 z-50 glass-card border-t-0 border-x-0 rounded-none">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
@@ -263,7 +263,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
               {!isPlaygroundPage && (
                 <button
                   onClick={() => setIsMobileMenuOpen(true)}
-                  className="md:hidden p-2 rounded-lg text-tsushin-slate hover:text-white hover:bg-tsushin-surface/50 transition-colors"
+                  className="lg:hidden p-2 rounded-lg text-tsushin-slate hover:text-white hover:bg-tsushin-surface/50 transition-colors"
                   aria-label="Open navigation menu"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -301,7 +301,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
             </div>
 
             {/* Navigation with active indicators */}
-            <nav className="hidden md:flex items-center space-x-1">
+            <nav className="hidden lg:flex items-center space-x-1">
               {navItems.map((item) => (
                 <Link
                   key={item.href}
@@ -363,7 +363,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                       Stays visible from md up so even when the label is suppressed at
                       1024px (xl breakpoint gates the text), admins still see the second
                       toggle is distinct from the tenant one. */}
-                  <span className={`hidden md:inline-flex items-center justify-center w-4 h-4 rounded-sm transition-colors ${
+                  <span className={`hidden lg:inline-flex items-center justify-center w-4 h-4 rounded-sm transition-colors ${
                     globalStop ? 'text-amber-300' : 'text-purple-300'
                   }`}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
@@ -410,7 +410,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                 aria-label="Tenant emergency stop"
                 className={`flex items-center gap-2 group ${globalStop ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
-                <span className={`text-xs font-semibold tracking-wide transition-colors duration-300 hidden sm:inline ${
+                <span className={`text-xs font-semibold tracking-wide transition-colors duration-300 hidden lg:inline ${
                   tenantBusy ? 'text-amber-400' :
                   globalStop ? 'text-slate-400' :
                   tenantStop ? 'text-red-400' : 'text-tsushin-success'
@@ -457,7 +457,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     {(user.full_name || user.email || 'U').charAt(0).toUpperCase()}
                   </span>
                 </div>
-                <div className="text-right hidden sm:block">
+                <div className="text-right hidden lg:block">
                   <div className="text-sm font-medium text-white truncate max-w-[120px]">
                     {user.full_name || user.email}
                   </div>
@@ -472,7 +472,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     )}
                   </div>
                 </div>
-                <div className="relative hidden sm:block" ref={helpMenuRef}>
+                <div className="relative hidden lg:block" ref={helpMenuRef}>
                   <button
                     onClick={() => setIsHelpMenuOpen(!isHelpMenuOpen)}
                     className="btn-ghost text-sm p-2 hover:bg-tsushin-hover rounded-lg transition-colors"
@@ -516,7 +516,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                 </div>
                 <button
                   onClick={logout}
-                  className="hidden sm:inline-flex btn-ghost text-sm py-1.5 px-3"
+                  className="hidden lg:inline-flex btn-ghost text-sm py-1.5 px-3"
                 >
                   Logout
                 </button>
@@ -531,7 +531,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
         <>
           {/* Backdrop overlay */}
           <div
-            className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 md:hidden ${
+            className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 lg:hidden ${
               isMobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
             onClick={() => setIsMobileMenuOpen(false)}
@@ -539,7 +539,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
 
           {/* Drawer panel */}
           <div
-            className={`fixed top-0 left-0 z-40 h-full w-72 bg-tsushin-surface border-r border-tsushin-border transform transition-transform duration-300 ease-in-out md:hidden ${
+            className={`fixed top-0 left-0 z-40 h-full w-72 bg-tsushin-surface border-r border-tsushin-border transform transition-transform duration-300 ease-in-out lg:hidden ${
               isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
             }`}
           >

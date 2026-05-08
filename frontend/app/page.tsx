@@ -53,21 +53,21 @@ export default function WatcherPage() {
   const canViewGraph = hasPermission('org.settings.write')
 
   const tabs = [
-    { id: 'dashboard' as WatcherTab, label: 'Dashboard', description: 'System Overview' },
-    { id: 'graph' as WatcherTab, label: 'Graph View', description: 'Network Visualization', adminOnly: true },
-    { id: 'agents' as WatcherTab, label: 'Agents', description: 'Continuous, conversations, runs' },
-    { id: 'flows' as WatcherTab, label: 'Flows', description: 'Flow Execution Monitoring' },
-    { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel Security Events' },
-    { id: 'channel-health' as WatcherTab, label: 'Channel Health', description: 'Instance & Circuit Breaker Status' },
-    { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI Cost & Consumption' },
+    { id: 'dashboard' as WatcherTab, label: 'Dashboard', description: 'System overview' },
+    { id: 'graph' as WatcherTab, label: 'Graph', description: 'Agent network map', adminOnly: true },
+    { id: 'agents' as WatcherTab, label: 'Agents', description: 'Always-on work and runs' },
+    { id: 'flows' as WatcherTab, label: 'Flows', description: 'Automation run history' },
+    { id: 'security' as WatcherTab, label: 'Security', description: 'Sentinel events' },
+    { id: 'channel-health' as WatcherTab, label: 'Channels', description: 'Connection health' },
+    { id: 'billing' as WatcherTab, label: 'Billing', description: 'AI usage and cost' },
   ]
 
   const agentsSubTabs: { id: AgentsSubTab; label: string; description: string }[] = [
-    { id: 'continuous-agents', label: 'Continuous Agents', description: 'Always-on inventory' },
-    { id: 'wake-events',       label: 'Wake Events',       description: 'Trigger event browser' },
-    { id: 'conversations',     label: 'Conversations',     description: 'Message & agent threads' },
-    { id: 'team-runs',         label: 'Team Runs',         description: 'Agent team executions' },
-    { id: 'communication',     label: 'A2A Comms',         description: 'Inter-agent messaging' },
+    { id: 'continuous-agents', label: 'Continuous Agents', description: 'Always-on agents' },
+    { id: 'wake-events',       label: 'Wake Events',       description: 'Trigger history' },
+    { id: 'conversations',     label: 'Conversations',     description: 'Agent threads' },
+    { id: 'team-runs',         label: 'Team Runs',         description: 'Team executions' },
+    { id: 'communication',     label: 'Agent Messages',    description: 'Agent-to-agent sessions' },
   ]
 
   const handleTabChange = (tab: WatcherTab) => {
@@ -87,20 +87,20 @@ export default function WatcherPage() {
       {/* Page Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-display font-bold text-white mb-2">Watcher</h1>
-        <p className="text-tsushin-slate">Observability & Monitoring Hub</p>
+        <p className="text-tsushin-slate">Monitor agents, automations, channels, and AI usage.</p>
       </div>
 
       {/* Tab Navigation — Wake Events and Continuous Agents stay mounted inside
           Watcher so operators do not lose the monitoring context when they
           switch between Watcher surfaces. */}
       <div className="mb-6">
-        <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
+        <div className="glass-card rounded-xl p-1.5 inline-flex max-w-full flex-wrap">
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => handleTabChange(tab.id)}
               className={`
-                relative px-5 py-3 text-sm font-medium rounded-lg transition-all duration-200
+                relative max-w-full px-4 sm:px-5 py-3 text-sm font-medium rounded-lg transition-all duration-200
                 ${activeTab === tab.id
                   ? 'text-white'
                   : 'text-tsushin-slate hover:text-white'
@@ -112,9 +112,9 @@ export default function WatcherPage() {
                 <span className="absolute inset-0 rounded-lg bg-tsushin-surface border border-tsushin-border/50 shadow-lg" />
               )}
               <span className="relative flex items-center gap-2">
-                <span className="flex flex-col items-start">
-                  <span>{tab.label}</span>
-                  <span className="text-2xs text-tsushin-muted">{tab.description}</span>
+                <span className="flex min-w-0 flex-col items-start">
+                  <span className="whitespace-nowrap">{tab.label}</span>
+                  <span className="max-w-[11rem] truncate text-2xs text-tsushin-muted">{tab.description}</span>
                 </span>
               </span>
             </button>
@@ -144,13 +144,13 @@ export default function WatcherPage() {
             {/* Sub-tab strip. Renders the same glass-card affordance as the
                 top-level strip but at a smaller scale so the visual
                 hierarchy stays clear. */}
-            <div className="glass-card rounded-xl p-1.5 inline-flex flex-wrap">
+            <div className="glass-card rounded-xl p-1.5 inline-flex max-w-full flex-wrap">
               {agentsSubTabs.map((sub) => (
                 <button
                   key={sub.id}
                   onClick={() => setAgentsSubTab(sub.id)}
                   className={`
-                    relative px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200
+                    relative max-w-full px-3 sm:px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200
                     ${agentsSubTab === sub.id
                       ? 'text-white'
                       : 'text-tsushin-slate hover:text-white'
@@ -160,9 +160,9 @@ export default function WatcherPage() {
                   {agentsSubTab === sub.id && (
                     <span className="absolute inset-0 rounded-lg bg-tsushin-surface border border-tsushin-border/50 shadow-lg" />
                   )}
-                  <span className="relative flex flex-col items-start">
-                    <span>{sub.label}</span>
-                    <span className="text-2xs text-tsushin-muted">{sub.description}</span>
+                  <span className="relative flex min-w-0 flex-col items-start">
+                    <span className="whitespace-nowrap">{sub.label}</span>
+                    <span className="max-w-[10rem] truncate text-2xs text-tsushin-muted">{sub.description}</span>
                   </span>
                 </button>
               ))}

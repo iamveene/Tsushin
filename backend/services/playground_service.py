@@ -15,6 +15,7 @@ from agent.followup_detector import build_data_block, is_followup_to_prior_skill
 from agent.memory.tool_output_buffer import get_tool_output_buffer
 # Phase 8: Watcher Activity Events
 from services.watcher_activity_service import emit_agent_processing_async
+from services.agent_run_status import determine_agent_run_status
 from services.playground_thread_service import (
     build_playground_channel_id,
     build_playground_thread_recipient,
@@ -895,7 +896,7 @@ class PlaygroundService:
             # BUG-378: Update AgentRun with result
             try:
                 _run_end = _time.time()
-                agent_run.status = "error" if result.get("error") else "success"
+                agent_run.status = determine_agent_run_status(result)
                 agent_run.output_preview = (result.get("answer") or result.get("error") or "")[:500]
                 agent_run.model_used = effective_model
                 agent_run.execution_time_ms = int((_run_end - _run_start) * 1000)

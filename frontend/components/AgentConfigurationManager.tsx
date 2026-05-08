@@ -327,7 +327,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             ) : defaultVectorStoreId ? (
               <>Using tenant default: <span className="text-teal-400">{vectorStoreInstances.find(v => v.id === defaultVectorStoreId)?.instance_name || 'Unknown'}</span></>
             ) : (
-              <>Using default: <span className="text-gray-400">ChromaDB (built-in)</span></>
+              <>Using default: <span className="text-gray-400">built-in store</span></>
             )}
           </div>
 

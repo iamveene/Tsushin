@@ -1,6 +1,6 @@
 # Tsushin — Comprehensive Documentation
 
-**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, self-hostable agentic messaging platform that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Webhook, Playground), multi-layer semantic memory, workflow automation (Flows), AI-powered security (Sentinel), and observability.
+**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, self-hostable agentic messaging platform that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, Webhook, Jira, GitHub), Tool-API credentials (Jira, GitHub, 1Password Password Vault), local services (Whisper/Speaches, Kokoro, Ollama), Agent Teams (line + mesh), Continuous Agents, multi-layer semantic memory, workflow automation (Flows), AI-powered security (Sentinel), and observability.
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
@@ -47,7 +47,7 @@ This document is the exhaustive reference for configuring, deploying, operating,
 
 ## 1. Introduction & Audience
 
-**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, agentic messaging framework that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, HTTP Webhook, Playground), a multi-layer semantic memory system, workflow automation ("Flows"), AI-powered security (Sentinel), and observability under a single self-hostable platform.
+**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, agentic messaging framework that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, HTTP Webhook, Jira, GitHub), Tool-API credentials (Jira, GitHub, 1Password Password Vault), local-service containers (Whisper/Speaches, Kokoro, Ollama), Agent Teams, Continuous Agents, a multi-layer semantic memory system, workflow automation ("Flows"), AI-powered security (Sentinel), and observability under a single self-hostable platform.
 
 Source: `README.md`, `backend/settings.py`, and the README version badge.
 
@@ -60,7 +60,7 @@ Source: `README.md`, `backend/settings.py`, and the README version badge.
 | **Application developers** | Public API v1 reference, OAuth2 client-credentials + direct API-key auth, rate limiting, webhook integration. |
 | **Security engineers** | Sentinel profiles, permission scopes, HMAC-signed webhooks, envelope-encrypted secrets, docker-socket-proxy isolation. |
 
-Version under documentation: **v0.6.0** in both the README and backend settings.
+Version under documentation: **v0.7.0** in both the README and `backend/settings.py` (`SERVICE_VERSION = "0.7.0"`). The v0.7.x patch series adds the IA reshape (Watcher 11→7 tabs, Studio Continuous Agents tab, Create Chooser modal), auto-flow editor surfacing, financial-flow notification states, ASR runtime resilience, LID matcher polish, Cloudflared sidecar opt-out, UI audit API-boundary hardening, and additional bug fixes — all tracked under "Unreleased" in `docs/changelog.md` until rolled into the next tagged release.
 
 ---
 
@@ -103,20 +103,24 @@ Frontend (Next.js)  <--REST/WebSocket-->  Backend (FastAPI + PG 16)  <-->  RBAC 
                                   +--------------+--------------+
                                   |              |              |
                                 CORE            HUB           STUDIO
-                             (Agents,      (Providers,     (Personas,
-                              Skills,       Channels,       Contacts,
-                              Sentinel)     Tool APIs,      Projects,
-                                            TTS)            Tone Presets)
+                             (Agents,      (Channels,       (Personas,
+                              Teams,        Triggers,        Contacts,
+                              Skills,       Tool APIs,       Projects,
+                              Sentinel)     Local Services)  Tone Presets,
+                                                             Continuous Agts)
                                   |
                            +------+------+
                            |             |
                          FLOWS         MEMORY            WATCHER
-                       (4 types,    (Working,         (Dashboard,
-                        7 steps)     Episodic,         Conversations,
-                                     Semantic,         Flows, Billing,
-                                     Shared)           Security, Graph)
+                       (4 types,    (Working,         (Dashboard, Graph,
+                        15+ steps,   Episodic,         Agents, Flows,
+                        Source/      Semantic,         Security,
+                        Gate)        Shared, OKG)      Channel Health,
+                                                       Billing)
 
-              SANDBOXED TOOLS (per-tenant Docker)  |  CHANNELS (WA/TG/Slack/Discord/Webhook/Playground)
+              SANDBOXED TOOLS (per-tenant Docker)  |  CHANNELS (WA/TG/Slack/Discord/Playground)
+              TRIGGERS (Email, Webhook, Jira, GitHub)  |  TOOL APIs (Jira, GitHub, 1Password)
+              LOCAL SERVICES (Whisper/Speaches, Kokoro, Ollama)
 ```
 
 Source: `README.md` (Architecture section).
@@ -378,7 +382,7 @@ Phase 8 finishes the v0.7.0 trigger/control-plane UX pass and keeps user guidanc
 * **Routing-rule reorder** — `POST /api/channels/{channel_type}/{instance_id}/routing-rules/reorder` accepts `{ "rule_ids": [...] }`, validates every rule belongs to the current tenant/channel/instance, and returns the refreshed rule page. Hub > Channels exposes modal create/edit/delete plus reorder controls for conversational channels only.
 * **Watcher wake polish** — continuous-agent detail/read-only watcher views show wake-event causes, subscription badges, and failure colors for trigger-origin runs.
 * **Wizard retrofit** — Slack, Discord, WhatsApp, and MCP setup flows now share the common `<Wizard>` shell without changing their backend create/test contracts.
-* **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` remains at `TOTAL_STEPS = 16`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and routes trigger configuration to Hub > Triggers while routing monitoring to Watcher.
+* **Onboarding count and copy** — `frontend/contexts/OnboardingContext.tsx` keeps the tour condensed at `TOTAL_STEPS = 8`. `frontend/components/OnboardingWizard.tsx` presents conversational channels separately from event triggers, keeps Webhook out of channel setup copy, and routes trigger configuration to Hub > Triggers while routing monitoring to Watcher.
 * **Webhook deprecation** — v0.7.0 intentionally has no Webhook deprecation banner/header path; Webhook moved directly to the Trigger catalog and Hub Triggers UI.
 * **Kokoro successor path** — legacy `/api/services/kokoro/{start,stop,status}` callers receive HTTP 410 and a `Link: </api/tts-instances>; rel="successor-version"` successor header. Hub copy points users to per-tenant Kokoro instances rather than the removed stack-level compose service.
 * **Phase 3 docs reconciliation** — Phase 3.1 docs now distinguish the completed Gmail send/reply/draft and Email poll/triage/MemGuard live gates from the remaining optional API-agent proof and Ubuntu fresh-install sudo handoff.
@@ -609,7 +613,7 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
 3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
-5. On first login an **onboarding tour** (16 steps) auto-opens. Steps 1 and 6–11 walk through platform areas (Welcome → Watcher → Studio → Hub → Channels → Flows → Playground). Steps 2–5 are a **"What's New in v0.6.0"** showcase covering (2) the expanded AI provider catalogue — Vertex AI, Grok, Groq, ElevenLabs — (3) Slack / Discord channels plus Webhook Triggers, (4) Custom Skills & MCP Servers, and (5) A2A agent-to-agent permissioning plus external vector stores for long-term memory. Steps 12–15 cover optional voice setup, Playground Mini, Sentinel block mode, and v0.7.0 Triggers & Continuous Agents. Step 16 is the "You're All Set" finale. Each showcase step includes a one-click deep-link to the relevant Hub tab or sub-page.
+5. On first login an **onboarding tour** auto-opens. It now uses the v0.7.0 getting-started path instead of the old v0.6.0 showcase: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and final next steps. Setup-oriented steps include direct links or guided wizard actions to the relevant Hub, Studio, Flows, Playground, or setup surface.
 6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, or Discord) via Hub > Channels to enable agent messaging. Signed HTTP events use the separate Webhook Trigger path in Hub > Triggers.
 7. The **User Guide** is accessible anytime via the **?** button in the header.
 
@@ -711,7 +715,7 @@ Tsushin ships a Helm chart at `k8s/tsushin/`:
 
 ```
 k8s/tsushin/
-├── Chart.yaml              # name: tsushin, version: 0.1.0, appVersion: 0.6.0
+├── Chart.yaml              # name: tsushin, version: 0.1.0, appVersion: 0.7.0
 ├── values.yaml             # Default values
 ├── values-dev.yaml         # Dev overrides
 ├── values-prod.yaml        # Prod overrides (HPA, network policies, managed TLS)
@@ -1764,7 +1768,7 @@ When creating a new vector store in Hub > Vector Stores (`frontend/components/ve
 
 Sentinel is an AI-powered detection/blocking layer. Registry source: `backend/services/sentinel_detections.py:17-141`. Profiles: `backend/services/sentinel_seeding.py:503-570`. UI: `frontend/app/settings/sentinel/page.tsx`, `frontend/app/agents/security/page.tsx`.
 
-### 12.1 Detection Types (7)
+### 12.1 Detection Types (9)
 
 | Key | Name | Severity | Applies to |
 |---|---|---|---|
@@ -1776,8 +1780,10 @@ Sentinel is an AI-powered detection/blocking layer. Registry source: `backend/se
 | `agent_escalation` | Agent Privilege Escalation | high | prompt |
 | `browser_ssrf` | Browser SSRF | critical | browser |
 | `vector_store_poisoning` | Vector Store Poisoning | high | vector_store |
+| `continuous_agent_action_approval` | Continuous-Agent Action Approval (v0.7.0) | varies | continuous-agent action plan |
 
-(8 registry entries — the "7 detection types" referred to at the product level excludes `agent_escalation`, which shipped later.)
+The Sentinel parser (v0.6.0 refactor) derives valid threat types dynamically from `DETECTION_REGISTRY` instead of a hard-coded list, so adding a new detection type only requires a new registry entry plus a profile-defaults seed update. v0.7.0 added `continuous_agent_action_approval` as a first-class detection type for the Continuous-Agent control plane (Alembic `0055` widened Sentinel detection-type log/cache columns to 64 characters to accommodate longer ids).
+
 Source: `backend/services/sentinel_detections.py:17-141`.
 
 ### 12.2 Profiles
@@ -1879,24 +1885,30 @@ Scheduled execution is driven by `backend/flows/scheduled_flow_executor.py`. The
 
 ### 13.3 Step Types
 
-Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_engine.py:2082-2102`):
+Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_engine.py:4182-4216`):
 
 | Type | Handler | Notes |
 |---|---|---|
-| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. Requires `recipient` or `recipients`, plus `message_template` or `content` in `config_json`. |
+| `source` | `SourceStepHandler` | Trigger-owned entry step for triggered flows. Auto-generated from the selected Hub trigger, locked at position 1, not manually addable. |
+| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. Requires `recipient` or `recipients`, plus `message_template` or `content` in `config_json`. v0.7.x supports `message_templates_by_state` keyed off an upstream `notification_state` (financial flows). |
 | `message` | `MessageStepHandler` | Sends a chat message (single-turn). |
-| `tool` | `ToolStepHandler` | Invokes a tool/function. |
-| `conversation` | `ConversationStepHandler` | Multi-turn AI conversation via `ConversationThread` (up to `max_turns`). |
+| `tool` | `ToolStepHandler` | Invokes a tool/function (built-in tool, sandboxed tool, or skill in tool mode). |
+| `conversation` | `ConversationStepHandler` | Multi-turn AI conversation via `ConversationThread` (up to `max_turns`). On system-managed (auto-generated from a trigger) flows the Default-agent step hides outbound-message fields. |
 | `slash_command` | `SlashCommandStepHandler` | Runs a platform slash command. |
 | `skill` | `SkillStepHandler` | Agentic skill execution (Phase 16). |
 | `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22). |
 | `summarization` | `SummarizationStepHandler` | AI summarization. Supports `thread_id`, `source_step`, or inline `text`/`content` in `config_json`. |
+| `gate` | `GateStepHandler` | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values. |
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
 | `password_vault` | `PasswordVaultStepHandler` | Programmatic vault reference resolution. Requires a tenant-scoped Hub Password Vault integration and stores only redacted output/handles in flow-run persistence. |
-| `financial_utility_automation` | `FinancialUtilityAutomationStepHandler` | Legacy/compatibility handler for existing financial boleto canaries. It can run the shipped templates, but it is not sufficient for migrated workflow acceptance; accepted migrations must be recreated from visible primitive Flow nodes. |
-| `source` | `SourceStepHandler` | Trigger-owned entry step for triggered flows. It is auto-generated from the selected Hub trigger, locked at position 1, and not manually addable. |
-| `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat. |
+| `http_request` | `HttpRequestStepHandler` | UI-authored HTTP primitive — editable method, URL, headers, body, secret references. |
+| `data_transform` | `DataTransformStepHandler` | Deterministic field extraction and normalization on previous-step outputs. |
+| `financial_record_store` | `FinancialRecordStoreStepHandler` | Generic financial record storage primitive. Emits `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `paid`, etc.) for downstream gates/notifications. |
+| `financial_bill_store` | `FinancialBillStoreStepHandler` | Utility-bill-specific storage alias of Financial Record Store. |
+| `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat for old flows (`Trigger`, `Subflow`, `Source`, `Message`, `Tool`, `Conversation`, `SlashCommand`, `Summarization`, `Gate`, `BrowserAutomation`, `HttpRequest`, `DataTransform`, `FinancialRecordStore`, `FinancialBillStore`). |
 | `AgentNode` | `ConversationStepHandler` alias | Alias accepted for compatibility (same config as `conversation`). |
+
+**Removed in v0.7.x (2026-05-07):** the opaque `financial_utility_automation` step type ("Legacy Utility Bill" in the palette), its frontend templates, config panel, backend handler, and the three site-specific runners (`run_moderna_condominio`, `run_consigaz_sao_blas`, `run_medsenior_samedil`) along with their `_extract_*` helpers and login URLs. The 6 migrated `Finan | …` flows already use only generic primitives; a DB audit confirmed zero remaining flow nodes referenced the legacy type before deletion. Operator-private template profiles and browser playbooks moved to `.private/` (gitignored), env-overridable via `TSN_FINAN_PLAYBOOK_DIR` and `TSN_FINAN_PROFILES_PATH`.
 
 Each `flow_node` row carries (Source: `models.py:1586-1639`):
 
@@ -1958,7 +1970,7 @@ The persisted Flow output is always redacted. Field/TOTP reads require the selec
 
 #### Financial utility automation steps
 
-The Flow editor now exposes UI-first primitives for financial migrations: `Password Vault`, `Browser Automation`, `HTTP Request`, `Data Transform`, `Financial Record Store`, `Utility Bill Store`, `Gate`, and `Notification`. The old `financial_utility_automation` / `Utility Bill` handler still exists only for legacy canary compatibility and must not be used as the acceptance target for migrated workflows.
+The Flow editor exposes UI-first primitives for financial migrations: `Password Vault`, `Browser Automation`, `HTTP Request`, `Data Transform`, `Financial Record Store`, `Utility Bill Store`, `Gate`, and `Notification`. The legacy `financial_utility_automation` / `Utility Bill` step type was **removed in v0.7.x (2026-05-07)** along with its frontend templates, config panel, backend handler, and three site-specific runners. The 6 migrated `Finan | …` flows already use only generic primitives, so the legacy type is no longer needed.
 
 v0.7.x ships an initial financial template catalog that expands into visible nodes, not a hidden automation wrapper:
 
@@ -1968,7 +1980,7 @@ Financial templates inflate the corresponding playbook steps into visible Flow n
 
 Storage primitives persist tenant-scoped state only. Utility bills upsert `financial_utility_bill` rows keyed by `(tenant_id, provider, unit_id, reference_month)` with encrypted boleto/barcode data; generic records upsert `financial_automation_record` rows keyed by a deterministic dedupe key. Flow outputs expose redacted previews and notification conditions, while raw browser/API payloads are passed through short-lived handles for trusted downstream parsing.
 
-The previous opaque `financial_utility_automation` step has been removed; a migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
+A migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
 
 1. Vault credential: a Password Vault step or built-in `password_vault` Tool step that selects the 1Password reference through the picker.
 2. HTTP/browser automation: explicit `HTTP Request` nodes or Browser Automation action nodes that sign in or fetch the source page/API using the vault output.
@@ -3513,7 +3525,7 @@ On submit: the Kokoro path creates a `TTSInstance`, polls `GET /api/tts-instance
 
 **Completion callbacks.** `useAudioWizardComplete(cb)` subscribes to wizard completion for the lifetime of a component — Hub / Studio pages can use this to reload their agent and TTS-instance lists.
 
-### 25.8 ASR — Hub > Add Provider > Speech-to-Text wizard + Hub Local Services card
+#### 20.6.1b ASR — Hub > Add Provider > Speech-to-Text wizard + Hub Local Services card (v0.7.0)
 
 ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** via the Provider Wizard, **management** via the Local Services card, and **per-agent assignment** via the Audio Agents Wizard / Studio Skills tab. There is **no global "Settings → ASR" page** and **no tenant-level default ASR**. Each agent either uses cloud OpenAI Whisper or pins a specific tenant-owned local instance.
 
@@ -3541,7 +3553,7 @@ ASR (Speech-to-Text) configuration lives entirely in the Hub — **creation** vi
 
 **Removed surfaces (v0.7.0 RC cleanup).** `/settings/asr`, `Tenant.default_asr_instance_id`, the legacy `tenant_default` value of `asr_mode`, and the GET/PUT `/api/settings/asr/default` routes were retired in this release. Existing skill rows still carrying `asr_mode='tenant_default'` collapse to `'openai'` at read time — no silent fan-out to a phantom tenant default.
 
-#### 25.8.1 ASR runtime resilience (2026-05-06)
+##### 20.6.1b.1 ASR runtime resilience (2026-05-06)
 
 Three patches landed together to make ASR failures observable and to honor the operator's privacy choice when a local engine is pinned.
 
@@ -4156,17 +4168,31 @@ Source files: `backend/services/syslog_service.py`, `backend/services/syslog_for
 
 ### 24.1 Watcher dashboard tabs
 
-Watcher is the frontend observability surface. The table below covers the existing documented tabs plus the Phase 10 Team Runs observability surface:
+Watcher is the frontend observability surface. The v0.7.x IA reshape (2026-05-07) consolidated Watcher from 11 top-level tabs to **7**, with the five agent-runtime surfaces collapsed into a single **Agents** tab containing five sub-tabs. Configuration lives in Studio + Hub; observability lives in Watcher.
+
+**Top-level tabs:**
 
 | Tab | Purpose |
 |---|---|
 | **Dashboard** | KPIs, activity timeline, system performance, distribution charts. System Performance includes a **Semantic Search** badge driven by `GET /api/stats/memory`'s `agents_with_semantic_search / total_agents` aggregation (Active when all agents enabled, Partial when some, Disabled when none). |
-| **Conversations** | Live conversation feed with filtering. |
+| **Graph View** | Interactive system topology (agents, users, projects, channels) with Dagre auto-layout, node expand/collapse, fullscreen mode. WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, A2A pulse, stale-edge auto-cleanup. |
+| **Agents** | Inventory + run history surfaces for agents and teams (5 sub-tabs — see below). Default sub-tab on entry is **Continuous Agents** (the inventory surface). |
 | **Flows** | Flow execution tracking & status. |
-| **Billing** | Token usage and cost analytics per agent/model. |
 | **Security** | Sentinel threat events with severity filtering. |
-| **Graph View** | Interactive system topology (agents, users, projects) with Dagre auto-layout, node expand/collapse, fullscreen mode. |
-| **Team Runs** | Phase 10 read-only Agent Teams observability surface: tenant-wide run filters/detail via `GET /api/watcher/team-runs`, live `team_run` WebSocket updates, Sentinel decisions, and mesh coordinator evidence. No Team Builder controls are exposed here. Browser evidence is stored under `.private/qa/v0.7.0/p10/`. |
+| **Channel Health** | Channel connectivity, circuit breakers, message-flow status per WhatsApp/Telegram/Slack/Discord/Webhook instance. |
+| **Billing** | Token usage and cost analytics per agent/model. |
+
+**Agents sub-tabs:**
+
+| Sub-tab | Purpose |
+|---|---|
+| **Continuous Agents** | Inventory of Continuous Agents with budgets, schedules/wake modes, run history. Configure in Studio → Continuous Agents (UI rename of the legacy "Watcher Monitor" surface; backend `ContinuousAgent` model unchanged). |
+| **Wake Events** | Recent wake events fanned out by the dispatcher to ContinuousRuns, bound Flows, and matching Agent Teams. |
+| **Conversations** | Live conversation feed with filtering. |
+| **Team Runs** | Phase 10 read-only Agent Teams observability surface: tenant-wide run filters/detail via `GET /api/watcher/team-runs`, live `team_run` WebSocket updates, Sentinel decisions, and mesh coordinator evidence. No Team Builder controls are exposed here. |
+| **A2A Comms** | Read-only Agent-to-Agent session log + statistics. Permission rule management (CRUD) lives in Studio → A2A Communications since v0.7.2; this surface shows a banner pointing back to Studio for rule changes. |
+
+Type narrowing in `frontend/app/page.tsx` is `WatcherTab = 'dashboard' | 'graph' | 'agents' | 'flows' | 'security' | 'channel-health' | 'billing'` plus a new `AgentsSubTab` enum. No backend changes were required for the IA reshape — the existing endpoints and WebSocket frames continue to drive each surface.
 
 Access requires the `watcher.read` permission (`backend/migrations/add_rbac_tables.py:387-388`).
 
@@ -4964,23 +4990,26 @@ Role mapping summary (`add_rbac_tables.py:422-495`):
 |---|---|
 | **Tenant** | An isolated organization — owns users, agents, flows, memory, knowledge, integrations. Represented by `tenant` table; id is a string like `tenant_20251202232822`. |
 | **Agent** | A configurable AI persona (provider + model + persona + skills + tools + security profile + channels + knowledge). Scoped to one tenant. |
-| **Flow** | A multi-step automated workflow. Types: Conversation, Notification, Workflow, Task. 7 step types (Conversation, Message, Notification, Tool, Skill, Summarization, Slash Command). |
-| **Skill** | A built-in agent capability (19 shipped: TTS, Transcription, Web Search, Scraping, Browser, Image Gen, Shell, Flows, Gmail, Calendar, Flight Search, etc.). |
+| **Flow** | A multi-step automated workflow. Types: Conversation, Notification, Workflow, Task. 15+ step types: Source (trigger-owned entry, locked at position 1), Notification, Message, Tool, Conversation, Slash Command, Skill, Custom Skill, Summarization, Gate (`all`/`any`/programmatic + `in`/`not_in`), Browser Automation, Password Vault, HTTP Request, Data Transform, Financial Record Store, Financial Bill Store. Plus legacy aliases (`Trigger`, `Subflow`, `AgentNode`). |
+| **Skill** | A built-in agent capability (22 shipped: Audio TTS, Audio Transcription, Web Search, Image Analysis, Image Gen/Edit, Browser Automation, Password Vault, Gmail, Code Repository (GitHub), Ticket Management (Jira), Automation, Scheduler, Flows, Flight Search, Shell, Sandboxed Tools, Knowledge Sharing, Adaptive Personality, OKG Term Memory, Agent Switcher, Agent Communication, Custom adapter). |
 | **Custom Skill** | Tenant-authored skill — Instruction (prompt injection), Script (Python/Bash/Node in sandbox), or MCP-Server (external MCP connection). |
 | **Tool (Sandboxed)** | A security/utility binary (nmap, dig, nuclei, httpx, subfinder, katana, sqlmap, webhook, whois) executed in a per-tenant Docker container. |
 | **Persona** | A reusable personality template — role, tone preset, personality traits, per-persona skills/tools/knowledge, guardrails. |
 | **Tone Preset** | Reusable communication style (formal, casual, technical, etc.). |
-| **Sentinel** | LLM-based threat-detection agent. Detects prompt injection, agent takeover, poisoning, shell malicious intent. |
+| **Sentinel** | LLM-based threat-detection agent. Detects 9 threat classes — prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), agent privilege escalation, browser SSRF, vector-store poisoning, and continuous-agent action approval. |
 | **Security Profile** | Sentinel configuration (Off, Permissive, Moderate, Aggressive) attachable at tenant / agent / skill scope with inheritance. |
 | **MemGuard** | Memory-poisoning protection — regex + fact-validation gate before long-term storage. |
 | **MCP** | Model Context Protocol. In Tsushin, also refers to the WhatsApp bridge containers (`mcp-agent-tenant_*`). |
 | **MCP Server Skill** | External MCP-protocol server (SSE / HTTP / Stdio) consumed as a tool provider. |
 | **WAHA / whatsmeow** | Underlying WhatsApp Web automation libraries used by the WhatsApp MCP containers (see `tester-mcp` running Go 1.24 + whatsmeow). |
-| **OKG** | Organisational Knowledge Graph — v0.6.1 memory architecture extension (see private roadmap). |
-| **Vector Store** | External vector DB integrations (e.g., Pinecone, Qdrant, MongoDB, local Chroma) registered under `/api/vector-stores`. |
-| **Hub** | Tenant-facing integration marketplace — AI providers, channels, tool APIs, TTS providers, MCP servers. |
-| **Studio** | The visual agent-builder surface — Agents + Personas + Contacts + Projects + Tone Presets + Knowledge Bases. |
-| **Watcher** | Observability dashboard — dashboard, conversations, flows, billing, security, graph view. |
+| **OKG** | Own (Ontology) Knowledge Graph — multi-tool registration `okg_store` / `okg_recall` / `okg_forget` shipped in v0.6.0. |
+| **Vector Store** | External vector DB integrations (e.g., Pinecone, Qdrant, MongoDB Atlas, local Chroma) registered under `/api/vector-stores`. v0.7.0 separates connection lifecycle from physical indexes via `VectorStoreIndex`, so a single connection can host many indexes per surface (Agent KB, Project KB, long-term memory) with independent embedding contracts. |
+| **Hub** | Tenant-facing integration marketplace, split in v0.7.0 into four roles: **Channels** (WhatsApp/Telegram/Slack/Discord/Playground), **Triggers** (Email/Webhook/Jira/GitHub), **Tool APIs** (Jira, GitHub, 1Password Password Vault), and **Local Services** (auto-provisioned Whisper/Speaches, Kokoro, Ollama). |
+| **Studio** | The configuration surface — Agents, Continuous Agents, Teams, Personas, Contacts, Projects, Tone Presets, Knowledge Bases, Custom Skills, A2A Communications, Sentinel profiles. |
+| **Watcher** | The observability surface (7 top-level tabs after the v0.7.x IA reshape) — Dashboard · Graph View · Agents (5 sub-tabs: Continuous Agents, Wake Events, Conversations, Team Runs, A2A Comms) · Flows · Security · Channel Health · Billing. |
+| **Continuous Agent** | An always-on agent that wakes on a trigger event with daily budget caps and a required Purpose + `action_kind` (`notify_only` / `reply` / `tool_use` / `flow_dispatch`). UI rename of the legacy "Watcher Monitor" surface; backend `ContinuousAgent` model unchanged. |
+| **Agent Team** | A line- or mesh-topology group of agents that work together on one goal under a hidden internal coordinator (mesh) or a fixed `execution_order` (line). Has its own Sentinel profile override and Watcher Team Runs observability. |
+| **Trigger** | A non-conversational event source (Email/Gmail, Webhook, Jira, GitHub) that fans wake events out to bound flows, continuous-agent subscriptions, and matching agent-team triggers in parallel. Each trigger mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification) on creation. |
 | **Playground** | Interactive in-browser chat for development and testing — threads, documents, slash commands, streaming. |
 | **Beacon** | Installable endpoint agent for Shell skill (WebSocket C2). Separate from Beacon here meaning the GKE/K8s concept. |
 | **Toolbox** | Per-tenant Docker container hosting sandboxed tools. Managed by `ToolboxContainerService`. |

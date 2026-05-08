@@ -68,6 +68,36 @@ def get_tenant_agent_ids(db: Session, ctx: TenantContext) -> List[int]:
     return [a.id for a in agents]
 
 
+def _agent_display_name(db: Session, agent: Optional[Agent]) -> Optional[str]:
+    if not agent:
+        return None
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.id == agent.contact_id,
+            Contact.tenant_id == agent.tenant_id,
+        )
+        .first()
+    )
+    if contact and contact.friendly_name:
+        return contact.friendly_name
+    if agent.description:
+        return agent.description
+    return None
+
+
+def _agent_usage_label(db: Session, agent_id: Optional[int], ctx: TenantContext) -> str:
+    if agent_id is None:
+        return "System"
+    query = db.query(Agent).filter(Agent.id == agent_id)
+    if not ctx.is_global_admin:
+        query = query.filter(Agent.tenant_id == ctx.tenant_id)
+    agent = query.first()
+    if not agent:
+        return "[deleted agent]"
+    return _agent_display_name(db, agent) or f"Agent #{agent.id}"
+
+
 def verify_agent_access(agent_id: int, db: Session, ctx: TenantContext) -> Agent:
     """
     Verify agent exists and user has access to it.
@@ -226,7 +256,9 @@ async def get_token_usage_by_agent(
         TokenUsage.agent_id.isnot(None)
     )
 
-    if not ctx.is_global_admin and tenant_agent_ids:
+    if not ctx.is_global_admin:
+        if not tenant_agent_ids:
+            return {"agents": [], "days": days}
         query = query.filter(TokenUsage.agent_id.in_(tenant_agent_ids))
 
     results = query.group_by(
@@ -237,16 +269,9 @@ async def get_token_usage_by_agent(
 
     summaries = []
     for row in results:
-        agent = db.query(Agent).filter(Agent.id == row.agent_id).first()
-        if agent:
-            contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
-            agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
-        else:
-            agent_name = f"Agent {row.agent_id}"
-
         summaries.append({
             "agent_id": row.agent_id,
-            "agent_name": agent_name,
+            "agent_name": _agent_usage_label(db, row.agent_id, ctx),
             "total_tokens": row.total_tokens,
             "total_cost": float(row.total_cost),
             "total_requests": row.total_requests,
@@ -377,7 +402,9 @@ async def get_recent_token_usage(
 
     if agent_id:
         query = query.filter(TokenUsage.agent_id == agent_id)
-    elif not ctx.is_global_admin and tenant_agent_ids:
+    elif not ctx.is_global_admin:
+        if not tenant_agent_ids:
+            return {"records": [], "count": 0}
         # Filter by tenant's agents (include system operations with NULL agent_id)
         from sqlalchemy import or_
         query = query.filter(
@@ -391,17 +418,10 @@ async def get_recent_token_usage(
 
     records = []
     for u in usages:
-        agent_name = "System"
-        if u.agent_id:
-            agent = db.query(Agent).filter(Agent.id == u.agent_id).first()
-            if agent:
-                contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
-                agent_name = contact.friendly_name if contact else f"Agent {agent.id}"
-
         records.append({
             "id": u.id,
             "timestamp": u.created_at.isoformat(),
-            "agent_name": agent_name,
+            "agent_name": _agent_usage_label(db, u.agent_id, ctx),
             "operation_type": u.operation_type,
             "skill_type": u.skill_type,
             "model": f"{u.model_provider}/{u.model_name}",

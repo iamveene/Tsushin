@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — UI audit backend/runtime contracts (2026-05-08)
+
+- Hardened backend API boundaries for UI audit findings: A2A permission lists clean up tenant-owned rules pointing at deleted or foreign agents, Sentinel profile assignments expose safe agent display labels for deleted-agent cases, agent-run status now treats execution-error output as failed, flow-run responses include flow display names plus safe duration fields, billing usage labels prefer agent/contact display names, and vector-store responses mask internal Docker/container/index identifiers while preserving operational fields for the UI.
+- Added targeted pytest coverage for the backend contract regressions, including tenant fail-closed billing filters, cross-tenant Sentinel assignment rejection, orphan A2A cleanup, flow duration semantics, agent-run execution-error reconciliation, and vector-store response masking.
+
 ### Changed — Watcher IA consolidation: 11 tabs → 7 with nested Agents sub-tabs (2026-05-07)
 
 - Watcher's top-level tab strip is now **Dashboard · Graph View · Agents · Flows · Security · Channel Health · Billing**. The five agent-runtime surfaces (Continuous Agents, Wake Events, Conversations, Team Runs, A2A Comms) collapsed into a single **Agents** top-level tab with sub-tabs. The non-agent observability tabs stay top-level. Result: single-row tab strip on standard screens, easier pivoting between agent inventory and recent activity.

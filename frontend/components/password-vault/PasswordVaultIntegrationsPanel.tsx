@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import { LockIcon } from '@/components/ui/icons'
 import { api } from '@/lib/client'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 import type {
   PasswordVaultIntegration,
   PasswordVaultIntegrationCreateRequest,
@@ -283,6 +284,7 @@ export function PasswordVaultIntegrationsPanel({
     value: string
   }>>({})
   const [managedSavingId, setManagedSavingId] = useState<number | null>(null)
+  const [showTechnicalDetailsById, setShowTechnicalDetailsById] = useState<Record<number, boolean>>({})
 
   function baseManagedDraft(integration: PasswordVaultIntegration) {
     return {
@@ -377,11 +379,17 @@ export function PasswordVaultIntegrationsPanel({
           </div>
           <div>
             <h3 className="font-semibold text-white">Password Vault</h3>
-            <p className="text-xs text-tsushin-slate">Provider-backed secret references for agents, flows, and browser automation</p>
+            <p className="text-xs text-tsushin-slate">Look up passwords from your password manager and use them safely in agents and flows.</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <span className="rounded-full border border-teal-500/25 bg-teal-500/10 px-2 py-0.5 text-[11px] text-teal-200">1Password provider</span>
-              <span className="rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">Skill-ready</span>
-              <span className="rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">Flow-ready</span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">
+                Skill-ready
+                <InfoTooltip text="Available as a skill in agents." position="top" />
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-tsushin-border bg-tsushin-slate/10 px-2 py-0.5 text-[11px] text-tsushin-slate">
+                Flow-ready
+                <InfoTooltip text="Usable in flow steps." position="top" />
+              </span>
             </div>
           </div>
         </div>
@@ -418,7 +426,7 @@ export function PasswordVaultIntegrationsPanel({
             const managedFields = managedFieldsById[integration.id] || []
             const managedDraft = managedDraftById[integration.id] || baseManagedDraft(integration)
             const vaultLabel = integration.default_vault_name || integration.default_vault || 'No default vault'
-            const vaultId = integration.default_vault_id || 'No vault ID'
+            const showTechnicalDetails = Boolean(showTechnicalDetailsById[integration.id])
             const accountHint = integration.account_email || integration.account_url || 'No account hint'
             const counts = [
               integration.vault_count !== null && integration.vault_count !== undefined ? `${integration.vault_count} vaults` : null,
@@ -440,7 +448,19 @@ export function PasswordVaultIntegrationsPanel({
                     </div>
                     <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
                       <span className="min-w-0 truncate">Vault: <span className="font-mono text-tsushin-accent">{vaultLabel}</span></span>
-                      <span className="min-w-0 truncate">Vault ID: <span className="font-mono text-tsushin-accent">{vaultId}</span></span>
+                      <span className="min-w-0 truncate">
+                        Technical details:{' '}
+                        <button
+                          type="button"
+                          onClick={() => setShowTechnicalDetailsById((current) => ({ ...current, [integration.id]: !showTechnicalDetails }))}
+                          className="text-teal-300 hover:text-white"
+                        >
+                          {showTechnicalDetails ? 'Hide' : 'Show'}
+                        </button>
+                      </span>
+                      {showTechnicalDetails && (
+                        <span className="min-w-0 truncate">Vault ID: <span className="font-mono text-tsushin-accent">{integration.default_vault_id || 'No vault ID'}</span></span>
+                      )}
                       <span className="min-w-0 truncate">Account: <span className="font-mono text-tsushin-accent">{accountHint}</span></span>
                       <span>{counts || 'No usage counted yet'}</span>
                       <span>{integration.last_tested_at || integration.last_health_check ? `Checked ${new Date(integration.last_tested_at || integration.last_health_check || '').toLocaleString()}` : 'Not tested yet'}</span>
@@ -509,7 +529,9 @@ export function PasswordVaultIntegrationsPanel({
                             <div className="truncate font-mono text-teal-200">
                               {field.vault || integration.default_vault_name || integration.default_vault_id || 'default'} / {field.item_ref} / {field.field_name}
                             </div>
-                            <div>{field.value_preview}</div>
+                            <div title={field.value_preview?.match(/\[REDACTED:(\d+)\]/) ? `Length of the redacted secret (${field.value_preview.match(/\[REDACTED:(\d+)\]/)?.[1]} chars)` : undefined}>
+                              {field.value_preview}
+                            </div>
                           </div>
                           {canWriteHub && (
                             <button

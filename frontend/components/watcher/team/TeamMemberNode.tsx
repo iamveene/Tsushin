@@ -132,8 +132,8 @@ function TeamMemberNode({ data, selected }: NodeProps) {
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-tsushin-muted">{label}</span>
-      <span className="truncate text-right text-white">{value}</span>
+      <span className="shrink-0 text-tsushin-muted">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-right text-white" title={value}>{value}</span>
     </div>
   )
 }

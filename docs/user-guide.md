@@ -34,13 +34,16 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 
 Welcome to Tsushin -- your multi-tenant AI agent platform. This section walks you through going from zero to your first AI conversation.
 
-### For Administrators: Installer Options (v0.6.0)
+### For Administrators: Installer Options (v0.7.0)
 
-If you're the administrator installing Tsushin for your organization, run `python3 install.py` from the repository root. v0.6.0 adds three installer behaviors worth knowing about:
+If you're the administrator installing Tsushin for your organization, run `python3 install.py` from the repository root. The installer hardens introduced in v0.6.x and carried forward in v0.7.x:
 
 - **`--le-staging`** -- when combined with `--domain` and `--email`, uses the Let's Encrypt **staging** directory instead of production. Use this to rehearse the full ACME flow without burning your production rate-limit budget (LE limits you to ~5 failed challenges per domain per hour on production). Example: `python3 install.py --defaults --domain app.example.com --email you@example.com --le-staging`.
-- **IP-address installs now work correctly.** The self-signed SAN now emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (the old format `DNS:<IP>` was rejected by browsers and curl). If you're accessing Tsushin by IP (e.g., `https://10.0.0.5`), the installer detects a stale SAN from a prior run and regenerates automatically.
+- **IP-address installs work correctly.** The self-signed SAN emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (the old format `DNS:<IP>` was rejected by browsers and curl). If you're accessing Tsushin by IP (e.g., `https://10.0.0.5`), the installer detects a stale SAN from a prior run and regenerates automatically.
 - **Frontend rebuild on API URL change.** If you rerun the installer and change `NEXT_PUBLIC_API_URL`, the installer diffs the previous `.env` and rebuilds the frontend image with `--no-cache`. Previously it would silently ship a stale cached bundle and leave the UI pointing at the old URL.
+- **Stack-scoped frontend proxy builds (v0.6.1).** The Caddy config and frontend proxy build target stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps both HTTP and HTTPS browser traffic pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
+- **Idempotent re-runs.** Re-running `python3 install.py` against an existing install preserves `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, and `ASANA_ENCRYPTION_KEY`. Fresh values are only generated on first installs or when a specific key is missing — fixes the pre-v0.6.1 failure mode where re-runs rotated the postgres password while the data volume still carried the old one.
+- **Manual-cert pre-flight validation.** Key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves Sectigo/GoDaddy chain mismatches).
 
 Full installer reference, GKE/Helm, GCP Secret Manager, and `.env` details live in [documentation.md §3 Quick Start](documentation.md#3-quick-start) and [§4 Deployment & Operations](documentation.md#4-deployment--operations).
 
@@ -56,7 +59,7 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 
 During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI**. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
 
-After first login, an 8-step onboarding tour highlights Watcher, Studio, Hub, Channels, Flows, Playground, Security, and the final setup checklist.
+After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
 
 ### Creating Your Organization
 
@@ -413,30 +416,33 @@ Skills extend what your agents can do.
 
 ### Built-in Skills
 
-Tsushin ships with 20 built-in skills. Enable or disable them per agent from the **Skills** tab.
+Tsushin ships with 22 built-in skills. Enable or disable them per agent from the **Skills** tab.
 
 | Skill | Mode | What It Does |
 |---|---|---|
 | **Audio Communication** | Special | Processes audio messages with AI or transcription-only mode. |
 | **Audio TTS Response** | Passive | Converts text responses to audio (OpenAI, Kokoro, or ElevenLabs). |
-| **Web Search** | Tool | Searches the web using Brave Search. |
-| **Image Generation & Editing** | Tool | Generates or edits images from text prompts. |
-| **Gmail** | Tool | Reads and searches emails from connected Gmail accounts. |
+| **Web Search** | Tool | Searches the web using Brave Search (default), Google/SerpAPI, SearXNG, or Tavily. |
+| **Image Analysis** | Special | Interprets inbound images, answers questions about attached photos, and extracts visible text. |
+| **Image Generation & Editing** | Tool | Generates or edits images from text prompts (Gemini-backed across WhatsApp, Telegram, Playground). |
+| **Gmail** | Tool | Reads, searches, and (with capability gates) sends/replies/drafts on connected Gmail accounts. |
+| **Code Repository** *(v0.7.0)* | Tool | Search/read/act on GitHub. Read on by default; write actions (create_issue, merge_pull_request, etc.) off by default and filtered out of the LLM tool spec. |
+| **Ticket Management** *(v0.7.0)* | Tool | Search/read/act on Jira tickets. Read on by default; write actions (update, add_comment, transition) off by default. |
 | **Automation** | Tool | Multi-step workflow automation. |
 | **Scheduler** | Tool | Schedules reminders and conversations via natural language. |
 | **Scheduler Query** | Legacy | Lists scheduled events (merged into Scheduler). |
-| **Flows** | Tool | Manages workflows and scheduled events. |
-| **Flight Search** | Tool | Searches for flights via configured providers. |
-| **Shell Commands** | Hybrid | Executes shell commands on registered remote hosts. |
-| **Sandboxed Tools** | Passive | Grants access to isolated security tools (nmap, dig, etc.). |
-| **Browser Automation** | Tool | Navigates websites, fills forms, captures screenshots. |
-| **Password Vault** | Tool | Resolves approved vault references through 1Password-backed Hub Tool APIs with redacted outputs and short-lived handles. |
+| **Flows** | Tool | Runs and manages workflows and scheduled events. |
+| **Flight Search** | Tool | Searches for flights via configured providers (Amadeus, Google Flights via SerpAPI). |
+| **Shell Commands** | Hybrid | Executes shell commands on registered remote hosts via secure beacon agents. |
+| **Sandboxed Tools** | Passive | Gates access to isolated security tools (nmap, dig, nuclei, httpx, whois, katana, subfinder, sqlmap, webhook). |
+| **Browser Automation** | Tool | Navigates websites, fills forms, extracts content, captures screenshots. |
+| **Password Vault** *(v0.7.x)* | Tool | Resolves approved vault references through 1Password-backed Hub Tool APIs with redacted outputs and short-lived handles. |
 | **Knowledge Sharing** | Passive | Shares learned facts into a cross-agent memory pool. |
 | **Adaptive Personality** | Passive | Extracts user facts and adapts the persona over time. |
-| **OKG Term Memory** | Hybrid | Stores/recalls structured term memory with MemGuard. |
-| **Agent Switcher** | Tool | Lets users switch their default agent via natural language. |
-| **Agent Communication** | Tool | Enables inter-agent questions and task delegation. |
-| **Custom Skill (Adapter)** | Tool | Runtime adapter for tenant-authored custom skills. |
+| **OKG Term Memory** | Hybrid | Stores/recalls structured term memory (own knowledge graph) with MemGuard validation. |
+| **Agent Switcher** | Tool | Lets users switch their default agent via natural language. Default execution mode is `hybrid`. |
+| **Agent Communication (A2A)** | Tool | Enables inter-agent questions and task delegation, gated by `agent_communication_permission` rules. |
+| **Custom Skill (Adapter)** | Tool | Runtime adapter for tenant-authored custom skills (Instruction / Script / MCP Server). |
 
 **Execution modes:** `Tool` (LLM decides when to invoke), `Passive` (runs automatically after every response), `Hybrid` (both), `Special` (media-triggered), `Legacy` (keywords/commands only).
 
@@ -828,21 +834,22 @@ Flows let you build multi-step automated workflows.
 
 | Step Type | What It Does |
 |---|---|
-| **Notification** | Sends a notification to a recipient. |
+| **Notification** | Sends a notification to a recipient. Supports `message_templates_by_state` (per-state templates keyed off an upstream `notification_state` such as `new_boleto`, `barcode_changed`, `paid`). |
 | **Message** | Sends a single chat message. |
-| **Tool** | Invokes a tool or function. |
+| **Tool** | Invokes a tool or function (built-in tool, sandboxed tool, or skill in tool mode). |
 | **Conversation** | Multi-turn AI conversation with an objective (configurable max turns, default: 20). |
 | **Slash Command** | Executes a platform slash command. |
 | **Skill** | Runs an agent skill (built-in or custom). |
 | **Summarization** | AI summarization of previous step outputs. |
+| **Gate** | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values, used by financial flows to route on `notification_state`. |
 | **Password Vault** | Resolves an approved vault reference without placing secrets in prompts. |
-| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot. |
+| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — split into editable actions (navigate, fill, click, wait, dismiss-modal, execute-script, etc.). |
 | **HTTP Request** | Calls an API with editable method, URL, headers, body, and secret references. |
 | **Data Transform** | Extracts and normalizes fields from previous step outputs. |
-| **Financial Record Store** | Persists and dedupes financial records. |
-| **Utility Bill Store** | Utility-bill-specific storage and dedupe alias. |
+| **Financial Record Store** | Persists and dedupes financial records; emits `notification_state` for downstream gates/notifications. |
+| **Utility Bill Store** | Utility-bill-specific storage and dedupe alias of Financial Record Store. |
 
-The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually.
+The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually. The legacy `Trigger`, `Subflow`, and `AgentNode` step types are kept as backward-compatible aliases for older flows.
 
 Financial templates should remain editable like any other Flow. Open a browser step to adjust URL/action/selectors, add a **Skill** or **Summarization** step for agentic reasoning, and end with a conditional **Notification** fed by a previous storage/gate output.
 
@@ -1028,7 +1035,7 @@ Each surface can pick a different index (and even a different backend), and each
 
 Sentinel is Tsushin's AI-powered security system that monitors all agent interactions in real time.
 
-### 8 Detection Types
+### 9 Detection Types
 
 1. **Prompt Injection** -- hidden commands trying to override agent instructions.
 2. **Agent Takeover** -- attempts to hijack the agent's behavior entirely.
@@ -1038,6 +1045,7 @@ Sentinel is Tsushin's AI-powered security system that monitors all agent interac
 6. **Agent Privilege Escalation** -- making an agent exceed its authorized permissions.
 7. **Browser SSRF** -- forcing browser automation to access internal/restricted resources.
 8. **Vector Store Poisoning** -- corrupting the vector database powering agent memory.
+9. **Continuous-Agent Action Approval** *(v0.7.0)* -- gates the action plan a Continuous Agent proposes before it runs (relevant when `action_kind` is `tool_use` or `flow_dispatch`).
 
 ### Security Profiles
 
@@ -1316,7 +1324,7 @@ Events are formatted using the RFC 5424 syslog standard and delivered asynchrono
 
 > **Audience:** Global Admins only. Regular tenant owners and members do not see this feature.
 
-v0.6.0 introduces **Remote Access via Cloudflare Tunnel** — a one-click way to expose your Tsushin instance on a public HTTPS URL without opening firewall ports or managing a reverse proxy. It is **off by default** at both the system level and the per-tenant level, so nothing becomes internet-reachable until you explicitly enable it.
+**Remote Access via Cloudflare Tunnel** (introduced v0.6.0; sidecar opt-out added v0.7.0) — a one-click way to expose your Tsushin instance on a public HTTPS URL without opening firewall ports or managing a reverse proxy. It is **off by default** at both the system level and the per-tenant level, so nothing becomes internet-reachable until you explicitly enable it. v0.7.0 adds an opt-out (`TSN_CLOUDFLARED_DISABLE_INPROCESS=true`) so deployments can run `cloudflared` as an external sidecar instead of as an in-process subprocess; the backend continues to own config, audit, entitlement, and status responsibilities.
 
 **Why you might use this:**
 - Collaborate with external teams, testers, or auditors without VPN provisioning.
@@ -1339,7 +1347,7 @@ v0.6.0 introduces **Remote Access via Cloudflare Tunnel** — a one-click way to
 
 **Security posture:**
 
-Cloudflare Tunnel makes the entire Tsushin app reachable on one public URL, so authentication and tenant entitlement become the sole gate. v0.6.0 has tightened which routes are anonymous (health, webhook receive, login) versus authenticated (everything else). Under Named Mode you can stack additional Zero Trust Access policies on top if you need them.
+Cloudflare Tunnel makes the entire Tsushin app reachable on one public URL, so authentication and tenant entitlement become the sole gate. The platform tightens which routes are anonymous (health, webhook receive, login) versus authenticated (everything else); v0.7.0 adds `cf-visitor` scheme honoring so the backend issues `Secure` cookies and emits HTTPS redirects when the visitor reaches the origin via Tunnel. Under Named Mode you can stack additional Zero Trust Access policies on top if you need them.
 
 **Disabling remote access instantly:** `/system/remote-access` > **Tunnel Status** > **Stop**. The tunnel subprocess exits and no new requests can reach the instance from the public URL until you start it again.
 

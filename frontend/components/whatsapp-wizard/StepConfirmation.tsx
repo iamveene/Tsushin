@@ -110,9 +110,15 @@ export default function StepConfirmation() {
         <h4 className="text-sm font-semibold text-teal-300 mb-2">What's next?</h4>
         <ul className="text-xs text-tsushin-slate space-y-1.5">
           <li>Send a message to {state.createdInstance?.phone_number || 'your WhatsApp number'} to test</li>
-          <li>Use the <span className="text-white font-medium">Playground</span> to test agent responses before going live</li>
-          <li>Visit the <span className="text-white font-medium">Hub</span> page to fine-tune filters anytime</li>
-          <li>Go to <span className="text-white font-medium">Contacts</span> to manage who your agent recognizes</li>
+          <li>
+            Use the <a href="/playground" className="text-white font-medium underline hover:text-teal-200">Playground</a> to test agent responses before going live
+          </li>
+          <li>
+            Visit <a href="/hub?tab=channels" className="text-white font-medium underline hover:text-teal-200">Hub → Channels</a> to fine-tune filters anytime
+          </li>
+          <li>
+            Go to <a href="/agents/contacts" className="text-white font-medium underline hover:text-teal-200">Contacts</a> to manage who your agent recognizes
+          </li>
         </ul>
       </div>
 
