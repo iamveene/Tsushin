@@ -247,19 +247,26 @@ export default function ProviderInstancePicker({
                     className="flex-1 px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                     data-testid="provider-instance-select"
                   >
-                    {currentVendor.instances.map((inst) => (
-                      <option
-                        key={inst.id}
-                        value={inst.id}
-                        title={inst.health_status_reason || undefined}
-                      >
-                        {inst.instance_name}
-                        {inst.is_default ? ' (default)' : ''}
-                        {inst.health_status && inst.health_status !== 'healthy'
-                          ? ` [${inst.health_status}]`
-                          : ''}
-                      </option>
-                    ))}
+                    {currentVendor.instances.map((inst) => {
+                      const statusLabel = (() => {
+                        if (!inst.health_status || inst.health_status === 'healthy') return ''
+                        if (inst.health_status === 'unknown') return ' (not yet checked)'
+                        if (inst.health_status === 'unhealthy') return ' (unreachable)'
+                        if (inst.health_status === 'degraded') return ' (degraded)'
+                        return ` (${inst.health_status})`
+                      })()
+                      return (
+                        <option
+                          key={inst.id}
+                          value={inst.id}
+                          title={inst.health_status_reason || undefined}
+                        >
+                          {inst.instance_name}
+                          {inst.is_default ? ' (default)' : ''}
+                          {statusLabel}
+                        </option>
+                      )
+                    })}
                   </select>
                   {allowCreate && (
                     <button
