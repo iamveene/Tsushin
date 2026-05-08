@@ -260,27 +260,34 @@ def _resolve_auth_login_rate_limit() -> str:
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 
-def _env_flag_enabled(value: Optional[str]) -> bool:
-    """Interpret common truthy env-var values."""
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _resolve_auth_limit(default_limit: str, env_var: Optional[str] = None) -> str:
     """
     Resolve the effective auth throttle at import time.
 
-    TSN_DISABLE_AUTH_RATE_LIMIT provides a QA/dev escape hatch that effectively
-    disables throttling across auth endpoints after a backend restart.
+    SEC-AUDIT-2026-05: removed the TSN_DISABLE_AUTH_RATE_LIMIT escape hatch —
+    leaving it set in production made login brute-forceable. Tests that need
+    to bypass throttling should patch the limiter directly.
     """
-    if _env_flag_enabled(os.environ.get("TSN_DISABLE_AUTH_RATE_LIMIT")):
-        return "1000000/minute"
-
     if env_var:
         configured_limit = (os.environ.get(env_var) or "").strip()
         if configured_limit:
             return configured_limit
 
     return default_limit
+
+
+# Refuse to boot if the removed kill-switch is still set in the environment —
+# avoids a silent rollout where the operator believes throttling is disabled.
+if (os.environ.get("TSN_DISABLE_AUTH_RATE_LIMIT") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    raise RuntimeError(
+        "TSN_DISABLE_AUTH_RATE_LIMIT is no longer supported (removed in security "
+        "audit 2026-05). Unset it. Tests should patch the limiter directly."
+    )
 
 AUTH_LOGIN_RATE_LIMIT = _resolve_auth_limit(_resolve_auth_login_rate_limit(), env_var="TSN_AUTH_RATE_LIMIT")
 AUTH_SIGNUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
@@ -472,8 +479,7 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
     Login endpoint
 
     Authenticates user with email and password, returns JWT access token.
-    Rate limit is configurable via TSN_AUTH_RATE_LIMIT and can be temporarily
-    disabled for QA/dev with TSN_DISABLE_AUTH_RATE_LIMIT=true.
+    Rate limit is configurable via TSN_AUTH_RATE_LIMIT.
     """
     auth_service = AuthService(db)
 

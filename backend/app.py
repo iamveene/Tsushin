@@ -1177,10 +1177,41 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # SEC-005: credentials=True is required for httpOnly cookie auth
 _cors_origins_str = os.getenv("TSN_CORS_ORIGINS", "*")
 _cors_origin_regex = None
+
+
+def _is_production_shaped() -> bool:
+    """Heuristic: are we running in a production-shaped deployment?
+
+    Used to refuse the dangerous wildcard-origin + credentials combo when the
+    operator clearly meant prod (TLS / HSTS / explicit env marker).
+    """
+    if (os.getenv("TSN_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower() in (
+        "production",
+        "prod",
+    ):
+        return True
+    if (os.getenv("TSN_ENABLE_HSTS") or "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if (os.getenv("SSL_MODE") or "").strip().lower() not in ("", "disabled", "off"):
+        return True
+    return False
+
+
 if _cors_origins_str.strip() == "*":
     # SEC-005 / CORS FIX: Use origin reflection instead of literal "*" wildcard.
     # Literal "*" with credentials=True is rejected by browsers.
     # allow_origin_regex=".*" reflects the requesting origin with credentials support.
+    if _is_production_shaped():
+        # Refuse to boot — wildcard + credentials in prod is a CSRF-grade bypass.
+        raise RuntimeError(
+            "TSN_CORS_ORIGINS='*' is not allowed in production-shaped deployments. "
+            "Set TSN_CORS_ORIGINS to an explicit comma-separated list of origins "
+            "(e.g. https://app.example.com)."
+        )
+    logger.warning(
+        "TSN_CORS_ORIGINS='*' is reflecting all origins with credentials=True. "
+        "DO NOT USE IN PRODUCTION — set an explicit allowlist."
+    )
     _cors_origins = []
     _cors_origin_regex = ".*"
     _cors_allow_credentials = True
