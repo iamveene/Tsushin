@@ -483,12 +483,10 @@ export default function PlaygroundPage() {
     }
   }
 
-  // Phase 14.5: Navigate to search result
   const handleSearchResultClick = (threadId: number, messageId: string) => {
     setIsSearchOpen(false)
     setActiveThreadId(threadId)
     handleThreadSelect(threadId)
-    // TODO: Scroll to specific message
   }
 
   // Phase 14.5: Direct keyboard shortcut for search (FIX for Cmd+K)

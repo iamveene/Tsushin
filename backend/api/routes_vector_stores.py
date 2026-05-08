@@ -281,7 +281,7 @@ def _to_response(instance: VectorStoreInstance, db: Session) -> dict:
         "is_active": instance.is_active,
         "is_auto_provisioned": getattr(instance, 'is_auto_provisioned', False),
         "container_status": getattr(instance, 'container_status', None),
-        "container_name": getattr(instance, 'container_name', None),
+        "container_name": None if _is_internal_vector_url(instance) else getattr(instance, 'container_name', None),
         "container_port": getattr(instance, 'container_port', None),
         "indexes": indexes,
         "default_index": default_index,

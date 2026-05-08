@@ -172,7 +172,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
             type="button"
             onClick={goToFullCreateFlow}
             className="text-xs text-teal-400 hover:text-teal-300 transition-colors"
-            title="Open the full Agent Studio create flow (persona, tone, keywords)"
+            title="Open the full Studio agent create flow (persona, tone, keywords)"
           >
             Need persona / tone / keywords? Open full create flow →
           </button>

@@ -12,7 +12,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
 import StudioTabs from '@/components/studio/StudioTabs'
 import { api, Agent, SentinelConfig, SentinelLog, SentinelStats, SentinelProfile, SentinelProfileAssignment } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
@@ -26,7 +25,6 @@ interface AgentWithSecurity extends Agent {
 }
 
 export default function SecurityPage() {
-  const pathname = usePathname()
   const { user, loading: authLoading, hasPermission } = useRequireAuth()
   const canEdit = hasPermission('org.settings.write')
 
@@ -276,13 +274,13 @@ export default function SecurityPage() {
           <div className="stat-card stat-card-accent group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="flex items-center gap-2 text-sm font-medium text-tsushin-slate">
+                <div className="flex items-center gap-2 text-sm font-medium text-tsushin-slate">
                   Profile Assignments
                   <InfoTooltip
                     text="Agents with a custom Sentinel security profile. Agents without one inherit the tenant default."
                     position="top"
                   />
-                </p>
+                </div>
                 <p className="text-3xl font-display font-bold text-purple-400 mt-1">
                   {customAssignments}
                 </p>

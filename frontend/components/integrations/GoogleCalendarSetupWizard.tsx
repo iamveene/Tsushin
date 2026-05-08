@@ -500,7 +500,7 @@ export default function GoogleCalendarSetupWizard({ isOpen, onClose, onComplete 
             We'll enable the <span className="text-blue-400">scheduler</span> skill on each selected agent and wire it to
             Google Calendar as the provider. You can change agents later in{' '}
             <a href="/agents" className="text-blue-300 underline hover:text-white">
-              Agent Studio
+              Studio → Agents
             </a>.
           </p>
 

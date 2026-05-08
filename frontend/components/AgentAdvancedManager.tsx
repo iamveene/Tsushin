@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { api, Agent, Config } from '@/lib/client'
 import { SettingsIcon, InfoIcon } from '@/components/ui/icons'
 
@@ -116,7 +117,9 @@ export default function AgentAdvancedManager({ agentId }: Props) {
           scratchpad payload it sees between rounds is capped at
           <strong> max bytes</strong>. Per-agent values are clamped to the
           platform-wide bounds defined under
-          <em> Settings → AI Configuration → Platform AI</em>.
+          <Link href="/settings/ai-configuration" className="font-medium underline decoration-dotted hover:text-blue-100">
+            Settings → AI Configuration → Platform AI
+          </Link>.
         </p>
       </div>
 

@@ -13,8 +13,8 @@
  *           Uses a ref + event listener to avoid stale closure race conditions.
  * BUG-318: WhatsApp wizard auto-launch chain removed from here entirely.
  * BUG-319: TOTAL_STEPS reduced from 9 to 8 (step 9 duplicated GettingStartedChecklist).
- * v0.7.0:    TOTAL_STEPS remains 16 for a concise getting-started path across
- *            providers, channels, skills, memory, flows, voice, Sentinel, and triggers.
+ * v0.7.0:    TOTAL_STEPS covers the condensed getting-started path across providers,
+ *            channels, triggers, agents, skills, memory, automation, monitoring, and testing.
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react'
@@ -44,10 +44,9 @@ interface OnboardingContextType {
 
 const OnboardingContext = createContext<OnboardingContextType | undefined>(undefined)
 
-// BUG-319: Reduced from 9 to 8 (step 9 "Setup Checklist" removed — it duplicated GettingStartedChecklist)
-// v0.7.0: 16-step getting-started walkthrough from provider setup through
-// trigger readiness and the existing completion step.
-const TOTAL_STEPS = 16
+// v0.7.0: condensed getting-started walkthrough from provider setup through
+// safe Playground testing.
+const TOTAL_STEPS = 8
 const LEGACY_STORAGE_KEY = 'tsushin_onboarding_completed'
 const STARTED_KEY_PREFIX = 'tsushin_onboarding_started'
 const MINIMIZED_KEY_PREFIX = 'tsushin_onboarding_minimized'

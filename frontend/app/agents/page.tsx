@@ -593,7 +593,7 @@ export default function AgentsPage() {
             <div>
               <h2 className="text-sm font-semibold text-white">Default routing now lives in Settings</h2>
               <p className="mt-1 text-sm text-tsushin-slate">
-                Agent Studio still shows which agent is the tenant default, but changes now happen from the dedicated Default Agents settings page.
+                Agents still shows which agent is the tenant default, but changes now happen from the dedicated Default Agents settings page.
               </p>
             </div>
             {canReadDefaultAgents ? (

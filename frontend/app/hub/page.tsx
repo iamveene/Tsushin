@@ -6164,7 +6164,21 @@ export default function HubPage() {
                           <p className="text-sm text-tsushin-slate">Each tenant gets its own private sandbox</p>
                         </div>
                       </div>
-                      {getToolboxBadge()}
+                      <div className="flex items-center gap-2">
+                        {getToolboxBadge()}
+                        {toolboxStatus && (toolboxStatus.status.toLowerCase() === 'not_created' || toolboxStatus.health.toLowerCase() === 'not_created') && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              window.location.href = '/hub/sandboxed-tools'
+                            }}
+                            className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-2.5 py-1 text-xs text-teal-200 hover:text-white"
+                          >
+                            Start
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="text-sm text-tsushin-slate mb-4">
                       <p className="mb-2">Create command-based tools that run in a secure, isolated container with pre-installed security scanners and utilities.</p>
