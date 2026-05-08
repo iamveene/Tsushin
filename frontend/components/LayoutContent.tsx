@@ -10,6 +10,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import RefreshButton from '@/components/RefreshButton'
 import UserGuidePanel from '@/components/UserGuidePanel'
+import MentalModelLegend from '@/components/ui/MentalModelLegend'
 import { authenticatedFetch } from '@/lib/client'
 import { useAuth, useRequireAuth } from '@/contexts/AuthContext'
 import { useOnboarding } from '@/contexts/OnboardingContext'
@@ -48,6 +49,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
   // Help menu state
   const [isHelpMenuOpen, setIsHelpMenuOpen] = useState(false)
   const [isUserGuideOpen, setIsUserGuideOpen] = useState(false)
+  const [isMentalModelOpen, setIsMentalModelOpen] = useState(false)
   const helpMenuRef = useRef<HTMLDivElement>(null)
 
   // Close help menu on outside click
@@ -481,7 +483,16 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
                     </svg>
                   </button>
                   {isHelpMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-48 bg-tsushin-surface border border-tsushin-border rounded-lg shadow-xl overflow-hidden z-50">
+                    <div className="absolute right-0 top-full mt-2 w-56 bg-tsushin-surface border border-tsushin-border rounded-lg shadow-xl overflow-hidden z-50">
+                      <button
+                        onClick={() => { setIsMentalModelOpen(true); setIsHelpMenuOpen(false) }}
+                        className="flex items-center gap-2.5 w-full text-left px-4 py-2.5 text-sm text-tsushin-slate hover:text-white hover:bg-tsushin-hover transition-colors"
+                      >
+                        <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        What is each section?
+                      </button>
                       <button
                         onClick={() => { startTour(); setIsHelpMenuOpen(false) }}
                         className="flex items-center gap-2.5 w-full text-left px-4 py-2.5 text-sm text-tsushin-slate hover:text-white hover:bg-tsushin-hover transition-colors"
@@ -732,6 +743,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
       )}
       {/* User Guide slide-over panel */}
       <UserGuidePanel isOpen={isUserGuideOpen} onClose={handleUserGuideClose} />
+      <MentalModelLegend open={isMentalModelOpen} onClose={() => setIsMentalModelOpen(false)} />
     </div>
   )
 }
