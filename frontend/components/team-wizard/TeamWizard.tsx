@@ -9,6 +9,7 @@ import {
   ArrowUpIcon,
   BotIcon,
   CheckCircleIcon,
+  MailIcon,
   GitHubIcon,
   PlusIcon,
   RefreshIcon,
@@ -18,7 +19,7 @@ import {
 } from '@/components/ui/icons'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import { useTeamWizard } from '@/contexts/TeamWizardContext'
-import { api, type Agent, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
+import { api, type Agent, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import {
   TEAM_TEMPLATE_PRESETS,
   type TeamTemplateId,
@@ -57,7 +58,7 @@ const STEP_META: Record<TeamWizardStep, { label: string; description: string; ti
     label: 'Triggers',
     description: 'Bindings',
     title: 'Trigger bindings',
-    body: 'Bind existing active Webhook, GitHub, or Jira triggers.',
+    body: 'Bind existing active Webhook, GitHub, Jira, or Gmail triggers.',
   },
   review: {
     label: 'Review',
@@ -94,9 +95,16 @@ function agentLabel(agent: Agent | undefined, fallbackId: number) {
 }
 
 function triggerKindLabel(kind: TeamTriggerDraftKind) {
+  if (kind === 'gmail') return 'Gmail'
   if (kind === 'github') return 'GitHub'
   if (kind === 'jira') return 'Jira'
   return 'Webhook'
+}
+
+function triggerKindIcon(kind: TeamTriggerDraftKind) {
+  if (kind === 'gmail') return <MailIcon size={18} />
+  if (kind === 'github') return <GitHubIcon size={18} />
+  return <WebhookIcon size={18} />
 }
 
 function parseFilters(text: string): Record<string, unknown> {
@@ -172,6 +180,18 @@ function activeJiraOptions(items: JiraTrigger[]): TriggerOption[] {
     }))
 }
 
+function activeEmailOptions(items: EmailTrigger[]): TriggerOption[] {
+  return items
+    .filter((item) => item.is_active && item.status === 'active')
+    .map((item) => ({
+      kind: 'gmail' as const,
+      id: item.id,
+      label: item.integration_name || `Gmail #${item.id}`,
+      detail: item.search_query || item.health_status_reason || 'Gmail trigger',
+      defaultEvents: ['email.message.received'],
+    }))
+}
+
 export default function TeamWizard() {
   const router = useRouter()
   const teamWizard = useTeamWizard()
@@ -225,15 +245,17 @@ export default function TeamWizard() {
       const agentRows = await api.getAgents(true)
       setAgents(agentRows)
 
-      const [webhookRows, githubRows, jiraRows] = await Promise.all([
+      const [webhookRows, githubRows, jiraRows, emailRows] = await Promise.all([
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
         api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
         api.listJiraTriggers().catch(() => [] as JiraTrigger[]),
+        api.listEmailTriggers().catch(() => [] as EmailTrigger[]),
       ])
       setTriggerOptions([
         ...activeWebhookOptions(webhookRows),
         ...activeGitHubOptions(githubRows),
         ...activeJiraOptions(jiraRows),
+        ...activeEmailOptions(emailRows),
       ])
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Failed to load wizard data')
@@ -835,7 +857,7 @@ function TriggersStep({
             <div key={trigger.uid} className="rounded-lg border border-tsushin-border bg-tsushin-surface/30 p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-center gap-3">
-                  {trigger.trigger_kind === 'github' ? <GitHubIcon size={18} /> : <WebhookIcon size={18} />}
+                  {triggerKindIcon(trigger.trigger_kind)}
                   <div>
                     <div className="font-semibold text-white">{triggerKindLabel(trigger.trigger_kind)} - {trigger.label}</div>
                     <div className="text-xs text-tsushin-slate">Instance #{trigger.trigger_instance_id}</div>
@@ -862,7 +884,7 @@ function TriggersStep({
                     value={trigger.event_types.join(', ')}
                     onChange={(event) => patchTrigger(trigger.uid, { event_types: eventTypesFromInput(event.target.value) })}
                     className={`${inputClass} min-h-[72px] resize-y`}
-                    placeholder="message.created, github.pull_request"
+                    placeholder="message.created, github.pull_request, email.message.received"
                   />
                 </label>
                 <label className="space-y-2">
