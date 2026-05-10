@@ -108,13 +108,19 @@ export default function A2APermissionsManager() {
     }
   }
 
+  const [togglingId, setTogglingId] = useState<number | null>(null)
+
   const handleTogglePermission = async (perm: AgentCommPermission) => {
+    if (togglingId === perm.id) return
+    setTogglingId(perm.id)
     try {
       await api.updateAgentCommPermission(perm.id, { is_enabled: !perm.is_enabled })
       toast.success(`Permission ${perm.is_enabled ? 'disabled' : 'enabled'}`)
       loadPermissions()
     } catch (err: any) {
       toast.error('Update Failed', err.message || 'Failed to update permission')
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -133,6 +139,10 @@ export default function A2APermissionsManager() {
   }
 
   const handleDeletePermission = async (id: number) => {
+    // Re-entry guard mirrors handleToggleTargetSkills above. Without it a
+    // second click while the request is in flight (or a stray double-click /
+    // automated double-fire) sends duplicate DELETEs to the backend.
+    if (deletingId === id) return
     if (!window.confirm('Are you sure you want to delete this permission? This action cannot be undone.')) return
     setDeletingId(id)
     try {
@@ -243,7 +253,8 @@ export default function A2APermissionsManager() {
                   <td className="px-6 py-4">
                     <button
                       onClick={() => handleTogglePermission(perm)}
-                      className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${
+                      disabled={togglingId === perm.id}
+                      className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors disabled:opacity-50 ${
                         perm.is_enabled ? 'bg-teal-500' : 'bg-gray-600'
                       }`}
                     >

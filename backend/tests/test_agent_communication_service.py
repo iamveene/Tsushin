@@ -267,6 +267,34 @@ def test_a2a_snapshot_permission_fks_use_set_null():
         )
 
 
+def test_build_agent_name_map_outerjoins_missing_contact(db_session):
+    """Regression: agent rows whose ``contact_id`` no longer resolves to a
+    Contact (Agent.contact_id has no FK constraint and can dangle) must
+    still appear in the name map — labelled ``Agent #{id}`` rather than
+    ``Agent #{id} (deleted)``. Otherwise the A2A permissions UI shows live
+    agents as deleted, which the previous INNER JOIN implementation did.
+    """
+    from api.routes_agent_communication import _build_agent_name_map
+
+    tenant_id = "tenant-name-map"
+    named = _create_agent(db_session, tenant_id=tenant_id, name="Named")
+    dangling = _create_agent(db_session, tenant_id=tenant_id, name="DanglingTemp")
+    # Drop the contact row to leave dangling.contact_id pointing at nothing.
+    db_session.query(Contact).filter(Contact.id == dangling.contact_id).delete()
+    db_session.commit()
+
+    name_map = _build_agent_name_map(
+        db_session,
+        {named.id, dangling.id, 9999},
+        tenant_id=tenant_id,
+    )
+    assert name_map[named.id] == "Named"
+    assert name_map[dangling.id] == f"Agent #{dangling.id}", (
+        "An agent row whose contact was deleted should be labelled by id, "
+        "not as deleted — only ids missing from the agent table itself "
+        "deserve the deleted suffix."
+    )
+    assert name_map[9999] == "Agent #9999 (deleted)"
 
 
 def test_invoke_target_agent_preserves_provider_instance_id(db_session):
