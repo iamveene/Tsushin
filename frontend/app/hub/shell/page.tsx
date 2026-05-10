@@ -12,6 +12,7 @@ const ShellBeaconSetupWizard = dynamic(
   { ssr: false },
 )
 import { copyToClipboard } from '@/lib/clipboard'
+import TabStrip from '@/components/ui/TabStrip'
 import {
   TerminalIcon,
   RadioIcon,
@@ -650,38 +651,39 @@ export default function ShellDashboardPage() {
         )}
 
         <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="border-b border-gray-800">
-            <nav className="flex">
-              {[
-                { key: 'beacons', label: 'Beacons', Icon: RadioIcon, count: integrations.length },
-                { key: 'commands', label: 'Command History', Icon: ClipboardIcon, count: commands.length },
-                { key: 'approvals', label: 'Approvals', Icon: LockIcon, count: approvalStats?.pending_count || 0 },
-                { key: 'patterns', label: 'Patterns', Icon: ShieldIcon, count: patterns.filter(p => !p.is_active).length },
-                { key: 'security', label: 'Sentinel', Icon: LockIcon, count: shellSecurityStats?.threats_blocked || 0 }
-              ].map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as typeof activeTab)}
-                  className={`relative px-6 py-4 font-medium text-sm transition-all flex items-center gap-2 ${
-                    activeTab === tab.key ? 'text-white bg-gray-800/50' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <tab.Icon size={16} />
-                  <span>{tab.label}</span>
-                  {tab.count > 0 && (
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${
-                      tab.key === 'approvals' && tab.count > 0 ? 'bg-orange-500 text-white' : 'bg-gray-700 text-gray-300'
-                    }`}>
-                      {tab.count}
-                    </span>
-                  )}
-                  {activeTab === tab.key && (
-                    <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-teal-500" />
-                  )}
-                </button>
-              ))}
-            </nav>
-          </div>
+          <TabStrip
+            className="border-b border-gray-800"
+            ariaLabel="Shell sections"
+          >
+            {[
+              { key: 'beacons', label: 'Beacons', Icon: RadioIcon, count: integrations.length },
+              { key: 'commands', label: 'Command History', Icon: ClipboardIcon, count: commands.length },
+              { key: 'approvals', label: 'Approvals', Icon: LockIcon, count: approvalStats?.pending_count || 0 },
+              { key: 'patterns', label: 'Patterns', Icon: ShieldIcon, count: patterns.filter(p => !p.is_active).length },
+              { key: 'security', label: 'Sentinel', Icon: LockIcon, count: shellSecurityStats?.threats_blocked || 0 }
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={`relative px-6 py-4 font-medium text-sm transition-all flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === tab.key ? 'text-white bg-gray-800/50' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <tab.Icon size={16} />
+                <span>{tab.label}</span>
+                {tab.count > 0 && (
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${
+                    tab.key === 'approvals' && tab.count > 0 ? 'bg-orange-500 text-white' : 'bg-gray-700 text-gray-300'
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+                {activeTab === tab.key && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-teal-500" />
+                )}
+              </button>
+            ))}
+          </TabStrip>
 
           <div className="p-6">
             {activeTab === 'beacons' && (

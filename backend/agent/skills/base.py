@@ -180,15 +180,13 @@ class BaseSkill(ABC):
                 "api_key": None,
                 "language": "auto",
                 "model": "whisper-1",
-                "keywords": ["trigger", "activate"],
-                "use_ai_fallback": True,
                 "ai_model": "gemini-2.5-flash"
             }
         """
         return {
-            # Phase 7.1: Configurable keyword triggers (optional for each skill)
-            "keywords": [],  # Empty list = skill doesn't use keyword filtering
-            "use_ai_fallback": True,  # Use AI classification when keywords match
+            # use_ai_fallback retained for back-compat with stored configs (no-op when
+            # the skill no longer uses keyword routing — skills route via LLM now).
+            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash-lite"  # Model for intent classification
         }
 
@@ -207,8 +205,6 @@ class BaseSkill(ABC):
                     "api_key": {"type": "string", "description": "OpenAI API key"},
                     "language": {"type": "string", "enum": ["auto", "en", "pt"], "default": "auto"},
                     "model": {"type": "string", "default": "whisper-1"},
-                    "keywords": {"type": "array", "items": {"type": "string"}},
-                    "use_ai_fallback": {"type": "boolean"},
                     "ai_model": {"type": "string", "enum": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gpt-3.5-turbo", "claude-haiku"]}
                 },
                 "required": ["api_key"]
@@ -217,18 +213,6 @@ class BaseSkill(ABC):
         return {
             "type": "object",
             "properties": {
-                # Phase 7.1: Configurable keyword schema (all skills)
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger skill detection (case-insensitive pre-filter)",
-                    "default": []
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI classification when keywords match but intent is unclear",
-                    "default": True
-                },
                 "ai_model": {
                     "type": "string",
                     "enum": ["gemini-2.5-flash", "gpt-3.5-turbo", "claude-haiku"],
@@ -536,20 +520,12 @@ class BaseSkill(ABC):
         """
         Use AI to classify message intent.
 
-        Phase 7.1: Helper method for AI-based intent detection.
-        Phase 7.4: Passes database session for API key loading.
-        Phase 17: Uses system AI config when no specific model configured.
-
         Args:
             message: Message text to classify
             config: Skill configuration (may contain ai_model override)
 
         Returns:
             True if AI classifies message as matching skill intent
-
-        Example:
-            config = {}  # Uses system AI config
-            result = await self._ai_classify("Can you switch my agent?", config)
         """
         from agent.skills.ai_classifier import get_classifier
 
@@ -563,9 +539,35 @@ class BaseSkill(ABC):
             skill_name=self.skill_name,
             skill_description=self.skill_description,
             model=ai_model,  # None = use system AI config
-            db=self._db_session,  # Pass database session for API key loading and system config
-            token_tracker=self._token_tracker  # Phase 0.6.0: Track classification costs
+            db=self._db_session,
+            token_tracker=self._token_tracker,
+            tenant_id=self._resolve_tenant_id_for_classifier(config),
         )
+
+    def _resolve_tenant_id_for_classifier(self, config: Dict[str, Any]) -> Optional[str]:
+        """
+        Best-effort tenant_id resolution for AIClient API-key lookup.
+
+        Order: explicit attr → config → agent lookup via DB. Returns None if no
+        path is available — the classifier will fall back to system config.
+        """
+        tenant_id = getattr(self, "_tenant_id", None)
+        if tenant_id:
+            return tenant_id
+        if isinstance(config, dict):
+            tenant_id = config.get("tenant_id")
+            if tenant_id:
+                return tenant_id
+        agent_id = getattr(self, "_agent_id", None)
+        if agent_id and self._db_session is not None:
+            try:
+                from models import Agent
+                agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+                if agent:
+                    return agent.tenant_id
+            except Exception:
+                pass
+        return None
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} type={self.skill_type}>"

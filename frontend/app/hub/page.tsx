@@ -18,6 +18,7 @@ import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+import TabStrip from '@/components/ui/TabStrip'
 
 const AddIntegrationWizard = dynamic(
   () => import('@/components/integrations/AddIntegrationWizard'),
@@ -4193,28 +4194,29 @@ export default function HubPage() {
 
         {/* Tabs */}
         <div className="glass-card rounded-xl overflow-clip">
-          <div className="border-b border-tsushin-border/50 overflow-x-auto">
-            <nav className="flex min-w-max">
-              {tabs.map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as TabType)}
-                  className={`group relative px-5 py-4 font-medium text-sm transition-all duration-200 flex items-center gap-3 whitespace-nowrap ${activeTab === tab.key
-                      ? 'text-white'
-                      : 'text-tsushin-slate hover:text-white'
-                    }`}
-                >
-                  <div className={`w-7 h-7 rounded-lg ${tab.iconBg} flex items-center justify-center ${activeTab === tab.key ? tab.color : 'text-tsushin-slate'} group-hover:scale-110 group-hover:${tab.color} transition-all`}>
-                    <tab.Icon />
-                  </div>
-                  <span className="relative z-10">{tab.label}</span>
-                  {activeTab === tab.key && (
-                    <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
-                  )}
-                </button>
-              ))}
-            </nav>
-          </div>
+          <TabStrip
+            className="border-b border-tsushin-border/50"
+            ariaLabel="Integration hub sections"
+          >
+            {tabs.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as TabType)}
+                className={`group relative px-5 py-4 font-medium text-sm transition-all duration-200 flex items-center gap-3 whitespace-nowrap flex-shrink-0 ${activeTab === tab.key
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
+                  }`}
+              >
+                <div className={`w-7 h-7 rounded-lg ${tab.iconBg} flex items-center justify-center ${activeTab === tab.key ? tab.color : 'text-tsushin-slate'} group-hover:scale-110 group-hover:${tab.color} transition-all`}>
+                  <tab.Icon />
+                </div>
+                <span className="relative z-10">{tab.label}</span>
+                {activeTab === tab.key && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-teal-500 to-cyan-400" />
+                )}
+              </button>
+            ))}
+          </TabStrip>
 
           <div className="p-6">
             {/* ==================== AI PROVIDERS TAB ==================== */}

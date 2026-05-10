@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import TabStrip from '@/components/ui/TabStrip'
 
 /**
  * Single source of truth for all Studio sub-navigation tabs.
@@ -130,47 +131,48 @@ export default function StudioTabs() {
 
   return (
     <div className="glass-card rounded-xl overflow-hidden">
-      <div className="border-b border-tsushin-border/50">
-        <nav className="flex">
-          {STUDIO_TABS.map((tab) => (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              data-tab={tab.label.toLowerCase().replace(/\s+/g, '-')}
-              className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                isActive(tab)
-                  ? 'text-white'
-                  : 'text-tsushin-slate hover:text-white'
-              }`}
-            >
-              <span className="relative z-10 flex items-center gap-1.5">
-                <svg
-                  className={`w-4 h-4 ${tab.iconColor}`}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  {tab.paths.map((d, i) => (
-                    <path
-                      key={i}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d={d}
-                    />
-                  ))}
-                </svg>
-                {tab.label}
-              </span>
-              {isActive(tab) && (
-                <span
-                  className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r ${tab.gradient}`}
-                />
-              )}
-            </Link>
-          ))}
-        </nav>
-      </div>
+      <TabStrip
+        className="border-b border-tsushin-border/50"
+        ariaLabel="Agent management sections"
+      >
+        {STUDIO_TABS.map((tab) => (
+          <Link
+            key={tab.href}
+            href={tab.href}
+            data-tab={tab.label.toLowerCase().replace(/\s+/g, '-')}
+            className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
+              isActive(tab)
+                ? 'text-white'
+                : 'text-tsushin-slate hover:text-white'
+            }`}
+          >
+            <span className="relative z-10 flex items-center gap-1.5">
+              <svg
+                className={`w-4 h-4 ${tab.iconColor}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                {tab.paths.map((d, i) => (
+                  <path
+                    key={i}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d={d}
+                  />
+                ))}
+              </svg>
+              {tab.label}
+            </span>
+            {isActive(tab) && (
+              <span
+                className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r ${tab.gradient}`}
+              />
+            )}
+          </Link>
+        ))}
+      </TabStrip>
     </div>
   )
 }
