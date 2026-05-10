@@ -13,6 +13,7 @@ import {
   CheckCircleIcon,
   ClockIcon,
   GitHubIcon,
+  MailIcon,
   PlayIcon,
   RefreshIcon,
   SaveIcon,
@@ -26,6 +27,7 @@ import {
 import {
   api,
   type Agent,
+  type EmailTrigger,
   type GitHubTrigger,
   type JiraTrigger,
   type SentinelProfile,
@@ -140,16 +142,24 @@ function eventTypesFromInput(value: string) {
 }
 
 function triggerKindLabel(kind: string) {
+  if (kind === 'gmail') return 'Gmail'
   if (kind === 'github') return 'GitHub'
   if (kind === 'jira') return 'Jira'
   if (kind === 'webhook') return 'Webhook'
   return formatLabel(kind)
 }
 
+function triggerKindIcon(kind: string, size = 16) {
+  if (kind === 'gmail') return <MailIcon size={size} />
+  if (kind === 'github') return <GitHubIcon size={size} />
+  return <WebhookIcon size={size} />
+}
+
 function buildTriggerOptions(
   webhooks: WebhookIntegration[],
   github: GitHubTrigger[],
   jira: JiraTrigger[],
+  email: EmailTrigger[],
 ): TriggerOption[] {
   const active = (item: { is_active: boolean; status: string }) => item.is_active && item.status === 'active'
   return [
@@ -173,6 +183,13 @@ function buildTriggerOptions(
       id: item.id,
       label: item.integration_name || `Jira #${item.id}`,
       detail: item.jql || item.health_status_reason || 'Jira trigger',
+    })),
+    ...email.filter(active).map((item) => ({
+      key: `gmail:${item.id}`,
+      kind: 'gmail' as const,
+      id: item.id,
+      label: item.integration_name || `Gmail #${item.id}`,
+      detail: item.search_query || item.health_status_reason || 'Gmail trigger',
     })),
   ]
 }
@@ -242,19 +259,20 @@ export default function StudioTeamDetailPage() {
     setLoading(true)
     setError(null)
     try {
-      const [teamRow, agentRows, sentinelRows, webhookRows, githubRows, jiraRows, runRows] = await Promise.all([
+      const [teamRow, agentRows, sentinelRows, webhookRows, githubRows, jiraRows, emailRows, runRows] = await Promise.all([
         api.getTeam(teamId),
         api.getAgents(true),
         api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
         api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
         api.listJiraTriggers().catch(() => [] as JiraTrigger[]),
+        api.listEmailTriggers().catch(() => [] as EmailTrigger[]),
         api.getTeamRuns(teamId, { page: 1, pageSize: 20 }).catch(() => ({ items: [], total: 0, page: 1, page_size: 20 })),
       ])
       setTeam(teamRow)
       setAgents(agentRows)
       setSentinelProfiles(sentinelRows.filter((profile) => profile.is_enabled))
-      setTriggerOptions(buildTriggerOptions(webhookRows, githubRows, jiraRows))
+      setTriggerOptions(buildTriggerOptions(webhookRows, githubRows, jiraRows, emailRows))
       setRuns(runRows.items)
       setSettingsForm({
         name: teamRow.name,
@@ -700,7 +718,7 @@ function TriggersTab({
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="glass-card rounded-xl p-5">
         <h2 className="mb-1 text-lg font-display font-semibold text-white">Add Trigger Binding</h2>
-        <p className="mb-5 text-sm text-tsushin-slate">Attach an existing Webhook, GitHub, or Jira trigger to this team.</p>
+        <p className="mb-5 text-sm text-tsushin-slate">Attach an existing Webhook, GitHub, Jira, or Gmail trigger to this team.</p>
         <div className="space-y-4">
           <label className="block">
             <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Trigger</span>
@@ -738,7 +756,7 @@ function TriggersTab({
                 <div key={trigger.id} className="rounded-lg border border-tsushin-border bg-tsushin-surface/30 p-4">
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
-                      {trigger.trigger_kind === 'github' ? <GitHubIcon size={16} /> : <WebhookIcon size={16} />}
+                      {triggerKindIcon(trigger.trigger_kind)}
                       <div className="font-medium text-white">{triggerKindLabel(trigger.trigger_kind)} #{trigger.trigger_instance_id}</div>
                     </div>
                     <label className="inline-flex items-center gap-2 text-sm text-tsushin-slate">

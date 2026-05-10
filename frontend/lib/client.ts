@@ -1034,7 +1034,7 @@ export interface TeamListResponse {
 
 export type TeamTopology = 'line' | 'mesh'
 export type TeamStatus = 'draft' | 'active' | 'paused' | 'archived'
-export type TeamTriggerBindingKind = 'webhook' | 'github' | 'jira'
+export type TeamTriggerBindingKind = 'webhook' | 'github' | 'jira' | 'gmail'
 
 export interface TeamMemberCreatePayload {
   agent_id: number
