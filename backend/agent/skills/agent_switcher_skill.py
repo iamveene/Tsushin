@@ -86,24 +86,9 @@ class AgentSwitcherSkill(BaseSkill):
             logger.debug(f"AgentSwitcherSkill: Ignoring slash command")
             return False
 
-        keywords = config.get("keywords", self.get_default_config()["keywords"])
-        use_ai_fallback = config.get("use_ai_fallback", True)
-
-        # Step 1: Keyword pre-filter (fast, free)
-        if not self._keyword_matches(message.body, keywords):
-            logger.debug(f"AgentSwitcherSkill: No keyword match in '{message.body[:50]}...'")
-            return False
-
-        logger.info(f"AgentSwitcherSkill: Keywords matched in '{message.body[:50]}...'")
-
-        # Step 2: AI fallback (optional, for intent verification)
-        if use_ai_fallback:
-            result = await self._ai_classify(message.body, config)
-            logger.info(f"AgentSwitcherSkill: AI classification result={result}")
-            return result
-
-        # Keywords matched, no AI verification needed
-        return True
+        result = await self._ai_classify(message.body, config)
+        logger.info(f"AgentSwitcherSkill: AI classification result={result}")
+        return result
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -140,8 +125,9 @@ class AgentSwitcherSkill(BaseSkill):
                 entity_type="agent name",
                 available_options=agent_names,
                 model=ai_model,
-                db=self.db_session,  # Phase 7.4: Pass db for API key loading
-                token_tracker=self._token_tracker  # Phase 0.6.0: Track entity extraction costs
+                db=self.db_session,
+                token_tracker=self._token_tracker,
+                tenant_id=self._resolve_tenant_id_for_classifier(config),
             )
 
             if not agent_name:
@@ -480,32 +466,22 @@ class AgentSwitcherSkill(BaseSkill):
         """
         Get default configuration for Agent Switcher skill.
 
-        Phase 7.1.2: Simplified keywords to avoid confusion with slash commands.
-        The AI will verify the full context to ensure it's an agent switch request.
-
-        Supported trigger words:
-        - English: invoke
-        - Portuguese: invocar
+        Intent is classified entirely by the LLM (AISkillClassifier) — no keyword
+        pre-filter — because phrasings like "invocar agente X" / "mudar para Y"
+        / audio-transcription artefacts vary widely.
         """
         return {
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash-lite"
         }
 
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
-        """
-        Get JSON schema for skill configuration.
-
-        Phase 7.1.2: Inherits base schema (keywords, use_ai_fallback, ai_model).
-        """
+        """Get JSON schema for skill configuration."""
         base_schema = super().get_config_schema()
-        # Add execution_mode to schema
         base_schema["properties"]["execution_mode"] = {
             "type": "string",
             "enum": ["tool", "legacy", "hybrid"],
-            "description": "Execution mode: tool (AI decides), legacy (keywords only), hybrid (both)",
+            "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
             "default": "hybrid"
         }
         return base_schema

@@ -22,6 +22,7 @@ import {
   AgentCommStats,
 } from '@/lib/client'
 import { formatDateTimeFull } from '@/lib/dateUtils'
+import TabStrip from '@/components/ui/TabStrip'
 
 type ViewKey = 'log' | 'statistics'
 
@@ -188,24 +189,25 @@ export default function CommunicationTab() {
     <div className="space-y-6">
       {/* View Toggle */}
       <div className="glass-card rounded-xl overflow-hidden">
-        <div className="border-b border-tsushin-border/50">
-          <nav className="flex">
-            {views.map((view) => (
-              <button
-                key={view.key}
-                onClick={() => setActiveView(view.key)}
-                className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                  activeView === view.key ? 'text-white' : 'text-tsushin-slate hover:text-white'
-                }`}
-              >
-                <span className="relative z-10">{view.label}</span>
-                {activeView === view.key && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-400" />
-                )}
-              </button>
-            ))}
-          </nav>
-        </div>
+        <TabStrip
+          className="border-b border-tsushin-border/50"
+          ariaLabel="Communication views"
+        >
+          {views.map((view) => (
+            <button
+              key={view.key}
+              onClick={() => setActiveView(view.key)}
+              className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
+                activeView === view.key ? 'text-white' : 'text-tsushin-slate hover:text-white'
+              }`}
+            >
+              <span className="relative z-10">{view.label}</span>
+              {activeView === view.key && (
+                <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-400" />
+              )}
+            </button>
+          ))}
+        </TabStrip>
       </div>
 
       {/* Pointer to the new config home (Studio → A2A Communications). */}

@@ -2,10 +2,11 @@
 Image Skill - Skills-as-Tools Architecture
 Generate new images or edit existing ones using Google Gemini or OpenAI.
 
-Phase: Skills-as-Tools
 - Tool name: generate_image
-- Execution mode: hybrid (tool + legacy keyword modes)
-- Edit mode is NOT exposed as tool (requires image input)
+- Execution mode: tool by default; falls back to LLM-classified intent on raw text
+  in legacy/hybrid mode (no keyword lists).
+- Edit mode is NOT exposed as a tool (requires image input that cannot pass
+  through tool-call arguments).
 """
 
 import os
@@ -41,8 +42,9 @@ class ImageSkill(BaseSkill):
 
     Skills-as-Tools:
     - Tool name: generate_image
-    - Execution mode: hybrid (tool + legacy keyword modes)
-    - Edit mode is NOT exposed as tool (requires image input)
+    - Execution mode: tool (default) / legacy / hybrid — intent on raw text is
+      classified by an LLM, not keyword lists.
+    - Edit mode is NOT exposed as tool (requires image input).
     """
 
     skill_type = "image"
@@ -80,6 +82,7 @@ class ImageSkill(BaseSkill):
         super().__init__()
         self.token_tracker = token_tracker
         self._recent_images_cache: Dict[str, dict] = {}  # chat_id -> {message_id, media_path, timestamp}
+        self._intent_cache: Dict[str, str] = {}  # message.id -> "generate" | "edit" | "none"
 
     # =========================================================================
     # SKILLS-AS-TOOLS: MCP TOOL DEFINITION
@@ -239,41 +242,52 @@ class ImageSkill(BaseSkill):
         """
         Determine if this skill should handle the message.
 
-        Hybrid mode logic:
-        - Handle image+caption only when the caption looks like an edit request
-        - In legacy mode: also handle keyword-based generation requests
-        - In tool-only mode: only media-triggered edit
+        Intent is classified by an LLM (AISkillClassifier) — no keyword lists.
+        The classifier returns one of: "generate", "edit", "none".
+
+        Routing:
+        - Image attached with caption: ask the classifier; if "edit" (or "generate" with
+          attached image meaning "regenerate-ish") we handle it. "none" defers (e.g. to
+          ImageAnalysisSkill or the agent's general-purpose reply).
+        - Image attached without caption: cache for follow-up, defer.
+        - Text only: in legacy/hybrid mode, classify and handle "generate"; classify
+          "edit" only if we have a recent cached image to operate on.
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
+        has_input_image = bool(
+            message.media_type and message.media_type.lower() in self.SUPPORTED_IMAGE_FORMATS
+        )
 
-        # Case 1: Image with caption that looks like an edit request -> EDIT mode
-        if message.media_type and message.media_type.lower() in self.SUPPORTED_IMAGE_FORMATS:
+        # Case 1: Image attached
+        if has_input_image:
             if message.body and message.body.strip():
-                if await self._is_edit_request(message, config):
-                    logger.info("ImageSkill: Image with edit caption detected (EDIT mode)")
+                intent = await self._classify_image_intent(
+                    message, config, has_input_image=True
+                )
+                if intent in ("edit", "generate"):
+                    logger.info(f"ImageSkill: image+caption classified as {intent.upper()}")
                     return True
-                logger.info("ImageSkill: Image caption does not look like edit request, deferring")
+                logger.info("ImageSkill: image+caption classified as NONE, deferring")
                 return False
             # Image without caption - cache for potential follow-up
             self._cache_recent_image(message)
             return False
 
-        # Case 2 & 3: Text message
+        # Case 2: Text-only
         if message.body and not message.media_type:
-            # Check if legacy mode is enabled for keyword detection
             if not self.is_legacy_enabled(config):
                 return False
 
-            # Check for generation keywords
-            if await self._is_generate_request(message, config):
-                logger.info(f"ImageSkill: Generation request detected (GENERATE mode)")
+            has_cached_image = self._has_recent_image(message.chat_id)
+            intent = await self._classify_image_intent(
+                message, config, has_input_image=has_cached_image
+            )
+            if intent == "generate":
+                logger.info("ImageSkill: text-only classified as GENERATE")
                 return True
-
-            # Check for edit keywords + recent image
-            if await self._is_edit_request(message, config):
-                if self._has_recent_image(message.chat_id):
-                    logger.info(f"ImageSkill: Edit request with recent image (EDIT mode)")
-                    return True
+            if intent == "edit" and has_cached_image:
+                logger.info("ImageSkill: text-only classified as EDIT with cached image")
+                return True
 
         return False
 
@@ -281,23 +295,27 @@ class ImageSkill(BaseSkill):
         """
         Process image request (edit or generate).
 
-        Determines mode and processes accordingly:
-        - EDIT mode: Requires input image + instruction
-        - GENERATE mode: Text prompt only, no input image
+        Mode comes from the LLM-classified intent cached during can_handle().
+        Falls back to "edit" when an image is present and intent is ambiguous.
         """
         try:
             model = config.get("model", self.DEFAULT_MODEL)
 
-            # Determine mode
             has_input_image = (
                 (message.media_type and message.media_type.lower() in self.SUPPORTED_IMAGE_FORMATS) or
                 self._has_recent_image(message.chat_id)
             )
 
-            is_generate_request = await self._is_generate_request(message, config) if message.body else False
+            intent = await self._classify_image_intent(
+                message, config, has_input_image=has_input_image
+            ) if message.body else "none"
 
-            # Mode selection: Generate if explicitly requested and no image, otherwise edit
-            mode = "generate" if (is_generate_request and not has_input_image) else "edit"
+            if intent == "generate" and not has_input_image:
+                mode = "generate"
+            elif intent == "generate" and has_input_image:
+                mode = "edit"
+            else:
+                mode = "edit"
 
             # Get instruction/prompt
             instruction = message.body
@@ -873,27 +891,75 @@ class ImageSkill(BaseSkill):
     # HELPER METHODS
     # =========================================================================
 
-    async def _is_generate_request(self, message: InboundMessage, config: Dict[str, Any]) -> bool:
-        """Check if message is requesting image generation (text-to-image)."""
-        text = message.body.lower()
-        keywords = config.get("generate_keywords", self.get_default_config()["generate_keywords"])
+    async def _classify_image_intent(
+        self,
+        message: InboundMessage,
+        config: Dict[str, Any],
+        has_input_image: bool,
+    ) -> str:
+        """
+        Classify the message's image intent via the shared AI classifier.
 
-        for keyword in keywords:
-            if keyword.lower() in text:
-                return True
+        Returns one of: "generate", "edit", "none". Result is cached per-message
+        so can_handle() and process() share a single LLM call.
+        """
+        if not message.body or not message.body.strip():
+            return "none"
 
-        return False
+        cache_key = f"{message.id}:{int(has_input_image)}"
+        if cache_key in self._intent_cache:
+            return self._intent_cache[cache_key]
 
-    async def _is_edit_request(self, message: InboundMessage, config: Dict[str, Any]) -> bool:
-        """Check if message appears to be an image edit request."""
-        text = message.body.lower()
-        keywords = config.get("edit_keywords", self.get_default_config()["edit_keywords"])
+        from agent.skills.ai_classifier import get_classifier
+        classifier = get_classifier()
 
-        for keyword in keywords:
-            if keyword.lower() in text:
-                return True
+        context_line = (
+            "An image has already been provided in this turn (attached or recently sent)."
+            if has_input_image
+            else "No image is attached or cached."
+        )
 
-        return False
+        prompt_message = (
+            f"User message: \"{message.body}\"\n"
+            f"Context: {context_line}\n\n"
+            "Classify what image operation the user is asking for:\n"
+            "- generate: user wants the system to CREATE a brand-new image from text "
+            "(e.g. \"draw a cat\", \"crie um pôster\", \"imagine a robot\")\n"
+            "- edit: user wants to MODIFY an existing image — change, remove, add, fix, "
+            "enhance, recolor, crop, replace background, etc. (e.g. \"deixa em preto e branco\", "
+            "\"remove the sky\", \"melhora a iluminação\")\n"
+            "- none: the message is NOT about image generation or editing "
+            "(e.g. comments, questions, unrelated chitchat like \"bonita né?\" or "
+            "\"vou mudar de assunto\")"
+        )
+
+        intent = await classifier.extract_entity(
+            message=prompt_message,
+            entity_type="image operation",
+            available_options=["generate", "edit", "none"],
+            model=config.get("ai_model"),
+            db=self._db_session,
+            token_tracker=self._token_tracker,
+            tenant_id=self._resolve_tenant_id_for_classifier(config),
+        )
+
+        normalized = (intent or "none").strip().lower()
+        if normalized not in ("generate", "edit", "none"):
+            logger.warning(
+                f"ImageSkill: classifier returned unexpected value '{intent}', defaulting to 'none'"
+            )
+            normalized = "none"
+
+        # Bounded cache: keep last 256 entries.
+        if len(self._intent_cache) >= 256:
+            self._intent_cache.pop(next(iter(self._intent_cache)))
+        self._intent_cache[cache_key] = normalized
+
+        logger.info(
+            f"ImageSkill: classifier={normalized} for '{message.body[:60]}' "
+            f"(has_input_image={has_input_image})"
+        )
+        return normalized
 
     def _cache_recent_image(self, message: InboundMessage):
         """Cache image info for potential follow-up requests."""
@@ -971,17 +1037,6 @@ class ImageSkill(BaseSkill):
     def get_default_config(cls) -> Dict[str, Any]:
         return {
             "model": cls.DEFAULT_MODEL,
-            "edit_keywords": [
-                "edit image", "editar imagem", "edit this", "editar isso",
-                "remove", "remover", "add", "adicionar", "change", "mudar",
-                "fix", "corrigir", "enhance", "melhorar", "crop", "cortar"
-            ],
-            "generate_keywords": [
-                "generate image", "generate an image", "create image", "create an image",
-                "gerar imagem", "crie uma imagem", "draw", "desenhar", "desenhe",
-                "make an image", "imagine", "visualize"
-            ],
-            "use_ai_fallback": True,
             "lookback_messages": 5,
             "processing_message": "Processing your image, please wait...",
             "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"],
@@ -998,16 +1053,6 @@ class ImageSkill(BaseSkill):
                     "description": "Gemini, Imagen, or OpenAI model for image generation. Imagen 4 models do not support image editing.",
                     "enum": list(cls.SUPPORTED_MODELS.keys()),
                     "default": cls.DEFAULT_MODEL
-                },
-                "edit_keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger image editing"
-                },
-                "generate_keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger image generation"
                 },
                 "lookback_messages": {
                     "type": "integer",
@@ -1029,7 +1074,7 @@ class ImageSkill(BaseSkill):
                 "execution_mode": {
                     "type": "string",
                     "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (AI decides), legacy (keywords only), hybrid (both)",
+                    "description": "Execution mode: tool (AI decides via tool call), legacy (LLM-classified intent on raw text), hybrid (both)",
                     "default": "tool"
                 }
             },

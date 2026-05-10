@@ -423,13 +423,7 @@ Rules:
         """
         Detect if message contains browser automation intent.
 
-        Uses keyword pre-filter followed by AI classification.
-
-        Args:
-            message: Inbound message
-
-        Returns:
-            True if message requests browser automation
+        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
         if not self.is_legacy_enabled(config):
@@ -439,26 +433,12 @@ Rules:
         if message.media_type:
             return False
 
-        text = message.body.lower()
-        keywords = config.get('keywords', self.get_default_config()['keywords'])
-        use_ai_fallback = config.get('use_ai_fallback', True)
-
-        # Step 1: Keyword pre-filter
-        has_keywords = self._keyword_matches(message.body, keywords)
-
-        if not has_keywords:
-            logger.debug(f"BrowserAutomationSkill: No keyword match in '{text[:50]}...'")
+        if not (message.body and message.body.strip()):
             return False
 
-        logger.info(f"BrowserAutomationSkill: Keywords matched in '{text[:50]}...'")
-
-        # Step 2: AI fallback (for intent verification)
-        if use_ai_fallback:
-            result = await self._ai_classify_browser(message.body, config)
-            logger.info(f"BrowserAutomationSkill: AI classification result={result}")
-            return result
-
-        return True
+        result = await self._ai_classify_browser(message.body, config)
+        logger.info(f"BrowserAutomationSkill: AI classification result={result}")
+        return result
 
     async def _ai_classify_browser(self, message: str, config: Dict[str, Any]) -> bool:
         """
@@ -1164,8 +1144,6 @@ Return JSON array only:"""
             Default config dict
         """
         return {
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider_type": "playwright",
             "timeout_seconds": 30,
@@ -1182,16 +1160,6 @@ Return JSON array only:"""
         return {
             "type": "object",
             "properties": {
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger browser automation"
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI to verify intent after keyword match",
-                    "default": True
-                },
                 "ai_model": {
                     "type": "string",
                     "description": "AI model for intent classification",

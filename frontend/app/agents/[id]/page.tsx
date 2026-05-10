@@ -17,6 +17,7 @@ import {
   LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, WrenchIcon, UsersIcon
 } from '@/components/ui/icons'
 import DetailShellHeader from '@/components/ui/DetailShell'
+import TabStrip from '@/components/ui/TabStrip'
 
 type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge' | 'advanced'
 
@@ -187,81 +188,34 @@ export default function AgentDetailPage() {
         )}
 
         {/* Tabs */}
-        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6">
-          <nav className="flex border-b border-tsushin-border">
-            <button
-              onClick={() => setActiveTab('configuration')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'configuration'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6 overflow-hidden">
+          <TabStrip
+            className="border-b border-tsushin-border"
+            ariaLabel="Agent configuration sections"
+          >
+            {([
+              ['configuration', SettingsIcon, 'Configuration'],
+              ['channels', RadioIcon, 'Channels'],
+              ['memory', BrainIcon, 'Memory Management'],
+              ['skills', SparklesIcon, 'Skills'],
+              ['custom-skills', WrenchIcon, 'Custom Skills'],
+              ['knowledge', BookOpenIcon, 'Knowledge Base'],
+              ['shared-knowledge', LinkIcon, 'Shared Knowledge'],
+              ['advanced', SettingsIcon, 'Advanced'],
+            ] as const).map(([key, Icon, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key as Tab)}
+                className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === key
+                    ? 'border-teal-500 text-teal-400'
+                    : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
-            >
-              <SettingsIcon size={16} /> Configuration
-            </button>
-            <button
-              onClick={() => setActiveTab('channels')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'channels'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <RadioIcon size={16} /> Channels
-            </button>
-            <button
-              onClick={() => setActiveTab('memory')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'memory'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <BrainIcon size={16} /> Memory Management
-            </button>
-            <button
-              onClick={() => setActiveTab('skills')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'skills'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <SparklesIcon size={16} /> Skills
-            </button>
-            <button
-              onClick={() => setActiveTab('custom-skills')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'custom-skills'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <WrenchIcon size={16} /> Custom Skills
-            </button>
-            <button
-              onClick={() => setActiveTab('knowledge')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'knowledge'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <BookOpenIcon size={16} /> Knowledge Base
-            </button>
-            <button
-              onClick={() => setActiveTab('shared-knowledge')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'shared-knowledge'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <LinkIcon size={16} /> Shared Knowledge
-            </button>
-            <button
-              onClick={() => setActiveTab('advanced')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'advanced'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <SettingsIcon size={16} /> Advanced
-            </button>
-          </nav>
+              >
+                <Icon size={16} /> {label}
+              </button>
+            ))}
+          </TabStrip>
         </div>
 
         {/* Tab Content */}
