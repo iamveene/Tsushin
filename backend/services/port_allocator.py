@@ -8,7 +8,7 @@ Ensures no port conflicts by checking both database and system.
 
 import socket
 import logging
-from typing import Set
+from typing import Optional, Set
 from sqlalchemy.orm import Session
 from models import WhatsAppMCPInstance
 from services.container_runtime import PORT_RANGES, iter_port_range
@@ -36,7 +36,7 @@ class PortAllocator:
             start_port == self.DEFAULT_START_PORT and end_port == self.DEFAULT_END_PORT
         ) else range(start_port, end_port + 1)
 
-    def allocate_port(self, db: Session) -> int:
+    def allocate_port(self, db: Session, excluded_ports: Optional[Set[int]] = None) -> int:
         """
         Find and allocate an available port
 
@@ -51,9 +51,14 @@ class PortAllocator:
         """
         # Get ports already allocated in database
         used_ports = self._get_used_ports_from_db(db)
+        excluded_ports = excluded_ports or set()
 
         # Find first available port
         for port in self.port_range:
+            if port in excluded_ports:
+                logger.debug(f"Port {port} skipped after failed allocation attempt")
+                continue
+
             if port in used_ports:
                 logger.debug(f"Port {port} already allocated in database")
                 continue
