@@ -9,6 +9,7 @@ Handles container lifecycle: create, start, stop, restart, delete.
 import hashlib
 import os
 import re
+import shutil
 import time
 import logging
 import requests
@@ -93,33 +94,57 @@ class MCPContainerManager:
 
         # 1. Allocate port
         port_allocator = get_port_allocator()
-        port = port_allocator.allocate_port(db)
-        logger.info(f"Allocated port {port}")
 
         # 1.5. Generate API secret (Phase Security-1: SSRF Prevention)
         api_secret = generate_mcp_secret()
         logger.info(f"Generated API secret for MCP authentication")
 
-        # 2. Generate container name (unique with timestamp, includes type)
-        # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation
-        stack_prefix = f"{self._get_stack_name()}-mcp-"
-        container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}"
+        # 2-4. Allocate a host port and start the container. The allocator runs
+        # inside the backend container, so it can miss ports already bound on the
+        # Docker host. If Docker rejects the host bind, retry with the next port.
+        failed_ports: set[int] = set()
+        last_start_error: Optional[Exception] = None
+        for _attempt in range(port_allocator.MAX_PORTS):
+            port = port_allocator.allocate_port(db, excluded_ports=failed_ports)
+            logger.info(f"Allocated port {port}")
 
-        # 3. Create volume directories (unique per instance)
-        session_dir = self._create_session_directory(tenant_id, container_name)
-        logger.info(f"Created session directory: {session_dir}")
+            # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation.
+            # Include the selected port so retries in the same second do not
+            # collide with a failed-but-created container name.
+            stack_prefix = f"{self._get_stack_name()}-mcp-"
+            container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}_{port}"
 
-        # 4. Start container
-        try:
-            container = self._start_container(container_name, port, session_dir, phone_number, api_secret)
-            container_id = container.id if hasattr(container, 'id') else str(container)
-            logger.info(f"Container {container_name} started with ID {container_id}")
+            # Create volume directories (unique per instance)
+            session_dir = self._create_session_directory(tenant_id, container_name)
+            logger.info(f"Created session directory: {session_dir}")
 
-        except MCPContainerProvisioningError:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to start container: {e}")
-            raise RuntimeError(f"Failed to start Docker container: {e}")
+            try:
+                container = self._start_container(container_name, port, session_dir, phone_number, api_secret)
+                container_id = container.id if hasattr(container, 'id') else str(container)
+                logger.info(f"Container {container_name} started with ID {container_id}")
+                break
+            except MCPContainerProvisioningError:
+                raise
+            except Exception as e:
+                last_start_error = e
+                if self._is_host_port_bind_conflict(e):
+                    logger.warning(
+                        "Docker host rejected MCP port %s; retrying with next port: %s",
+                        port,
+                        e,
+                    )
+                    failed_ports.add(port)
+                    self._cleanup_failed_start(container_name, session_dir)
+                    continue
+
+                logger.error(f"Failed to start container: {e}")
+                self._cleanup_failed_start(container_name, session_dir)
+                raise RuntimeError(f"Failed to start Docker container: {e}")
+        else:
+            raise RuntimeError(
+                "Failed to start Docker container: no available MCP host ports "
+                f"after retrying Docker bind conflicts. Last error: {last_start_error}"
+            )
 
         # 5. Use container name for Docker DNS resolution (more robust than IP)
         # Container name is resolvable within the Docker network
@@ -179,6 +204,27 @@ class MCPContainerManager:
         logger.info(f"Container {container_name} starting, health check in progress")
 
         return instance
+
+    def _is_host_port_bind_conflict(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return (
+            "address already in use" in message
+            or "port is already allocated" in message
+            or ("failed to bind port" in message and "listen tcp" in message)
+        )
+
+    def _cleanup_failed_start(self, container_name: str, session_dir: str) -> None:
+        try:
+            self.runtime.remove_container(container_name, force=True)
+        except ContainerNotFoundError:
+            pass
+        except Exception as cleanup_error:
+            logger.warning("Failed to remove failed MCP container %s: %s", container_name, cleanup_error)
+
+        try:
+            shutil.rmtree(session_dir, ignore_errors=True)
+        except Exception as cleanup_error:
+            logger.warning("Failed to remove failed MCP session dir %s: %s", session_dir, cleanup_error)
 
     def _create_session_directory(self, tenant_id: str, container_name: str) -> str:
         """
