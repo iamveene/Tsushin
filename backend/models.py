@@ -4290,6 +4290,12 @@ class AgentTeamMemberA2ASnapshot(Base):
             ["tenant_id", "permission_id"],
             ["agent_communication_permission.tenant_id", "agent_communication_permission.id"],
             name="fk_agent_team_a2a_snapshot_tenant_permission",
+            # Mirrors the single-column permission_id FK above: when the original
+            # A2A permission row is deleted, this composite FK must also release
+            # its reference, otherwise the parent delete is blocked with a
+            # ForeignKeyViolation that surfaces as a 500 in
+            # DELETE /api/agent-communication/permissions/{id}.
+            ondelete="SET NULL",
         ),
         UniqueConstraint(
             "tenant_id",

@@ -587,27 +587,32 @@ class AgentCommunicationService:
             raise
 
     def delete_permission(self, perm_id: int) -> bool:
-        perm = (
-            self.db.query(AgentCommunicationPermission)
-            .filter(
-                AgentCommunicationPermission.id == perm_id,
-                AgentCommunicationPermission.tenant_id == self.tenant_id,
+        try:
+            perm = (
+                self.db.query(AgentCommunicationPermission)
+                .filter(
+                    AgentCommunicationPermission.id == perm_id,
+                    AgentCommunicationPermission.tenant_id == self.tenant_id,
+                )
+                .first()
             )
-            .first()
-        )
-        if not perm:
-            return False
-        source_agent_id = perm.source_agent_id
-        self._audit_log("agent_comm.permission.delete", perm.source_agent_id, perm.target_agent_id, {
-            "permission_id": perm.id,
-        })
-        self.db.delete(perm)
-        self._disable_auto_managed_agent_communication_skill_if_unused(
-            source_agent_id,
-            exclude_permission_id=perm.id,
-        )
-        self.db.commit()
-        return True
+            if not perm:
+                return False
+            source_agent_id = perm.source_agent_id
+            self._audit_log("agent_comm.permission.delete", perm.source_agent_id, perm.target_agent_id, {
+                "permission_id": perm.id,
+            })
+            self.db.delete(perm)
+            self._disable_auto_managed_agent_communication_skill_if_unused(
+                source_agent_id,
+                exclude_permission_id=perm.id,
+            )
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            logger.exception("Failed to delete agent communication permission")
+            raise
 
     # ------------------------------------------------------------------
     # Session queries (for API routes)

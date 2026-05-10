@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_serializer
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import (
@@ -571,7 +572,18 @@ async def delete_permission(
         raise HTTPException(status_code=404, detail="Permission rule not found")
 
     svc = AgentCommunicationService(db, ctx.tenant_id)
-    deleted = svc.delete_permission(permission_id)
+    try:
+        deleted = svc.delete_permission(permission_id)
+    except IntegrityError:
+        # Surface FK conflicts (e.g. lingering team-member snapshots that still
+        # reference the permission row) as a clear 409 instead of a generic 500.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Permission cannot be deleted because another record still "
+                "references it. Please report this with the permission ID."
+            ),
+        )
     if not deleted:
         raise HTTPException(status_code=404, detail="Permission rule not found")
     return None
