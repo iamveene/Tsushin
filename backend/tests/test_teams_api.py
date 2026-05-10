@@ -835,6 +835,36 @@ def test_team_trigger_binding_crud_and_canonical_config_across_prefixes(db_sessi
         "is_enabled": False,
     }
     assert db_session.get(AgentTeamTrigger, created["id"]).is_enabled is False
+    deduped = _run(
+        create_team_trigger_binding(
+            team["id"],
+            payload=TeamTriggerCreate(
+                trigger_kind="webhook",
+                trigger_instance_id=webhook.id,
+                event_types=["payload.final"],
+                filters={"severity": "low"},
+                is_enabled=True,
+            ),
+            ctx=_ctx(db_session),
+            current_user=_user(),
+        )
+    )
+    assert deduped["id"] == created["id"]
+    assert deduped["config_json"] == {
+        "trigger_instance_id": webhook.id,
+        "event_types": ["payload.final"],
+        "filters": {"severity": "low"},
+        "is_enabled": True,
+    }
+    assert (
+        db_session.query(AgentTeamTrigger)
+        .filter(
+            AgentTeamTrigger.team_id == team["id"],
+            AgentTeamTrigger.trigger_kind == "webhook",
+        )
+        .count()
+        == 1
+    )
 
     github_binding = _run(
         create_v1_team_trigger_binding(
