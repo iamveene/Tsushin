@@ -16,10 +16,13 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { api, WhatsAppMCPInstance, Contact } from '@/lib/client'
 
+export type WhatsAppWizardInstanceType = 'agent' | 'tester'
+
 interface WizardState {
   isOpen: boolean
   currentStep: number
   totalSteps: number
+  instanceType: WhatsAppWizardInstanceType
   // Accumulated data from completed steps
   createdInstanceId: number | null
   createdInstance: WhatsAppMCPInstance | null
@@ -40,8 +43,8 @@ interface WizardState {
 
 interface WhatsAppWizardContextType {
   state: WizardState
-  openWizard: () => void
-  forceOpenWizard: () => void
+  openWizard: (instanceType?: WhatsAppWizardInstanceType) => void
+  forceOpenWizard: (instanceType?: WhatsAppWizardInstanceType) => void
   closeWizard: () => void
   nextStep: () => void
   previousStep: () => void
@@ -58,13 +61,15 @@ interface WhatsAppWizardContextType {
 
 const WhatsAppWizardContext = createContext<WhatsAppWizardContextType | undefined>(undefined)
 
-const TOTAL_STEPS = 8
+const AGENT_TOTAL_STEPS = 8
+const TESTER_TOTAL_STEPS = 3
 const DISMISSED_KEY = 'tsushin_whatsapp_wizard_dismissed'
 
-const initialState: WizardState = {
+const buildInitialState = (instanceType: WhatsAppWizardInstanceType = 'agent'): WizardState => ({
   isOpen: false,
   currentStep: 1,
-  totalSteps: TOTAL_STEPS,
+  totalSteps: instanceType === 'tester' ? TESTER_TOTAL_STEPS : AGENT_TOTAL_STEPS,
+  instanceType,
   createdInstanceId: null,
   createdInstance: null,
   instanceDisplayName: null,
@@ -75,7 +80,9 @@ const initialState: WizardState = {
   boundAgentId: null,
   boundAgentName: null,
   stepsCompleted: {},
-}
+})
+
+const initialState: WizardState = buildInitialState()
 
 export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<WizardState>(initialState)
@@ -87,17 +94,19 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   //   (b) Tour Step 5 "Set Up Channels" action button (uses openWizard)
 
   // openWizard: respects dismissed state (won't reopen if user previously dismissed)
-  const openWizard = useCallback(() => {
+  const openWizard = useCallback((instanceType: WhatsAppWizardInstanceType = 'agent') => {
     const dismissed = localStorage.getItem(DISMISSED_KEY) === 'true'
     if (dismissed) return
-    setState({ ...initialState, isOpen: true })
+    const requestedInstanceType = instanceType === 'tester' ? 'tester' : 'agent'
+    setState({ ...buildInitialState(requestedInstanceType), isOpen: true })
   }, [])
 
   // BUG-322: forceOpenWizard: ignores dismissed state — used from Getting Started Checklist
-  const forceOpenWizard = useCallback(() => {
+  const forceOpenWizard = useCallback((instanceType: WhatsAppWizardInstanceType = 'agent') => {
     // Clear dismissed flag so the wizard can function normally after force-open
     localStorage.removeItem(DISMISSED_KEY)
-    setState({ ...initialState, isOpen: true })
+    const requestedInstanceType = instanceType === 'tester' ? 'tester' : 'agent'
+    setState({ ...buildInitialState(requestedInstanceType), isOpen: true })
   }, [])
 
   // BUG-321: closeWizard dispatches event so onboarding tour can advance step
@@ -111,7 +120,7 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   const nextStep = useCallback(() => {
     setState(prev => ({
       ...prev,
-      currentStep: Math.min(prev.currentStep + 1, TOTAL_STEPS),
+      currentStep: Math.min(prev.currentStep + 1, prev.totalSteps),
     }))
   }, [])
 
@@ -123,8 +132,11 @@ export function WhatsAppWizardProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const goToStep = useCallback((step: number) => {
-    if (step < 1 || step > TOTAL_STEPS) return
-    setState(prev => ({ ...prev, currentStep: step }))
+    if (step < 1) return
+    setState(prev => {
+      if (step > prev.totalSteps) return prev
+      return { ...prev, currentStep: step }
+    })
   }, [])
 
   const setInstanceData = useCallback((instance: WhatsAppMCPInstance) => {

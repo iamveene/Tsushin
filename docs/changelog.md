@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — WhatsApp bot/tester creation matrix (2026-05-10)
+
+- Hub > Channels > WhatsApp guided setup now offers separate **Bot instance** and **Tester instance** paths. Tester wizard creation uses `instance_type='tester'`, skips bot-only contact creation, and lands on a tester-specific QR/summary flow.
+- Runtime-managed tester shortcut health now resolves through the stable per-instance Docker DNS alias instead of underscore-bearing container names, so `/api/mcp/instances/tester/status` does not 500 when the latest tester was created through the UI.
+- MCP instance creation now treats tester-status lookup failures as a non-blocking conflict preflight issue, preserving actionable container/image/port errors and allowing advanced bot creation to proceed through Docker host-port retry.
+- Validated locally through browser automation for all four user-facing creation paths: guided bot, guided tester, advanced bot, and advanced tester.
+
 ### Production deployment workflow gate (2026-05-10)
 
 - Added a main-only production deploy runbook covering quick local validation, browser automation gates, Cloudflare allowlist checks, `develop` -> PR -> `main`, and public-origin QA on `https://tsushin.archsec.io`.

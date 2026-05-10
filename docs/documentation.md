@@ -2252,9 +2252,15 @@ Adapter capability flags (`backend/channels/whatsapp/adapter.py:22-28`):
 | `api_secret` | String(64) (nullable) | NULL | 32-byte hex-encoded token for cross-tenant MCP authentication (SSRF prevention) |
 | `api_secret_created_at` | DateTime (nullable) | NULL | Timestamp for secret rotation tracking |
 
-**E2E setup — WhatsApp channel (8-step guided wizard):**
+**E2E setup — WhatsApp channel (guided wizard):**
 
-The **WhatsApp Setup Wizard** (Hub > Channels > WhatsApp) walks through the full configuration in 8 steps:
+Hub > Channels > WhatsApp now opens a creation-mode selector before setup:
+
+- **Guided Setup → Bot instance** launches the full 8-step bot wizard.
+- **Guided Setup → Tester instance** launches the 3-step QA tester wizard for QR-only tester-to-bot validation.
+- **Advanced Setup** creates either an `agent` or `tester` instance directly from phone number and type.
+
+The **Bot instance** guided path walks through the full configuration in 8 steps:
 
 1. **Welcome** — overview of the setup process.
 2. **Connect Phone** — enter an optional Instance Name (display label) and phone number, then scan the QR code. A bot contact is auto-created with the instance name.
@@ -2267,11 +2273,17 @@ The **WhatsApp Setup Wizard** (Hub > Channels > WhatsApp) walks through the full
 
 The wizard can also be launched manually from Hub > Channels or from the onboarding tour's Communication Channels action. It no longer auto-launches after the main onboarding tour completes.
 
-**Manual setup (alternative):**
+The **Tester instance** guided path keeps the same container/QR creation code path but skips bot-only contact, filter, and agent-binding steps:
+
+1. **Welcome** — explains the QA tester purpose.
+2. **Connect Tester** — enter an optional tester label and phone number, then scan the QR code.
+3. **All Done** — confirms the tester instance exists and is waiting for QR authentication.
+
+**Advanced setup (alternative):**
 
 1. Navigate to **Hub > Channels > WhatsApp** in the UI.
-2. Click **Manual Setup** — provide a name and the WhatsApp phone number.
-3. The system spawns a Docker container (`mcp-agent-tenant_{timestamp}_{id}`) on `tsushin-network`.
+2. Click **Advanced Setup** — choose `Agent` or `Tester`, then provide the WhatsApp phone number.
+3. The system spawns a Docker container (`mcp-{agent|tester}-tenant_{timestamp}_{port}`) on `tsushin-network`.
 4. **Scan the QR code** — visible in the UI or via `docker logs <container_name> --tail=20`. The QR expires after ~60 seconds; refresh if needed.
 5. Once authenticated, the instance status changes to `running` with `connected=true`.
 6. **Configure filters** — set `group_filters`, `number_filters`, and `group_keywords` on the instance to control where the bot responds.

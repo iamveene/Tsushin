@@ -1185,9 +1185,11 @@ class MCPContainerManager:
                 if tester_instance and tester_instance.container_name:
                     try:
                         container = self.runtime.get_container(tester_instance.container_name)
+                        runtime_alias = self._build_runtime_dns_alias(tester_instance)
+                        self._ensure_container_dns_alias(tester_instance.container_name, runtime_alias)
                         self._set_tester_target(
                             tester_instance.container_name,
-                            f"http://{tester_instance.container_name}:8080/api",
+                            f"http://{runtime_alias}:8080/api",
                             "runtime",
                         )
                         return container
@@ -1287,7 +1289,7 @@ class MCPContainerManager:
                 "session_age_sec": payload.get("session_age_sec", 0),
                 "last_activity_sec": payload.get("last_activity_sec", 0),
             })
-        except requests.RequestException as e:
+        except Exception as e:
             tester_status["status"] = "degraded"
             tester_status["error"] = str(e)
             return tester_status
@@ -1296,7 +1298,7 @@ class MCPContainerManager:
             qr_response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=5)
             if qr_response.status_code == 200:
                 tester_status["qr_available"] = bool(qr_response.json().get("qr_code"))
-        except requests.RequestException:
+        except Exception:
             pass
 
         return tester_status
@@ -1317,7 +1319,7 @@ class MCPContainerManager:
             if response.status_code != 200:
                 return None
             return response.json().get("qr_code")
-        except requests.RequestException:
+        except Exception:
             return None
 
     def restart_tester(self) -> Dict[str, Any]:

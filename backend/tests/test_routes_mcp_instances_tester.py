@@ -285,6 +285,37 @@ def test_create_mcp_instance_surfaces_runtime_error_detail(mock_user):
     assert "Check server logs" not in exc_info.value.detail
 
 
+def test_create_mcp_instance_continues_when_tester_preflight_fails(mock_user):
+    request = MagicMock()
+    request.app.state = SimpleNamespace()
+    db = MagicMock()
+    db.query.return_value.all.return_value = []
+
+    manager = MagicMock()
+    manager.get_tester_status.side_effect = RuntimeError("runtime tester status unavailable")
+    manager.create_instance.side_effect = RuntimeError(
+        "WhatsApp MCP image is not available to the container runtime: tsushin/whatsapp-mcp:latest"
+    )
+
+    with patch("api.routes_mcp_instances.MCPContainerManager", return_value=manager):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                create_mcp_instance(
+                    data=MCPInstanceCreate(phone_number="+5527988290533", instance_type="agent"),
+                    request=request,
+                    current_user=mock_user,
+                    _=None,
+                    context=SimpleNamespace(),
+                    db=db,
+                )
+            )
+
+    manager.create_instance.assert_called_once()
+    assert exc_info.value.status_code == 500
+    assert "WhatsApp MCP image is not available" in exc_info.value.detail
+    assert "runtime tester status unavailable" not in exc_info.value.detail
+
+
 def test_create_mcp_instance_redacts_sensitive_runtime_error_detail(mock_user):
     request = MagicMock()
     request.app.state = SimpleNamespace()
