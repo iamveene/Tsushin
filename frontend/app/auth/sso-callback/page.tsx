@@ -9,7 +9,7 @@
  * This prevents JWT exposure in browser history, server logs, and referrer headers.
  */
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -37,12 +37,23 @@ function SSOCallbackContent() {
   const { setAuthFromToken } = useAuth()
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(true)
+  const processedCallbackRef = useRef<string | null>(null)
 
   useEffect(() => {
     const processCallback = async () => {
       // MED-009: receives one-time 'code' (legacy 'token' flow removed in v0.7).
       const code = searchParams.get('code')
       const errorMsg = searchParams.get('error')
+      const callbackKey = errorMsg
+        ? `error:${errorMsg}`
+        : code
+          ? `code:${code}`
+          : 'missing'
+
+      if (processedCallbackRef.current === callbackKey) {
+        return
+      }
+      processedCallbackRef.current = callbackKey
 
       if (errorMsg) {
         setError(decodeURIComponent(errorMsg))

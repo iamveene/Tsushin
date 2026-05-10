@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from db import get_db
 from models import WhatsAppMCPInstance
 from models_rbac import User
-from services.mcp_container_manager import MCPContainerManager
+from services.mcp_container_manager import MCPContainerManager, MCPContainerProvisioningError
 from services.mcp_auth_service import get_auth_headers
 from services.whatsapp_binding_service import backfill_unambiguous_whatsapp_bindings
 from auth_dependencies import get_current_user_required, require_permission, get_tenant_context, TenantContext
@@ -146,6 +146,26 @@ class TesterStatusResponse(BaseModel):
 
 def _normalize_phone_number(phone_number: Optional[str]) -> str:
     return re.sub(r"\D+", "", phone_number or "")
+
+
+def _redact_runtime_error_detail(message: str) -> str:
+    """Keep runtime failures actionable without exposing credentials."""
+    detail = message.strip() or "Unknown runtime error"
+    detail = re.sub(
+        r"(?i)(MCP_API_SECRET|AUTHORIZATION|BEARER|TOKEN|PASSWORD|SECRET)([=:\s]+)([^,\s]+)",
+        r"\1\2[redacted]",
+        detail,
+    )
+    if len(detail) > 700:
+        detail = f"{detail[:697]}..."
+    return detail
+
+
+def _mcp_creation_failure_detail(exc: Exception) -> str:
+    return (
+        "Failed to create WhatsApp MCP instance: "
+        f"{_redact_runtime_error_detail(str(exc))}"
+    )
 
 
 def _require_user_tenant_id(current_user: User) -> str:
@@ -373,6 +393,10 @@ async def create_mcp_instance(
 
     except HTTPException:
         raise
+    except (MCPContainerProvisioningError, RuntimeError) as e:
+        detail = _mcp_creation_failure_detail(e)
+        logger.error(detail)
+        raise HTTPException(status_code=500, detail=detail)
     except Exception as e:
         logger.error(f"Failed to create MCP instance: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create MCP instance. Check server logs for details.")
