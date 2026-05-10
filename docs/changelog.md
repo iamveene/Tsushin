@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — WhatsApp MCP helper image gate (2026-05-10)
+
+- Production deploy now ensures `TSN_WHATSAPP_MCP_IMAGE` exists on the Docker host and rebuilds it from `backend/whatsapp-mcp` when the image is missing, the helper source changed, or a forced rebuild is requested.
+- Fresh installs now treat the WhatsApp MCP helper image as mandatory: the installer fails fast if the image build or post-build inspection fails, preventing Hub creation from later surfacing “WhatsApp MCP image is not available” for bot/tester instances.
+
 ### Fixed — WhatsApp bot/tester creation matrix (2026-05-10)
 
 - Hub > Channels > WhatsApp guided setup now offers separate **Bot instance** and **Tester instance** paths. Tester wizard creation uses `instance_type='tester'`, skips bot-only contact creation, and lands on a tester-specific QR/summary flow.
