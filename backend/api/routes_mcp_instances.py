@@ -329,8 +329,16 @@ async def create_mcp_instance(
                 detail="An existing WhatsApp MCP instance already uses this phone number.",
             )
 
-        tester_status = manager.get_tester_status()
-        tester_phone_number = manager.get_tester_phone_number()
+        try:
+            tester_status = manager.get_tester_status()
+            tester_phone_number = manager.get_tester_phone_number()
+        except Exception as tester_check_error:
+            logger.warning(
+                "Skipping tester phone conflict preflight for new MCP instance because tester status failed: %s",
+                tester_check_error,
+            )
+            tester_status = {}
+            tester_phone_number = None
         if (
             tester_status.get("authenticated")
             and tester_status.get("connected")

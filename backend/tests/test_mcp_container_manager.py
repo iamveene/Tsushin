@@ -178,9 +178,10 @@ class TestMCPContainerManager:
         tester_instance = MagicMock(spec=WhatsAppMCPInstance)
         tester_instance.id = 88
         tester_instance.tenant_id = "tenant_123"
-        tester_instance.container_name = "runtime-tester-88"
+        tester_instance.container_name = "tsushin-mcp-tester-tenant_123_1712400000"
         tester_instance.instance_type = "tester"
         tester_instance.status = "running"
+        expected_alias = manager._build_runtime_dns_alias(tester_instance)
 
         class FakeQuery:
             def filter(self, *args, **kwargs):
@@ -250,8 +251,12 @@ class TestMCPContainerManager:
 
         assert tester_status["source"] == "runtime"
         assert tester_status["name"] == tester_instance.container_name
-        assert tester_status["api_url"] == f"http://{tester_instance.container_name}:8080/api"
+        assert tester_status["api_url"] == f"http://{expected_alias}:8080/api"
         assert tester_status["qr_available"] is True
+        assert any(
+            call.kwargs.get("aliases") == [expected_alias]
+            for call in mock_runtime.ensure_container_on_network.call_args_list
+        )
 
     @patch("services.mcp_container_manager.requests.get")
     def test_health_check_recovers_when_container_id_is_blank_but_container_name_resolves(
