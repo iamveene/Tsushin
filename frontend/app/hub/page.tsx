@@ -7077,9 +7077,9 @@ export default function HubPage() {
       <WhatsAppCreateModeSelector
         isOpen={showCreateModeSelector}
         onClose={() => setShowCreateModeSelector(false)}
-        onSelectWizard={() => {
+        onSelectWizard={(instanceType) => {
           setShowCreateModeSelector(false)
-          openWhatsAppWizard()
+          openWhatsAppWizard(instanceType)
         }}
         onSelectAdvanced={() => {
           setShowCreateModeSelector(false)

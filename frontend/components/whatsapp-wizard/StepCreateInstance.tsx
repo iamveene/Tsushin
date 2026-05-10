@@ -6,6 +6,8 @@ import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 
 export default function StepCreateInstance() {
   const { state, setInstanceData, setInstanceDisplayName, setBotContact, addContact, nextStep, markStepComplete } = useWhatsAppWizard()
+  const isTester = state.instanceType === 'tester'
+  const defaultDisplayName = isTester ? 'Tsushin Tester' : 'Tsushin Bot'
 
   const [displayName, setDisplayName] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -16,6 +18,9 @@ export default function StepCreateInstance() {
   const [existingInstances, setExistingInstances] = useState<WhatsAppMCPInstance[]>([])
   const [useExisting, setUseExisting] = useState(false)
   const [selectedExistingId, setSelectedExistingId] = useState<number | null>(null)
+  const matchingExistingInstances = existingInstances.filter(
+    (inst) => (inst.instance_type || 'agent') === state.instanceType
+  )
 
   // QR code state
   const [qrCode, setQrCode] = useState<string | null>(null)
@@ -81,22 +86,24 @@ export default function StepCreateInstance() {
           // Fetch full instance data
           const inst = await api.getMCPInstance(id)
           setInstanceData(inst)
-          setInstanceDisplayName(displayName.trim() || 'Tsushin Bot')
+          setInstanceDisplayName(displayName.trim() || inst.display_name || defaultDisplayName)
           markStepComplete(2)
-          // Auto-create bot contact
-          try {
-            const botName = displayName.trim() || 'Tsushin Bot'
-            const botContact = await api.createContact({
-              friendly_name: botName,
-              phone_number: inst.phone_number,
-              role: 'agent',
-              is_dm_trigger: false,
-              is_active: true,
-            })
-            setBotContact(botContact)
-            addContact(botContact)
-          } catch (e) {
-            console.warn('Failed to auto-create bot contact:', e)
+          if (!isTester) {
+            // Auto-create bot contact for agent instances only.
+            try {
+              const botName = displayName.trim() || inst.display_name || defaultDisplayName
+              const botContact = await api.createContact({
+                friendly_name: botName,
+                phone_number: inst.phone_number,
+                role: 'agent',
+                is_dm_trigger: false,
+                is_active: true,
+              })
+              setBotContact(botContact)
+              addContact(botContact)
+            } catch (e) {
+              console.warn('Failed to auto-create bot contact:', e)
+            }
           }
           // Auto-advance after 1.5s
           setTimeout(() => nextStep(), 1500)
@@ -111,7 +118,7 @@ export default function StepCreateInstance() {
         if (res.qr_code) setQrCode(res.qr_code)
       } catch {}
     }, 15000)
-  }, [setInstanceData, setInstanceDisplayName, setBotContact, addContact, markStepComplete, nextStep, displayName])
+  }, [setInstanceData, setInstanceDisplayName, setBotContact, addContact, markStepComplete, nextStep, displayName, defaultDisplayName, isTester])
 
   // Cleanup intervals on unmount
   useEffect(() => {
@@ -129,8 +136,9 @@ export default function StepCreateInstance() {
     setCreating(true)
     setError(null)
     try {
-      const instance = await api.createMCPInstance(phoneNumber.trim(), 'agent', displayName.trim() || undefined)
+      const instance = await api.createMCPInstance(phoneNumber.trim(), state.instanceType, displayName.trim() || undefined)
       setInstanceData(instance)
+      setInstanceDisplayName(displayName.trim() || defaultDisplayName)
       startPolling(instance.id)
     } catch (e: any) {
       setError(e.message || 'Failed to create instance')
@@ -145,6 +153,7 @@ export default function StepCreateInstance() {
     try {
       const inst = await api.getMCPInstance(selectedExistingId)
       setInstanceData(inst)
+      setInstanceDisplayName(inst.display_name || defaultDisplayName)
 
       // Check if already authenticated
       const health = await api.getMCPHealth(selectedExistingId)
@@ -181,7 +190,7 @@ export default function StepCreateInstance() {
           onClick={nextStep}
           className="mt-6 px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors"
         >
-          Continue to About You
+          {isTester ? 'Continue to Summary' : 'Continue to About You'}
         </button>
       </div>
     )
@@ -204,7 +213,9 @@ export default function StepCreateInstance() {
                 <span>Live</span>
               </div>
             </div>
-            <p className="text-tsushin-slate">Scan this QR code with WhatsApp on your phone</p>
+            <p className="text-tsushin-slate">
+              Scan this QR code with {isTester ? 'the QA tester phone' : 'WhatsApp on your phone'}
+            </p>
             <div className="text-left max-w-xs mx-auto">
               <ol className="text-sm text-tsushin-slate space-y-2">
                 <li>1. Open WhatsApp on your phone</li>
@@ -229,10 +240,12 @@ export default function StepCreateInstance() {
   return (
     <div className="space-y-6">
       <p className="text-tsushin-slate text-sm">
-        Connect a phone number to WhatsApp. This creates a dedicated bridge so your AI agent can send and receive messages through it.
+        {isTester
+          ? 'Connect a phone number to WhatsApp. This creates a dedicated tester bridge for WhatsApp QA validation.'
+          : 'Connect a phone number to WhatsApp. This creates a dedicated bridge so your AI agent can send and receive messages through it.'}
       </p>
 
-      {existingInstances.length > 0 && (
+      {matchingExistingInstances.length > 0 && (
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setUseExisting(false)}
@@ -252,7 +265,7 @@ export default function StepCreateInstance() {
                 : 'bg-tsushin-deep border border-tsushin-border text-tsushin-slate hover:text-white'
             }`}
           >
-            Use Existing ({existingInstances.length})
+            Use Existing ({matchingExistingInstances.length})
           </button>
         </div>
       )}
@@ -266,9 +279,9 @@ export default function StepCreateInstance() {
             className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white"
           >
             <option value="">Choose...</option>
-            {existingInstances.map((inst) => (
+            {matchingExistingInstances.map((inst) => (
               <option key={inst.id} value={inst.id}>
-                {inst.phone_number} ({inst.status})
+                {inst.display_name || inst.phone_number} ({inst.status})
               </option>
             ))}
           </select>
@@ -288,11 +301,11 @@ export default function StepCreateInstance() {
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g., Support Bot, Sales Line"
+              placeholder={isTester ? 'e.g., QA Tester, Test Phone' : 'e.g., Support Bot, Sales Line'}
               className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white placeholder-tsushin-slate/50"
             />
             <p className="mt-1 text-xs text-tsushin-slate">
-              A friendly label for this WhatsApp number. If blank, the phone number is used.
+              A friendly label for this WhatsApp number. If blank, {defaultDisplayName} is used.
             </p>
           </div>
           <div>
@@ -313,7 +326,7 @@ export default function StepCreateInstance() {
             disabled={creating}
             className="w-full py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
           >
-            {creating ? 'Creating...' : 'Create & Connect'}
+            {creating ? 'Creating...' : `Create ${isTester ? 'Tester' : 'Bot'} & Connect`}
           </button>
         </div>
       )}
