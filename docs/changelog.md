@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Production deployment workflow gate (2026-05-10)
+
+- Added a main-only production deploy runbook covering quick local validation, browser automation gates, Cloudflare allowlist checks, `develop` -> PR -> `main`, and public-origin QA on `https://tsushin.archsec.io`.
+- Added `scripts/deploy-prod.sh` to SSH to the production checkout, pull with `git pull --ff-only`, rebuild changed services without `docker-compose down`, verify container health, and check the public Cloudflare URL.
+
 ### Added — Audio transcript memory toggle (2026-05-08)
 
 - Added a per-agent **Remember audio transcripts** toggle to the shared transcript configuration UI used by the Audio Agents Wizard, regular Agent Wizard audio step, and Agent Skills Manager. The UI treats missing `audio_transcript.config.remember_transcript` as enabled, and new/edited transcript skill saves now persist the explicit `remember_transcript` flag alongside the existing response mode and ASR settings.
