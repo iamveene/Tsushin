@@ -4,8 +4,9 @@ import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 
 export default function StepConfirmation() {
   const { state, closeWizard } = useWhatsAppWizard()
+  const isTester = state.instanceType === 'tester'
 
-  const items = [
+  const agentItems = [
     {
       label: 'WhatsApp Instance',
       value: state.instanceDisplayName
@@ -68,6 +69,28 @@ export default function StepConfirmation() {
     },
   ]
 
+  const testerItems = [
+    {
+      label: 'Tester Instance',
+      value: state.instanceDisplayName
+        ? `${state.instanceDisplayName} (${state.createdInstance?.phone_number})`
+        : state.createdInstance?.phone_number || 'N/A',
+      done: !!state.createdInstanceId,
+    },
+    {
+      label: 'Instance Type',
+      value: 'QA tester',
+      done: state.createdInstance?.instance_type === 'tester',
+    },
+    {
+      label: 'WhatsApp Session',
+      value: state.stepsCompleted[2] ? 'Connected' : 'Waiting for QR scan',
+      done: !!state.stepsCompleted[2],
+    },
+  ]
+
+  const items = isTester ? testerItems : agentItems
+
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -76,9 +99,13 @@ export default function StepConfirmation() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <h3 className="text-xl font-bold text-white mb-2">Setup Complete!</h3>
+        <h3 className="text-xl font-bold text-white mb-2">
+          {isTester ? 'Tester Ready!' : 'Setup Complete!'}
+        </h3>
         <p className="text-tsushin-slate max-w-sm mx-auto">
-          Your WhatsApp integration is ready. Here's a summary of what was configured:
+          {isTester
+            ? 'Your WhatsApp tester instance was created. Scan the QR code when you are ready to authenticate it.'
+            : "Your WhatsApp integration is ready. Here's a summary of what was configured:"}
         </p>
       </div>
 
@@ -109,16 +136,28 @@ export default function StepConfirmation() {
       <div className="bg-teal-500/10 border border-teal-500/20 rounded-lg p-4">
         <h4 className="text-sm font-semibold text-teal-300 mb-2">What's next?</h4>
         <ul className="text-xs text-tsushin-slate space-y-1.5">
-          <li>Send a message to {state.createdInstance?.phone_number || 'your WhatsApp number'} to test</li>
-          <li>
-            Use the <a href="/playground" className="text-white font-medium underline hover:text-teal-200">Playground</a> to test agent responses before going live
-          </li>
-          <li>
-            Visit <a href="/hub?tab=channels" className="text-white font-medium underline hover:text-teal-200">Hub → Channels</a> to fine-tune filters anytime
-          </li>
-          <li>
-            Go to <a href="/agents/contacts" className="text-white font-medium underline hover:text-teal-200">Contacts</a> to manage who your agent recognizes
-          </li>
+          {isTester ? (
+            <>
+              <li>Use the tester controls in Hub to validate tester-to-bot WhatsApp paths</li>
+              <li>Keep tester and bot phone numbers separate so E2E checks remain representative</li>
+              <li>
+                Visit <a href="/hub?tab=channels" className="text-white font-medium underline hover:text-teal-200">Hub → Channels</a> to reopen the QR code anytime
+              </li>
+            </>
+          ) : (
+            <>
+              <li>Send a message to {state.createdInstance?.phone_number || 'your WhatsApp number'} to test</li>
+              <li>
+                Use the <a href="/playground" className="text-white font-medium underline hover:text-teal-200">Playground</a> to test agent responses before going live
+              </li>
+              <li>
+                Visit <a href="/hub?tab=channels" className="text-white font-medium underline hover:text-teal-200">Hub → Channels</a> to fine-tune filters anytime
+              </li>
+              <li>
+                Go to <a href="/agents/contacts" className="text-white font-medium underline hover:text-teal-200">Contacts</a> to manage who your agent recognizes
+              </li>
+            </>
+          )}
         </ul>
       </div>
 

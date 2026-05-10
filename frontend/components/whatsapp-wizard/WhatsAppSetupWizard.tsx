@@ -11,7 +11,7 @@ import StepContacts from './StepContacts'
 import StepBindAgent from './StepBindAgent'
 import StepConfirmation from './StepConfirmation'
 
-const WIZARD_STEPS: WizardStep[] = [
+const AGENT_WIZARD_STEPS: WizardStep[] = [
   { id: 'welcome', label: 'Welcome', description: 'Overview' },
   { id: 'connect-phone', label: 'Connect Phone', description: 'MCP instance' },
   { id: 'user-info', label: 'About You', description: 'Profile' },
@@ -22,9 +22,16 @@ const WIZARD_STEPS: WizardStep[] = [
   { id: 'done', label: 'All Done!', description: 'Finish' },
 ]
 
+const TESTER_WIZARD_STEPS: WizardStep[] = [
+  { id: 'welcome', label: 'Welcome', description: 'Overview' },
+  { id: 'connect-phone', label: 'Connect Tester', description: 'MCP instance' },
+  { id: 'done', label: 'All Done!', description: 'Finish' },
+]
+
 export default function WhatsAppSetupWizard() {
   const { state, closeWizard, previousStep, nextStep } = useWhatsAppWizard()
-  const stepTitles = WIZARD_STEPS.map(step => step.label)
+  const wizardSteps = state.instanceType === 'tester' ? TESTER_WIZARD_STEPS : AGENT_WIZARD_STEPS
+  const stepTitles = wizardSteps.map(step => step.label)
 
   if (!state.isOpen) return null
 
@@ -39,6 +46,15 @@ export default function WhatsAppSetupWizard() {
   }
 
   const renderStep = () => {
+    if (state.instanceType === 'tester') {
+      switch (state.currentStep) {
+        case 1: return <StepWelcome />
+        case 2: return <StepCreateInstance />
+        case 3: return <StepConfirmation />
+        default: return null
+      }
+    }
+
     switch (state.currentStep) {
       case 1: return <StepWelcome />
       case 2: return <StepCreateInstance />
@@ -63,7 +79,7 @@ export default function WhatsAppSetupWizard() {
       isOpen={state.isOpen}
       onClose={handleClose}
       title="WhatsApp Setup"
-      steps={WIZARD_STEPS}
+      steps={wizardSteps}
       currentStep={state.currentStep}
       size="xl"
       autoHeight

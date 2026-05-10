@@ -1,12 +1,13 @@
 'use client'
 
 import Modal from '@/components/ui/Modal'
-import { LightningIcon, WrenchIcon } from '@/components/ui/icons'
+import { BeakerIcon, BotIcon, LightningIcon, WrenchIcon } from '@/components/ui/icons'
+import type { WhatsAppWizardInstanceType } from '@/contexts/WhatsAppWizardContext'
 
 interface WhatsAppCreateModeSelectorProps {
   isOpen: boolean
   onClose: () => void
-  onSelectWizard: () => void
+  onSelectWizard: (instanceType: WhatsAppWizardInstanceType) => void
   onSelectAdvanced: () => void
 }
 
@@ -20,15 +21,12 @@ export default function WhatsAppCreateModeSelector({
     <Modal isOpen={isOpen} onClose={onClose} title="Create WhatsApp Instance" size="sm">
       <div className="space-y-4">
         {/* Wizard card */}
-        <button
-          onClick={onSelectWizard}
-          className="group relative w-full text-left p-5 rounded-xl border-2 border-teal-500/30 bg-teal-500/5 hover:border-teal-500/60 hover:bg-teal-500/10 transition-all cursor-pointer"
-        >
+        <div className="relative w-full text-left p-5 rounded-xl border-2 border-teal-500/30 bg-teal-500/5">
           <span className="absolute top-3 right-3 bg-teal-500/20 text-teal-300 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
             Recommended
           </span>
           <div className="flex items-start gap-4">
-            <div className="w-11 h-11 bg-teal-500/15 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-teal-500/25 transition-colors">
+            <div className="w-11 h-11 bg-teal-500/15 rounded-xl flex items-center justify-center flex-shrink-0">
               <LightningIcon size={22} className="text-teal-400" />
             </div>
             <div className="flex-1 min-w-0">
@@ -43,7 +41,35 @@ export default function WhatsAppCreateModeSelector({
               </div>
             </div>
           </div>
-        </button>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => onSelectWizard('agent')}
+              className="group rounded-lg border border-teal-500/30 bg-tsushin-deep/50 px-3 py-3 text-left hover:border-teal-400/60 hover:bg-teal-500/10 transition-all"
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <BotIcon size={17} className="text-teal-300" />
+                Bot instance
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-tsushin-slate">
+                Full setup with contacts, filters, and agent binding.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectWizard('tester')}
+              className="group rounded-lg border border-orange-500/30 bg-tsushin-deep/50 px-3 py-3 text-left hover:border-orange-400/60 hover:bg-orange-500/10 transition-all"
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <BeakerIcon size={17} className="text-orange-300" />
+                Tester instance
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-tsushin-slate">
+                QR-only QA bridge for tester-to-bot validation.
+              </p>
+            </button>
+          </div>
+        </div>
 
         {/* Divider */}
         <div className="relative flex items-center">
