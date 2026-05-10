@@ -1830,6 +1830,7 @@ NEXT_PUBLIC_API_URL={backend_url}
                 "context": self.root_dir / "backend" / "whatsapp-mcp",
                 "dockerfile": None,  # Uses default Dockerfile
                 "build_args": {},
+                "required": True,
             },
             {
                 "name": "Toolbox (Sandboxed Tools)",
@@ -1837,14 +1838,24 @@ NEXT_PUBLIC_API_URL={backend_url}
                 "context": self.root_dir,
                 "dockerfile": self.root_dir / "backend" / "containers" / "Dockerfile.toolbox",
                 "build_args": {"TARGETARCH": target_arch} if target_arch else {},
+                "required": False,
             },
         ]
 
         for img in images_to_build:
             print_info(f"Building {img['name']} image...")
+            required = bool(img.get("required"))
 
             # Check if context directory exists
             if not img['context'].exists():
+                message = f"{img['name']} build context not found at {img['context']}"
+                if required:
+                    print_error(message)
+                    print_info(
+                        "WhatsApp bot/tester instances require this image. "
+                        "Re-run from a complete Tsushin checkout or restore backend/whatsapp-mcp."
+                    )
+                    sys.exit(1)
                 print_warning(f"Skipping {img['name']}: directory not found at {img['context']}")
                 continue
 
@@ -1885,8 +1896,34 @@ NEXT_PUBLIC_API_URL={backend_url}
                 process.wait()
 
                 if process.returncode == 0:
-                    print_success(f"{img['name']} image built successfully")
+                    inspect = subprocess.run(
+                        ["docker", "image", "inspect", img["image"]],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if inspect.returncode == 0:
+                        print_success(f"{img['name']} image built successfully")
+                    elif required:
+                        print_error(
+                            f"{img['name']} build completed but image {img['image']} "
+                            "is not available to Docker."
+                        )
+                        sys.exit(1)
+                    else:
+                        print_warning(
+                            f"{img['name']} image {img['image']} was not found after build."
+                        )
                 else:
+                    if required:
+                        print_error(
+                            f"{img['name']} image build failed. WhatsApp bot/tester "
+                            "instances will not work until this image is available."
+                        )
+                        print_info(
+                            "Rebuild manually with: "
+                            f"docker build -t {img['image']} {img['context']}"
+                        )
+                        sys.exit(1)
                     # BUG-655: toolbox image failures are the #1 cause of
                     # noisy installer output on aarch64 hosts. Give users a
                     # clearer, more actionable warning rather than the generic
@@ -1906,6 +1943,13 @@ NEXT_PUBLIC_API_URL={backend_url}
                         )
 
             except Exception as e:
+                if required:
+                    print_error(f"Could not build {img['name']} image: {e}")
+                    print_info(
+                        "WhatsApp bot/tester instances require this image. "
+                        f"Rebuild manually with: docker build -t {img['image']} {img['context']}"
+                    )
+                    sys.exit(1)
                 print_warning(f"Could not build {img['name']} image: {e}")
                 print_info("You can build it manually later if needed")
 
