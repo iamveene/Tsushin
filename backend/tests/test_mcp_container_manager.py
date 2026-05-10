@@ -22,7 +22,7 @@ sys.modules.setdefault("docker", docker_stub)
 
 from models import WhatsAppMCPInstance
 from services.container_runtime import ContainerNotFoundError
-from services.mcp_container_manager import MCPContainerManager
+from services.mcp_container_manager import MCPContainerManager, MCPContainerProvisioningError
 
 
 @pytest.fixture
@@ -356,3 +356,24 @@ class TestMCPContainerManager:
         assert changes["mcp_port"] == 8085
         assert mock_instance.container_id == "container-from-name"
         mock_db.commit.assert_called_once()
+
+    def test_start_container_fails_before_create_when_image_missing(
+        self,
+        manager,
+        mock_runtime,
+        tmp_path,
+    ):
+        mock_runtime.image_exists.return_value = False
+
+        with pytest.raises(MCPContainerProvisioningError) as exc_info:
+            manager._start_container(
+                "tsushin-mcp-agent-tenant_123_1712400000",
+                8099,
+                str(tmp_path),
+                "+5527988290533",
+                "secret",
+            )
+
+        assert "WhatsApp MCP image is not available" in str(exc_info.value)
+        mock_runtime.get_or_create_network.assert_not_called()
+        mock_runtime.create_container.assert_not_called()
