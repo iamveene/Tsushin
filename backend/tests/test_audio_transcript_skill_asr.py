@@ -209,7 +209,7 @@ def test_audio_transcript_prefers_asr_instance_when_configured():
         os.remove(audio_path)
 
 
-def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
+def test_audio_transcript_fails_closed_when_pinned_asr_instance_fails():
     _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
@@ -217,7 +217,6 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
         skill = AudioTranscriptSkill()
         skill.set_db_session(object())
         failing_response = ASRResponse(success=False, provider="speaches", error="boom")
-        openai_response = ASRResponse(success=True, provider="openai", text="fallback transcript")
         asr_instance = SimpleNamespace(
             id=7,
             is_active=True,
@@ -232,9 +231,8 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
             "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
             return_value=_FakeProvider(failing_response),
         ), patch(
-            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider",
-            return_value=_FakeProvider(openai_response),
-        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
+        ) as get_openai_provider, patch(
             "agent.skills.audio_transcript.get_api_key",
             return_value="sk-test",
         ):
@@ -251,14 +249,17 @@ def test_audio_transcript_falls_back_to_openai_when_asr_instance_fails():
                 )
             )
 
-        assert result.success is True
-        assert "fallback transcript" in result.output
-        assert result.metadata["provider"] == "openai"
+        assert result.success is False
+        assert "Local ASR instance (7): boom" in result.output
+        assert "no OpenAI fallback" in result.output
+        assert result.metadata["provider"] == "local_asr"
+        assert result.metadata["fallback_attempted"] is False
+        get_openai_provider.assert_not_called()
     finally:
         os.remove(audio_path)
 
 
-def test_audio_transcript_reports_local_and_openai_failures_together():
+def test_audio_transcript_pinned_instance_error_does_not_include_cloud_fallback():
     _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
@@ -266,7 +267,6 @@ def test_audio_transcript_reports_local_and_openai_failures_together():
         skill = AudioTranscriptSkill()
         skill.set_db_session(object())
         failing_local = ASRResponse(success=False, provider="openai_whisper", error="local_timeout")
-        failing_openai = ASRResponse(success=False, provider="openai", error="invalid_api_key")
         asr_instance = SimpleNamespace(
             id=7,
             is_active=True,
@@ -281,9 +281,8 @@ def test_audio_transcript_reports_local_and_openai_failures_together():
             "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
             return_value=_FakeProvider(failing_local),
         ), patch(
-            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider",
-            return_value=_FakeProvider(failing_openai),
-        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
+        ) as get_openai_provider, patch(
             "agent.skills.audio_transcript.get_api_key",
             return_value="sk-test",
         ):
@@ -302,7 +301,9 @@ def test_audio_transcript_reports_local_and_openai_failures_together():
 
         assert result.success is False
         assert "Local ASR instance (7): local_timeout" in result.output
-        assert "OpenAI fallback: invalid_api_key" in result.output
+        assert "no OpenAI fallback" in result.output
+        assert result.metadata["fallback_attempted"] is False
+        get_openai_provider.assert_not_called()
     finally:
         os.remove(audio_path)
 

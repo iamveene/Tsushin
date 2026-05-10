@@ -251,10 +251,16 @@ def test_container_manager_vendor_configs_have_both_engines():
     assert "speaches-ai/speaches" in speaches["image_factory"]()
 
 
-def test_container_manager_build_environment_per_vendor():
-    from services.whisper_container_manager import WhisperContainerManager
+def test_container_manager_build_environment_per_vendor(monkeypatch):
+    import services.whisper_container_manager as whisper_container_manager
 
-    mgr = WhisperContainerManager()
+    monkeypatch.setattr(
+        whisper_container_manager,
+        "get_container_runtime",
+        lambda: object(),
+    )
+
+    mgr = whisper_container_manager.WhisperContainerManager()
 
     speaches_env = mgr._build_environment("speaches", token="abc", default_model="model-a")
     assert speaches_env["API_KEY"] == "abc"
