@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — ASR regression contract and combined suite isolation (2026-05-10)
+
+- Aligned audio-transcript tests and documentation with the current pinned-local ASR contract: an explicitly selected tenant ASR instance fails closed instead of silently falling back to OpenAI Whisper.
+- Isolated WhatsApp routing and OpenAI-Whisper container-manager tests so fake Docker imports do not leak across combined pytest runs.
+
 ### Changed — Flow UI reconstruction requirement clarified (2026-05-10)
 
 - Clarified that migrated financial and production-replication flows must be recreatable from scratch through visible Flow UI controls; future JSON import/export is useful for speed, but it is not an acceptance substitute for operator-friendly manual reconstruction.

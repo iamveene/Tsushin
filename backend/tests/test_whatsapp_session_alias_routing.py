@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 if "docker" not in sys.modules:
     docker_stub = types.ModuleType("docker")
     docker_stub.DockerClient = object
-    docker_stub.errors = types.SimpleNamespace(NotFound=Exception)
+    docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=Exception)
     sys.modules["docker"] = docker_stub
 
 import models_rbac  # noqa: F401 - registers RBAC relationships for Base metadata
