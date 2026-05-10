@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Flow UI reconstruction requirement clarified (2026-05-10)
+
+- Clarified that migrated financial and production-replication flows must be recreatable from scratch through visible Flow UI controls; future JSON import/export is useful for speed, but it is not an acceptance substitute for operator-friendly manual reconstruction.
+- Tightened the Browser Automation requirement so playbook steps such as navigate, fill from Password Vault/TOTP, click, wait, dismiss modal, CAPTCHA/manual handoff, extract fields, and evidence capture must appear as understandable editable sequence controls rather than opaque JSON or code-like nodes.
+
 ### Fixed — WhatsApp MCP helper image gate (2026-05-10)
 
 - Production deploy now ensures `TSN_WHATSAPP_MCP_IMAGE` exists on the Docker host and rebuilds it from `backend/whatsapp-mcp` when the image is missing, the helper source changed, or a forced rebuild is requested.
