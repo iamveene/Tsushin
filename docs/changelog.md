@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Skill intent routing migrated from keyword lists to LLM classifier (2026-05-10)
+
+- Replaced the bilingual keyword chip-list anti-pattern across **eight** skills (`image`, `image_analysis`, `gmail`, `automation`, `browser_automation`, `flight_search`, `web_search`, `agent_switcher`) with `AISkillClassifier`-driven intent decisions. Image skill now uses a multi-class `extract_entity` call returning `generate` / `edit` / `none`; the rest call `classify_intent` directly. Per-message result is cached so `can_handle()` and `process()` share one LLM call.
+- Removed `edit_keywords`, `generate_keywords`, `edit_handoff_keywords`, and `keywords` from each affected skill's `get_default_config()` and `get_config_schema()`. Removed `keywords` from `BaseSkill` defaults and schema. Tenants no longer see chip-input fields for these per-skill keyword lists in the agent configuration UI.
+- Removed the `EMAIL_KEYWORDS` constant from `GmailSkill`, hardcoded `automation_keywords` / `_detect_intent` keyword chains from `AutomationSkill`, and the keyword pre-filter in `BrowserAutomationSkill`/`FlightSearchSkill`/`SearchSkill`/`AgentSwitcherSkill`. The defensive `_simple_parse` fallback inside `BrowserAutomationSkill` is kept (only invoked when the AI parser fails).
+- Frontend cleanup in `AgentSkillsManager.tsx`: dropped the "Edit Keywords & Options" button label (now "Edit Options"), the "Trigger Keywords" chip preview, and the "Keywords: N configured" fact line on skill cards.
+- Regression contract: the substring match on `mudar` no longer falsely classifies "vou mudar de assunto" as an image-edit request. Tracked by `backend/tests/test_skill_intent_classification.py` (22 new schema + behavior assertions, all classifier paths mocked).
+
+### Fixed — `AISkillClassifier` raised when caller passed an explicit model (2026-05-10)
+
+- `classify_intent()` and `extract_entity()` previously bypassed the system AI config's `provider_instance_id` whenever a caller passed an explicit `model` argument, leading to `ValueError: No API key found for provider: gemini` on every Agent Switcher classification on tenants whose credentials live behind a provider instance rather than a global API key.
+- Both methods now load the system AI config whenever `db` is available and use the system's `provider_instance_id` for `AIClient` construction, regardless of whether the caller supplied a model name.
+- `BaseSkill._ai_classify()` now resolves `tenant_id` (from explicit attr → config → agent lookup) and passes it through, so `AIClient`'s tenant-scoped default-instance fallback can resolve a key when no global key exists.
+
+### Fixed — `/agents` tab strip clipped on narrow viewports; consistent shared `<TabStrip>` everywhere (2026-05-10)
+
+- Added `frontend/components/ui/TabStrip.tsx` as the single source of truth for horizontal page-level tab strips: bakes in `overflow-x-auto` + `min-w-max` + nowrap-friendly children so tabs scroll horizontally instead of being clipped.
+- Migrated every hand-rolled tab strip to the new component: Studio (`StudioTabs.tsx`), Agent detail (`/agents/[id]`), Hub (`/hub`), Hub > Sandboxed Tools, Hub > Shell, Settings > Team detail, Watcher > Communication. The remaining `<nav className="flex">` in `LayoutContent.tsx` is the vertical sidebar nav, intentionally left alone.
+- This closes the production complaint where the `/agents` tab strip cut off everything after the **Builder** tab on narrower windows. Future page tab strips MUST import `<TabStrip>` rather than hand-rolling a new flex nav.
+
 ### Fixed — Agent Team trigger parity controls (2026-05-10)
 
 - Agent Team trigger event defaults now come from one shared frontend helper, so Team Wizard and Team detail both default Jira bindings to `jira.issue.detected`, Gmail bindings to `email.message.received`, and GitHub bindings to the trigger's configured events when present.

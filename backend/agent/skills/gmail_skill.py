@@ -54,18 +54,6 @@ class GmailSkill(BaseSkill):
     # Hidden from the agent creation wizard: requires Google OAuth flow (Hub → Integrations → Gmail).
     wizard_visible = False
 
-    # Keywords that trigger this skill
-    EMAIL_KEYWORDS = [
-        # Portuguese
-        "email", "e-mail", "emails", "mensagem", "mensagens",
-        "inbox", "caixa de entrada", "correio",
-        # English
-        "mail", "inbox", "message", "messages",
-        # Actions
-        "ler", "leia", "mostrar", "ver", "listar",
-        "read", "show", "list", "check", "search"
-    ]
-
     def __init__(self):
         """Initialize Gmail skill."""
         super().__init__()
@@ -126,32 +114,20 @@ class GmailSkill(BaseSkill):
         """
         Determine if this message should be handled by Gmail skill.
 
-        Uses keyword matching + AI classification.
+        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
 
-        # Skills-as-Tools: If in tool-only mode, don't handle via keywords
+        # Skills-as-Tools: in tool-only mode, the agent's LLM picks via tool call instead.
         if not self.is_legacy_enabled(config):
             return False
-
-        capabilities = config.get('capabilities', {})
-        body_lower = message.body.lower()
 
         # Check if skill is enabled
         if not config.get('enabled', True):
             return False
 
-        # Get keywords from config or defaults
-        keywords = config.get('keywords', self.EMAIL_KEYWORDS)
-
-        # Keyword pre-filter
-        if not any(kw in body_lower for kw in keywords):
-            logger.debug(f"GmailSkill: No keyword match in '{message.body[:50]}...'")
-            return False
-
-        logger.info(f"GmailSkill: Keywords matched in '{message.body[:50]}...'")
-
-        # Check if any capability is enabled
+        # Check if any capability is enabled (cheap structural guard before LLM call)
+        capabilities = config.get('capabilities', {})
         has_enabled_capability = any(
             cap.get('enabled', True) if isinstance(cap, dict) else True
             for cap in capabilities.values()
@@ -161,14 +137,9 @@ class GmailSkill(BaseSkill):
             logger.info("GmailSkill: All capabilities disabled")
             return False
 
-        # Use AI fallback if enabled
-        use_ai = config.get('use_ai_fallback', True)
-        if use_ai:
-            result = await self._ai_classify(message.body, config)
-            logger.info(f"GmailSkill: AI classification result={result}")
-            return result
-
-        return True
+        result = await self._ai_classify(message.body, config)
+        logger.info(f"GmailSkill: AI classification result={result}")
+        return result
 
     async def _ai_classify(self, message: str, config: Dict[str, Any]) -> bool:
         """
@@ -1578,8 +1549,6 @@ class GmailSkill(BaseSkill):
         return {
             "execution_mode": "tool",
             "enabled": True,
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "integration_id": None,  # Must be configured per-agent
             "default_max_results": 10,

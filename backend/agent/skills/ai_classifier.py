@@ -66,11 +66,26 @@ class AISkillClassifier:
             # is_match = True
         """
         try:
-            # Phase 27: Resolve system AI config (provider_instance_id preferred)
+            # Phase 27: Resolve system AI config (provider_instance_id preferred).
+            # Even when a caller passes an explicit `model`, we still pull the
+            # system-managed provider_instance_id so AIClient can look up the
+            # API key — without this, the explicit-model path falls back to a
+            # global API-key lookup that fails for tenants that only have
+            # provider-instance credentials.
             _pi_id = None
-            if model is None and db is not None:
-                provider, model, _pi_id = get_system_ai_config(db)
-                logger.debug(f"Using system AI config: provider={provider}, model={model}, instance_id={_pi_id}")
+            provider = None
+            if db is not None:
+                sys_provider, sys_model, sys_pi_id = get_system_ai_config(db)
+                if model is None:
+                    provider, model, _pi_id = sys_provider, sys_model, sys_pi_id
+                    logger.debug(
+                        f"Using system AI config: provider={provider}, model={model}, instance_id={_pi_id}"
+                    )
+                else:
+                    provider, _pi_id = sys_provider, sys_pi_id
+                    logger.debug(
+                        f"Using caller-specified model '{model}' with system provider_instance_id={_pi_id}"
+                    )
             elif model is None:
                 model = DEFAULT_SYSTEM_AI_MODEL
                 logger.debug(f"No db provided, using default model: {model}")
@@ -222,11 +237,24 @@ Answer (YES or NO):"""
             # entity = "Assistant"
         """
         try:
-            # Phase 27: Resolve system AI config (provider_instance_id preferred)
+            # Phase 27: Resolve system AI config (provider_instance_id preferred).
+            # Even when a caller passes an explicit `model`, we still pull the
+            # system-managed provider_instance_id so AIClient can look up the
+            # API key.
             _pi_id = None
-            if model is None and db is not None:
-                provider, model, _pi_id = get_system_ai_config(db)
-                logger.debug(f"Entity extraction using system AI config: provider={provider}, model={model}, instance_id={_pi_id}")
+            provider = None
+            if db is not None:
+                sys_provider, sys_model, sys_pi_id = get_system_ai_config(db)
+                if model is None:
+                    provider, model, _pi_id = sys_provider, sys_model, sys_pi_id
+                    logger.debug(
+                        f"Entity extraction using system AI config: provider={provider}, model={model}, instance_id={_pi_id}"
+                    )
+                else:
+                    provider, _pi_id = sys_provider, sys_pi_id
+                    logger.debug(
+                        f"Entity extraction using caller-specified model '{model}' with system provider_instance_id={_pi_id}"
+                    )
             elif model is None:
                 model = DEFAULT_SYSTEM_AI_MODEL
                 logger.debug(f"No db provided, using default model: {model}")

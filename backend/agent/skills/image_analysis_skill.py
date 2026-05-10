@@ -52,13 +52,14 @@ class ImageAnalysisSkill(BaseSkill):
     def __init__(self, token_tracker: Optional["TokenTracker"] = None):
         super().__init__()
         self.token_tracker = token_tracker
+        self._intent_cache: Dict[str, str] = {}  # message.id -> "generate" | "edit" | "none"
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
         Handle only attached images.
 
-        If the caption looks like an edit request, defer to the existing
-        image generation/editing skill instead of analyzing.
+        If the caption is an image-edit/generate request (LLM-classified, not
+        keyword-matched), defer to ImageSkill instead of analyzing.
         """
         if not message.media_type or message.media_type.lower() not in self.SUPPORTED_IMAGE_FORMATS:
             return False
@@ -66,8 +67,8 @@ class ImageAnalysisSkill(BaseSkill):
         config = getattr(self, "_config", {}) or self.get_default_config()
         caption = (message.body or "").strip()
 
-        if caption and self._looks_like_edit_request(caption, config):
-            logger.info("ImageAnalysisSkill: caption looks like edit request, deferring")
+        if caption and await self._looks_like_edit_request(message, config):
+            logger.info("ImageAnalysisSkill: caption classified as image edit, deferring to ImageSkill")
             return False
 
         logger.info("ImageAnalysisSkill: image message accepted for analysis")
@@ -208,11 +209,56 @@ class ImageAnalysisSkill(BaseSkill):
             "identify the main elements, and mention any visible text if relevant."
         )
 
-    def _looks_like_edit_request(self, text: str, config: Dict[str, Any]) -> bool:
-        """Detect whether the caption is likely meant for image editing, not analysis."""
-        edit_keywords = config.get("edit_handoff_keywords", self.get_default_config()["edit_handoff_keywords"])
-        text_lower = text.lower()
-        return any(keyword.lower() in text_lower for keyword in edit_keywords)
+    async def _looks_like_edit_request(self, message: InboundMessage, config: Dict[str, Any]) -> bool:
+        """
+        Decide whether to defer this image+caption to ImageSkill.
+
+        Uses the shared LLM classifier (same prompt/options as ImageSkill) to
+        keep handoff decisions consistent between the two skills.
+        """
+        caption = (message.body or "").strip()
+        if not caption:
+            return False
+
+        if message.id in self._intent_cache:
+            return self._intent_cache[message.id] in ("edit", "generate")
+
+        from agent.skills.ai_classifier import get_classifier
+        classifier = get_classifier()
+
+        prompt_message = (
+            f"User message: \"{caption}\"\n"
+            f"Context: An image has already been provided in this turn.\n\n"
+            "Classify what image operation the user is asking for:\n"
+            "- generate: user wants the system to CREATE a brand-new image from text\n"
+            "- edit: user wants to MODIFY the attached image (change, remove, add, fix, "
+            "enhance, recolor, crop, replace background, etc.)\n"
+            "- none: the caption is a question/comment about the image, not an edit "
+            "request (e.g. \"what is this?\", \"bonita né?\", \"explain\")"
+        )
+
+        intent = await classifier.extract_entity(
+            message=prompt_message,
+            entity_type="image operation",
+            available_options=["generate", "edit", "none"],
+            model=config.get("ai_model"),
+            db=self._db_session,
+            token_tracker=self.token_tracker,
+            tenant_id=self._resolve_tenant_id_for_classifier(config),
+        )
+
+        normalized = (intent or "none").strip().lower()
+        if normalized not in ("generate", "edit", "none"):
+            normalized = "none"
+
+        if len(self._intent_cache) >= 256:
+            self._intent_cache.pop(next(iter(self._intent_cache)))
+        self._intent_cache[message.id] = normalized
+
+        logger.info(
+            f"ImageAnalysisSkill: handoff classifier={normalized} for caption '{caption[:60]}'"
+        )
+        return normalized in ("edit", "generate")
 
     def _extract_response_text(self, response: Any) -> str:
         """Extract text safely from google-genai responses."""
@@ -314,12 +360,6 @@ class ImageAnalysisSkill(BaseSkill):
                 "If it is a screenshot, explain the key issue or information visible. "
                 "Be concise but useful."
             ),
-            "edit_handoff_keywords": [
-                "edit image", "editar imagem", "edit this", "editar isso",
-                "remove", "remover", "add", "adicionar", "change", "mudar",
-                "fix", "corrigir", "enhance", "melhorar", "crop", "cortar",
-                "replace", "substituir", "background", "fundo"
-            ],
             "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"],
             "execution_mode": "special"
         }
@@ -338,11 +378,6 @@ class ImageAnalysisSkill(BaseSkill):
                 "analysis_prompt": {
                     "type": "string",
                     "description": "Base instruction used when analyzing attached images"
-                },
-                "edit_handoff_keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "If caption matches these keywords, defer to the image editing skill"
                 },
                 "enabled_channels": {
                     "type": "array",
