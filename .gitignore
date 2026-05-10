@@ -290,6 +290,7 @@ backend/tests/*
 !backend/tests/test_watcher_team_runs.py
 !backend/tests/test_watcher_media_burst.py
 !backend/tests/test_team_membership_a2a.py
+!backend/tests/test_agent_communication_service.py
 !backend/tests/test_internal_agent_api_guards.py
 !backend/tests/test_trigger_delete_cascade.py
 !backend/tests/test_v070_backend_completion.py
