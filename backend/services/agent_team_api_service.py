@@ -393,6 +393,19 @@ class AgentTeamApiService:
             filters=data.get("filters"),
             is_enabled=data.get("is_enabled", True),
         )
+        existing = self._find_existing_trigger_binding(
+            team_id=team.id,
+            trigger_kind=trigger_kind,
+            trigger_instance_id=config["trigger_instance_id"],
+        )
+        if existing is not None:
+            existing.config_json = config
+            existing.is_enabled = config["is_enabled"]
+            existing.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(existing)
+            return self.serialize_trigger(existing)
+
         trigger = AgentTeamTrigger(
             tenant_id=self.tenant_id,
             team_id=team.id,
@@ -773,6 +786,32 @@ class AgentTeamApiService:
         if not trigger:
             raise AgentTeamApiError(404, "Team trigger binding not found")
         return trigger
+
+    def _find_existing_trigger_binding(
+        self,
+        *,
+        team_id: int,
+        trigger_kind: str,
+        trigger_instance_id: int,
+    ) -> Optional[AgentTeamTrigger]:
+        rows = (
+            self.db.query(AgentTeamTrigger)
+            .filter(
+                AgentTeamTrigger.tenant_id == self.tenant_id,
+                AgentTeamTrigger.team_id == team_id,
+                AgentTeamTrigger.trigger_kind == trigger_kind,
+            )
+            .order_by(AgentTeamTrigger.id.asc())
+            .all()
+        )
+        for row in rows:
+            config = self._normalized_trigger_config(row)
+            try:
+                if int(config["trigger_instance_id"]) == int(trigger_instance_id):
+                    return row
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def _get_member(self, team_id: int, agent_id: int) -> AgentTeamMember:
         member = (
