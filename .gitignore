@@ -356,6 +356,7 @@ backend/tests/*
 !backend/tests/test_alembic_0092_gate_schema_backfill.py
 !backend/tests/test_dev_mode_seed_users.py
 !backend/tests/test_api_key_resolver_priority.py
+!backend/tests/test_skill_intent_classification.py
 !backend/tests/fixtures/
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg

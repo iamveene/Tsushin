@@ -433,7 +433,11 @@ def test_process_rejects_imagen_edit_with_skill_result(monkeypatch):
     async def fail_get_api_key():
         raise AssertionError("process should reject Imagen edit before API lookup")
 
+    async def fake_classify(*args, **kwargs):
+        return "edit"
+
     monkeypatch.setattr(skill, "_get_api_key", fail_get_api_key)
+    monkeypatch.setattr(skill, "_classify_image_intent", fake_classify)
 
     message = InboundMessage(
         id="msg-1",

@@ -78,41 +78,18 @@ class FlightSearchSkill(BaseSkill):
         """
         Detect if message contains flight search intent.
 
-        Looks for flight-related keywords in multiple languages.
-
-        Args:
-            message: Inbound message
-
-        Returns:
-            True if message is about flight search
+        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
         """
-        # Skills-as-Tools: If in tool-only mode, don't handle via keywords
         config = getattr(self, '_config', {}) or self.get_default_config()
         if not self.is_legacy_enabled(config):
             return False
 
-        text = message.body.lower()
-
-        # Get configuration
-        keywords = config.get('keywords', self.get_default_config()['keywords'])
-        use_ai_fallback = config.get('use_ai_fallback', True)
-
-        # Step 1: Keyword pre-filter
-        has_keywords = self._keyword_matches(message.body, keywords)
-
-        if not has_keywords:
-            logger.debug(f"FlightSearchSkill: No keyword match in '{text[:50]}...'")
+        if not (message.body and message.body.strip()):
             return False
 
-        logger.info(f"FlightSearchSkill: Keywords matched in '{text[:50]}...'")
-
-        # Step 2: AI fallback (optional, for intent verification)
-        if use_ai_fallback:
-            result = await self._ai_classify(message.body, config)
-            logger.info(f"FlightSearchSkill: AI classification result={result}")
-            return result
-
-        return True
+        result = await self._ai_classify(message.body, config)
+        logger.info(f"FlightSearchSkill: AI classification result={result}")
+        return result
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -701,8 +678,6 @@ Return JSON only:"""
         """
         return {
             "execution_mode": "tool",
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider": "google_flights",  # Default provider - uses SerpApi
             "settings": {
@@ -726,17 +701,8 @@ Return JSON only:"""
                 "execution_mode": {
                     "type": "string",
                     "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (LLM decides), legacy (keywords), hybrid (both)",
+                    "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
                     "default": "tool"
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger flight search (legacy/hybrid mode)"
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI to verify intent after keyword match"
                 },
                 "ai_model": {
                     "type": "string",

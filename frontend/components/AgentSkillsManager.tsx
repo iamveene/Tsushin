@@ -256,7 +256,6 @@ function getFallbackSkillCardFacts(
   config: SkillConfig,
   schemaProperties: Record<string, ConfigSchemaProperty>,
 ): SkillCardFact[] {
-  const keywords = asStringArray(config.keywords)
   const facts: SkillCardFact[] = []
 
   Object.entries(config).forEach(([key, value]) => {
@@ -270,10 +269,6 @@ function getFallbackSkillCardFacts(
       value: formatted,
     })
   })
-
-  if (keywords.length > 0) {
-    facts.push({ label: 'Keywords', value: `${keywords.length} configured` })
-  }
 
   return facts
 }
@@ -291,10 +286,9 @@ function getSkillCardFacts(
         { label: 'Depth limit', value: 'A2A permission rule' },
       ]
     case 'agent_switcher': {
-      const keywordCount = asStringArray(config.keywords).length
       return [
         { label: 'Triggering', value: 'Agent tool call' },
-        { label: 'Keywords', value: keywordCount > 0 ? `${keywordCount} configured` : 'Not required' },
+        { label: 'Intent', value: 'LLM-classified' },
       ]
     }
     case 'browser_automation':
@@ -1475,31 +1469,12 @@ export default function AgentSkillsManager({ agentId }: Props) {
               )}
             </div>
 
-            {/* Show keywords if configured */}
-            {config.keywords && config.keywords.length > 0 && (
-              <div className="mt-3">
-                <div className="text-xs text-tsushin-muted mb-1">Trigger Keywords</div>
-                <div className="flex flex-wrap gap-1">
-                  {config.keywords.slice(0, 8).map((kw: string, i: number) => (
-                    <span key={i} className="px-2 py-0.5 text-xs bg-teal-100 dark:bg-teal-800/30 text-teal-700 dark:text-teal-300 rounded">
-                      {kw}
-                    </span>
-                  ))}
-                  {config.keywords.length > 8 && (
-                    <span className="px-2 py-0.5 text-xs bg-tsushin-elevated text-tsushin-muted rounded">
-                      +{config.keywords.length - 8} more
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-
             <div className="mt-3 flex gap-2">
               <button
                 onClick={() => openConfig(skillType)}
                 className="px-3 py-1 text-sm text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/30 rounded"
               >
-                Edit Keywords & Options
+                Edit Options
               </button>
               <button
                 onClick={() => removeSkill(skillType, displayName)}
