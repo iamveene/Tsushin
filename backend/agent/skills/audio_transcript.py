@@ -1,7 +1,8 @@
 """
 Phase 5.0 Week 3: Audio Transcription Skill
-Transcribes audio messages using a tenant ASR instance when configured,
-falling back to OpenAI Whisper.
+Transcribes audio messages using OpenAI Whisper or an explicitly pinned tenant
+ASR instance. Pinned local ASR fails closed instead of silently falling back to
+OpenAI, preserving the operator's privacy and cost expectations.
 Phase 7.2: Added token tracking for Whisper API usage
 """
 
