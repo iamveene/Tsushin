@@ -311,6 +311,55 @@ def test_generated_env_includes_stack_scoped_helper_images(installer, tmp_path):
     assert "TSN_TOOLBOX_BASE_IMAGE=audit5local/toolbox:base" in env_text
 
 
+def test_whatsapp_helper_image_build_failure_is_fatal(installer, tmp_path, monkeypatch):
+    """Fresh installs must not continue without the runtime WhatsApp image."""
+    installer.root_dir = tmp_path
+    installer.buildx_available = False
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    (tmp_path / "backend" / "whatsapp-mcp").mkdir(parents=True)
+
+    class FailedBuild:
+        def __init__(self, *args, **kwargs):
+            self.stdout = iter(["failed\n"])
+            self.returncode = 1
+
+        def wait(self):
+            return None
+
+    monkeypatch.setattr(install.subprocess, "Popen", FailedBuild)
+
+    with pytest.raises(SystemExit):
+        installer.build_additional_images()
+
+
+def test_whatsapp_helper_image_build_success_requires_inspect(installer, tmp_path, monkeypatch):
+    installer.root_dir = tmp_path
+    installer.buildx_available = False
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    (tmp_path / "backend" / "whatsapp-mcp").mkdir(parents=True)
+
+    class SuccessfulBuild:
+        def __init__(self, *args, **kwargs):
+            self.stdout = iter(["Successfully built\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return None
+
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "Popen", SuccessfulBuild)
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    installer.build_additional_images()
+
+    assert ["docker", "image", "inspect", "tsushin/whatsapp-mcp:latest"] in calls
+
+
 # ---------------------------------------------------------------------------
 # _validate_cert_pair
 # ---------------------------------------------------------------------------

@@ -7,8 +7,9 @@ set -euo pipefail
 #   1. validate this checkout is on main and pushed
 #   2. SSH to the production checkout
 #   3. git pull --ff-only on the production host
-#   4. rebuild only changed compose services, without docker-compose down
-#   5. verify local container health and the public Cloudflare URL
+#   4. ensure the WhatsApp MCP helper image exists for runtime-created instances
+#   5. rebuild only changed compose services, without docker-compose down
+#   6. verify local container health and the public Cloudflare URL
 #
 # No secrets are stored here. Provide SSH credentials through your normal SSH
 # agent or, if needed for an interactive one-off, DEPLOY_SSH_PASSWORD.
@@ -260,6 +261,49 @@ detect_services() {
   done < <(git diff --name-only "$before" "$after")
 }
 
+whatsapp_helper_image_ref() {
+  local image_ref
+  image_ref="$(get_env_value TSN_WHATSAPP_MCP_IMAGE)"
+  image_ref="${image_ref:-tsushin/whatsapp-mcp:latest}"
+  printf '%s' "$image_ref"
+}
+
+should_rebuild_whatsapp_helper_image() {
+  local before="$1"
+  local after="$2"
+  local image_ref="$3"
+
+  if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
+    printf 'WhatsApp MCP helper image is missing: %s\n' "$image_ref"
+    return 0
+  fi
+
+  [[ "$DEPLOY_FORCE_REBUILD" == "1" ]] && return 0
+  [[ "$before" == "$after" ]] && return 1
+
+  git diff --name-only "$before" "$after" | grep -Eq \
+    '^(backend/whatsapp-mcp/|docker-compose(\..*)?\.yml$|install\.py$|scripts/deploy-prod\.sh$)'
+}
+
+ensure_whatsapp_helper_image() {
+  local before="$1"
+  local after="$2"
+  local image_ref
+  image_ref="$(whatsapp_helper_image_ref)"
+
+  if ! should_rebuild_whatsapp_helper_image "$before" "$after" "$image_ref"; then
+    printf 'OK: WhatsApp MCP helper image exists (%s)\n' "$image_ref"
+    return 0
+  fi
+
+  [[ -f backend/whatsapp-mcp/Dockerfile ]] || fail "Missing backend/whatsapp-mcp/Dockerfile; cannot build ${image_ref}"
+
+  printf 'Building WhatsApp MCP helper image: %s\n' "$image_ref"
+  docker build -t "$image_ref" backend/whatsapp-mcp
+  docker image inspect "$image_ref" >/dev/null 2>&1 || fail "WhatsApp MCP helper image was not available after build: ${image_ref}"
+  printf 'OK: WhatsApp MCP helper image ready (%s)\n' "$image_ref"
+}
+
 wait_for_container() {
   local container="$1"
   local attempts="${2:-60}"
@@ -313,6 +357,7 @@ printf 'Deploy revision: %s -> %s\n' "$before" "$after"
 detect_services "$before" "$after"
 
 docker network inspect tsushin-network >/dev/null 2>&1 || docker network create tsushin-network >/dev/null
+ensure_whatsapp_helper_image "$before" "$after"
 
 if ((${#build_services[@]} > 0)); then
   printf 'Rebuilding services: %s\n' "${build_services[*]}"
