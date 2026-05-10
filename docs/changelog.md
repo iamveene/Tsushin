@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — WhatsApp transcript memory recall (2026-05-10)
+
+- WhatsApp routing now injects recent working memory independently from the legacy global semantic-search flag, while still using each selected agent's own semantic-search settings for deeper recall.
+- Transcript-only audio turns that are remembered as `audio_transcript` user memory are now available to the next WhatsApp reply, so follow-ups like "what was the previous message?" can see the transcript while the original audio response remains transcript-only.
+
 ### Fixed — ASR regression contract and combined suite isolation (2026-05-10)
 
 - Aligned audio-transcript tests and documentation with the current pinned-local ASR contract: an explicitly selected tenant ASR instance fails closed instead of silently falling back to OpenAI Whisper.

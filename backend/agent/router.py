@@ -940,6 +940,27 @@ class AgentRouter:
                 return output[len(prefix):].strip()
         return output
 
+    def _agent_memory_context_config(self, agent_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge global and selected-agent memory settings for prompt context."""
+        effective = dict(self.config or {})
+        for key in (
+            "memory_size",
+            "memory_isolation_mode",
+            "enable_semantic_search",
+            "semantic_search_results",
+            "semantic_similarity_threshold",
+            "enable_shared_memory",
+        ):
+            value = (agent_config or {}).get(key)
+            if value is not None:
+                effective[key] = value
+        return effective
+
+    @staticmethod
+    def _include_shared_memory_for_context(context_config: Dict[str, Any]) -> bool:
+        isolation_mode = context_config.get("memory_isolation_mode", "isolated") or "isolated"
+        return isolation_mode == "shared" and context_config.get("enable_shared_memory", True)
+
     async def _transcript_memory_safety_allows(
         self,
         *,
@@ -1474,7 +1495,11 @@ class AgentRouter:
             "model_provider": agent.model_provider,
             "model_name": agent.model_name,
             "system_prompt": system_prompt,
-            "memory_size": self.config.get("memory_size", 10),  # Inherit from config
+            "memory_size": getattr(agent, "memory_size", None) or self.config.get("memory_size", 10),
+            "memory_isolation_mode": getattr(agent, "memory_isolation_mode", None) or self.config.get("memory_isolation_mode", "isolated"),
+            "enable_semantic_search": getattr(agent, "enable_semantic_search", None),
+            "semantic_search_results": getattr(agent, "semantic_search_results", None),
+            "semantic_similarity_threshold": getattr(agent, "semantic_similarity_threshold", None),
             "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
             "provider_instance_id": getattr(agent, 'provider_instance_id', None),
             "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
@@ -2890,38 +2915,36 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # Item 10: Now with contact-based memory support
             # Phase 15: Project-scoped memory when in project context
             semantic_context = ""
-            if self.config.get("enable_semantic_search", False):
-                self.logger.info("Semantic search enabled for group message")
-                context = await self.memory_manager.get_context(
-                    agent_id=agent_id,
-                    sender_key=sender_key,
-                    current_message=message_text,
-                    max_semantic_results=self.config.get("semantic_search_results", 5),
-                    similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
-                    include_knowledge=True,  # Include learned facts
-                    include_shared=self.config.get("enable_shared_memory", True),  # Phase 4.8 Week 4
-                    chat_id=chat_id,  # For channel_isolated mode
-                    whatsapp_id=sender,  # Item 10: For contact resolution
-                    telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
-                    use_contact_mapping=True,  # Item 10: Enable contact-based memory
-                    project_id=current_project_id  # Phase 15: Project-scoped memory
-                )
-                # Format context for display (Phase 4.8 Week 3: pass sender_key for adaptive personality)
-                # Fix: Use freshness detection to determine if tool context should be included
-                agent_memory = self.memory_manager.get_agent_memory(agent_id)
-                include_tool_context = self._should_include_tool_context(message_text, context)
-                semantic_context = agent_memory.format_context_for_prompt(
-                    context,
-                    user_id=sender_key,
-                    include_tool_outputs=include_tool_context
-                )
-                self.logger.info(f"Semantic context generated: {len(semantic_context)} chars (tool_context={include_tool_context})")
+            context_config = self._agent_memory_context_config(agent_config)
+            context = await self.memory_manager.get_context(
+                agent_id=agent_id,
+                sender_key=sender_key,
+                current_message=message_text,
+                max_semantic_results=context_config.get("semantic_search_results", 5),
+                similarity_threshold=context_config.get("semantic_similarity_threshold", 0.3),
+                include_knowledge=True,  # Include learned facts
+                include_shared=self._include_shared_memory_for_context(context_config),
+                chat_id=chat_id,  # For channel_isolated mode
+                whatsapp_id=sender,  # Item 10: For contact resolution
+                telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
+                use_contact_mapping=True,  # Item 10: Enable contact-based memory
+                project_id=current_project_id  # Phase 15: Project-scoped memory
+            )
+            # Always include working memory. Semantic search only controls Layer 2 recall.
+            agent_memory = self.memory_manager.get_agent_memory(agent_id)
+            include_tool_context = self._should_include_tool_context(message_text, context)
+            semantic_context = agent_memory.format_context_for_prompt(
+                context,
+                user_id=sender_key,
+                include_tool_outputs=include_tool_context
+            )
+            self.logger.info(f"Memory context generated: {len(semantic_context)} chars (tool_context={include_tool_context})")
 
             # Combine all contexts
             parts = []
             if context_prefix:
                 parts.append(context_prefix)
-            if semantic_context and semantic_context != "No previous context":
+            if semantic_context and semantic_context not in {"[No previous context]", "No previous context"}:
                 parts.append(semantic_context)
 
             if parts:
@@ -2935,33 +2958,30 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # Phase 4.8: Direct message - add semantic context from agent-scoped memory
             # Item 10: Now with contact-based memory support
             # Phase 15: Project-scoped memory when in project context
-            if self.config.get("enable_semantic_search", False):
-                context = await self.memory_manager.get_context(
-                    agent_id=agent_id,
-                    sender_key=sender_key,
-                    current_message=message_text,
-                    max_semantic_results=self.config.get("semantic_search_results", 5),
-                    similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
-                    include_knowledge=True,  # Include learned facts
-                    include_shared=self.config.get("enable_shared_memory", True),  # Phase 4.8 Week 4
-                    whatsapp_id=sender,  # Item 10: For contact resolution
-                    telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
-                    use_contact_mapping=True,  # Item 10: Enable contact-based memory
-                    project_id=current_project_id  # Phase 15: Project-scoped memory
-                )
-                # Format and prepend semantic context (Phase 4.8 Week 3: pass sender_key for adaptive personality)
-                # Fix: Use freshness detection to determine if tool context should be included
-                agent_memory = self.memory_manager.get_agent_memory(agent_id)
-                include_tool_context = self._should_include_tool_context(message_text, context)
-                context_str = agent_memory.format_context_for_prompt(
-                    context,
-                    user_id=sender_key,
-                    include_tool_outputs=include_tool_context
-                )
-                if context_str and context_str != "[No previous context]":
-                    translated_message = f"{context_str}\n\n[Current message from {sender_name}]: {translated_message}"
-                else:
-                    translated_message = f"[Message from {sender_name}]: {translated_message}"
+            context_config = self._agent_memory_context_config(agent_config)
+            context = await self.memory_manager.get_context(
+                agent_id=agent_id,
+                sender_key=sender_key,
+                current_message=message_text,
+                max_semantic_results=context_config.get("semantic_search_results", 5),
+                similarity_threshold=context_config.get("semantic_similarity_threshold", 0.3),
+                include_knowledge=True,  # Include learned facts
+                include_shared=self._include_shared_memory_for_context(context_config),
+                whatsapp_id=sender,  # Item 10: For contact resolution
+                telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
+                use_contact_mapping=True,  # Item 10: Enable contact-based memory
+                project_id=current_project_id  # Phase 15: Project-scoped memory
+            )
+            # Always include working memory. Semantic search only controls Layer 2 recall.
+            agent_memory = self.memory_manager.get_agent_memory(agent_id)
+            include_tool_context = self._should_include_tool_context(message_text, context)
+            context_str = agent_memory.format_context_for_prompt(
+                context,
+                user_id=sender_key,
+                include_tool_outputs=include_tool_context
+            )
+            if context_str and context_str not in {"[No previous context]", "No previous context"}:
+                translated_message = f"{context_str}\n\n[Current message from {sender_name}]: {translated_message}"
             else:
                 translated_message = f"[Message from {sender_name}]: {translated_message}"
 
