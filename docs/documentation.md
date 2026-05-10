@@ -600,7 +600,7 @@ The installer automatically:
 2. Creates the `tsushin-network` Docker bridge if absent.
 3. Generates `.env` with random `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `TSN_MASTER_KEY`.
 4. Sets `HOST_BACKEND_DATA_PATH` to the absolute host path of `backend/data` (required for Docker-in-Docker volume mounts).
-5. Builds backend + frontend images and stack-scoped helper images, then starts the stack.
+5. Builds backend + frontend images and stack-scoped helper images, then starts the stack. The WhatsApp MCP helper image is mandatory; if `TSN_WHATSAPP_MCP_IMAGE` cannot be built and inspected, install stops before the UI can create a broken WhatsApp bot/tester instance.
 6. (If SSL) Generates `caddy/<stack-name>/Caddyfile` with stack-scoped upstreams plus matching self-signed cert or Let's Encrypt configuration.
 
 Source: `install.py:49-53`, `docker-compose.yml:131-134` (HOST_BACKEND_DATA_PATH is required in `.env`).
@@ -725,7 +725,7 @@ Production deploys follow the release gate below:
 /Users/vinicios/code/cloudflare/cf-allowlist.sh add-ip <ip-or-cidr>
 ```
 
-Use `scripts/deploy-prod.sh` for the production host. The script refuses non-`main` deploys by default, SSHes to the production checkout, runs `git pull --ff-only`, rebuilds changed services with Docker Compose without calling `docker-compose down`, verifies container health, and checks the public Cloudflare URL.
+Use `scripts/deploy-prod.sh` for the production host. The script refuses non-`main` deploys by default, SSHes to the production checkout, runs `git pull --ff-only`, ensures the WhatsApp MCP helper image from `TSN_WHATSAPP_MCP_IMAGE` exists or rebuilds it from `backend/whatsapp-mcp`, rebuilds changed services with Docker Compose without calling `docker-compose down`, verifies container health, and checks the public Cloudflare URL.
 
 ```bash
 cd /Users/vinicios/code/tsushin
