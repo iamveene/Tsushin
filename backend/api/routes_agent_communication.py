@@ -76,19 +76,25 @@ def _resolve_agent_name(db: Session, agent_id: int) -> str:
 
 
 def _build_agent_name_map(db: Session, agent_ids: set, tenant_id: str = None) -> dict:
-    """Batch-resolve agent IDs to friendly names to avoid N+1 queries."""
+    """Batch-resolve agent IDs to friendly names to avoid N+1 queries.
+
+    Uses a LEFT OUTER JOIN to Contact so that an agent whose contact row was
+    deleted (Agent.contact_id has no FK constraint and can dangle) is still
+    listed — labelled by id rather than as "(deleted)". Only agents that are
+    truly missing from the agent table get the "(deleted)" suffix.
+    """
     if not agent_ids:
         return {}
     q = (
         db.query(Agent.id, Contact.friendly_name)
-        .join(Contact, Contact.id == Agent.contact_id)
+        .outerjoin(Contact, Contact.id == Agent.contact_id)
         .filter(Agent.id.in_(agent_ids))
     )
     if tenant_id:
         q = q.filter(Agent.tenant_id == tenant_id)
     rows = q.all()
-    name_map = {row[0]: row[1] for row in rows}
-    # Fill in any missing (deleted agents)
+    name_map = {row[0]: (row[1] or f"Agent #{row[0]}") for row in rows}
+    # Only mark "(deleted)" for ids the agent table did not return at all.
     for aid in agent_ids:
         if aid not in name_map:
             name_map[aid] = f"Agent #{aid} (deleted)"
