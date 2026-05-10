@@ -20,6 +20,7 @@ import {
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import { useTeamWizard } from '@/contexts/TeamWizardContext'
 import { api, type Agent, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
+import { defaultTeamTriggerEvents, eventTypesFromInput } from '@/lib/team-trigger-defaults'
 import {
   TEAM_TEMPLATE_PRESETS,
   type TeamTemplateId,
@@ -117,17 +118,6 @@ function parseFilters(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-function eventTypesFromInput(value: string) {
-  return Array.from(
-    new Set(
-      value
-        .split(/[\n,]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  )
-}
-
 function triggerOptionKey(option: TriggerOption) {
   return `${option.kind}:${option.id}`
 }
@@ -152,7 +142,7 @@ function activeWebhookOptions(items: WebhookIntegration[]): TriggerOption[] {
       id: item.id,
       label: item.integration_name || `Webhook #${item.id}`,
       detail: item.slug || item.inbound_url || `Webhook #${item.id}`,
-      defaultEvents: ['message.created'],
+      defaultEvents: defaultTeamTriggerEvents('webhook', item),
     }))
 }
 
@@ -164,7 +154,7 @@ function activeGitHubOptions(items: GitHubTrigger[]): TriggerOption[] {
       id: item.id,
       label: item.integration_name || `${item.repo_owner}/${item.repo_name}`,
       detail: `${item.repo_owner}/${item.repo_name}`,
-      defaultEvents: item.events?.length ? item.events : ['github.pull_request'],
+      defaultEvents: defaultTeamTriggerEvents('github', item),
     }))
 }
 
@@ -176,7 +166,7 @@ function activeJiraOptions(items: JiraTrigger[]): TriggerOption[] {
       id: item.id,
       label: item.integration_name || item.jira_integration_name || `Jira #${item.id}`,
       detail: item.project_key || item.site_url || item.jql,
-      defaultEvents: ['jira.issue.updated'],
+      defaultEvents: defaultTeamTriggerEvents('jira', item),
     }))
 }
 
@@ -188,7 +178,7 @@ function activeEmailOptions(items: EmailTrigger[]): TriggerOption[] {
       id: item.id,
       label: item.integration_name || `Gmail #${item.id}`,
       detail: item.search_query || item.health_status_reason || 'Gmail trigger',
-      defaultEvents: ['email.message.received'],
+      defaultEvents: defaultTeamTriggerEvents('gmail', item),
     }))
 }
 
@@ -884,7 +874,7 @@ function TriggersStep({
                     value={trigger.event_types.join(', ')}
                     onChange={(event) => patchTrigger(trigger.uid, { event_types: eventTypesFromInput(event.target.value) })}
                     className={`${inputClass} min-h-[72px] resize-y`}
-                    placeholder="message.created, github.pull_request, email.message.received"
+                    placeholder="message.created, github.pull_request, jira.issue.detected, email.message.received"
                   />
                 </label>
                 <label className="space-y-2">

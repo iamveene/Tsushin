@@ -74,8 +74,31 @@ export default function StudioTeamsPage() {
     teamWizard.openWizard()
   }, [newTeamRequested, teamWizard])
 
-  useTeamWizardComplete(() => {
-    loadTeams()
+  useTeamWizardComplete((teamId) => {
+    setError(null)
+    void api.getTeam(teamId)
+      .then((createdTeam) => {
+        setLoading(false)
+        const alreadyPresent = teams.some((team) => team.id === createdTeam.id)
+        setTeams((current) => {
+          return [createdTeam, ...current.filter((team) => team.id !== createdTeam.id)]
+            .filter((team) => includeArchived || team.status !== 'archived')
+            .slice(0, 50)
+            .map((team) => ({ ...team }))
+            .sort((a, b) => {
+              if (a.id === createdTeam.id) return -1
+              if (b.id === createdTeam.id) return 1
+              return new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime()
+            })
+        })
+        setTotal((current) => alreadyPresent ? current : Math.max(current + 1, teams.length + 1))
+      })
+      .catch(() => {
+        // The canonical reload below will surface any persistent API issue.
+      })
+      .finally(() => {
+        void loadTeams()
+      })
   })
 
   useEffect(() => {
