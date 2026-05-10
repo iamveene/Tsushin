@@ -32,6 +32,10 @@ from services.container_runtime import (
 logger = logging.getLogger(__name__)
 
 
+class MCPContainerProvisioningError(RuntimeError):
+    """Raised when a WhatsApp MCP container cannot be provisioned safely."""
+
+
 class MCPContainerManager:
     """Manages Docker containers for WhatsApp MCP instances"""
 
@@ -51,6 +55,9 @@ class MCPContainerManager:
         self._resolved_tester_api_url: Optional[str] = None
         self._resolved_tester_source: Optional[str] = None
         logger.info("MCPContainerManager initialized with container runtime")
+
+    def _get_image_name(self) -> str:
+        return os.getenv("TSN_WHATSAPP_MCP_IMAGE", self.IMAGE_NAME)
 
     def _resolve_network_name(self) -> str:
         """Resolve the tsushin network name."""
@@ -108,6 +115,8 @@ class MCPContainerManager:
             container_id = container.id if hasattr(container, 'id') else str(container)
             logger.info(f"Container {container_name} started with ID {container_id}")
 
+        except MCPContainerProvisioningError:
+            raise
         except Exception as e:
             logger.error(f"Failed to start container: {e}")
             raise RuntimeError(f"Failed to start Docker container: {e}")
@@ -259,12 +268,20 @@ class MCPContainerManager:
         logger.info(f"Starting container {container_name} on port {port}")
         logger.info(f"Volume mount: {session_dir_abs} -> /app/store")
 
+        image_name = self._get_image_name()
+        if not self.runtime.image_exists(image_name):
+            raise MCPContainerProvisioningError(
+                "WhatsApp MCP image is not available to the container runtime: "
+                f"{image_name}. Build or pull the image before creating an instance, "
+                "or set TSN_WHATSAPP_MCP_IMAGE to an existing image."
+            )
+
         # Check if tsushin network exists, create if not
         network_name = self._resolve_network_name()
         self.runtime.get_or_create_network(network_name)
 
         container = self.runtime.create_container(
-            image=self.IMAGE_NAME,
+            image=image_name,
             name=container_name,
             ports={'8080/tcp': ('127.0.0.1', port)},  # Also expose on localhost for debugging
             volumes={

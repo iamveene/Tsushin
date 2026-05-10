@@ -709,7 +709,45 @@ docker logs mcp-agent-tenant_<id> --tail=10   # Look for QR-code re-auth loop
 docker restart mcp-agent-tenant_<id>          # Restart, then re-scan QR from phone
 ```
 
-### 4.3 Kubernetes / GKE (Helm chart)
+### 4.3 Production deploy gate (main-only)
+
+Production deploys follow the release gate below:
+
+1. Validate locally first from `/Users/vinicios/code/tsushin`: start from a healthy compose stack, rebuild changed services without cache when needed, and run the smallest relevant API/build checks.
+2. Run real browser automation against every affected local UI/workflow route. Static checks alone are not enough for release approval.
+3. Move code through `develop` -> PR -> `main`. Production deploys are allowed only from `main` unless the user explicitly approves an emergency override.
+4. Verify Cloudflare allowlisting before deploy:
+
+```bash
+/Users/vinicios/code/cloudflare/cf-allowlist.sh status
+/Users/vinicios/code/cloudflare/cf-allowlist.sh current-ip
+/Users/vinicios/code/cloudflare/cf-allowlist.sh add-host <hostname>
+/Users/vinicios/code/cloudflare/cf-allowlist.sh add-ip <ip-or-cidr>
+```
+
+Use `scripts/deploy-prod.sh` for the production host. The script refuses non-`main` deploys by default, SSHes to the production checkout, runs `git pull --ff-only`, rebuilds changed services with Docker Compose without calling `docker-compose down`, verifies container health, and checks the public Cloudflare URL.
+
+```bash
+cd /Users/vinicios/code/tsushin
+scripts/deploy-prod.sh
+```
+
+Common non-secret overrides:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEPLOY_HOST` | `hunter.archsec.io` | SSH host for the production server. |
+| `DEPLOY_USER` | `root` | SSH user. |
+| `DEPLOY_REMOTE_DIR` | `/opt/code/tsushin` | Production git checkout path. |
+| `DEPLOY_GIT_REMOTE` | `origin` | Remote used by local preflight and remote pull. |
+| `DEPLOY_BRANCH` | `main` | Release branch to deploy. Non-`main` requires `DEPLOY_ALLOW_NON_MAIN=1`. |
+| `DEPLOY_PUBLIC_URL` | `https://tsushin.archsec.io` | Public URL checked after the remote rebuild. |
+| `DEPLOY_SERVICES` | `auto` | Auto-detect rebuild targets from the pulled diff, or set explicit services such as `backend frontend`. |
+| `DEPLOY_FORCE_REBUILD` | `0` | Set `1` to rebuild backend and frontend even when no service diff is detected. |
+
+The source-of-truth production verification is public browser QA on `https://tsushin.archsec.io` after the script completes. Container health, server-local curl, and public curl are necessary gates, but they do not replace browser automation on the public origin.
+
+### 4.4 Kubernetes / GKE (Helm chart)
 
 Tsushin ships a Helm chart at `k8s/tsushin/`:
 
@@ -736,7 +774,7 @@ Features of the Helm chart (per `README.md:261-268`):
 * Prometheus metrics scraped from `/metrics`.
 * Structured JSON logs via `TSN_LOG_FORMAT=json`.
 
-### 4.4 GCP Secret Manager backend
+### 4.5 GCP Secret Manager backend
 
 Tsushin's secret retrieval is abstracted behind a `SecretProvider` interface. Activate the GCP provider with `TSN_SECRET_BACKEND=gcp` (default is `env`, which reads `os.environ`).
 
@@ -751,7 +789,7 @@ GCP provider features (`services/secret_provider.py:148-267`):
 
 **Secret naming:** A key `JWT_SECRET_KEY` with prefix `tsushin` becomes GCP secret `tsushin_JWT_SECRET_KEY` (or similar — confirm naming convention with `services/secret_provider.py`). Source: `backend/settings.py:142-144`.
 
-### 4.5 Startup & Seeding Sequence
+### 4.6 Startup & Seeding Sequence
 
 `db.init_database()` runs on every backend startup (called from `main.py`). It is fully idempotent — running it on an already-initialised DB is safe.
 
@@ -785,7 +823,7 @@ GCP provider features (`services/secret_provider.py:148-267`):
 
 ---
 
-### 4.6 Emergency Stop (tenant + global kill switches)
+### 4.7 Emergency Stop (tenant + global kill switches)
 
 Two independent kill switches sit in the header and gate every ingress point (WhatsApp, Telegram, Slack, Discord, webhooks, API triggers). Either switch being `true` halts processing for the messages it covers.
 
