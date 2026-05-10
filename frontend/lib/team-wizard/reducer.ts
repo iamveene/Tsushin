@@ -10,7 +10,7 @@ export type TeamWizardStep =
 export type TeamTemplateId = 'custom' | 'incident_triage' | 'release_review' | 'research_synthesis'
 export type TeamTopologyDraft = 'line' | 'mesh'
 export type TeamStatusDraft = 'draft' | 'active' | 'paused'
-export type TeamTriggerDraftKind = 'webhook' | 'github' | 'jira'
+export type TeamTriggerDraftKind = 'webhook' | 'github' | 'jira' | 'gmail'
 
 export interface TeamMemberDraft {
   agent_id: number
@@ -175,7 +175,7 @@ export function normalizeTeamDraft(draft: Partial<TeamWizardDraft> | null | unde
       ? draft.triggers
           .filter(
             (trigger) =>
-              ['webhook', 'github', 'jira'].includes(trigger.trigger_kind) &&
+              ['webhook', 'github', 'jira', 'gmail'].includes(trigger.trigger_kind) &&
               Number.isFinite(Number(trigger.trigger_instance_id)) &&
               Number(trigger.trigger_instance_id) > 0,
           )

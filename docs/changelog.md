@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Agent Team Gmail trigger binding UI (2026-05-10)
+
+- Studio Team creation and Team detail trigger binding controls now include active Gmail/Email triggers alongside Webhook, GitHub, and Jira.
+- This closes the UI-only gap where backend dispatch and trigger detail readback supported Gmail team bindings, but operators could not recreate those bindings through the Agent Team UI during production parity replication.
+
 ### Fixed — WhatsApp transcript memory recall (2026-05-10)
 
 - WhatsApp routing now injects recent working memory independently from the legacy global semantic-search flag, while still using each selected agent's own semantic-search settings for deeper recall.
