@@ -565,7 +565,7 @@ def test_dispatch_creates_redacted_payload_ref_for_email_instance(db_session, tm
 @pytest.mark.parametrize(
     ("trigger_type", "instance_id", "event_type", "seed_fn"),
     [
-        ("jira", 701, "jira.issue.updated", _seed_jira),
+        ("jira", 701, "jira.issue.detected", _seed_jira),
         ("github", 901, "github.pull_request", _seed_github),
     ],
 )
@@ -744,7 +744,7 @@ def test_dispatch_rolls_back_partial_team_run_queue_insert_failure(
         (
             "jira",
             701,
-            "jira.issue.updated",
+            "jira.issue.detected",
             _seed_jira,
             {"jsonpath_matchers": [{"path": "$.issue.fields.status.name", "operator": "equals", "value": "Done"}]},
             {"issue": {"fields": {"status": {"name": "Done"}}}},
@@ -903,7 +903,7 @@ def test_dispatch_team_triggers_fail_closed_for_inactive_team_or_missing_instanc
     ("trigger_type", "instance_id", "event_type", "seed_fn"),
     [
         ("email", 601, "email.message.received", _seed_email),
-        ("jira", 701, "jira.issue.created", _seed_jira),
+        ("jira", 701, "jira.issue.detected", _seed_jira),
         ("github", 901, "github.pull_request", _seed_github),
         ("webhook", 401, "message.created", _seed_webhook),
     ],

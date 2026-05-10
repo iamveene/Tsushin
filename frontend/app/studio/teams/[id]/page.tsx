@@ -40,6 +40,7 @@ import {
   type TeamTriggerResponse,
   type WebhookIntegration,
 } from '@/lib/client'
+import { defaultTeamTriggerEvents, eventTypesFromInput, eventTypesToInput } from '@/lib/team-trigger-defaults'
 
 const TeamCanvas = dynamic(() => import('@/components/watcher/team/TeamCanvas'), {
   ssr: false,
@@ -58,6 +59,7 @@ type TriggerOption = {
   id: number
   label: string
   detail: string
+  defaultEvents: string[]
 }
 
 const TABS: Array<{ id: TeamTab; label: string; icon: ReactNode }> = [
@@ -137,10 +139,6 @@ function parseFilters(text: string) {
   return parsed as Record<string, unknown>
 }
 
-function eventTypesFromInput(value: string) {
-  return value.split(',').map((item) => item.trim()).filter(Boolean)
-}
-
 function triggerKindLabel(kind: string) {
   if (kind === 'gmail') return 'Gmail'
   if (kind === 'github') return 'GitHub'
@@ -169,6 +167,7 @@ function buildTriggerOptions(
       id: item.id,
       label: item.integration_name || `Webhook #${item.id}`,
       detail: item.health_status_reason || item.health_status || 'Webhook trigger',
+      defaultEvents: defaultTeamTriggerEvents('webhook', item),
     })),
     ...github.filter(active).map((item) => ({
       key: `github:${item.id}`,
@@ -176,6 +175,7 @@ function buildTriggerOptions(
       id: item.id,
       label: item.integration_name || `GitHub #${item.id}`,
       detail: item.health_status_reason || item.health_status || 'GitHub trigger',
+      defaultEvents: defaultTeamTriggerEvents('github', item),
     })),
     ...jira.filter(active).map((item) => ({
       key: `jira:${item.id}`,
@@ -183,6 +183,7 @@ function buildTriggerOptions(
       id: item.id,
       label: item.integration_name || `Jira #${item.id}`,
       detail: item.jql || item.health_status_reason || 'Jira trigger',
+      defaultEvents: defaultTeamTriggerEvents('jira', item),
     })),
     ...email.filter(active).map((item) => ({
       key: `gmail:${item.id}`,
@@ -190,6 +191,7 @@ function buildTriggerOptions(
       id: item.id,
       label: item.integration_name || `Gmail #${item.id}`,
       detail: item.search_query || item.health_status_reason || 'Gmail trigger',
+      defaultEvents: defaultTeamTriggerEvents('gmail', item),
     })),
   ]
 }
@@ -226,6 +228,7 @@ export default function StudioTeamDetailPage() {
   const [newTriggerKey, setNewTriggerKey] = useState('')
   const [newTriggerEvents, setNewTriggerEvents] = useState('')
   const [newTriggerFilters, setNewTriggerFilters] = useState('{}')
+  const [newTriggerEnabled, setNewTriggerEnabled] = useState(true)
   const [triggerEdits, setTriggerEdits] = useState<Record<number, { eventTypes: string; filters: string; enabled: boolean }>>({})
 
   const activeRun = useMemo(
@@ -399,13 +402,22 @@ export default function StudioTeamDetailPage() {
         trigger_instance_id: option.id,
         event_types: eventTypesFromInput(newTriggerEvents),
         filters: parseFilters(newTriggerFilters),
-        is_enabled: true,
+        is_enabled: newTriggerEnabled,
       })
       setNewTriggerKey('')
       setNewTriggerEvents('')
       setNewTriggerFilters('{}')
+      setNewTriggerEnabled(true)
       await loadAll()
     }, 'Trigger binding saved.')
+  }
+
+  const handleNewTriggerKeyChange = (value: string) => {
+    setNewTriggerKey(value)
+    const option = triggerOptions.find((item) => item.key === value)
+    setNewTriggerEvents(option ? eventTypesToInput(option.defaultEvents) : '')
+    setNewTriggerFilters('{}')
+    setNewTriggerEnabled(true)
   }
 
   const handleUpdateTrigger = async (trigger: TeamTriggerResponse) => {
@@ -628,11 +640,13 @@ export default function StudioTeamDetailPage() {
                   triggerEdits={triggerEdits}
                   setTriggerEdits={setTriggerEdits}
                   newTriggerKey={newTriggerKey}
-                  setNewTriggerKey={setNewTriggerKey}
+                  setNewTriggerKey={handleNewTriggerKeyChange}
                   newTriggerEvents={newTriggerEvents}
                   setNewTriggerEvents={setNewTriggerEvents}
                   newTriggerFilters={newTriggerFilters}
                   setNewTriggerFilters={setNewTriggerFilters}
+                  newTriggerEnabled={newTriggerEnabled}
+                  setNewTriggerEnabled={setNewTriggerEnabled}
                   readOnly={readOnly || busy}
                   onCreate={handleCreateTrigger}
                   onUpdate={handleUpdateTrigger}
@@ -694,6 +708,8 @@ function TriggersTab({
   setNewTriggerEvents,
   newTriggerFilters,
   setNewTriggerFilters,
+  newTriggerEnabled,
+  setNewTriggerEnabled,
   readOnly,
   onCreate,
   onUpdate,
@@ -709,6 +725,8 @@ function TriggersTab({
   setNewTriggerEvents: (value: string) => void
   newTriggerFilters: string
   setNewTriggerFilters: (value: string) => void
+  newTriggerEnabled: boolean
+  setNewTriggerEnabled: (value: boolean) => void
   readOnly: boolean
   onCreate: () => void
   onUpdate: (trigger: TeamTriggerResponse) => void
@@ -732,10 +750,20 @@ function TriggersTab({
           <label className="block">
             <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Event types</span>
             <input value={newTriggerEvents} onChange={(event) => setNewTriggerEvents(event.target.value)} disabled={readOnly} className={`${FIELD_BASE} w-full`} placeholder="Optional, comma separated" />
+            <span className="mt-1 block text-xs text-tsushin-muted">Defaults to the trigger's canonical event. Clear it only when this team should wake on every event from the selected trigger.</span>
           </label>
           <label className="block">
             <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Filters JSON</span>
             <textarea value={newTriggerFilters} onChange={(event) => setNewTriggerFilters(event.target.value)} disabled={readOnly} className={`${TEXTAREA_BASE} min-h-[120px] w-full font-mono text-xs`} />
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-tsushin-slate">
+            <input
+              type="checkbox"
+              checked={newTriggerEnabled}
+              disabled={readOnly}
+              onChange={(event) => setNewTriggerEnabled(event.target.checked)}
+            />
+            Enabled
           </label>
           <button type="button" onClick={onCreate} disabled={readOnly || !newTriggerKey} className="btn-primary inline-flex items-center gap-2 text-sm disabled:opacity-50">
             <WebhookIcon size={16} />

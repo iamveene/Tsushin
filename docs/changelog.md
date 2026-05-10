@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Agent Team trigger parity controls (2026-05-10)
+
+- Agent Team trigger event defaults now come from one shared frontend helper, so Team Wizard and Team detail both default Jira bindings to `jira.issue.detected`, Gmail bindings to `email.message.received`, and GitHub bindings to the trigger's configured events when present.
+- Team detail trigger binding now pre-fills canonical event types when an operator selects a trigger, accepts comma or newline-separated event lists, and exposes an Enabled checkbox before save so paused bindings can be recreated through the UI.
+- Backend Team trigger binding creation is now idempotent per team/trigger instance, updating the existing binding instead of creating duplicates when an operator retries after stale UI state.
+- Studio Teams now optimistically reflects a successfully created team before the canonical reload finishes, reducing duplicate-creation risk from stale counters/cards during browser-driven configuration.
+
 ### Fixed — Agent Team Gmail trigger binding UI (2026-05-10)
 
 - Studio Team creation and Team detail trigger binding controls now include active Gmail/Email triggers alongside Webhook, GitHub, and Jira.
