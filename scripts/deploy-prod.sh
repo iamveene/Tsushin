@@ -324,9 +324,11 @@ fi
 
 base_services=(postgres docker-socket-proxy backend frontend proxy)
 up_services=("${base_services[@]}")
-for service in "${restart_services[@]:-}"; do
-  add_service "$service" up_services
-done
+if ((${#restart_services[@]} > 0)); then
+  for service in "${restart_services[@]}"; do
+    add_service "$service" up_services
+  done
+fi
 
 compose up -d "${up_services[@]}"
 compose ps
