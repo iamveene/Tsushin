@@ -346,3 +346,61 @@ def test_transcript_only_audio_memory_respects_remember_false(monkeypatch):
 
     assert should_send is True
     assert router.memory_manager.messages == []
+
+
+def test_agent_to_config_preserves_agent_memory_settings():
+    router = _router_shell()
+    router.config = {
+        "memory_size": 1000,
+        "enable_semantic_search": False,
+        "semantic_search_results": 5,
+        "semantic_similarity_threshold": 0.3,
+    }
+    agent = SimpleNamespace(
+        model_provider="gemini",
+        model_name="gemini-3.1-flash-lite-preview",
+        system_prompt="You are helpful.",
+        persona_id=None,
+        tone_preset_id=None,
+        custom_tone=None,
+        memory_size=10,
+        memory_isolation_mode="isolated",
+        enable_semantic_search=True,
+        semantic_search_results=10,
+        semantic_similarity_threshold=0.5,
+        response_template="{response}",
+        provider_instance_id=None,
+        max_agentic_rounds=None,
+        max_agentic_loop_bytes=None,
+    )
+
+    config = router._agent_to_config(agent)
+
+    assert config["memory_size"] == 10
+    assert config["memory_isolation_mode"] == "isolated"
+    assert config["enable_semantic_search"] is True
+    assert config["semantic_search_results"] == 10
+    assert config["semantic_similarity_threshold"] == 0.5
+
+
+def test_agent_memory_context_config_prefers_agent_settings():
+    router = _router_shell()
+    router.config = {
+        "enable_semantic_search": False,
+        "semantic_search_results": 5,
+        "semantic_similarity_threshold": 0.3,
+        "enable_shared_memory": True,
+    }
+
+    merged = router._agent_memory_context_config({
+        "enable_semantic_search": True,
+        "semantic_search_results": 10,
+        "semantic_similarity_threshold": 0.5,
+        "memory_isolation_mode": "isolated",
+    })
+
+    assert merged["enable_semantic_search"] is True
+    assert merged["semantic_search_results"] == 10
+    assert merged["semantic_similarity_threshold"] == 0.5
+    assert merged["memory_isolation_mode"] == "isolated"
+    assert router._include_shared_memory_for_context(merged) is False
