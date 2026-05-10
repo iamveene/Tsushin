@@ -2010,11 +2010,13 @@ The persisted Flow output is always redacted. Field/TOTP reads require the selec
 
 The Flow editor exposes UI-first primitives for financial migrations: `Password Vault`, `Browser Automation`, `HTTP Request`, `Data Transform`, `Financial Record Store`, `Utility Bill Store`, `Gate`, and `Notification`. The legacy `financial_utility_automation` / `Utility Bill` step type was **removed in v0.7.x (2026-05-07)** along with its frontend templates, config panel, backend handler, and three site-specific runners. The 6 migrated `Finan | …` flows already use only generic primitives, so the legacy type is no longer needed.
 
+The acceptance bar is manual UI reconstruction, not backend import. A normal operator must be able to recreate every active source flow from a redacted manifest by using only Flows UI controls. A future JSON import/export feature may speed up migration, clone, and backup workflows, but it is a convenience feature and must not be treated as the workaround for missing Flow editor affordances.
+
 v0.7.x ships an initial financial template catalog that expands into visible nodes, not a hidden automation wrapper:
 
 Operator-private template profiles live in `.private/finan_profiles.json` and the corresponding browser playbook JSONs live under `.private/finan_playbooks/` (both gitignored). The expected shape of a profile entry plus the keys consumed by template seeding are documented in `services/flow_template_seeding.py`. Override the locations with `TSN_FINAN_PROFILES_PATH` and `TSN_FINAN_PLAYBOOK_DIR`. A clone without those files boots cleanly with zero Finan templates registered.
 
-Financial templates inflate the corresponding playbook steps into visible Flow nodes — never an opaque runner. Browser work is split into editable actions such as navigate, fill, click, wait for selector, wait for URL, dismiss modal, execute script, solve CAPTCHA boundary, and extract. Provider bootstrap secrets are separate Password Vault steps, not literals inside template JSON.
+Financial templates inflate the corresponding playbook steps into visible Flow nodes — never an opaque runner. Browser work is split into editable, operator-readable actions such as navigate, fill username, fill password or TOTP from Password Vault, click submit, wait for selector, wait for URL, dismiss modal, CAPTCHA/manual handoff boundary, extract fields, and capture evidence. The UI should present these as understandable sequence steps with labels, pickers, toggles, and validation, not as raw JSON, code-first selectors, or programming-like node blobs. Provider bootstrap secrets are separate Password Vault steps, not literals inside template JSON.
 
 Storage primitives persist tenant-scoped state only. Utility bills upsert `financial_utility_bill` rows keyed by `(tenant_id, provider, unit_id, reference_month)` with encrypted boleto/barcode data; generic records upsert `financial_automation_record` rows keyed by a deterministic dedupe key. Flow outputs expose redacted previews and notification conditions, while raw browser/API payloads are passed through short-lived handles for trusted downstream parsing.
 
@@ -2027,9 +2029,11 @@ A migrated financial workflow is accepted only when a normal operator can create
 5. Gate: a visible Gate step that decides whether the bill is new/changed/unpaid and notification-worthy.
 6. Notification: a visible Notification step that emits only redacted metadata and only when the Gate permits delivery.
 
+For cross-environment replication, each source field in the redacted manifest must map to a visible Flow UI control. This includes schedule and recurrence, trigger/source binding, agent/provider choices, integration references, browser session profile, HTTP method/URL/headers/body, Browser Automation sequence actions, extraction rules, storage/dedupe keys, gate mode/conditions, notification channel/recipient/template, retry/failure behavior, and node ordering. If any field can only be reproduced through API/DB writes or raw import, log a product bug with the exact missing UI control.
+
 Acceptance for each migrated financial workflow requires all of the following evidence:
 
-1. UI recreation from scratch in Flows, with each primitive node editable and saved through the UI.
+1. UI recreation from scratch in Flows, with each primitive node editable and saved through the UI; JSON import/export is optional future capability, not acceptance evidence.
 2. A manual run from the Flow list/editor.
 3. Local state update after the first run.
 4. A second manual run against the same bill proving dedupe/no duplicate state or duplicate notification.
@@ -2041,7 +2045,7 @@ New-user runbook:
 
 1. Open Hub → Tool APIs → Password Vault, add the 1Password service-account connection, set vault/item/field allowlists as needed, enable only the required runtime permissions, and use Test before saving.
 2. Attach the Password Vault skill to any agent that will resolve secrets agentically; select the same Hub integration and capability toggles from the Skills UI or from the guided Agent Wizard's Skills step.
-3. Open Flows → From Template for the supported financial catalog, or Flows → New Flow when composing manually. Templates must expand into visible primitive nodes; Advanced options may hold technical overrides such as browser session profile, unit key, asset label, and timezone.
+3. Open Flows → From Template for the supported financial catalog, or Flows → New Flow when composing manually. Templates must expand into visible primitive nodes; Advanced options may hold technical overrides such as browser session profile, unit key, asset label, and timezone, but every override needed to reproduce the source flow must still be available through the UI.
 4. Use the Variable Reference panel to pass only redacted or derived values between nodes; do not paste plaintext secrets or full boleto barcodes into prompts or notification templates.
 5. Save, manually run, inspect the run modal and local state, then run again to prove dedupe.
 6. Edit the workflow from the Flow editor when credentials, selectors, extraction fields, storage keys, gates, or notification recipients change.
