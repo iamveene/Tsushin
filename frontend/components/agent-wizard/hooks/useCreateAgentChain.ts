@@ -35,6 +35,7 @@ interface TranscriptSkillPayload {
   model: string
   asr_mode: AudioConfig['asrMode']
   asr_instance_id?: number
+  vad_filter?: boolean | null
   remember_transcript: boolean
 }
 
@@ -96,6 +97,7 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
     }
     if (audio.asrMode === 'instance' && audio.asrInstanceId) {
       transcriptConfig.asr_instance_id = audio.asrInstanceId
+      transcriptConfig.vad_filter = audio.vadFilter
     }
     await api.updateAgentSkill(agentId, 'audio_transcript', {
       is_enabled: true,

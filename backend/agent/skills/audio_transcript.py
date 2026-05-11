@@ -154,6 +154,16 @@ class AudioTranscriptSkill(BaseSkill):
             language = config.get("language", "auto")
             model = config.get("model", "whisper-1")
             tenant_id = config.get("tenant_id")
+            raw_vad_filter = config.get("vad_filter")
+            vad_filter: Optional[bool] = None
+            if isinstance(raw_vad_filter, bool):
+                vad_filter = raw_vad_filter
+            elif isinstance(raw_vad_filter, str):
+                normalized_vad_filter = raw_vad_filter.strip().lower()
+                if normalized_vad_filter in {"true", "1", "yes", "y", "on"}:
+                    vad_filter = True
+                elif normalized_vad_filter in {"false", "0", "no", "n", "off"}:
+                    vad_filter = False
             transcript = ""
             provider_name = "openai"
             provider_model = model
@@ -205,6 +215,7 @@ class AudioTranscriptSkill(BaseSkill):
                                 audio_path=audio_path,
                                 model=provider_model,
                                 language=language,
+                                vad_filter=vad_filter,
                                 tenant_id=tenant_id,
                                 agent_id=getattr(message, "agent_id", None),
                                 sender_key=getattr(message, "sender", None),
@@ -293,6 +304,7 @@ class AudioTranscriptSkill(BaseSkill):
                         audio_path=audio_path,
                         model=model,
                         language=language,
+                        vad_filter=vad_filter,
                         tenant_id=tenant_id,
                         agent_id=getattr(message, "agent_id", None),
                         sender_key=getattr(message, "sender", None),
@@ -444,6 +456,7 @@ class AudioTranscriptSkill(BaseSkill):
             "asr_instance_id": None,  # Pin a specific local Whisper/Speaches/openai_whisper instance when set
             "language": "auto",  # Auto-detect language
             "model": "whisper-1",  # OpenAI Whisper model
+            "vad_filter": None,  # Optional Speaches VAD override; false helps music-backed voice notes
             "response_mode": "conversational",  # "conversational" or "transcript_only"
             "remember_transcript": True,  # Store transcript-only audio as user memory by default
         }
@@ -486,6 +499,11 @@ class AudioTranscriptSkill(BaseSkill):
                     "description": "Whisper model to use",
                     "default": "whisper-1",
                     "enum": ["whisper-1"]
+                },
+                "vad_filter": {
+                    "type": ["boolean", "null"],
+                    "description": "Optional Speaches VAD override. Set false for audio where Speaches VAD removes speech-like content.",
+                    "default": None
                 },
                 "response_mode": {
                     "type": "string",

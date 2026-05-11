@@ -63,6 +63,7 @@ export interface AudioConfig {
   model?: string
   asrMode: ASRUsageMode
   asrInstanceId: number | null
+  vadFilter: boolean | null
   transcriptModel: string
   rememberTranscript: boolean
 }
@@ -116,6 +117,7 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   setAsDefaultTTS: false,
   asrMode: 'openai',
   asrInstanceId: null,
+  vadFilter: null,
   transcriptModel: 'whisper-1',
   rememberTranscript: true,
 }
