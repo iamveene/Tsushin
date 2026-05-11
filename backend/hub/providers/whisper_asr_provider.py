@@ -56,6 +56,8 @@ class WhisperASRProvider(ASRProvider):
                 data = {"model": model}
                 if request.language and request.language != "auto":
                     data["language"] = request.language
+                if request.vad_filter is not None:
+                    data["vad_filter"] = "true" if request.vad_filter else "false"
                 # 600s timeout: even Speaches/faster-whisper can queue requests
                 # under CPU bursts. See openai_whisper_asr_provider for context.
                 async with httpx.AsyncClient(timeout=600) as client:
@@ -94,5 +96,5 @@ class WhisperASRProvider(ASRProvider):
             success=True,
             provider=self.provider_name,
             text=text,
-            metadata={"model": model},
+            metadata={"model": model, "vad_filter": request.vad_filter},
         )

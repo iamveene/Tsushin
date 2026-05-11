@@ -110,6 +110,7 @@ export default function StepReview() {
                         ? `local instance #${state.draft.audio.asrInstanceId ?? '—'}`
                         : 'OpenAI Whisper'}
                       {' · '}
+                      {state.draft.audio.vadFilter === false ? 'VAD off · ' : ''}
                       {state.draft.audio.rememberTranscript !== false ? 'remember transcripts' : 'do not remember transcripts'}
                     </div>
                   )}

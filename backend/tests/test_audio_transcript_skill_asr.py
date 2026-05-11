@@ -145,8 +145,10 @@ class _FakeWhisperDB:
 class _FakeProvider:
     def __init__(self, response):
         self._response = response
+        self.requests = []
 
     async def transcribe(self, request):
+        self.requests.append(request)
         return self._response
 
 
@@ -205,6 +207,52 @@ def test_audio_transcript_prefers_asr_instance_when_configured():
         assert "local transcript" in result.output
         assert result.metadata["provider"] == "speaches"
         assert result.metadata["model"] == "Systran/faster-distil-whisper-small.en"
+    finally:
+        os.remove(audio_path)
+
+
+def test_audio_transcript_passes_vad_filter_to_pinned_asr_instance():
+    _ensure_real_whisper_instance_service()
+    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    try:
+        skill = AudioTranscriptSkill()
+        skill.set_db_session(object())
+        local_response = ASRResponse(success=True, provider="speaches", text="local transcript")
+        fake_provider = _FakeProvider(local_response)
+        asr_instance = SimpleNamespace(
+            id=7,
+            is_active=True,
+            vendor="speaches",
+            default_model="Systran/faster-whisper-small",
+        )
+
+        with patch(
+            "services.whisper_instance_service.WhisperInstanceService.get_instance",
+            return_value=asr_instance,
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
+            return_value=fake_provider,
+        ):
+            result = asyncio.run(
+                skill.process(
+                    _make_message(audio_path),
+                    {
+                        "tenant_id": "tenant-alpha",
+                        "asr_mode": "instance",
+                        "asr_instance_id": 7,
+                        "model": "whisper-1",
+                        "language": "pt",
+                        "vad_filter": False,
+                        "response_mode": "conversational",
+                    },
+                )
+            )
+
+        assert result.success is True
+        assert fake_provider.requests[0].vad_filter is False
+        assert fake_provider.requests[0].language == "pt"
+        assert fake_provider.requests[0].model == "Systran/faster-whisper-small"
     finally:
         os.remove(audio_path)
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Speaches local ASR VAD override for real WhatsApp voice notes (2026-05-10)
+
+- Added `audio_transcript.config.vad_filter` and pass it through to pinned Speaches instances as the OpenAI-compatible `vad_filter` multipart field, allowing operators to disable Speaches VAD when it removes an entire real voice note and returns `empty_transcription`.
+- The shared audio transcript UI now exposes the Speaches VAD toggle in Agent Skills Manager, Audio Agents Wizard, and the regular Agent Wizard audio step; the setting is cleared when switching back to cloud OpenAI Whisper or a non-Speaches local instance.
+- Added a focused backend regression test proving a pinned local ASR request preserves `vad_filter=false`, language, and model routing.
+
 ### Changed — Skill intent routing migrated from keyword lists to LLM classifier (2026-05-10)
 
 - Replaced the bilingual keyword chip-list anti-pattern across **eight** skills (`image`, `image_analysis`, `gmail`, `automation`, `browser_automation`, `flight_search`, `web_search`, `agent_switcher`) with `AISkillClassifier`-driven intent decisions. Image skill now uses a multi-class `extract_entity` call returning `generate` / `edit` / `none`; the rest call `classify_intent` directly. Per-message result is cached so `can_handle()` and `process()` share one LLM call.

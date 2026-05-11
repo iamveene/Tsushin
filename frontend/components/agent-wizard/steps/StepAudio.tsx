@@ -129,6 +129,7 @@ export default function StepAudio() {
               model: audio.transcriptModel,
               asrMode: audio.asrMode,
               asrInstanceId: audio.asrInstanceId,
+              vadFilter: audio.vadFilter,
               rememberTranscript: audio.rememberTranscript,
             }}
             onChange={(patch) => {
@@ -137,6 +138,7 @@ export default function StepAudio() {
               if (patch.model !== undefined) next.transcriptModel = patch.model
               if (patch.asrMode !== undefined) next.asrMode = patch.asrMode
               if (patch.asrInstanceId !== undefined) next.asrInstanceId = patch.asrInstanceId
+              if (patch.vadFilter !== undefined) next.vadFilter = patch.vadFilter
               if (patch.rememberTranscript !== undefined) next.rememberTranscript = patch.rememberTranscript
               patchAudio(next)
             }}
