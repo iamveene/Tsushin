@@ -76,7 +76,18 @@ MODEL_PRICING = {
     "tts-1": {"prompt": 15.0, "completion": 0.0},  # $0.015 per 1K chars = $15 per 1M chars
     "tts-1-hd": {"prompt": 30.0, "completion": 0.0},  # $0.030 per 1K chars = $30 per 1M chars
 
-    # Anthropic - Claude Opus 4.6 series (latest flagship)
+    # Anthropic — base-input / output rates per 1M tokens, sourced from
+    # https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-05).
+    # Cache-write / cache-read multipliers (1.25x, 2x, 0.1x) are not modeled in
+    # this two-field schema; we charge base input until cache-tier tracking is added.
+    # Opus 4.5/4.6/4.7 moved DOWN to $5/$25 — the legacy $15/$75 only applies to
+    # Opus 4 / Opus 4.1 / Opus 3.
+
+    # Anthropic - Claude Opus 4.7 series (latest flagship, 2026-01)
+    "claude-opus-4-7": {"prompt": 5.0, "completion": 25.0},
+    "claude-opus-4-7-latest": {"prompt": 5.0, "completion": 25.0},
+
+    # Anthropic - Claude Opus 4.6 series
     "claude-opus-4-6": {"prompt": 5.0, "completion": 25.0},
     "claude-opus-4-6-latest": {"prompt": 5.0, "completion": 25.0},
 
@@ -88,13 +99,15 @@ MODEL_PRICING = {
     "claude-opus-4-5-20251101": {"prompt": 5.0, "completion": 25.0},
     "claude-opus-4-5-latest": {"prompt": 5.0, "completion": 25.0},
 
-    # Anthropic - Claude 4.6 series
-    "claude-opus-4-6": {"prompt": 15.0, "completion": 75.0},
-    "claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
-
-    # Anthropic - Claude Sonnet 4 series
+    # Anthropic - Claude Sonnet 4.5 / 4 series
+    "claude-sonnet-4-5": {"prompt": 3.0, "completion": 15.0},
+    "claude-sonnet-4-5-latest": {"prompt": 3.0, "completion": 15.0},
     "claude-sonnet-4-20250514": {"prompt": 3.0, "completion": 15.0},
     "claude-sonnet-4-latest": {"prompt": 3.0, "completion": 15.0},
+
+    # Anthropic - Claude Opus 4 / 4.1 (legacy $15/$75 tier)
+    "claude-opus-4": {"prompt": 15.0, "completion": 75.0},
+    "claude-opus-4-1": {"prompt": 15.0, "completion": 75.0},
 
     # Anthropic - Claude 3.5 series (legacy)
     "claude-3-5-sonnet-20241022": {"prompt": 3.0, "completion": 15.0},
@@ -102,7 +115,8 @@ MODEL_PRICING = {
     "claude-3-5-haiku-20241022": {"prompt": 0.80, "completion": 4.0},
 
     # Anthropic - Claude Haiku 4.5
-    "claude-haiku-4-5": {"prompt": 0.80, "completion": 4.0},
+    "claude-haiku-4-5": {"prompt": 1.0, "completion": 5.0},
+    "claude-haiku-4-5-20251001": {"prompt": 1.0, "completion": 5.0},
     "claude-haiku-4-5-20251022": {"prompt": 1.0, "completion": 5.0},
     "claude-haiku-4-5-latest": {"prompt": 1.0, "completion": 5.0},
 
@@ -112,30 +126,45 @@ MODEL_PRICING = {
     "claude-3-sonnet-20240229": {"prompt": 3.0, "completion": 15.0},
     "claude-3-haiku-20240307": {"prompt": 0.25, "completion": 1.25},
 
-    # Google Gemini 3.x preview series (2026-04-20, folded into v0.6.0 addendum)
-    # NOTE: Google has not yet published official pricing for the 3.x preview line;
-    # placeholders approximate the 2.5 Flash / 2.5 Flash-Lite tiers respectively.
-    "gemini-3-flash-preview": {"prompt": 0.30, "completion": 2.50},  # TODO confirm when Google publishes
-    "gemini-3.1-flash-lite-preview": {"prompt": 0.10, "completion": 0.40},  # TODO confirm
-    "gemini-3.1-flash-tts-preview": {"prompt": 0.0, "completion": 0.0},  # TODO confirm — TTS preview, pricing TBD
+    # Google Gemini — published rates from https://ai.google.dev/gemini-api/docs/pricing
+    # (verified 2026-05). The Gemini 3.x Pro tier has a context-length surcharge
+    # (≤200k tokens vs >200k); we model the ≤200k rate since the schema is
+    # two-field. Audio-input premium and image-output token rates are not
+    # separately modeled — text I/O rates are used for the base entry.
 
-    # Google Gemini 2.5 series (UPDATED prices)
-    "gemini-2.5-pro": {"prompt": 1.25, "completion": 10.0},  # Updated: output was 5.0
+    # Google Gemini 3.x preview series — Standard tier, ≤200k input
+    "gemini-3-pro-preview": {"prompt": 2.0, "completion": 12.0},
+    "gemini-3.1-pro-preview": {"prompt": 2.0, "completion": 12.0},
+    "gemini-3-flash-preview": {"prompt": 0.50, "completion": 3.0},
+    "gemini-3.1-flash-lite-preview": {"prompt": 0.25, "completion": 1.50},
+    "gemini-3.1-flash-tts-preview": {"prompt": 1.0, "completion": 20.0},  # Text in, audio out
+
+    # Google Gemini 2.5 series
+    "gemini-2.5-pro": {"prompt": 1.25, "completion": 10.0},
     "gemini-2.5-pro-preview-05-06": {"prompt": 1.25, "completion": 10.0},
     "gemini-2.5-pro-preview-03-25": {"prompt": 1.25, "completion": 10.0},
-    "gemini-2.5-flash": {"prompt": 0.30, "completion": 2.50},  # Updated: was 0.075/0.3
+    "gemini-2.5-pro-tts-preview": {"prompt": 1.0, "completion": 20.0},  # Tier parity with 3.1 TTS
+    "gemini-2.5-flash": {"prompt": 0.30, "completion": 2.50},
     "gemini-2.5-flash-preview-05-20": {"prompt": 0.30, "completion": 2.50},
-    "gemini-2.5-flash-lite": {"prompt": 0.10, "completion": 0.40},  # NEW - most affordable
+    "gemini-2.5-flash-tts-preview": {"prompt": 1.0, "completion": 20.0},  # Tier parity with 3.1 TTS
+    "gemini-2.5-flash-lite": {"prompt": 0.10, "completion": 0.40},
 
     # Google Gemini 2.0 series
     "gemini-2.0-flash": {"prompt": 0.10, "completion": 0.40},
+    "gemini-2.0-flash-lite": {"prompt": 0.075, "completion": 0.30},
     "gemini-2.0-flash-exp": {"prompt": 0.0, "completion": 0.0},  # Free tier (legacy)
 
+    # Google Gemini embedding models (input-only; no completion side)
+    "gemini-embedding-001": {"prompt": 0.15, "completion": 0.0},
+    "gemini-embedding-2": {"prompt": 0.20, "completion": 0.0},
+
     # Google Gemini / Imagen Image Generation
-    # Pricing: per image (represented as per-operation cost)
+    # The 3.x flash/pro image previews charge text input + image output per 1M
+    # tokens (image tokens, not per image). Legacy 2.5 flash-image and Imagen
+    # rows below are per-image proxies retained from prior accounting.
+    "gemini-3.1-flash-image-preview": {"prompt": 0.50, "completion": 60.0},
+    "gemini-3-pro-image-preview": {"prompt": 2.0, "completion": 120.0},
     "gemini-2.5-flash-image": {"prompt": 20.0, "completion": 0.0},  # Nano Banana - $0.02/image
-    "gemini-3.1-flash-image-preview": {"prompt": 20.0, "completion": 0.0},  # TODO confirm — assume parity with 2.5 flash-image for now
-    "gemini-3-pro-image-preview": {"prompt": 40.0, "completion": 0.0},  # Nano Banana Pro - $0.04/image
     "imagen-4.0-fast-generate-001": {"prompt": 20.0, "completion": 0.0},  # Imagen 4 Fast - $0.02/image
     "imagen-4.0-generate-001": {"prompt": 40.0, "completion": 0.0},  # Imagen 4 Standard - $0.04/image
     "imagen-4.0-ultra-generate-001": {"prompt": 60.0, "completion": 0.0},  # Imagen 4 Ultra - $0.06/image
@@ -158,36 +187,55 @@ MODEL_PRICING = {
     "elevenlabs": {"prompt": 30.0, "completion": 0.0},
 
     # ============================================================
-    # xAI Grok models (direct API)
+    # xAI Grok models (direct API) — verified 2026-05 against x.ai/api docs.
+    # NOTE: grok-4-fast and grok-4.1-fast are scheduled for retirement
+    # 2026-05-15; pricing retained for historical cost calculations.
     # ============================================================
+    "grok-2": {"prompt": 2.0, "completion": 10.0},  # Legacy grok-2 pricing
     "grok-3": {"prompt": 3.0, "completion": 15.0},
+    "grok-3-mini": {"prompt": 0.30, "completion": 0.50},
     "grok-3-fast": {"prompt": 5.0, "completion": 25.0},
     "grok-4": {"prompt": 3.0, "completion": 15.0},
     "grok-4-fast": {"prompt": 0.20, "completion": 0.50},
     "grok-4.1-fast": {"prompt": 0.20, "completion": 0.50},
     "grok-4.20-beta": {"prompt": 2.0, "completion": 6.0},
+    "grok-4.3": {"prompt": 1.25, "completion": 2.50},  # New 2026 flagship (1M context)
+
+    # ============================================================
+    # Groq (fast inference of open-weight models; cents per 1M tokens)
+    # ============================================================
+    "llama-3.3-70b-versatile": {"prompt": 0.59, "completion": 0.79},
+    "llama-3.1-8b-instant": {"prompt": 0.05, "completion": 0.08},
+    "mixtral-8x7b-32768": {"prompt": 0.24, "completion": 0.24},
+    "gemma2-9b-it": {"prompt": 0.20, "completion": 0.20},
 
     # ============================================================
     # OpenRouter models (provider/model format)
     # OpenRouter adds ~5% markup to base provider costs
     # ============================================================
 
-    # OpenRouter - Google Gemini
-    "google/gemini-3-flash-preview": {"prompt": 0.30, "completion": 2.50},  # TODO confirm
-    "google/gemini-3.1-flash-lite-preview": {"prompt": 0.10, "completion": 0.40},  # TODO confirm
+    # OpenRouter - Google Gemini (real published rates; ≤200k Pro tier)
+    "google/gemini-3-pro-preview": {"prompt": 2.0, "completion": 12.0},
+    "google/gemini-3.1-pro-preview": {"prompt": 2.0, "completion": 12.0},
+    "google/gemini-3-flash-preview": {"prompt": 0.50, "completion": 3.0},
+    "google/gemini-3.1-flash-lite-preview": {"prompt": 0.25, "completion": 1.50},
     "google/gemini-2.5-flash": {"prompt": 0.30, "completion": 2.50},
     "google/gemini-2.5-flash-preview-05-20": {"prompt": 0.30, "completion": 2.50},
+    "google/gemini-2.5-flash-lite": {"prompt": 0.10, "completion": 0.40},
     "google/gemini-2.5-pro": {"prompt": 1.25, "completion": 10.0},
     "google/gemini-2.5-pro-preview-05-06": {"prompt": 1.25, "completion": 10.0},
     "google/gemini-2.0-flash": {"prompt": 0.10, "completion": 0.40},
+    "google/gemini-2.0-flash-lite": {"prompt": 0.075, "completion": 0.30},
     "google/gemini-2.0-flash-exp:free": {"prompt": 0.0, "completion": 0.0},
     "google/gemini-1.5-flash": {"prompt": 0.075, "completion": 0.3},
     "google/gemini-1.5-pro": {"prompt": 1.25, "completion": 5.0},
 
-    # OpenRouter - Anthropic Claude
+    # OpenRouter - Anthropic Claude (Opus 4.5+ at $5/$25; legacy Opus 3/4 at $15/$75)
+    "anthropic/claude-opus-4-7": {"prompt": 5.0, "completion": 25.0},
     "anthropic/claude-opus-4-6": {"prompt": 5.0, "completion": 25.0},
     "anthropic/claude-sonnet-4-6": {"prompt": 3.0, "completion": 15.0},
     "anthropic/claude-opus-4-5": {"prompt": 5.0, "completion": 25.0},
+    "anthropic/claude-sonnet-4-5": {"prompt": 3.0, "completion": 15.0},
     "anthropic/claude-sonnet-4": {"prompt": 3.0, "completion": 15.0},
     "anthropic/claude-haiku-4-5": {"prompt": 1.0, "completion": 5.0},
     "anthropic/claude-3.5-haiku": {"prompt": 0.80, "completion": 4.0},
@@ -197,10 +245,12 @@ MODEL_PRICING = {
     "anthropic/claude-3-opus": {"prompt": 15.0, "completion": 75.0},
 
     # OpenRouter - OpenAI
+    "openai/gpt-5.4-pro": {"prompt": 30.0, "completion": 180.0},
     "openai/gpt-5.4": {"prompt": 2.50, "completion": 15.0},
     "openai/gpt-5.3": {"prompt": 1.75, "completion": 14.0},
     "openai/gpt-5": {"prompt": 1.25, "completion": 10.0},
     "openai/gpt-5-mini": {"prompt": 0.25, "completion": 2.0},
+    "openai/gpt-5-nano": {"prompt": 0.05, "completion": 0.40},
     "openai/gpt-4.1": {"prompt": 2.0, "completion": 8.0},
     "openai/gpt-4.1-mini": {"prompt": 0.40, "completion": 1.60},
     "openai/gpt-4.1-nano": {"prompt": 0.10, "completion": 0.40},
@@ -211,6 +261,7 @@ MODEL_PRICING = {
     "openai/gpt-4-turbo": {"prompt": 10.0, "completion": 30.0},
     "openai/o1": {"prompt": 15.0, "completion": 60.0},
     "openai/o1-mini": {"prompt": 1.10, "completion": 4.40},
+    "openai/o3": {"prompt": 2.0, "completion": 8.0},
     "openai/o3-mini": {"prompt": 1.10, "completion": 4.40},
     "openai/o4-mini": {"prompt": 1.10, "completion": 4.40},
 
@@ -219,6 +270,9 @@ MODEL_PRICING = {
     "x-ai/grok-4-fast": {"prompt": 0.20, "completion": 0.50},
     "x-ai/grok-4.1-fast": {"prompt": 0.20, "completion": 0.50},
     "x-ai/grok-4.20-beta": {"prompt": 2.0, "completion": 6.0},
+    "x-ai/grok-4.3": {"prompt": 1.25, "completion": 2.50},
+    "x-ai/grok-3-mini": {"prompt": 0.30, "completion": 0.50},
+    "x-ai/grok-2": {"prompt": 2.0, "completion": 10.0},
     "x-ai/grok-3": {"prompt": 3.0, "completion": 15.0},
 
     # OpenRouter - Meta Llama (free tier)
