@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Token-tracker model pricing refresh against 2026-05 vendor rates (2026-05-11)
+
+- `backend/analytics/token_tracker.py` `MODEL_PRICING` audited end-to-end against live vendor docs ([Anthropic](https://platform.claude.com/docs/en/about-claude/pricing), [Google Gemini](https://ai.google.dev/gemini-api/docs/pricing), Groq, xAI). 138 → 166 entries; zero key-duplicates remain (`uniq -d` verified). Smoke tests in `TokenTracker._calculate_cost` reproduce vendor totals for 28 spot-checked models.
+- Removed a silent dict-key clobber that defined `claude-opus-4-6` twice with conflicting values ($5/$25 vs $15/$75). Anthropic moved the Opus 4.5 / 4.6 / 4.7 tier down to **$5 in / $25 out per MTok**; the legacy $15/$75 rate is now correctly scoped only to Opus 3 / Opus 4 / Opus 4.1.
+- Replaced Gemini 3.x placeholder rates with the published numbers: `gemini-3.1-pro-preview` and `gemini-3-pro-preview` at **$2 / $12** (≤200k tier), `gemini-3-flash-preview` at **$0.50 / $3**, and `gemini-3.1-flash-lite-preview` at **$0.25 / $1.50**. The flash-lite-preview correction is the highest-impact change in this set — production agents default to that model and had been billed at $0.10/$0.40, which under-counted cost roughly 3x.
+- Added pricing rows for models that were already selectable in `routes_provider_instances.py` and `routes_sentinel.py` but missing from the pricing dict: `claude-opus-4-7`, `claude-haiku-4-5-20251001`, `gemini-2.0-flash-lite`, `gemini-2.5-flash-tts-preview`, `gemini-2.5-pro-tts-preview`, `gemini-3.1-flash-tts-preview` (text→audio), `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview`, `gemini-embedding-001`, `gemini-embedding-2`, `grok-4.3`, `grok-3-mini`, `grok-2`, plus the full Groq tier (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `mixtral-8x7b-32768`, `gemma2-9b-it`). OpenRouter `provider/model` mirrors added at parity for every above entry.
+- Schema caveats documented inline: the two-field `{prompt, completion}` shape cannot model Anthropic prompt-caching 5m/1h write multipliers and 0.1x cache-hit reads, the Gemini 3.x Pro >200k-context surcharge, or the Gemini audio-input premium. Standard text-modality rate is used as the single representative rate until cache/tier tracking is added to the schema.
+- Existing `token_usage.estimated_cost` rows are frozen at write time; only new LLM calls bill at the corrected rates. Verified end-to-end on production: a synthetic 10k/1k call to `gemini-3.1-flash-lite-preview` after deploy was billed at $0.00400 (new rate) instead of $0.00140 (old rate). Browser session against `https://tsushin.archsec.io/settings/analytics` rendered the same value in the Recent and By-Model tabs with 0 console errors.
+
+### Diagnosed — Production analytics under-report linked to silent flow short-circuit (2026-05-11)
+
+- Investigated user-reported "$0 cost over 30 days" against production. Token-tracker pipeline is healthy: 64 token_usage rows exist over 30 days summing to ~$0.012626, written correctly via `TokenTracker.track_usage()` from `agent/ai_client.py`. The low total is a real consequence of two upstream defects that prevent the Jira/Gmail trigger flows from ever invoking an LLM (see `BUGS.md`):
+  - Jira auto-flow (`flow_definition.id=2` on prod / `207` on local) has a gate node configured as `gate_mode='agentic'` with no `gate_prompt`; the engine fails closed at `flow_engine.py:3597-3599` so all downstream steps are skipped on every run. 137 prod runs in 30 days, every conversation step `skipped`.
+  - Gmail auto-flow (`id=1` on prod / `217` on local) has a conversation node with no `recipient`; the empty-recipient guard at `flow_engine.py:2609-2620` skips the step before any LLM call. Notification node is also disabled. 34 prod runs in 30 days, every conversation step `skipped`.
+- The pricing refresh in this release does not fix these flow defects; tracking entries opened in `BUGS.md` for the auto-flow template and editor validations.
+
 ### Fixed — Speaches local ASR VAD override for real WhatsApp voice notes (2026-05-10)
 
 - Added `audio_transcript.config.vad_filter` and pass it through to pinned Speaches instances as the OpenAI-compatible `vad_filter` multipart field, allowing operators to disable Speaches VAD when it removes an entire real voice note and returns `empty_transcription`.
