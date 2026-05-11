@@ -446,6 +446,7 @@ export interface AudioTranscriptFieldsValue {
   model: string
   asrMode: ASRUsageMode
   asrInstanceId: number | null
+  vadFilter?: boolean | null
   rememberTranscript?: boolean
 }
 
@@ -482,7 +483,7 @@ export function AudioTranscriptFields({
       onChange({ asrMode: mode, asrInstanceId: nextId })
       return
     }
-    onChange({ asrMode: mode, asrInstanceId: null })
+    onChange({ asrMode: mode, asrInstanceId: null, vadFilter: null })
   }
 
   return (
@@ -601,7 +602,14 @@ export function AudioTranscriptFields({
           <label className="block text-sm font-medium mb-2">Local instance</label>
           <select
             value={value.asrInstanceId ?? ''}
-            onChange={(e) => onChange({ asrInstanceId: e.target.value ? Number(e.target.value) : null })}
+            onChange={(e) => {
+              const nextId = e.target.value ? Number(e.target.value) : null
+              const nextInstance = instances.find(inst => inst.id === nextId) || null
+              onChange({
+                asrInstanceId: nextId,
+                vadFilter: nextInstance?.vendor === 'speaches' ? value.vadFilter ?? null : null,
+              })
+            }}
             className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
           >
             {instances.map(inst => (
@@ -610,6 +618,21 @@ export function AudioTranscriptFields({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {value.asrMode === 'instance' && selectedInstance?.vendor === 'speaches' && (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/5">
+          <div>
+            <div className="text-sm font-medium text-white">Speaches voice activity filter</div>
+            <div className="text-xs text-gray-400 mt-1">Disable when Speaches returns empty transcripts for real voice notes with music or heavy background audio.</div>
+          </div>
+          <ToggleSwitch
+            checked={value.vadFilter !== false}
+            onChange={(checked) => onChange({ vadFilter: checked })}
+            size="md"
+            title={value.vadFilter !== false ? 'Disable Speaches VAD' : 'Enable Speaches VAD'}
+          />
         </div>
       )}
 

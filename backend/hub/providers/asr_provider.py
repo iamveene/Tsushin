@@ -14,6 +14,7 @@ class ASRRequest:
     audio_path: str
     model: str
     language: Optional[str] = None
+    vad_filter: Optional[bool] = None
     tenant_id: Optional[str] = None
     agent_id: Optional[int] = None
     sender_key: Optional[str] = None
