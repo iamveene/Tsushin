@@ -72,7 +72,6 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   // xAI Grok
   'grok-4.3': { prompt: 1.25, completion: 2.50 },
   'grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
-  'grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
   'grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
   'grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
   'grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
