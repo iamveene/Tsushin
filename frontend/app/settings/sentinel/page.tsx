@@ -26,6 +26,8 @@ function displayProfileName(name: string | null | undefined): string {
 }
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem, SentinelProfileAssignment, SentinelEffectiveConfig } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import Link from 'next/link'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
 import SentinelHierarchyView from '@/components/sentinel/SentinelHierarchyView'
@@ -151,7 +153,10 @@ export default function SentinelSettingsPage() {
       ])
 
       setConfig(configData)
-      setProviders(providersData)
+      setProviders(providersData.map(provider => ({
+        ...provider,
+        models: getProviderModelOptions(provider.name, provider.models),
+      })))
       setStats(statsData)
       setContacts(contactsData)
 
@@ -385,6 +390,11 @@ export default function SentinelSettingsPage() {
   }
 
   const slugify = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+  const getSentinelModelOptions = (providerName?: string | null, currentModel?: string | null) => {
+    const provider = providers.find(p => p.name === providerName)
+    return getProviderModelOptions(providerName, provider?.models || [], { currentModel })
+  }
 
   // Close profile modals on Escape key
   useEffect(() => {
@@ -1780,7 +1790,14 @@ If you believe this is an error, please contact support."
                     </label>
                     <select
                       value={formState.llm_provider || config?.llm_provider || 'gemini'}
-                      onChange={(e) => setFormState({ ...formState, llm_provider: e.target.value, llm_model: undefined })}
+                      onChange={(e) => {
+                        const nextProvider = e.target.value
+                        setFormState({
+                          ...formState,
+                          llm_provider: nextProvider,
+                          llm_model: getPreferredProviderModel(nextProvider, [], null, { sentinel: true }),
+                        })
+                      }}
                       disabled={!canEdit}
                       className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     >
@@ -1793,16 +1810,18 @@ If you believe this is an error, please contact support."
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Model
                     </label>
-                    <select
+                    <ProviderModelInput
+                      vendor={formState.llm_provider || config?.llm_provider}
+                      models={getSentinelModelOptions(
+                        formState.llm_provider || config?.llm_provider,
+                        formState.llm_model || config?.llm_model
+                      )}
                       value={formState.llm_model || config?.llm_model || ''}
-                      onChange={(e) => setFormState({ ...formState, llm_model: e.target.value })}
+                      onChange={(llm_model) => setFormState({ ...formState, llm_model })}
                       disabled={!canEdit}
+                      placeholder="Select or type a model ID"
                       className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                    >
-                      {providers.find(p => p.name === (formState.llm_provider || config?.llm_provider))?.models.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 </div>
 
@@ -2512,17 +2531,27 @@ If you believe this is an error, please contact support."
                         <input
                           type="text"
                           value={profileForm.llm_provider || 'gemini'}
-                          onChange={(e) => setProfileForm({ ...profileForm, llm_provider: e.target.value })}
+                          onChange={(e) => {
+                            const nextProvider = e.target.value
+                            setProfileForm({
+                              ...profileForm,
+                              llm_provider: nextProvider,
+                              llm_model: getPreferredProviderModel(nextProvider, [], null, { sentinel: true }),
+                            })
+                          }}
                           disabled={editingProfile?.is_system}
                           className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
-                        <input
-                          type="text"
+                        <ProviderModelInput
+                          vendor={profileForm.llm_provider}
+                          models={getSentinelModelOptions(profileForm.llm_provider, profileForm.llm_model)}
                           value={profileForm.llm_model || 'gemini-2.5-flash-lite'}
-                          onChange={(e) => setProfileForm({ ...profileForm, llm_model: e.target.value })}
+                          onChange={(llm_model) => setProfileForm({ ...profileForm, llm_model })}
+                          listId="sentinel-profile-llm-models"
+                          placeholder="Select or type a model ID"
                           disabled={editingProfile?.is_system}
                           className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         />

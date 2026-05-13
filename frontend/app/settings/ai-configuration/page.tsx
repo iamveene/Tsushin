@@ -22,6 +22,8 @@ import {
   BotIcon as BotIconSvg,
   type IconProps,
 } from '@/components/ui/icons'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
+import { getPreferredProviderModel, getProviderModelLabels } from '@/lib/provider-models'
 
 // Grok (xAI) icon
 const GrokIcon = ({ size, className }: IconProps) => (
@@ -166,16 +168,7 @@ export default function AIConfigurationPage() {
 
   const handleInstanceSelect = (instance: ProviderInstance) => {
     setSelectedInstanceId(instance.id)
-    // Auto-select first model from instance, or keep current if it belongs to this instance
-    if (instance.available_models.length > 0) {
-      if (instance.available_models.includes(selectedModel)) {
-        // Keep current selection
-      } else {
-        setSelectedModel(instance.available_models[0])
-      }
-    } else {
-      setSelectedModel('')
-    }
+    setSelectedModel(getPreferredProviderModel(instance.vendor, instance.available_models, selectedModel))
     setTestResult(null)
     setSuccess(null)
   }
@@ -469,11 +462,31 @@ export default function AIConfigurationPage() {
             </div>
 
             {/* Model Selection */}
-            {selectedInstance && selectedInstance.available_models.length > 0 && (
+            {selectedInstance && (
               <div className="glass-card rounded-xl p-6 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
-                <div className="space-y-2">
-                  {selectedInstance.available_models.map((model) => {
+                {selectedInstance.available_models.length === 0 && (
+                  <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-sm text-yellow-100">
+                    No live models are configured for this instance yet. Type any model ID manually,
+                    or edit it in the{' '}
+                    <Link href="/hub" className="text-teal-300 hover:text-teal-200 underline">Hub</Link>.
+                  </div>
+                )}
+                <ProviderModelInput
+                  vendor={selectedInstance.vendor}
+                  models={selectedInstance.available_models}
+                  value={selectedModel}
+                  onChange={handleModelChange}
+                  currentModel={selectedModel}
+                  disabled={!canEdit}
+                  placeholder="Select or type a model ID"
+                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+                  dataTestId="system-ai-model-input"
+                />
+                <div className="space-y-2 mt-4">
+                  {getProviderModelLabels(selectedInstance.vendor, selectedInstance.available_models, {
+                    currentModel: selectedModel,
+                  }).map(({ value: model, label }) => {
                     const isSelected = selectedModel === model
                     const colors = VENDOR_COLORS[selectedInstance.vendor] || VENDOR_COLORS.custom
 
@@ -488,7 +501,7 @@ export default function AIConfigurationPage() {
                             : 'border-white/10 hover:border-white/20'
                         } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                       >
-                        <span className="text-sm text-white font-mono">{model}</span>
+                        <span className="text-sm text-white font-mono">{label}</span>
                         {isSelected && (
                           <svg className={`w-5 h-5 ${colors.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -497,37 +510,6 @@ export default function AIConfigurationPage() {
                       </button>
                     )
                   })}
-                </div>
-              </div>
-            )}
-
-            {/* No models warning */}
-            {selectedInstance && selectedInstance.available_models.length === 0 && (
-              <div className="glass-card rounded-xl p-6 mb-6">
-                <div className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <div>
-                    <p className="text-yellow-400 font-medium">No models available</p>
-                    <p className="text-sm text-tsushin-slate mt-1">
-                      This instance has no models configured. Edit it in the{' '}
-                      <Link href="/hub" className="text-teal-400 hover:text-teal-300 underline">Hub</Link>{' '}
-                      to discover or add models.
-                    </p>
-                    {/* Allow manual model entry */}
-                    <div className="mt-3">
-                      <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
-                      <input
-                        type="text"
-                        value={selectedModel}
-                        onChange={(e) => handleModelChange(e.target.value)}
-                        placeholder="e.g. gemini-2.5-flash"
-                        disabled={!canEdit}
-                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
-                      />
-                    </div>
-                  </div>
                 </div>
               </div>
             )}

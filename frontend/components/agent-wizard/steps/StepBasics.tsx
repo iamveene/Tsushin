@@ -6,6 +6,7 @@ import { api } from '@/lib/client'
 import type { LlmCatalogVendor } from '@/lib/client'
 import { isBasicsValid } from '@/lib/agent-wizard/reducer'
 import ProviderInstancePicker from '@/components/providers/ProviderInstancePicker'
+import { getPreferredProviderModel } from '@/lib/provider-models'
 import { DEFAULT_AGENT_NAME } from '../defaults'
 
 export default function StepBasics() {
@@ -33,7 +34,7 @@ export default function StepBasics() {
             if (inst) {
               patchBasics({
                 model_provider: firstWithInstance.vendor,
-                model_name: inst.available_models[0] || '',
+                model_name: getPreferredProviderModel(firstWithInstance.vendor, inst.available_models),
                 provider_instance_id: inst.id,
               })
             }

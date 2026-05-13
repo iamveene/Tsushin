@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Shared latest-model LLM catalog and cached pricing baseline (2026-05-13)
+
+- Added `backend/constants/llm_models.py` as the shared source for curated provider defaults, Sentinel model lists, provider-test fallbacks, provider inference, and official per-1M token pricing. Direct-provider defaults now include OpenAI `gpt-5.5` / non-streaming `gpt-5.5-pro`, Anthropic `claude-opus-4-7`, xAI `grok-4.3` / `grok-4.3-latest` / current Grok 4.20 and Grok 4.1 Fast variants, DeepSeek V4, and Groq-hosted open models only (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`, Llama hosted by Groq).
+- Added OpenRouter gateway defaults for `openai/gpt-5.5`, `openai/gpt-5.5-pro`, `anthropic/claude-opus-4.7`, `anthropic/claude-opus-4-7`, and `x-ai/grok-4.3` while preserving live discovery and manual IDs for any gateway model.
+- Retrofitted selectors in Setup, Hub AI Providers, System AI, Sentinel, `/agents`, Agent Wizard, Studio/Watcher agent selection, Agent Configuration Manager, and Playground to use shared curated fallbacks plus live/discovered models, with manual typed model IDs accepted instead of select-only lock-in.
+- Updated usage/cost tracking to carry nullable `cached_input_cost_per_million` defaults and to bill cached-input tokens separately when provider payloads expose cache-hit counts; otherwise the existing prompt/completion fallback remains unchanged.
+- Runtime guards added for latest models: `gpt-5.5-pro` falls back to non-streaming generation, GPT-5.x OpenAI-compatible calls use `max_completion_tokens`, and Claude Opus 4.7 requests strip unsupported sampling parameters.
+- Added `scripts/deploy-prod.sh` as the main-only production promotion helper: local preflight, pushed-main parity, Cloudflare allowlist status, remote `git pull --ff-only`, no-`down` Docker Compose rebuilds, container health, and public URL checks.
+
 ### Fixed — Token-tracker model pricing refresh against 2026-05 vendor rates (2026-05-11)
 
 - `backend/analytics/token_tracker.py` `MODEL_PRICING` audited end-to-end against live vendor docs ([Anthropic](https://platform.claude.com/docs/en/about-claude/pricing), [Google Gemini](https://ai.google.dev/gemini-api/docs/pricing), Groq, xAI). 138 → 166 entries; zero key-duplicates remain (`uniq -d` verified). Smoke tests in `TokenTracker._calculate_cost` reproduce vendor totals for 28 spot-checked models.
