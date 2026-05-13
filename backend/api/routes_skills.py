@@ -53,6 +53,11 @@ class SkillConfigRequest(BaseModel):
     """Request to enable or update a skill"""
     is_enabled: bool = Field(True, description="Enable or disable the skill")
     config: dict = Field(default_factory=dict, description="Skill configuration")
+    auto_inject_results: Optional[bool] = Field(None, description="Inject recent structured tool results into follow-up turns")
+    skip_ai_on_data_fetch: Optional[bool] = Field(None, description="Return data-fetch tool output directly instead of an AI-composed answer")
+    max_result_bytes: Optional[int] = Field(None, ge=256, le=65536, description="Maximum bytes per injected tool result")
+    max_results_retained: Optional[int] = Field(None, ge=1, le=10, description="Maximum structured tool results retained for injection")
+    max_turns_lookback: Optional[int] = Field(None, ge=1, le=50, description="Maximum turns to look back for follow-up data injection")
 
 
 class SkillResponse(BaseModel):
@@ -62,12 +67,23 @@ class SkillResponse(BaseModel):
     skill_type: str
     is_enabled: bool
     config: dict
+    auto_inject_results: Optional[bool] = None
+    skip_ai_on_data_fetch: Optional[bool] = None
+    max_result_bytes: Optional[int] = None
+    max_results_retained: Optional[int] = None
+    max_turns_lookback: Optional[int] = None
     created_at: str
     updated_at: str
 
 
 # Helper function for agent ownership verification
-def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent:
+def verify_agent_access(
+    db: Session,
+    agent_id: int,
+    ctx: TenantContext,
+    *,
+    internal_status_code: int = 404,
+) -> Agent:
     """
     Verify agent exists and user has access to it.
 
@@ -91,7 +107,66 @@ def verify_agent_access(db: Session, agent_id: int, ctx: TenantContext) -> Agent
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    if getattr(agent, "is_internal", False):
+        detail = (
+            f"Agent {agent_id} not found"
+            if internal_status_code == 404
+            else "Internal coordinator agents cannot have public skills attached or modified"
+        )
+        raise HTTPException(status_code=internal_status_code, detail=detail)
     return agent
+
+
+def _normalize_audio_transcript_config(
+    config: Optional[dict],
+    db: Session,
+    ctx: TenantContext,
+) -> dict:
+    """Validate tenant-scoped ASR references before persisting them."""
+    normalized = dict(config or {})
+    asr_mode = normalized.get("asr_mode")
+    asr_instance_id = normalized.get("asr_instance_id")
+    remember_transcript = normalized.get("remember_transcript", True)
+
+    if asr_mode is None:
+        asr_mode = "instance" if asr_instance_id else "openai"
+
+    if asr_mode not in {"openai", "tenant_default", "instance"}:
+        raise HTTPException(
+            status_code=400,
+            detail="audio_transcript.asr_mode must be one of: openai, tenant_default, instance",
+        )
+
+    if asr_mode == "instance":
+        if asr_instance_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="audio_transcript.asr_instance_id is required when asr_mode='instance'",
+            )
+
+        from services.whisper_instance_service import WhisperInstanceService
+
+        instance = WhisperInstanceService.get_instance(int(asr_instance_id), ctx.tenant_id, db)
+        if not instance or not instance.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"ASR instance {asr_instance_id} not found",
+            )
+    else:
+        normalized["asr_instance_id"] = None
+
+    normalized["asr_mode"] = asr_mode
+    if isinstance(remember_transcript, str):
+        normalized["remember_transcript"] = remember_transcript.strip().lower() not in {
+            "false",
+            "0",
+            "no",
+            "n",
+            "off",
+        }
+    else:
+        normalized["remember_transcript"] = bool(remember_transcript) if remember_transcript is not None else True
+    return normalized
 
 
 # API Endpoints
@@ -161,6 +236,11 @@ async def get_agent_skills(
                     "skill_type": skill.skill_type,
                     "is_enabled": skill.is_enabled,
                     "config": skill.config or {},
+                    "auto_inject_results": skill.auto_inject_results,
+                    "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+                    "max_result_bytes": skill.max_result_bytes,
+                    "max_results_retained": skill.max_results_retained,
+                    "max_turns_lookback": skill.max_turns_lookback,
                     "created_at": skill.created_at.isoformat() if skill.created_at else None,
                     "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
                 }
@@ -216,6 +296,11 @@ async def get_skill_config(
             "skill_type": skill.skill_type,
             "is_enabled": skill.is_enabled,
             "config": skill.config or {},
+            "auto_inject_results": skill.auto_inject_results,
+            "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+            "max_result_bytes": skill.max_result_bytes,
+            "max_results_retained": skill.max_results_retained,
+            "max_turns_lookback": skill.max_turns_lookback,
             "created_at": skill.created_at.isoformat() if skill.created_at else None,
             "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
         }
@@ -251,7 +336,7 @@ async def update_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
 
@@ -263,6 +348,14 @@ async def update_skill(
                        f"Available: {list(skill_manager.registry.keys())}"
             )
 
+        config_payload = request.config
+        if skill_type == "audio_transcript":
+            config_payload = _normalize_audio_transcript_config(
+                request.config,
+                db,
+                ctx,
+            )
+
         # Check if skill already exists
         existing = db.query(AgentSkill)\
             .filter(AgentSkill.agent_id == agent_id)\
@@ -272,7 +365,17 @@ async def update_skill(
         if existing:
             # Update existing
             existing.is_enabled = request.is_enabled
-            existing.config = request.config
+            existing.config = config_payload
+            if request.auto_inject_results is not None:
+                existing.auto_inject_results = request.auto_inject_results
+            if request.skip_ai_on_data_fetch is not None:
+                existing.skip_ai_on_data_fetch = request.skip_ai_on_data_fetch
+            if request.max_result_bytes is not None:
+                existing.max_result_bytes = request.max_result_bytes
+            if request.max_results_retained is not None:
+                existing.max_results_retained = request.max_results_retained
+            if request.max_turns_lookback is not None:
+                existing.max_turns_lookback = request.max_turns_lookback
             db.commit()
             db.refresh(existing)
 
@@ -287,6 +390,11 @@ async def update_skill(
                 "skill_type": existing.skill_type,
                 "is_enabled": existing.is_enabled,
                 "config": existing.config or {},
+                "auto_inject_results": existing.auto_inject_results,
+                "skip_ai_on_data_fetch": existing.skip_ai_on_data_fetch,
+                "max_result_bytes": existing.max_result_bytes,
+                "max_results_retained": existing.max_results_retained,
+                "max_turns_lookback": existing.max_turns_lookback,
                 "created_at": existing.created_at.isoformat() if existing.created_at else None,
                 "updated_at": existing.updated_at.isoformat() if existing.updated_at else None
             }
@@ -296,8 +404,20 @@ async def update_skill(
             db,
             agent_id,
             skill_type,
-            request.config
+            config_payload
         )
+        if request.auto_inject_results is not None:
+            skill.auto_inject_results = request.auto_inject_results
+        if request.skip_ai_on_data_fetch is not None:
+            skill.skip_ai_on_data_fetch = request.skip_ai_on_data_fetch
+        if request.max_result_bytes is not None:
+            skill.max_result_bytes = request.max_result_bytes
+        if request.max_results_retained is not None:
+            skill.max_results_retained = request.max_results_retained
+        if request.max_turns_lookback is not None:
+            skill.max_turns_lookback = request.max_turns_lookback
+        db.commit()
+        db.refresh(skill)
 
         logger.info(f"Created skill '{skill_type}' for agent {agent_id}")
 
@@ -307,6 +427,11 @@ async def update_skill(
             "skill_type": skill.skill_type,
             "is_enabled": skill.is_enabled,
             "config": skill.config or {},
+            "auto_inject_results": skill.auto_inject_results,
+            "skip_ai_on_data_fetch": skill.skip_ai_on_data_fetch,
+            "max_result_bytes": skill.max_result_bytes,
+            "max_results_retained": skill.max_results_retained,
+            "max_turns_lookback": skill.max_turns_lookback,
             "created_at": skill.created_at.isoformat() if skill.created_at else None,
             "updated_at": skill.updated_at.isoformat() if skill.updated_at else None
         }
@@ -345,7 +470,7 @@ async def disable_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
         success = await skill_manager.disable_skill(db, agent_id, skill_type)
@@ -409,7 +534,7 @@ async def test_skill(
     """
     try:
         # Verify agent exists and user has access
-        verify_agent_access(db, agent_id, ctx)
+        verify_agent_access(db, agent_id, ctx, internal_status_code=403)
 
         skill_manager = get_skill_manager()
 

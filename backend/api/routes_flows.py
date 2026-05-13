@@ -14,7 +14,7 @@ import logging
 import json
 import asyncio
 
-from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent
+from models import FlowDefinition, FlowNode, FlowRun, FlowNodeRun, ConversationThread, Agent, FlowTriggerBinding
 from auth_dependencies import (
     require_permission,
     get_current_user_required,
@@ -130,6 +130,15 @@ class FlowDefinitionResponse(BaseModel):
     # BUG-336: Keyword triggers
     trigger_keywords: Optional[List] = None
 
+    # v0.7.0 release-finishing: surface system-managed trigger metadata so the UI
+    # can render a "Jira/GitHub/Email/... Trigger" badge and disable Delete on
+    # auto-generated flows. All four are additive and default to user-authored
+    # behaviour so existing callers keep working unchanged.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None  # 'jira'|'email'|'github'|'webhook'
+
     class Config:
         from_attributes = True
 
@@ -153,6 +162,9 @@ class FlowNodeCreate(BaseModel):
     timeout_seconds: int = 300
     retry_on_failure: bool = False
     max_retries: int = 0
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: bool = False
     max_turns: int = 20
     conversation_objective: Optional[str] = None
@@ -170,6 +182,9 @@ class FlowNodeUpdate(BaseModel):
     timeout_seconds: Optional[int] = None
     retry_on_failure: Optional[bool] = None
     max_retries: Optional[int] = None
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: Optional[bool] = None
     max_turns: Optional[int] = None
     conversation_objective: Optional[str] = None
@@ -189,6 +204,9 @@ class FlowNodeResponse(BaseModel):
     timeout_seconds: int = 300
     retry_on_failure: bool = False
     max_retries: int = 0
+    retry_delay_seconds: Optional[int] = None
+    on_success: Optional[str] = None
+    on_failure: Optional[str] = None
     allow_multi_turn: bool = False
     max_turns: int = 20
     conversation_objective: Optional[str] = None
@@ -209,6 +227,10 @@ class LegacyFlowRunCreate(BaseModel):
 class LegacyFlowRunResponse(BaseModel):
     id: int
     flow_definition_id: int
+    flow_name: Optional[str] = None
+    flow_display_name: Optional[str] = None
+    duration_ms: Optional[int] = None
+    duration_label: Optional[str] = None
     status: str
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
@@ -224,6 +246,49 @@ class LegacyFlowRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _flow_run_duration_ms(run: FlowRun) -> Optional[int]:
+    if not run.started_at or not run.completed_at:
+        return None
+    duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+    return max(duration_ms, 0)
+
+
+def _flow_run_duration_label(run: FlowRun) -> Optional[str]:
+    duration_ms = _flow_run_duration_ms(run)
+    if duration_ms is None:
+        return None
+    if duration_ms < 1000:
+        return "<1s"
+    seconds = duration_ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s" if duration_ms % 1000 else f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    remainder = int(seconds % 60)
+    return f"{minutes}m {remainder}s"
+
+
+def _legacy_flow_run_response(run: FlowRun, flow_name: Optional[str] = None) -> LegacyFlowRunResponse:
+    return LegacyFlowRunResponse(
+        id=run.id,
+        flow_definition_id=run.flow_definition_id,
+        flow_name=flow_name,
+        flow_display_name=flow_name or f"Flow #{run.flow_definition_id}",
+        duration_ms=_flow_run_duration_ms(run),
+        duration_label=_flow_run_duration_label(run),
+        status=run.status,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        initiator=run.initiator,
+        trigger_context_json=run.trigger_context_json,
+        final_report_json=run.final_report_json,
+        error_text=run.error_text,
+        created_at=run.created_at,
+        total_steps=run.total_steps or 0,
+        completed_steps=run.completed_steps or 0,
+        failed_steps=run.failed_steps or 0,
+    )
 
 
 class FlowNodeRunResponse(BaseModel):
@@ -279,6 +344,26 @@ def validate_flow_structure(db: Session, flow_id: int, strict: bool = False) -> 
     if min(positions) < 1:
         return False, "Step positions must be >= 1"
 
+    # v0.7.0 Wave 2 — source step rules (parity with FlowEngine.validate_flow_structure).
+    # The API path calls *this* helper synchronously inside POST /flows/{id}/execute
+    # (line ~2228) so triggered-without-source must reject HERE, not just inside
+    # FlowEngine.run_flow where the failure spawns a separate failed FlowRun and
+    # leaves the API-created FlowRun stuck in 'pending' forever.
+    source_nodes = [n for n in nodes if n.type in ("source", "Source")]
+    if len(source_nodes) > 1:
+        return False, (
+            f"Flow can have at most one Source step "
+            f"(found {len(source_nodes)} at positions {[n.position for n in source_nodes]})"
+        )
+    for src in source_nodes:
+        if src.position != 1:
+            return False, f"Source step must be at position 1 (found at position {src.position})"
+
+    flow = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id).first()
+    if flow is not None and flow.execution_method == "triggered":
+        if not source_nodes:
+            return False, "Flow with execution_method='triggered' must declare a Source step at position 1"
+
     return True, None
 
 
@@ -290,6 +375,22 @@ def count_flow_nodes(db: Session, flow_id: int) -> int:
 def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionResponse:
     """Convert FlowDefinition to response model."""
     count = count_flow_nodes(db, flow.id)
+    is_system_owned = bool(getattr(flow, "is_system_owned", False))
+
+    # Only look up the trigger kind for system-managed flows so user-authored
+    # flows pay no extra query cost.
+    system_trigger_kind: Optional[str] = None
+    if is_system_owned:
+        binding_row = (
+            db.query(FlowTriggerBinding.trigger_kind)
+            .filter(
+                FlowTriggerBinding.flow_definition_id == flow.id,
+                FlowTriggerBinding.is_system_managed.is_(True),
+            )
+            .first()
+        )
+        system_trigger_kind = binding_row[0] if binding_row else None
+
     return FlowDefinitionResponse(
         id=flow.id,
         name=flow.name,
@@ -305,7 +406,11 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         scheduled_at=flow.scheduled_at,
         flow_type=flow.flow_type or "workflow",
         default_agent_id=flow.default_agent_id,
-        trigger_keywords=flow.trigger_keywords or []  # BUG-336
+        trigger_keywords=flow.trigger_keywords or [],  # BUG-336
+        is_system_owned=is_system_owned,
+        editable_by_tenant=bool(getattr(flow, "editable_by_tenant", True)),
+        deletable_by_tenant=bool(getattr(flow, "deletable_by_tenant", True)),
+        system_trigger_kind=system_trigger_kind,
     )
 
 
@@ -324,6 +429,9 @@ def node_to_response(node: FlowNode) -> FlowNodeResponse:
         timeout_seconds=node.timeout_seconds or 300,
         retry_on_failure=node.retry_on_failure or False,
         max_retries=node.max_retries or 0,
+        retry_delay_seconds=node.retry_delay_seconds,
+        on_success=node.on_success,
+        on_failure=node.on_failure,
         allow_multi_turn=node.allow_multi_turn or False,
         max_turns=node.max_turns or 20,
         conversation_objective=node.conversation_objective,
@@ -766,22 +874,12 @@ def list_runs(
             query = query.filter(FlowRun.status == status)
 
         runs = query.order_by(FlowRun.created_at.desc()).limit(limit).all()
+        flow_ids = {run.flow_definition_id for run in runs}
+        flow_name_query = db.query(FlowDefinition.id, FlowDefinition.name).filter(FlowDefinition.id.in_(flow_ids))
+        flow_name_query = tenant_context.filter_by_tenant(flow_name_query, FlowDefinition.tenant_id)
+        flow_names = {flow_id: name for flow_id, name in flow_name_query.all()} if flow_ids else {}
 
-        return [LegacyFlowRunResponse(
-            id=run.id,
-            flow_definition_id=run.flow_definition_id,
-            status=run.status,
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-            initiator=run.initiator,
-            trigger_context_json=run.trigger_context_json,
-            final_report_json=run.final_report_json,
-            error_text=run.error_text,
-            created_at=run.created_at,
-            total_steps=run.total_steps or 0,
-            completed_steps=run.completed_steps or 0,
-            failed_steps=run.failed_steps or 0
-        ) for run in runs]
+        return [_legacy_flow_run_response(run, flow_names.get(run.flow_definition_id)) for run in runs]
 
     except Exception as e:
         logger.exception("Error listing flow runs")
@@ -804,21 +902,13 @@ def get_run(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        return LegacyFlowRunResponse(
-            id=run.id,
-            flow_definition_id=run.flow_definition_id,
-            status=run.status,
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-            initiator=run.initiator,
-            trigger_context_json=run.trigger_context_json,
-            final_report_json=run.final_report_json,
-            error_text=run.error_text,
-            created_at=run.created_at,
-            total_steps=run.total_steps or 0,
-            completed_steps=run.completed_steps or 0,
-            failed_steps=run.failed_steps or 0
+        flow = (
+            tenant_context
+            .filter_by_tenant(db.query(FlowDefinition), FlowDefinition.tenant_id)
+            .filter(FlowDefinition.id == run.flow_definition_id)
+            .first()
         )
+        return _legacy_flow_run_response(run, flow.name if flow else None)
 
     except HTTPException:
         raise
@@ -843,9 +933,11 @@ def get_run_steps(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        step_runs = db.query(FlowNodeRun).filter(
+        step_runs = db.query(FlowNodeRun).join(
+            FlowNode, FlowNode.id == FlowNodeRun.flow_node_id
+        ).filter(
             FlowNodeRun.flow_run_id == run_id
-        ).all()
+        ).order_by(FlowNode.position.asc(), FlowNodeRun.id.asc()).all()
 
         return step_runs
 
@@ -871,7 +963,110 @@ def get_run_nodes(
 # ============= FLOW DEFINITION ENDPOINTS =============
 
 VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
-VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword"}  # BUG-336: added keyword
+VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword", "triggered"}  # v0.7.0 Wave 2: added 'triggered' for source-step-driven flows
+VALID_SOURCE_TRIGGER_KINDS = {"email", "webhook", "jira", "github"}
+
+
+def _validate_flow_create_execution_config(flow: FlowCreate) -> None:
+    """Validate execution-method invariants before POST /flows/create persists."""
+    source_steps = [step for step in (flow.steps or []) if step.type == StepType.SOURCE]
+
+    if len(source_steps) > 1:
+        positions = [step.position for step in source_steps]
+        raise HTTPException(
+            status_code=422,
+            detail=f"Flow can have exactly one Source step for triggered execution (found {len(source_steps)} at positions {positions})",
+        )
+
+    source_step = source_steps[0] if source_steps else None
+    if source_step is not None and source_step.position != 1:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Source step must be at position 1 (found at position {source_step.position})",
+        )
+
+    if flow.execution_method == ExecutionMethod.TRIGGERED:
+        if source_step is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Flow with execution_method='triggered' must declare exactly one Source step at position 1",
+            )
+
+        trigger_kind = (source_step.config.trigger_kind or "").strip().lower()
+        if trigger_kind not in VALID_SOURCE_TRIGGER_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Source step config.trigger_kind must be one of: {sorted(VALID_SOURCE_TRIGGER_KINDS)}",
+            )
+
+        trigger_instance_id = source_step.config.trigger_instance_id
+        if trigger_instance_id is None or trigger_instance_id <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Source step config.trigger_instance_id must be greater than 0",
+            )
+    elif source_step is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Source steps are only supported for execution_method='triggered'",
+        )
+
+    if flow.execution_method == ExecutionMethod.SCHEDULED and flow.scheduled_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="scheduled_at is required when execution_method='scheduled'",
+        )
+
+    if flow.execution_method == ExecutionMethod.RECURRING and flow.recurrence_rule is None:
+        raise HTTPException(
+            status_code=422,
+            detail="recurrence_rule is required when execution_method='recurring'",
+        )
+
+    if flow.execution_method == ExecutionMethod.KEYWORD:
+        keywords = flow.trigger_keywords or []
+        if not any(isinstance(keyword, str) and keyword.strip() for keyword in keywords):
+            raise HTTPException(
+                status_code=422,
+                detail="At least one non-empty trigger keyword is required when execution_method='keyword'",
+            )
+
+
+def _ensure_flow_editable(flow: "FlowDefinition") -> None:
+    """v0.7.0 Wave 2 — enforce ``editable_by_tenant`` on system-owned flows.
+
+    System-owned auto-generated flows (Wave 4) carry ``is_system_owned=True``
+    and may also carry ``editable_by_tenant=False`` to lock structural edits.
+    Without this enforcement Phase A's protection promise is hollow — any
+    tenant admin could mutate the auto-flow's steps and break the binding.
+
+    Most system-owned auto-flows ship with ``editable_by_tenant=True`` so
+    the casual-user "Enable Notification" toggle still works (it flips a
+    flag inside the Notification node's config_json). Only flows marked
+    explicitly non-editable hit this 403.
+    """
+    from fastapi import HTTPException
+    if bool(getattr(flow, "is_system_owned", False)) and not bool(getattr(flow, "editable_by_tenant", True)):
+        raise HTTPException(
+            status_code=403,
+            detail="System-owned flow is not editable by tenant",
+        )
+
+
+def _ensure_flow_deletable(flow: "FlowDefinition") -> None:
+    """v0.7.0 Wave 2 — enforce ``deletable_by_tenant`` on system-owned flows.
+
+    Auto-generated flows that wrap a trigger (Wave 4) ship with
+    ``deletable_by_tenant=False`` to keep the binding intact for the
+    lifetime of the trigger. Tenant deletion of the trigger itself
+    cleans both up via ``flow_binding_service.delete_bindings_for_trigger``.
+    """
+    from fastapi import HTTPException
+    if bool(getattr(flow, "is_system_owned", False)) and not bool(getattr(flow, "deletable_by_tenant", True)):
+        raise HTTPException(
+            status_code=403,
+            detail="System-owned flow is not deletable by tenant",
+        )
 
 
 @router.post("", response_model=FlowDefinitionResponse, status_code=201, dependencies=[Depends(require_permission("flows.write"))], include_in_schema=False)
@@ -935,6 +1130,8 @@ def create_flow_v2(
     Supports execution methods, flow types, and inline step creation.
     """
     try:
+        _validate_flow_create_execution_config(flow)
+
         db_flow = FlowDefinition(
             name=flow.name,
             description=flow.description,
@@ -1076,6 +1273,11 @@ def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any
             if spec.max is not None and iv > spec.max:
                 iv = spec.max
             cleaned[key] = iv
+        if spec.type == "password_vault_integration":
+            try:
+                cleaned[key] = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"Parameter '{key}' must be a Password Vault connection")
         # Select / channel — validate against options whitelist
         if spec.type in ("select", "channel") and spec.options:
             allowed = [str(o.get("value")) for o in spec.options]
@@ -1090,7 +1292,7 @@ def _validate_template_params(template, params: Dict[str, Any]) -> Dict[str, Any
     return cleaned
 
 
-def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
+def _validate_tenant_refs(db: Session, tenant_id: Optional[str], flow_create) -> None:
     """Verify every agent_id / persona_id / sandboxed tool referenced by the
     generated FlowCreate belongs to the caller's tenant. Prevents cross-tenant
     resource leak through wizard-generated flows.
@@ -1137,20 +1339,108 @@ def _validate_tenant_refs(db: Session, tenant_id: str, flow_create) -> None:
             _check_tool(step.config.tool_name)
 
 
-def _check_required_credentials(db: Session, tenant_id: str, required: List[str]) -> List[str]:
+def _resolve_template_tenant_id(db: Session, ctx: TenantContext, params: Dict[str, Any]) -> Optional[str]:
+    """Resolve the tenant that should own a UI-instantiated template.
+
+    Tenant users always operate inside their own tenant. Global admins do not
+    have a tenant on the session, so UI-first templates infer the tenant from
+    tenant-scoped resources the user selected in the wizard (agent and/or
+    Password Vault integration). All selected resources must agree.
+    """
+    effective_tenant_id = ctx.tenant_id
+    candidate_tenants: List[str] = []
+
+    def _add_candidate(label: str, tenant_id: Optional[str]) -> None:
+        nonlocal effective_tenant_id
+        if tenant_id is None:
+            return
+        if effective_tenant_id and tenant_id != effective_tenant_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} belongs to tenant {tenant_id}, not {effective_tenant_id}",
+            )
+        if not ctx.can_access_resource(tenant_id):
+            raise HTTPException(status_code=422, detail=f"{label} not found in this tenant")
+        candidate_tenants.append(tenant_id)
+
+    agent_id = params.get("agent_id")
+    if agent_id not in (None, ""):
+        try:
+            agent_id_int = int(agent_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Parameter 'agent_id' must be a number")
+        row = db.query(Agent.tenant_id).filter(Agent.id == agent_id_int).first()
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Agent {agent_id_int} not found")
+        _add_candidate(f"Agent {agent_id_int}", row[0])
+
+    vault_integration_id = params.get("password_vault_integration_id")
+    if vault_integration_id not in (None, ""):
+        from models import PasswordVaultIntegration
+
+        try:
+            vault_integration_id_int = int(vault_integration_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Parameter 'password_vault_integration_id' must be a number")
+        row = db.query(PasswordVaultIntegration.tenant_id).filter(
+            PasswordVaultIntegration.id == vault_integration_id_int,
+            PasswordVaultIntegration.type == "password_vault",
+            PasswordVaultIntegration.is_active == True,  # noqa: E712
+        ).first()
+        if not row:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Password Vault integration {vault_integration_id_int} not found",
+            )
+        _add_candidate(f"Password Vault integration {vault_integration_id_int}", row[0])
+
+    unique_candidates = {tenant_id for tenant_id in candidate_tenants if tenant_id}
+    if len(unique_candidates) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Selected template resources belong to different tenants",
+        )
+    if effective_tenant_id is None and unique_candidates:
+        effective_tenant_id = unique_candidates.pop()
+    return effective_tenant_id
+
+
+def _check_required_credentials(
+    db: Session,
+    tenant_id: Optional[str],
+    required: List[str],
+    params: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """BUG-627: pre-flight check that every required credential declared by a
     template is configured for the tenant. Returns the list of missing
     credentials (empty list means all present).
 
-    Credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
-    'google_calendar'. System-wide keys (tenant_id IS NULL) satisfy the
-    requirement too, so a shared Gmail credential works for any tenant.
+    Most credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
+    'google_calendar'. Provider-shaped Hub integrations such as Password
+    Vault/1Password are checked against their own tenant-scoped integration
+    rows so UI-created financial templates can depend on them without a seed.
     """
     if not required:
         return []
-    from models import ApiKey
+    from models import ApiKey, PasswordVaultIntegration
     missing: List[str] = []
+    params = params or {}
     for service in required:
+        normalized = str(service or "").strip().lower()
+        if normalized in {"password_vault", "onepassword", "1password"}:
+            query = db.query(PasswordVaultIntegration.id).filter(
+                PasswordVaultIntegration.tenant_id == tenant_id,
+                PasswordVaultIntegration.type == "password_vault",
+                PasswordVaultIntegration.is_active == True,  # noqa: E712
+            )
+            integration_id = params.get("password_vault_integration_id")
+            if integration_id not in (None, ""):
+                query = query.filter(PasswordVaultIntegration.id == int(integration_id))
+            row = query.first()
+            if not row:
+                missing.append(service)
+            continue
+
         row = db.query(ApiKey.id).filter(
             ApiKey.service == service,
             ApiKey.is_active == True,  # noqa: E712
@@ -1189,7 +1479,8 @@ def instantiate_flow_template(
     # or when the tenant plans to configure credentials later), we still let
     # the instantiate through, but the default is strict.
     skip_cred_check = bool((req.params or {}).get("skip_credential_check")) if hasattr(req, "params") else False
-    missing = _check_required_credentials(db, tenant_context.tenant_id, tmpl.required_credentials)
+    effective_tenant_id = _resolve_template_tenant_id(db, tenant_context, cleaned_params)
+    missing = _check_required_credentials(db, effective_tenant_id, tmpl.required_credentials, cleaned_params)
     if missing and not skip_cred_check:
         raise HTTPException(
             status_code=400,
@@ -1206,7 +1497,7 @@ def instantiate_flow_template(
 
     # 2. Run builder
     try:
-        flow_create = tmpl.build(cleaned_params, tenant_context.tenant_id)
+        flow_create = tmpl.build(cleaned_params, effective_tenant_id)
     except KeyError as e:
         raise HTTPException(status_code=422, detail=f"Missing required parameter: {e}")
     except (ValueError, TypeError) as e:
@@ -1238,13 +1529,13 @@ def instantiate_flow_template(
         )
 
     # 3. Enforce multi-tenant isolation on every referenced resource
-    _validate_tenant_refs(db, tenant_context.tenant_id, flow_create)
+    _validate_tenant_refs(db, effective_tenant_id, flow_create)
 
     try:
         db_flow = FlowDefinition(
             name=flow_create.name,
             description=flow_create.description,
-            tenant_id=tenant_context.tenant_id,
+            tenant_id=effective_tenant_id,
             execution_method=flow_create.execution_method.value,
             scheduled_at=flow_create.scheduled_at,
             recurrence_rule=flow_create.recurrence_rule.model_dump() if flow_create.recurrence_rule else None,
@@ -1284,7 +1575,7 @@ def instantiate_flow_template(
             db.commit()
 
         log_tenant_event(
-            db, tenant_context.tenant_id, tenant_context.user.id,
+            db, effective_tenant_id, tenant_context.user.id,
             TenantAuditActions.FLOW_CREATE, "flow", str(db_flow.id),
             {"name": db_flow.name, "template_id": template_id}, request,
         )
@@ -1310,12 +1601,21 @@ def list_flows(
     flow_type: Optional[str] = None,
     execution_method: Optional[str] = None,
     search: Optional[str] = None,
+    bound_trigger_kind: Optional[str] = None,  # v0.7.0 Wave 4
+    bound_trigger_id: Optional[int] = None,    # v0.7.0 Wave 4
     limit: int = 25,
     offset: int = 0,
     db: Session = Depends(get_db),
     tenant_context: TenantContext = Depends(get_tenant_context)
 ):
-    """List all flow definitions with optional filtering and pagination."""
+    """List all flow definitions with optional filtering and pagination.
+
+    v0.7.0 Wave 4: ``bound_trigger_kind`` + ``bound_trigger_id`` join into
+    ``flow_trigger_binding`` so the trigger detail page's "Wired Flows"
+    card can fetch only the flows actually wired to the current trigger.
+    Both must be supplied together (a kind without an id, or vice versa,
+    is treated as no filter).
+    """
     try:
         query = db.query(FlowDefinition)
 
@@ -1332,6 +1632,16 @@ def list_flows(
 
         if search:
             query = query.filter(FlowDefinition.name.ilike(f"%{search}%"))
+
+        if bound_trigger_kind is not None and bound_trigger_id is not None:
+            from models import FlowTriggerBinding
+            query = query.join(
+                FlowTriggerBinding,
+                FlowTriggerBinding.flow_definition_id == FlowDefinition.id,
+            ).filter(
+                FlowTriggerBinding.trigger_kind == bound_trigger_kind,
+                FlowTriggerBinding.trigger_instance_id == bound_trigger_id,
+            )
 
         total = query.count()
         flows = query.order_by(FlowDefinition.created_at.desc()).offset(offset).limit(limit).all()
@@ -1389,6 +1699,36 @@ def get_tool_metadata(
                                 "name": "query",
                                 "required": True,
                                 "description": "Search query text"
+                            }
+                        ]
+                    }]
+                },
+                "password_vault": {
+                    "id": "password_vault",
+                    "name": "Password Vault",
+                    "commands": [{
+                        "id": "resolve",
+                        "name": "resolve",
+                        "parameters": [
+                            {
+                                "name": "integration_id",
+                                "required": True,
+                                "description": "Password Vault integration id"
+                            },
+                            {
+                                "name": "item_ref",
+                                "required": True,
+                                "description": "Vault item title or id"
+                            },
+                            {
+                                "name": "field_name",
+                                "required": True,
+                                "description": "Field label/id/purpose to resolve"
+                            },
+                            {
+                                "name": "vault",
+                                "required": False,
+                                "description": "Optional vault override"
                             }
                         ]
                     }]
@@ -1578,6 +1918,8 @@ def update_flow(
         if not db_flow:
             raise HTTPException(status_code=404, detail="Flow not found")
 
+        _ensure_flow_editable(db_flow)
+
         if flow.name is not None:
             db_flow.name = flow.name
         if flow.description is not None:
@@ -1647,6 +1989,8 @@ def patch_flow(
         db_flow = query.first()
         if not db_flow:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(db_flow)
 
         if flow.name is not None:
             db_flow.name = flow.name
@@ -1730,6 +2074,8 @@ def delete_flow(
         flow = query.first()
         if not flow:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_deletable(flow)
 
         run_count = db.query(FlowRun).filter(FlowRun.flow_definition_id == flow_id).count()
         if run_count > 0 and not force:
@@ -1823,6 +2169,9 @@ def create_step(
             timeout_seconds=step.timeout_seconds,
             retry_on_failure=step.retry_on_failure,
             max_retries=step.max_retries,
+            retry_delay_seconds=step.retry_delay_seconds,
+            on_success=step.on_success,
+            on_failure=step.on_failure,
             allow_multi_turn=step.allow_multi_turn,
             max_turns=step.max_turns,
             conversation_objective=step.conversation_objective,
@@ -1907,8 +2256,11 @@ def update_step(
     try:
         flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
         flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
-        if not flow_query.first():
+        flow_obj = flow_query.first()
+        if not flow_obj:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(flow_obj)
 
         db_step = db.query(FlowNode).filter(
             FlowNode.id == step_id,
@@ -1917,6 +2269,21 @@ def update_step(
 
         if not db_step:
             raise HTTPException(status_code=404, detail="Step not found")
+
+        # v0.7.0 Wave 2 — block changing the type of a Source step or
+        # moving it off position 1. The auto-flow created in Wave 4 relies
+        # on the source node staying put for the lifetime of the binding.
+        if db_step.type in ("source", "Source"):
+            if step.type is not None and step.type not in ("source", "Source"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot change the type of a Source step",
+                )
+            if step.position is not None and step.position != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Source step must remain at position 1",
+                )
 
         if step.type is not None:
             db_step.type = step.type
@@ -1936,6 +2303,12 @@ def update_step(
             db_step.retry_on_failure = step.retry_on_failure
         if step.max_retries is not None:
             db_step.max_retries = step.max_retries
+        if step.retry_delay_seconds is not None:
+            db_step.retry_delay_seconds = step.retry_delay_seconds
+        if step.on_success is not None:
+            db_step.on_success = step.on_success
+        if step.on_failure is not None:
+            db_step.on_failure = step.on_failure
         if step.allow_multi_turn is not None:
             db_step.allow_multi_turn = step.allow_multi_turn
         if step.max_turns is not None:
@@ -2050,8 +2423,11 @@ def delete_step(
     try:
         flow_query = db.query(FlowDefinition).filter(FlowDefinition.id == flow_id)
         flow_query = tenant_context.filter_by_tenant(flow_query, FlowDefinition.tenant_id)
-        if not flow_query.first():
+        flow_obj = flow_query.first()
+        if not flow_obj:
             raise HTTPException(status_code=404, detail="Flow not found")
+
+        _ensure_flow_editable(flow_obj)
 
         step = db.query(FlowNode).filter(
             FlowNode.id == step_id,
@@ -2060,6 +2436,18 @@ def delete_step(
 
         if not step:
             raise HTTPException(status_code=404, detail="Step not found")
+
+        # v0.7.0 Wave 2 — Source steps are the canonical entry node for
+        # a triggered flow; deleting one would orphan the flow_trigger_binding
+        # that points to it (binding.source_node_id becomes NULL via
+        # ON DELETE SET NULL, and the flow can no longer wake from its
+        # trigger). The trigger-page UX deletes the binding (and the
+        # auto-flow when system-managed) — never the source node alone.
+        if step.type in ("source", "Source"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the Source step. Delete the trigger binding or the entire flow instead.",
+            )
 
         db.delete(step)
         db.commit()
@@ -2192,21 +2580,7 @@ async def execute_flow(
 
         logger.info(f"Flow run {run_id} created (pending), background execution started")
 
-        return LegacyFlowRunResponse(
-            id=flow_run.id,
-            flow_definition_id=flow_run.flow_definition_id,
-            status=flow_run.status,
-            started_at=flow_run.started_at,
-            completed_at=flow_run.completed_at,
-            initiator=flow_run.initiator,
-            trigger_context_json=flow_run.trigger_context_json,
-            final_report_json=flow_run.final_report_json,
-            error_text=flow_run.error_text,
-            created_at=flow_run.created_at,
-            total_steps=flow_run.total_steps or 0,
-            completed_steps=flow_run.completed_steps or 0,
-            failed_steps=flow_run.failed_steps or 0
-        )
+        return _legacy_flow_run_response(flow_run, flow.name)
 
     except HTTPException:
         raise

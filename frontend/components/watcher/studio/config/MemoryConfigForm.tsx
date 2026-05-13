@@ -103,7 +103,7 @@ export default function MemoryConfigForm({ nodeId, data, onUpdate }: MemoryConfi
           max={5000}
           onChange={e => handleSizeChange(parseInt(e.target.value) || 1)}
         />
-        <p className="field-help">Number of messages kept in the ring buffer (1-5000)</p>
+        <p className="field-help">Number of recent messages kept in mind (1-5000)</p>
       </div>
 
       <div className="config-field">

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface UserGuidePanelProps {
   isOpen: boolean
@@ -151,6 +152,8 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
   // for a11y and pointer events once the transition finishes.
   const hiddenA11y = !isOpen
 
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   return (
     <>
       {/* Backdrop — BUG-603: z-[200] keeps the User Guide above every other app modal
@@ -161,7 +164,7 @@ export default function UserGuidePanel({ isOpen, onClose }: UserGuidePanelProps)
         className={`fixed inset-0 z-[200] bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
           isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
-        onClick={onClose}
+        {...backdropDismiss}
         aria-hidden={hiddenA11y ? 'true' : undefined}
         style={hiddenA11y ? { visibility: 'hidden' } : undefined}
       />

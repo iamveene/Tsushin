@@ -224,7 +224,18 @@ class MCPWatcher:
             raise  # Re-raise to be caught by gather()
 
     async def _handle_conversation_message(self, msg: dict, trigger_type: str):
-        """Optionally debounce WhatsApp conversation messages before routing."""
+        """Optionally debounce WhatsApp conversation messages before routing.
+
+        Media-only messages (audio/image/video/document) bypass the debounce
+        window: they carry an empty ``body`` and therefore would be dropped
+        silently by the buffer's ``if not combined_body: return`` guard. Each
+        media message also has its own downstream side effect (e.g. an audio
+        gets transcribed and delivered) that must not be aggregated away.
+        """
+        if (msg.get("media_type") or "").strip():
+            await self.on_message_callback(msg, trigger_type)
+            return
+
         delay = self._get_conversation_delay(msg, trigger_type)
         if delay > 0:
             self._enqueue_conversation_message(msg, trigger_type, delay)

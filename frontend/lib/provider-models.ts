@@ -47,6 +47,7 @@ export const PROVIDER_MODEL_CATALOG: Record<string, ProviderModelOption[]> = {
   ],
   grok: [
     { value: 'grok-4.3', label: 'Grok 4.3' },
+    { value: 'grok-4.3-latest', label: 'Grok 4.3 (Latest)' },
     { value: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi-Agent' },
     { value: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning' },
     { value: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning' },
@@ -60,6 +61,7 @@ export const PROVIDER_MODEL_CATALOG: Record<string, ProviderModelOption[]> = {
     { value: 'openai/gpt-5.5-pro', label: 'GPT-5.5 Pro (OpenRouter)' },
     { value: 'anthropic/claude-opus-4.7', label: 'Claude Opus 4.7 (OpenRouter)' },
     { value: 'x-ai/grok-4.3', label: 'Grok 4.3 (OpenRouter)' },
+    { value: 'x-ai/grok-4.3-latest', label: 'Grok 4.3 Latest (OpenRouter)' },
     { value: 'x-ai/grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi-Agent (OpenRouter)' },
     { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { value: 'meta-llama/llama-3.1-8b-instruct:free', label: 'Llama 3.1 8B (Free)' },

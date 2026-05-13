@@ -167,9 +167,13 @@ class FlowRunSummary(BaseModel):
     """Summary of a flow run."""
     id: int = Field(description="Flow run ID")
     flow_definition_id: int = Field(description="Flow definition ID")
+    flow_name: Optional[str] = Field(None, description="Flow display name")
+    flow_display_name: Optional[str] = Field(None, description="Name to show in operator UIs")
     status: str = Field(description="Run status: pending, running, completed, failed, cancelled")
     started_at: Optional[str] = Field(None, description="Start timestamp")
     completed_at: Optional[str] = Field(None, description="Completion timestamp")
+    duration_ms: Optional[int] = Field(None, description="Run duration in milliseconds when known")
+    duration_label: Optional[str] = Field(None, description="Human-readable run duration when known")
     initiator: Optional[str] = Field(None, description="Who initiated the run")
     total_steps: int = Field(0, description="Total steps in the run")
     completed_steps: int = Field(0, description="Completed steps count")
@@ -196,9 +200,13 @@ class FlowRunDetailResponse(BaseModel):
     """Flow run with step runs."""
     id: int = Field(description="Flow run ID")
     flow_definition_id: int = Field(description="Flow definition ID")
+    flow_name: Optional[str] = Field(None, description="Flow display name")
+    flow_display_name: Optional[str] = Field(None, description="Name to show in operator UIs")
     status: str = Field(description="Run status")
     started_at: Optional[str] = Field(None, description="Start timestamp")
     completed_at: Optional[str] = Field(None, description="Completion timestamp")
+    duration_ms: Optional[int] = Field(None, description="Run duration in milliseconds when known")
+    duration_label: Optional[str] = Field(None, description="Human-readable run duration when known")
     initiator: Optional[str] = Field(None, description="Who initiated the run")
     total_steps: int = Field(0, description="Total steps")
     completed_steps: int = Field(0, description="Completed steps")
@@ -322,14 +330,39 @@ def _node_to_response(node: FlowNode) -> dict:
     }
 
 
+def _flow_run_duration_ms(run: FlowRun) -> Optional[int]:
+    if not run.started_at or not run.completed_at:
+        return None
+    return max(0, int((run.completed_at - run.started_at).total_seconds() * 1000))
+
+
+def _flow_run_duration_label(run: FlowRun) -> Optional[str]:
+    duration_ms = _flow_run_duration_ms(run)
+    if duration_ms is None:
+        return None
+    if duration_ms < 1000:
+        return "<1s"
+    seconds = duration_ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s" if duration_ms % 1000 else f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    remainder = int(seconds % 60)
+    return f"{minutes}m {remainder}s"
+
+
 def _run_to_summary(run: FlowRun) -> dict:
     """Convert FlowRun to a summary dict."""
+    flow_name = getattr(getattr(run, "flow", None), "name", None)
     return {
         "id": run.id,
         "flow_definition_id": run.flow_definition_id,
+        "flow_name": flow_name,
+        "flow_display_name": flow_name or f"Flow #{run.flow_definition_id}",
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_ms": _flow_run_duration_ms(run),
+        "duration_label": _flow_run_duration_label(run),
         "initiator": run.initiator,
         "total_steps": run.total_steps or 0,
         "completed_steps": run.completed_steps or 0,
@@ -474,13 +507,18 @@ async def get_run(
     step_runs = db.query(FlowNodeRun).filter(
         FlowNodeRun.flow_run_id == run_id,
     ).order_by(FlowNodeRun.id).all()
+    flow_name = getattr(getattr(run, "flow", None), "name", None)
 
     return {
         "id": run.id,
         "flow_definition_id": run.flow_definition_id,
+        "flow_name": flow_name,
+        "flow_display_name": flow_name or f"Flow #{run.flow_definition_id}",
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_ms": _flow_run_duration_ms(run),
+        "duration_label": _flow_run_duration_label(run),
         "initiator": run.initiator,
         "total_steps": run.total_steps or 0,
         "completed_steps": run.completed_steps or 0,

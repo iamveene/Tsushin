@@ -155,7 +155,8 @@ class CalendarService(HubIntegrationBase):
         method: str,
         endpoint: str,
         params: Optional[Dict] = None,
-        json_data: Optional[Dict] = None
+        json_data: Optional[Dict] = None,
+        timeout: float = 10.0,
     ) -> Dict:
         """
         Make authenticated request to Google Calendar API.
@@ -165,6 +166,10 @@ class CalendarService(HubIntegrationBase):
             endpoint: API endpoint (relative to BASE_URL)
             params: Query parameters
             json_data: JSON body data
+            timeout: httpx request timeout (seconds). Default 10s — BUG-684
+                defense-in-depth: mirrors the Gmail service so a single
+                unreachable Google endpoint cannot hold FastAPI DB sessions
+                for 30s and exhaust the `QueuePool`.
 
         Returns:
             API response as dict
@@ -244,7 +249,7 @@ class CalendarService(HubIntegrationBase):
                 pass
             # #endregion
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     method,
                     url,

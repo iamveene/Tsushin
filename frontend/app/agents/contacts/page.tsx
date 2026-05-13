@@ -192,7 +192,25 @@ export default function ContactsPage() {
   }
 
   const handleDelete = async (contactId: number) => {
-    if (!confirm('Are you sure you want to delete this contact?')) return
+    const target = contacts.find(c => c.id === contactId)
+    const targetName = target?.friendly_name ?? `contact ${contactId}`
+    // Agent-role contacts back an Agent record; deleting one removes routing
+    // targets that operators may not have in mind while skimming the list.
+    // Surface the cascade explicitly so a misclick on Tsushin/Gigi doesn't
+    // silently take an active agent offline.
+    const isAgent = target?.role === 'agent'
+    const prompt = isAgent
+      ? `Delete agent contact "${targetName}"?\n\n` +
+        `This is an agent record. Removing it will also clear its channel aliases, ` +
+        `any user→agent assignments pointing at it, and the linked-user mapping. ` +
+        `Users currently routed to this agent will fall back to the default agent.\n\n` +
+        `This cannot be undone.`
+      : `Delete contact "${targetName}"?\n\n` +
+        `Channel aliases (WhatsApp/Telegram/etc.), the agent assignment, ` +
+        `and the linked-user mapping for this contact will also be removed.\n\n` +
+        `This cannot be undone.`
+
+    if (!confirm(prompt)) return
 
     try {
       await api.deleteContact(contactId)
@@ -341,8 +359,8 @@ export default function ContactsPage() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Agent Studio</h1>
-            <p className="text-tsushin-slate">Manage contacts and agent assignments</p>
+            <h1 className="text-3xl font-bold text-white mb-2">Contacts</h1>
+            <p className="text-tsushin-slate">People and inboxes your agents talk to. Assign default agents per contact.</p>
           </div>
           <div className="flex gap-3">
             <button
@@ -373,7 +391,10 @@ export default function ContactsPage() {
             <p className="text-sm font-medium text-tsushin-slate">Agent Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{agentContacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-green-500">
+          <div
+            className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-green-500"
+            title="Contacts that trigger an agent when they send a direct message."
+          >
             <p className="text-sm font-medium text-tsushin-slate">DM Triggers</p>
             <p className="text-2xl font-bold text-white mt-1">{dmTriggerContacts.length}</p>
           </div>
@@ -405,10 +426,13 @@ export default function ContactsPage() {
                             ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                             : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                         }`}>
-                          {contact.role}
+                          {contact.role === 'agent' ? 'Agent' : contact.role === 'external' ? 'External' : 'User'}
                         </span>
                         {contact.is_dm_trigger && (
-                          <span className="px-2 py-1 text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20 rounded-full">
+                          <span
+                            className="px-2 py-1 text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20 rounded-full"
+                            title="Triggers when someone DMs this contact."
+                          >
                             DM Trigger
                           </span>
                         )}
@@ -492,7 +516,10 @@ export default function ContactsPage() {
                         <td className="py-3 px-4">
                           <div className="font-medium text-white">{contact.friendly_name}</div>
                           {contact.is_dm_trigger && (
-                            <span className="inline-block px-2 py-0.5 text-xs bg-green-500/10 text-green-400 rounded mt-1">
+                            <span
+                              className="inline-block px-2 py-0.5 text-xs bg-green-500/10 text-green-400 rounded mt-1"
+                              title="Triggers when someone DMs this contact."
+                            >
                               DM Trigger
                             </span>
                           )}

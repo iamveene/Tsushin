@@ -7,6 +7,8 @@ import { WhatsAppWizardProvider } from '@/contexts/WhatsAppWizardContext'
 import { GoogleWizardProvider } from '@/contexts/GoogleWizardContext'
 import { AudioWizardProvider } from '@/contexts/AudioWizardContext'
 import { AgentWizardProvider } from '@/contexts/AgentWizardContext'
+import { TeamWizardProvider } from '@/contexts/TeamWizardContext'
+import { ProviderWizardProvider } from '@/contexts/ProviderWizardContext'
 import { ToastProvider } from '@/contexts/ToastContext'
 import LayoutContent from '@/components/LayoutContent'
 import OnboardingWizard from '@/components/OnboardingWizard'
@@ -61,13 +63,17 @@ export default function RootLayout({
               <GoogleWizardProvider>
                 <AudioWizardProvider>
                   <AgentWizardProvider>
-                    <ToastProvider>
-                      <LayoutContent>{children}</LayoutContent>
-                      <OnboardingWizard />
-                      <WhatsAppSetupWizard />
-                      <PlaygroundMini />
-                      <ToastContainer />
-                    </ToastProvider>
+                    <TeamWizardProvider>
+                      <ProviderWizardProvider>
+                        <ToastProvider>
+                          <LayoutContent>{children}</LayoutContent>
+                          <OnboardingWizard />
+                          <WhatsAppSetupWizard />
+                          <PlaygroundMini />
+                          <ToastContainer />
+                        </ToastProvider>
+                      </ProviderWizardProvider>
+                    </TeamWizardProvider>
                   </AgentWizardProvider>
                 </AudioWizardProvider>
               </GoogleWizardProvider>

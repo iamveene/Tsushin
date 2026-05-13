@@ -57,11 +57,7 @@ class AgentCommunicationSkill(BaseSkill):
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {
-            "keywords": [],
-            "use_ai_fallback": False,
-            "ai_model": "gemini-2.5-flash-lite",
             "default_timeout": 60,
-            "default_max_depth": 3,
         }
 
     @classmethod
@@ -75,13 +71,6 @@ class AgentCommunicationSkill(BaseSkill):
                     "default": 60,
                     "minimum": 5,
                     "maximum": 120,
-                },
-                "default_max_depth": {
-                    "type": "integer",
-                    "description": "Maximum delegation chain depth",
-                    "default": 3,
-                    "minimum": 1,
-                    "maximum": 5,
                 },
             },
             "required": [],
@@ -120,7 +109,16 @@ class AgentCommunicationSkill(BaseSkill):
                     },
                     "context": {
                         "type": "string",
-                        "description": "Optional context to pass to the target agent (e.g., conversation summary)",
+                        "description": (
+                            "Optional short topical hint about the user's intent "
+                            "(e.g. 'user is planning a trip', 'follow-up on incident #42'). "
+                            "IMPORTANT: do NOT paste tool output, another agent's response, "
+                            "emails, calendar events, or any private/account-scoped data here. "
+                            "The target agent owns its own data and will fetch it via its own "
+                            "tools — providing such content here is treated as untrusted hearsay "
+                            "and may cause the target to respond incorrectly or refuse the task. "
+                            "Keep this field short (one or two sentences) or omit it."
+                        ),
                     },
                 },
                 "required": ["action"],

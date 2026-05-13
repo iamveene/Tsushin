@@ -124,7 +124,19 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
     setPhaseMessage('Creating Ollama provider instance...')
     try {
       // 1) Ensure Ollama instance exists (reuses or creates)
-      const inst = await api.ensureOllamaInstance()
+      let inst = await api.ensureOllamaInstance()
+      // ensureOllamaInstance ignores body — the backend always names the row
+      // "Ollama (Local)". If the user picked a different instance_name in
+      // step 2, honour that by renaming immediately after create. Skip the
+      // rename when the two already match or when the user left the default.
+      const desiredName = (config.instance_name || '').trim()
+      if (desiredName && desiredName !== inst.instance_name) {
+        try {
+          inst = await api.updateProviderInstance(inst.id, { instance_name: desiredName })
+        } catch {
+          // Rename is cosmetic — do not block provisioning on a name collision.
+        }
+      }
       setInstance(inst)
 
       setPhaseMessage('Provisioning Ollama container (may take 1–2 min to pull image)...')
@@ -152,7 +164,7 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
           if (provisionPoller.current) clearInterval(provisionPoller.current)
           provisionPoller.current = null
           setPhase('error')
-          setPhaseMessage('Container failed to start. Check Hub > Local Services > Ollama for details.')
+          setPhaseMessage('Container failed to start. Check Hub → AI Providers → Ollama for details.')
         }
       } catch {
         // transient — keep polling
@@ -397,7 +409,7 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
               autoFocus
             />
             <p className="text-[11px] text-gray-500 mt-1">
-              Displayed in Hub and Agent Studio. You can rename it later.
+              Displayed in Hub and Studio → Agents. You can rename it later from the Ollama provider panel.
             </p>
           </div>
 
@@ -567,7 +579,10 @@ export default function OllamaSetupWizard({ isOpen, onClose, onComplete }: Ollam
               switch to Ollama with the model <span className="font-mono text-purple-300">{resolvedModelName() || '—'}</span>.
             </p>
             <p className="text-xs text-gray-500 mt-2">
-              Skip to just provision the container — agents can be rewired later from Agent Studio.
+              Skip to just provision the container — agents can be rewired later from{' '}
+              <a href="/agents" className="text-purple-300 underline hover:text-white">
+                Studio → Agents
+              </a>.
             </p>
           </div>
 

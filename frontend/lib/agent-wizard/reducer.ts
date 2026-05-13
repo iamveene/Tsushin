@@ -11,6 +11,7 @@ import type { AudioProvider } from '@/components/audio-wizard/defaults'
 
 export type AgentType = 'text' | 'audio' | 'hybrid'
 export type AudioCapability = 'voice' | 'transcript' | 'hybrid'
+export type ASRUsageMode = 'openai' | 'instance'
 export type MemoryMode = 'builtin' | 'vector' | 'semantic'
 
 export type StepKey =
@@ -29,6 +30,13 @@ export interface BasicsConfig {
   agent_phone: string
   model_provider: string
   model_name: string
+  /**
+   * Specific provider_instance to bind this agent to. Required when the tenant
+   * has configured one or more instances for the chosen vendor — without it,
+   * the backend would fall back to flat-field creds and break agents whose
+   * vendor doesn't support flat fields (e.g. Vertex AI, which needs a
+   * project_id/sa_email/private_key triple carried on the instance).
+   */
   provider_instance_id: number | null
 }
 
@@ -51,6 +59,13 @@ export interface AudioConfig {
   memLimit: string
   autoProvision: boolean
   setAsDefaultTTS: boolean
+  /** Provider-specific TTS model id (Gemini today). */
+  model?: string
+  asrMode: ASRUsageMode
+  asrInstanceId: number | null
+  vadFilter: boolean | null
+  transcriptModel: string
+  rememberTranscript: boolean
 }
 
 export interface SkillsConfig {
@@ -100,6 +115,11 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   memLimit: '1.5g',
   autoProvision: true,
   setAsDefaultTTS: false,
+  asrMode: 'openai',
+  asrInstanceId: null,
+  vadFilter: null,
+  transcriptModel: 'whisper-1',
+  rememberTranscript: true,
 }
 
 export const EMPTY_DRAFT: WizardDraft = {
@@ -349,6 +369,10 @@ export function reducer(state: WizardState, action: WizardAction): WizardState {
 export function isBasicsValid(b: BasicsConfig): boolean {
   if (!b.agent_name.trim()) return false
   if (!b.model_provider || !b.model_name) return false
+  // Non-local vendors must bind to a specific provider_instance so the backend
+  // can resolve credentials. Ollama is the only vendor that can run without
+  // one (local daemon, no auth).
+  if (b.model_provider !== 'ollama' && !b.provider_instance_id) return false
   if (b.agent_phone && b.agent_phone.trim()) {
     const cleaned = b.agent_phone.replace(/\s/g, '')
     if (!/^\+?\d{10,15}$/.test(cleaned)) return false
@@ -365,6 +389,7 @@ export function isPersonalityValid(p: PersonalityConfig): boolean {
 export function isAudioValid(a: AudioConfig | null): boolean {
   if (!a) return false
   if (!a.voice || !a.language) return false
+  if (a.asrMode === 'instance' && !a.asrInstanceId) return false
   return true
 }
 

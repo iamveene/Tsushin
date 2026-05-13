@@ -9,9 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { authenticatedFetch, ProviderInstance } from '@/lib/client'
-import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
-import ProviderModelInput from '@/components/providers/ProviderModelInput'
+import { authenticatedFetch, ProviderInstance, api as apiClient, Config } from '@/lib/client'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -24,6 +22,8 @@ import {
   BotIcon as BotIconSvg,
   type IconProps,
 } from '@/components/ui/icons'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
+import { getPreferredProviderModel, getProviderModelLabels } from '@/lib/provider-models'
 
 // Grok (xAI) icon
 const GrokIcon = ({ size, className }: IconProps) => (
@@ -105,6 +105,15 @@ export default function AIConfigurationPage() {
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
+  // BUG-716: platform-wide bounds for the agentic loop. Lives on the global
+  // Config row and is exposed via PUT /api/config (already wired in schemas).
+  const [platformConfig, setPlatformConfig] = useState<Config | null>(null)
+  const [platformMinRounds, setPlatformMinRounds] = useState<number>(1)
+  const [platformMaxRounds, setPlatformMaxRounds] = useState<number>(8)
+  const [savingPlatform, setSavingPlatform] = useState(false)
+  const [platformSuccess, setPlatformSuccess] = useState<string | null>(null)
+  const [platformError, setPlatformError] = useState<string | null>(null)
+
   const apiUrl = ''
 
   const fetchData = useCallback(async () => {
@@ -131,6 +140,16 @@ export default function AIConfigurationPage() {
         // Only show active instances
         setInstances(instancesData.filter(i => i.is_active))
       }
+
+      // Platform-wide agentic-loop bounds (BUG-716)
+      try {
+        const fullConfig = await apiClient.getConfig()
+        setPlatformConfig(fullConfig)
+        setPlatformMinRounds(fullConfig.platform_min_agentic_rounds ?? 1)
+        setPlatformMaxRounds(fullConfig.platform_max_agentic_rounds ?? 8)
+      } catch (cfgErr) {
+        console.warn('Failed to load platform agentic bounds:', cfgErr)
+      }
     } catch (err) {
       console.error('Error fetching AI config:', err)
       setError('Failed to load configuration')
@@ -146,25 +165,10 @@ export default function AIConfigurationPage() {
   }, [authLoading, user, fetchData])
 
   const selectedInstance = instances.find(i => i.id === selectedInstanceId) || null
-  const selectedModelOptions = getProviderModelOptions(selectedInstance?.vendor, selectedInstance?.available_models || [], {
-    currentModel: selectedModel,
-  })
 
   const handleInstanceSelect = (instance: ProviderInstance) => {
     setSelectedInstanceId(instance.id)
-    const modelOptions = getProviderModelOptions(instance.vendor, instance.available_models, {
-      currentModel: selectedModel,
-    })
-    if (modelOptions.length > 0) {
-      const preferredModel = getPreferredProviderModel(instance.vendor, modelOptions, selectedModel)
-      if (modelOptions.includes(selectedModel) && preferredModel === selectedModel) {
-        // Keep current selection
-      } else {
-        setSelectedModel(preferredModel)
-      }
-    } else {
-      setSelectedModel('')
-    }
+    setSelectedModel(getPreferredProviderModel(instance.vendor, instance.available_models, selectedModel))
     setTestResult(null)
     setSuccess(null)
   }
@@ -249,6 +253,43 @@ export default function AIConfigurationPage() {
   const hasChanges =
     config &&
     (selectedInstanceId !== config.provider_instance_id || selectedModel !== config.model_name)
+
+  const handleSavePlatformBounds = async () => {
+    setSavingPlatform(true)
+    setPlatformError(null)
+    setPlatformSuccess(null)
+    try {
+      // Clamp + sanity-check before sending. Backend Field validators also
+      // enforce 1..8 but we surface the message to the user up front.
+      let minRounds = Math.round(platformMinRounds)
+      let maxRounds = Math.round(platformMaxRounds)
+      if (!Number.isFinite(minRounds) || minRounds < 1) minRounds = 1
+      if (!Number.isFinite(maxRounds) || maxRounds > 8) maxRounds = 8
+      if (maxRounds < minRounds) {
+        setPlatformError('Max rounds must be greater than or equal to min rounds.')
+        return
+      }
+
+      const updated = await apiClient.updateConfig({
+        platform_min_agentic_rounds: minRounds,
+        platform_max_agentic_rounds: maxRounds,
+      } as Partial<Config>)
+      setPlatformConfig(updated)
+      setPlatformMinRounds(updated.platform_min_agentic_rounds ?? minRounds)
+      setPlatformMaxRounds(updated.platform_max_agentic_rounds ?? maxRounds)
+      setPlatformSuccess('Platform agentic-loop bounds saved.')
+    } catch (err: any) {
+      console.error('Failed to save platform bounds:', err)
+      setPlatformError(err?.message || 'Failed to save platform bounds')
+    } finally {
+      setSavingPlatform(false)
+    }
+  }
+
+  const platformBoundsChanged =
+    platformConfig != null &&
+    ((platformConfig.platform_min_agentic_rounds ?? 1) !== platformMinRounds ||
+      (platformConfig.platform_max_agentic_rounds ?? 8) !== platformMaxRounds)
 
   const healthDot = (status: string) => {
     switch (status) {
@@ -399,12 +440,9 @@ export default function AIConfigurationPage() {
                           </div>
                           <p className="text-xs text-tsushin-slate">
                             {VENDOR_LABELS[instance.vendor] || instance.vendor}
-                            {(() => {
-                              const modelCount = getProviderModelOptions(instance.vendor, instance.available_models).length
-                              return modelCount > 0 ? (
-                                <> &middot; {modelCount} model{modelCount !== 1 ? 's' : ''}</>
-                              ) : null
-                            })()}
+                            {instance.available_models.length > 0 && (
+                              <> &middot; {instance.available_models.length} model{instance.available_models.length !== 1 ? 's' : ''}</>
+                            )}
                           </p>
                         </div>
                         {instance.is_default && (
@@ -424,11 +462,31 @@ export default function AIConfigurationPage() {
             </div>
 
             {/* Model Selection */}
-            {selectedInstance && selectedModelOptions.length > 0 && (
+            {selectedInstance && (
               <div className="glass-card rounded-xl p-6 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
-                <div className="space-y-2">
-                  {selectedModelOptions.map((model) => {
+                {selectedInstance.available_models.length === 0 && (
+                  <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-sm text-yellow-100">
+                    No live models are configured for this instance yet. Type any model ID manually,
+                    or edit it in the{' '}
+                    <Link href="/hub" className="text-teal-300 hover:text-teal-200 underline">Hub</Link>.
+                  </div>
+                )}
+                <ProviderModelInput
+                  vendor={selectedInstance.vendor}
+                  models={selectedInstance.available_models}
+                  value={selectedModel}
+                  onChange={handleModelChange}
+                  currentModel={selectedModel}
+                  disabled={!canEdit}
+                  placeholder="Select or type a model ID"
+                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+                  dataTestId="system-ai-model-input"
+                />
+                <div className="space-y-2 mt-4">
+                  {getProviderModelLabels(selectedInstance.vendor, selectedInstance.available_models, {
+                    currentModel: selectedModel,
+                  }).map(({ value: model, label }) => {
                     const isSelected = selectedModel === model
                     const colors = VENDOR_COLORS[selectedInstance.vendor] || VENDOR_COLORS.custom
 
@@ -443,7 +501,7 @@ export default function AIConfigurationPage() {
                             : 'border-white/10 hover:border-white/20'
                         } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                       >
-                        <span className="text-sm text-white font-mono">{model}</span>
+                        <span className="text-sm text-white font-mono">{label}</span>
                         {isSelected && (
                           <svg className={`w-5 h-5 ${colors.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -452,50 +510,6 @@ export default function AIConfigurationPage() {
                       </button>
                     )
                   })}
-                </div>
-                <div className="mt-4">
-                  <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
-                  <ProviderModelInput
-                    vendor={selectedInstance.vendor}
-                    models={selectedInstance.available_models}
-                    value={selectedModel}
-                    onChange={handleModelChange}
-                    placeholder="Select or type a model ID"
-                    disabled={!canEdit}
-                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* No models warning */}
-            {selectedInstance && selectedModelOptions.length === 0 && (
-              <div className="glass-card rounded-xl p-6 mb-6">
-                <div className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <div>
-                    <p className="text-yellow-400 font-medium">No models available</p>
-                    <p className="text-sm text-tsushin-slate mt-1">
-                      This instance has no models configured. Edit it in the{' '}
-                      <Link href="/hub" className="text-teal-400 hover:text-teal-300 underline">Hub</Link>{' '}
-                      to discover or add models.
-                    </p>
-                    {/* Allow manual model entry */}
-                    <div className="mt-3">
-                      <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
-                      <ProviderModelInput
-                        vendor={selectedInstance.vendor}
-                        models={selectedInstance.available_models}
-                        value={selectedModel}
-                        onChange={handleModelChange}
-                        placeholder="e.g. gemini-2.5-flash"
-                        disabled={!canEdit}
-                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
-                      />
-                    </div>
-                  </div>
                 </div>
               </div>
             )}
@@ -596,9 +610,91 @@ export default function AIConfigurationPage() {
           </>
         )}
 
+        {/* Platform AI — Agentic Loop Bounds (BUG-716) */}
+        <div className="glass-card rounded-xl p-6 mt-8">
+          <div className="flex items-start gap-4 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0">
+              <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-white font-medium mb-1">Platform AI — Agentic Loop Bounds</h3>
+              <p className="text-sm text-tsushin-slate">
+                Hard upper/lower bounds for the bounded agentic loop. Per-agent
+                <code className="mx-1 px-1.5 py-0.5 text-xs rounded bg-white/5 border border-white/10">max_agentic_rounds</code>
+                values are clamped into this range at runtime, regardless of what an agent owner saved.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-2">
+                Minimum rounds
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                disabled={!canEdit}
+                value={platformMinRounds}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  setPlatformMinRounds(Number.isFinite(n) ? n : 1)
+                }}
+                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-tsushin-slate mb-2">
+                Maximum rounds
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                disabled={!canEdit}
+                value={platformMaxRounds}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10)
+                  setPlatformMaxRounds(Number.isFinite(n) ? n : 8)
+                }}
+                className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+              />
+            </div>
+          </div>
+
+          {platformError && (
+            <div className="p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              {platformError}
+            </div>
+          )}
+          {platformSuccess && (
+            <div className="p-3 mb-4 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm">
+              {platformSuccess}
+            </div>
+          )}
+
+          {canEdit && (
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-tsushin-slate">
+                {platformBoundsChanged ? 'Unsaved changes' : 'Range 1 – 8.'}
+              </p>
+              <button
+                onClick={handleSavePlatformBounds}
+                disabled={savingPlatform || !platformBoundsChanged}
+                className="px-4 py-2 text-sm bg-purple-500 hover:bg-purple-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingPlatform ? 'Saving...' : 'Save Platform Bounds'}
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Read-only notice */}
         {!canEdit && (
-          <div className="glass-card rounded-xl p-6 text-center">
+          <div className="glass-card rounded-xl p-6 text-center mt-8">
             <p className="text-tsushin-slate">
               You don&apos;t have permission to modify system AI configuration.
               Contact your organization admin to make changes.

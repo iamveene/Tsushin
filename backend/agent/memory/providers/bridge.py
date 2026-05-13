@@ -266,6 +266,26 @@ class ProviderBridgeStore:
         formatted = self._records_to_dicts(records)
         return formatted, query_embedding, result_embeddings
 
+    async def search_similar_by_embedding(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        sender_key: Optional[str] = None,
+    ) -> List[Dict]:
+        """Search with a pre-computed embedding (no re-embed).
+
+        Mirrors ``search_similar`` but skips the bridge-level embedding
+        step. Used by the case-memory query path
+        (``search_similar_cases``) so a Gemini ``RETRIEVAL_QUERY``
+        embedding isn't silently re-computed under the bridge's own
+        ``embedding_service`` (which may default to a different
+        provider/model and produce a different vector).
+        """
+        records = await self._provider.search_similar(
+            query_embedding, limit, sender_key
+        )
+        return self._records_to_dicts(records)
+
     async def delete_message(self, message_id: str) -> None:
         """Async delete — callers must await."""
         try:

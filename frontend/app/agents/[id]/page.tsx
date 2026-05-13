@@ -10,15 +10,18 @@ import AgentKnowledgeManager from '@/components/AgentKnowledgeManager'
 // AgentSandboxedToolsManager is now embedded in the Skills > Sandboxed Tools config modal
 import AgentConfigurationManager from '@/components/AgentConfigurationManager'
 import AgentChannelsManager from '@/components/AgentChannelsManager'
+import AgentAdvancedManager from '@/components/AgentAdvancedManager'
 import SharedKnowledgeViewer from '@/components/SharedKnowledgeViewer'
 import {
   SettingsIcon, RadioIcon, BrainIcon, SparklesIcon, BookOpenIcon,
-  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, MicrophoneIcon, WrenchIcon
+  LinkIcon, TheaterIcon, BotIcon, LightningIcon, KeyIcon, StarIcon, WrenchIcon, UsersIcon
 } from '@/components/ui/icons'
+import DetailShellHeader from '@/components/ui/DetailShell'
+import TabStrip from '@/components/ui/TabStrip'
 
-type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge'
+type Tab = 'configuration' | 'channels' | 'memory' | 'skills' | 'custom-skills' | 'knowledge' | 'shared-knowledge' | 'advanced'
 
-const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'custom-skills', 'knowledge', 'shared-knowledge']
+const VALID_TABS: Tab[] = ['configuration', 'channels', 'memory', 'skills', 'custom-skills', 'knowledge', 'shared-knowledge', 'advanced']
 
 export default function AgentDetailPage() {
   const params = useParams()
@@ -111,121 +114,108 @@ export default function AgentDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-tsushin-ink">
-      {/* Header */}
-      <div className="bg-tsushin-surface/80 backdrop-blur-md border-b border-tsushin-border">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center gap-4 mb-4">
-            <button
-              onClick={() => router.push('/agents')}
-              className="text-tsushin-slate hover:text-white"
-            >
-              ← Back
-            </button>
-            <div className="h-6 w-px bg-tsushin-border"></div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold text-white">{agent.contact_name}</h1>
-                {agent.is_default && (
-                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-warning/20 text-yellow-200 rounded-full inline-flex items-center gap-1">
-                    <StarIcon size={12} /> Default
-                  </span>
-                )}
-                {agent.is_active ? (
-                  <span className="px-2 py-1 text-xs font-medium bg-green-800/30 text-green-200 rounded-full">
-                    ✓ Active
-                  </span>
-                ) : (
-                  <span className="px-2 py-1 text-xs font-medium bg-tsushin-surface text-tsushin-slate rounded-full">
-                    ○ Inactive
-                  </span>
-                )}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-4 text-sm text-tsushin-slate">
-                <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
-                <span className="inline-flex items-center gap-1"><BotIcon size={14} /> Model: {agent.model_name}</span>
-                <span className="inline-flex items-center gap-1"><LightningIcon size={14} /> Skills: {skillsCount}</span>
-                <span className="inline-flex items-center gap-1"><KeyIcon size={14} /> Keywords: {agent.keywords.length || 0}</span>
-              </div>
-            </div>
+    <div className="min-h-screen bg-tsushin-ink animate-fade-in">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <DetailShellHeader
+          breadcrumb={[
+            { label: 'Studio', href: '/agents' },
+            { label: 'Agents', href: '/agents' },
+            { label: agent.contact_name },
+          ]}
+          title={agent.contact_name}
+          badges={
+            <>
+              {agent.is_default && (
+                <span className="px-2 py-1 text-xs font-medium bg-tsushin-warning/20 text-yellow-200 rounded-full inline-flex items-center gap-1">
+                  <StarIcon size={12} /> Default
+                </span>
+              )}
+              {agent.is_active ? (
+                <span className="px-2 py-1 text-xs font-medium bg-green-800/30 text-green-200 rounded-full">
+                  ✓ Active
+                </span>
+              ) : (
+                <span className="px-2 py-1 text-xs font-medium bg-tsushin-surface text-tsushin-slate rounded-full">
+                  ○ Inactive
+                </span>
+              )}
+              {agent.is_team_member && (
+                <span className="badge badge-team flex items-center gap-1">
+                  <UsersIcon size={12} /> Team
+                </span>
+              )}
+            </>
+          }
+          meta={
+            <>
+              <span className="inline-flex items-center gap-1"><TheaterIcon size={14} /> Tone: {agent.tone_preset_name || 'Custom'}</span>
+              <span className="inline-flex items-center gap-1"><BotIcon size={14} /> Model: {agent.model_name}</span>
+              <span className="inline-flex items-center gap-1"><LightningIcon size={14} /> Skills: {skillsCount}</span>
+              <span className="inline-flex items-center gap-1"><KeyIcon size={14} /> Keywords: {agent.keywords.length || 0}</span>
+            </>
+          }
+          actions={
             <button
               onClick={() => setActiveTab('configuration')}
-              className="btn-primary px-4 py-2 rounded-lg"
+              className="btn-primary inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm"
             >
               <SettingsIcon size={16} /> Edit Configuration
             </button>
-          </div>
-        </div>
-      </div>
+          }
+        />
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+        {agent.is_team_member && (
+          <div className="mb-6 rounded-xl border border-tsushin-indigo/25 bg-tsushin-indigo/10 px-4 py-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-start gap-3">
+                <UsersIcon size={18} className="mt-0.5 flex-shrink-0 text-tsushin-indigo-glow" />
+                <div>
+                  <h2 className="text-sm font-semibold text-white">Team member agent</h2>
+                  <p className="mt-1 text-sm text-tsushin-slate">
+                    Direct conversations stay separate from team executions, but settings changes here may affect team behavior.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push(agent.current_team_id ? `/studio/teams/${agent.current_team_id}` : '/studio/teams')}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-tsushin-indigo/30 bg-tsushin-indigo/10 px-4 py-2 text-sm font-medium text-tsushin-indigo-glow transition-colors hover:bg-tsushin-indigo/20"
+              >
+                Open Teams
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
-        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6">
-          <nav className="flex border-b border-tsushin-border">
-            <button
-              onClick={() => setActiveTab('configuration')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'configuration'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
+        <div className="bg-tsushin-surface border border-tsushin-border rounded-xl mb-6 overflow-hidden">
+          <TabStrip
+            className="border-b border-tsushin-border"
+            ariaLabel="Agent configuration sections"
+          >
+            {([
+              ['configuration', SettingsIcon, 'Configuration'],
+              ['channels', RadioIcon, 'Channels'],
+              ['memory', BrainIcon, 'Memory Management'],
+              ['skills', SparklesIcon, 'Skills'],
+              ['custom-skills', WrenchIcon, 'Custom Skills'],
+              ['knowledge', BookOpenIcon, 'Knowledge Base'],
+              ['shared-knowledge', LinkIcon, 'Shared Knowledge'],
+              ['advanced', SettingsIcon, 'Advanced'],
+            ] as const).map(([key, Icon, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key as Tab)}
+                className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === key
+                    ? 'border-teal-500 text-teal-400'
+                    : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
                 }`}
-            >
-              <SettingsIcon size={16} /> Configuration
-            </button>
-            <button
-              onClick={() => setActiveTab('channels')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'channels'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <RadioIcon size={16} /> Channels
-            </button>
-            <button
-              onClick={() => setActiveTab('memory')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'memory'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <BrainIcon size={16} /> Memory Management
-            </button>
-            <button
-              onClick={() => setActiveTab('skills')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'skills'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <SparklesIcon size={16} /> Skills
-            </button>
-            <button
-              onClick={() => setActiveTab('custom-skills')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'custom-skills'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <WrenchIcon size={16} /> Custom Skills
-            </button>
-            <button
-              onClick={() => setActiveTab('knowledge')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'knowledge'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <BookOpenIcon size={16} /> Knowledge Base
-            </button>
-            <button
-              onClick={() => setActiveTab('shared-knowledge')}
-              className={`px-6 py-4 font-medium text-sm border-b-2 transition-colors inline-flex items-center gap-1.5 ${activeTab === 'shared-knowledge'
-                  ? 'border-teal-500 text-teal-400'
-                  : 'border-transparent text-tsushin-slate hover:text-white hover:border-tsushin-muted'
-                }`}
-            >
-              <LinkIcon size={16} /> Shared Knowledge
-            </button>
-          </nav>
+              >
+                <Icon size={16} /> {label}
+              </button>
+            ))}
+          </TabStrip>
         </div>
 
         {/* Tab Content */}
@@ -256,6 +246,10 @@ export default function AgentDetailPage() {
 
           {activeTab === 'shared-knowledge' && (
             <SharedKnowledgeViewer agentId={agentId} />
+          )}
+
+          {activeTab === 'advanced' && (
+            <AgentAdvancedManager agentId={agentId} />
           )}
 
         </div>

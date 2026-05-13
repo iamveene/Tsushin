@@ -76,7 +76,7 @@ export default function AgentMemoryManager({ agentId, agentName }: Props) {
   }
 
   const deleteConversation = async (senderKey: string) => {
-    if (!confirm(`Delete all memory for ${senderKey}?\n\nThis will remove:\n- Working memory (ring buffer)\n- Episodic memory (vector store)\n- Semantic facts\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Delete all memory for ${senderKey}?\n\nThis will remove:\n- Recent messages\n- Long-term memory\n- Learned facts\n\nThis action cannot be undone.`)) {
       return
     }
 
@@ -193,7 +193,7 @@ export default function AgentMemoryManager({ agentId, agentName }: Props) {
           </p>
           <ul className="list-disc list-inside text-sm text-tsushin-slate mt-2 space-y-1">
             <li>View conversation history per user</li>
-            <li>Manage working memory (ring buffer)</li>
+            <li>Manage recent-message history</li>
             <li>Browse episodic memory (vector embeddings)</li>
             <li>Clean old messages by date range</li>
             <li>Reset agent memory completely</li>
@@ -244,7 +244,7 @@ export default function AgentMemoryManager({ agentId, agentName }: Props) {
             <div>
               <div className="font-medium">Isolated</div>
               <div className="text-sm text-tsushin-slate">
-                Separate memory per agent (each agent has isolated ChromaDB directory)
+                Separate memory per agent (each agent has an isolated memory store)
               </div>
             </div>
           </label>
@@ -276,7 +276,7 @@ export default function AgentMemoryManager({ agentId, agentName }: Props) {
             <div>
               <div className="font-medium">Shared</div>
               <div className="text-sm text-tsushin-slate">
-                Shared memory across all channels (single ChromaDB for entire agent)
+                Shared memory across all channels (one shared memory store for the agent)
               </div>
             </div>
           </label>

@@ -3,15 +3,16 @@
 import { useState, useEffect } from 'react'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
-import type { Agent, TTSInstance, TTSProviderInfo, ProviderInstance } from '@/lib/client'
+import type { Agent, TTSInstance, ProviderInstance } from '@/lib/client'
 import type { AudioWizardOpenOptions, AudioAgentType } from '@/contexts/AudioWizardContext'
 import { getPreferredProviderModel } from '@/lib/provider-models'
 import {
   VOICE_AGENT_DEFAULTS,
   TRANSCRIPT_AGENT_DEFAULTS,
+  GEMINI_TTS_DEFAULT_MODEL,
   type AudioProvider,
 } from './defaults'
-import { AudioProviderPicker, AudioVoiceFields } from './AudioProviderFields'
+import { AudioProviderPicker, AudioTranscriptFields, AudioVoiceFields } from './AudioProviderFields'
 import { useKokoroPolling } from '@/components/agent-wizard/hooks/useKokoroPolling'
 
 interface AudioAgentsWizardProps {
@@ -19,6 +20,10 @@ interface AudioAgentsWizardProps {
   onClose: () => void
   onComplete: () => void
   options: AudioWizardOpenOptions
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6  // 6 = provisioning progress
@@ -31,6 +36,13 @@ interface WizardState {
   language: string
   speed: number
   format: string
+  /** Provider-specific model id (Gemini today). */
+  model?: string
+  asrMode: 'openai' | 'instance'
+  asrInstanceId: number | null
+  vadFilter: boolean | null
+  transcriptModel: string
+  rememberTranscript: boolean
   // Kokoro-only
   memLimit: string
   autoProvision: boolean
@@ -52,6 +64,12 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
     language: 'pt',
     speed: 1.0,
     format: 'opus',
+    model: provider === 'gemini' ? GEMINI_TTS_DEFAULT_MODEL : undefined,
+    asrMode: 'openai',
+    asrInstanceId: null,
+    vadFilter: null,
+    transcriptModel: 'whisper-1',
+    rememberTranscript: true,
     memLimit: '1.5g',
     autoProvision: true,
     providerInstanceId: null,
@@ -65,13 +83,11 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
 export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options }: AudioAgentsWizardProps) {
   const [step, setStep] = useState<Step>(1)
   const [state, setState] = useState<WizardState>(() => makeInitialState(options))
-  const [providers, setProviders] = useState<TTSProviderInfo[]>([])
   const [existingTTSInstances, setExistingTTSInstances] = useState<TTSInstance[]>([])
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [createdInstance, setCreatedInstance] = useState<TTSInstance | null>(null)
   const [createdAgentId, setCreatedAgentId] = useState<number | null>(null)
   const [progressStatus, setProgressStatus] = useState<'provisioning' | 'running' | 'error' | 'done' | null>(null)
   const [progressMessage, setProgressMessage] = useState('Starting...')
@@ -80,13 +96,15 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   // Reset on open
   useEffect(() => {
     if (!isOpen) return
-    setStep(1)
-    setState(makeInitialState(options))
-    setError(null)
-    setCreatedInstance(null)
-    setCreatedAgentId(null)
-    setProgressStatus(null)
-    setProgressMessage('Starting...')
+    const timer = window.setTimeout(() => {
+      setStep(1)
+      setState(makeInitialState(options))
+      setError(null)
+      setCreatedAgentId(null)
+      setProgressStatus(null)
+      setProgressMessage('Starting...')
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [isOpen, options])
 
   // Load provider + agent metadata once open
@@ -97,8 +115,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       api.getTTSInstances().catch(() => []),
       api.getProviderInstances().catch(() => []),
       api.getAgents(true).catch(() => []),
-    ]).then(([p, tts, provInst, ag]) => {
-      setProviders(p)
+    ]).then(([, tts, provInst, ag]) => {
       setExistingTTSInstances(tts)
       setProviderInstances(provInst)
       setAgents(ag)
@@ -165,26 +182,36 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
         })
       } else {
         // OpenAI / ElevenLabs / Gemini: set skill config directly (no TTSInstance)
+        const cfg: Record<string, unknown> = {
+          provider: state.provider,
+          voice: state.voice,
+          language: state.language,
+          speed: state.speed,
+          response_format: state.format,
+        }
+        if (state.model) cfg.model = state.model
         await api.updateAgentSkill(agentId, 'audio_tts', {
           is_enabled: true,
-          config: {
-            provider: state.provider,
-            voice: state.voice,
-            language: state.language,
-            speed: state.speed,
-            response_format: state.format,
-          },
+          config: cfg,
         })
       }
     }
 
     if (wantsTranscript) {
+      const transcriptConfig: Record<string, unknown> = {
+        response_mode: state.agentType === 'transcript' ? 'transcript_only' : 'conversational',
+        language: state.language,
+        model: state.transcriptModel || 'whisper-1',
+        asr_mode: state.asrMode,
+        remember_transcript: state.rememberTranscript !== false,
+      }
+      if (state.asrMode === 'instance' && state.asrInstanceId) {
+        transcriptConfig.asr_instance_id = state.asrInstanceId
+        transcriptConfig.vad_filter = state.vadFilter
+      }
       await api.updateAgentSkill(agentId, 'audio_transcript', {
         is_enabled: true,
-        config: {
-          response_mode: state.agentType === 'transcript' ? 'transcript_only' : 'conversational',
-          language: state.language,
-        },
+        config: transcriptConfig,
       })
     }
   }
@@ -272,7 +299,6 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
             default_format: state.format,
             is_default: state.setAsDefaultTTS,
           })
-          setCreatedInstance(inst)
           ttsInstanceId = inst.id
           if (state.setAsDefaultTTS) {
             try { await api.setDefaultTTSInstance(inst.id) } catch { /* non-fatal */ }
@@ -307,10 +333,11 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       await wireAudioSkills(agentId, ttsInstanceId)
 
       finish()
-    } catch (e: any) {
+    } catch (error: unknown) {
       setProgressStatus('error')
-      setProgressMessage(e?.message || 'Unexpected error during provisioning.')
-      setError(e?.message || 'Failed')
+      const message = getErrorMessage(error, 'Unexpected error during provisioning.')
+      setProgressMessage(message)
+      setError(message)
     } finally {
       setLoading(false)
     }
@@ -340,7 +367,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           {stepIndicator}
           <div>
             <h3 className="text-lg font-semibold text-white mb-2">What kind of audio agent do you need?</h3>
-            <p className="text-sm text-gray-300">Pick a capability. You can change it later by editing the agent's skills.</p>
+            <p className="text-sm text-gray-300">Pick a capability. You can change it later by editing the agent&apos;s skills.</p>
           </div>
           <div className="space-y-2">
             {options.map(opt => (
@@ -366,6 +393,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   // -------------------- Step 2: Provider --------------------
   if (step === 2) {
     const allowsProviderChoice = state.agentType !== 'transcript'
+    const wantsTTS = state.agentType === 'voice' || state.agentType === 'hybrid'
     const footer = (
       <div className="flex items-center justify-between w-full">
         <button onClick={() => setStep(1)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">← Back</button>
@@ -373,7 +401,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           onClick={() => setStep(3)}
           className="px-4 py-2 text-sm bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors"
         >
-          Next: Configure voice →
+          Next: Configure {wantsTTS ? 'audio' : 'transcription'} →
         </button>
       </div>
     )
@@ -383,12 +411,16 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           {stepIndicator}
           {!allowsProviderChoice && (
             <div className="p-3 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sm text-sky-200">
-              Transcription-only agents use OpenAI Whisper. You just need an OpenAI API key configured in Hub.
+              Transcript-only agents can still use OpenAI Whisper, the tenant default ASR instance, or a specific local Speaches/Whisper node in the next step.
             </div>
           )}
           <div>
             <h3 className="text-lg font-semibold text-white mb-2">Choose a TTS provider</h3>
-            <p className="text-sm text-gray-300">This determines where the audio is synthesized.</p>
+            <p className="text-sm text-gray-300">
+              {allowsProviderChoice
+                ? 'This determines where spoken responses are synthesized.'
+                : 'Transcription-only agents skip TTS provider selection.'}
+            </p>
           </div>
           <AudioProviderPicker
             provider={state.provider}
@@ -407,6 +439,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   // -------------------- Step 3: Voice & credentials --------------------
   if (step === 3) {
     const wantsTTS = state.agentType === 'voice' || state.agentType === 'hybrid'
+    const wantsTranscript = state.agentType === 'transcript' || state.agentType === 'hybrid'
     const providerOK = !wantsTTS
       || state.provider === 'kokoro'
       || (state.provider === 'openai' && hasOpenAIKey)
@@ -432,27 +465,53 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           {stepIndicator}
           <div>
             <h3 className="text-lg font-semibold text-white mb-2">
-              {wantsTTS ? 'Voice & provider configuration' : 'Transcription settings'}
+              {wantsTTS && wantsTranscript ? 'Voice and transcription settings' : wantsTTS ? 'Voice & provider configuration' : 'Transcription settings'}
             </h3>
           </div>
 
-          <AudioVoiceFields
-            value={{
-              provider: state.provider,
-              voice: state.voice,
-              language: state.language,
-              speed: state.speed,
-              format: state.format,
-              memLimit: state.memLimit,
-              setAsDefaultTTS: state.setAsDefaultTTS,
-            }}
-            onChange={(patch) => setState(s => ({ ...s, ...patch }))}
-            wantsTTS={wantsTTS}
-            kokoroRunning={kokoroRunning}
-            hasOpenAIKey={hasOpenAIKey}
-            hasElevenLabsKey={hasElevenLabsKey}
-            hasGeminiKey={hasGeminiKey}
-          />
+          {wantsTTS && (
+            <AudioVoiceFields
+              value={{
+                provider: state.provider,
+                voice: state.voice,
+                language: state.language,
+                speed: state.speed,
+                format: state.format,
+                memLimit: state.memLimit,
+                setAsDefaultTTS: state.setAsDefaultTTS,
+                model: state.model,
+              }}
+              onChange={(patch) => setState(s => ({ ...s, ...patch }))}
+              wantsTTS={wantsTTS}
+              kokoroRunning={kokoroRunning}
+              hasOpenAIKey={hasOpenAIKey}
+              hasElevenLabsKey={hasElevenLabsKey}
+              hasGeminiKey={hasGeminiKey}
+            />
+          )}
+
+          {wantsTranscript && (
+            <AudioTranscriptFields
+              value={{
+                language: state.language,
+                model: state.transcriptModel,
+                asrMode: state.asrMode,
+                asrInstanceId: state.asrInstanceId,
+                vadFilter: state.vadFilter,
+                rememberTranscript: state.rememberTranscript,
+              }}
+              onChange={(patch) => setState(s => ({
+                ...s,
+                language: patch.language !== undefined ? patch.language : s.language,
+                transcriptModel: patch.model !== undefined ? patch.model : s.transcriptModel,
+                asrMode: patch.asrMode !== undefined ? patch.asrMode : s.asrMode,
+                asrInstanceId: patch.asrInstanceId !== undefined ? patch.asrInstanceId : s.asrInstanceId,
+                vadFilter: patch.vadFilter !== undefined ? patch.vadFilter : s.vadFilter,
+                rememberTranscript: patch.rememberTranscript !== undefined ? patch.rememberTranscript : s.rememberTranscript,
+              }))}
+              showResponseMode={false}
+            />
+          )}
         </div>
       </Modal>
     )
@@ -557,6 +616,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       ? (agents.find(a => a.id === state.existingAgentId)?.contact_name || '—')
       : state.newAgentName
     const skillDiff: string[] = []
+    const wantsTTS = state.agentType === 'voice' || state.agentType === 'hybrid'
     if (state.agentType === 'voice' || state.agentType === 'hybrid') skillDiff.push('audio_tts')
     if (state.agentType === 'transcript' || state.agentType === 'hybrid') skillDiff.push('audio_transcript')
 
@@ -572,17 +632,52 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
               <div className="text-white capitalize">{state.agentType}</div>
             </div>
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
-              <div className="text-xs text-gray-500">Provider</div>
-              <div className="text-white capitalize">{state.provider}</div>
-            </div>
-            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
-              <div className="text-xs text-gray-500">Voice</div>
-              <div className="text-white">{state.voice}</div>
-            </div>
-            <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
               <div className="text-xs text-gray-500">Language</div>
               <div className="text-white">{state.language}</div>
             </div>
+            {wantsTTS && (
+              <>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
+                  <div className="text-xs text-gray-500">Provider</div>
+                  <div className="text-white capitalize">{state.provider}</div>
+                </div>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
+                  <div className="text-xs text-gray-500">Voice</div>
+                  <div className="text-white">{state.voice}</div>
+                </div>
+              </>
+            )}
+            {(state.agentType === 'transcript' || state.agentType === 'hybrid') && (
+              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5">
+                <div className="text-xs text-gray-500">ASR backend</div>
+                <div className="text-white capitalize">
+                  {state.asrMode === 'instance'
+                    ? `Local instance #${state.asrInstanceId ?? '—'}`
+                    : 'OpenAI Whisper'}
+                </div>
+              </div>
+            )}
+            {state.model && (
+              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                <div className="text-xs text-gray-500">Model</div>
+                <div className="text-white font-mono text-xs">{state.model}</div>
+              </div>
+            )}
+            {(state.agentType === 'transcript' || state.agentType === 'hybrid') && (
+              <>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                  <div className="text-xs text-gray-500">Transcript model</div>
+                  <div className="text-white font-mono text-xs">{state.transcriptModel}</div>
+                </div>
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
+                  <div className="text-xs text-gray-500">Transcript memory</div>
+                  <div className="text-white text-sm">
+                    {state.rememberTranscript !== false ? 'Remembered' : 'Immediate only'}
+                    {state.vadFilter === false ? ' · Speaches VAD off' : ''}
+                  </div>
+                </div>
+              </>
+            )}
             <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 col-span-2">
               <div className="text-xs text-gray-500">Target agent</div>
               <div className="text-white">

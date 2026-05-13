@@ -429,7 +429,8 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 lines.append(line)
 
             output = "\n".join(lines)
-            output += "\n\nPara cancelar um lembrete, vá em: http://localhost:3030/flows"
+            import settings
+            output += f"\n\nPara cancelar um lembrete, vá em: {settings.FRONTEND_URL.rstrip('/')}/flows"
 
             logger.info(f"Returning list of {len(events)} events to user")
             return SkillResult(

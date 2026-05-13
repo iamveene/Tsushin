@@ -5,6 +5,33 @@
 # Update hooks: pre-commit autoupdate
 
 repos:
+  # PRIMARY GUARD: enforce the public-repo path allowlist
+  # (.github/path-allowlist.txt). Any tracked path not matched by an explicit
+  # allow pattern is rejected. This is the single source of truth — denylist
+  # patterns can be forgotten, but a positive allowlist forces every new path
+  # to be a deliberate decision. Adding a new public path = editing the
+  # allowlist file in the same change, where reviewers can see it.
+  - repo: local
+    hooks:
+      - id: enforce-path-allowlist
+        name: enforce public-repo path allowlist
+        entry: python3 scripts/check-path-allowlist.py
+        language: system
+        pass_filenames: true
+        always_run: false
+
+  # Secondary, name-based guard for known internal-file patterns. Redundant
+  # with the allowlist above (any internal path would also fail there), but
+  # produces a clearer error message naming the specific banned filename.
+  - repo: local
+    hooks:
+      - id: block-internal-files
+        name: block internal files (CLAUDE/BUGS/ROADMAP/AGENTS/.private)
+        entry: ./scripts/check-no-internal-files.sh
+        language: script
+        pass_filenames: true
+        always_run: false
+
   # Gitleaks - Secret Detection (Primary)
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2

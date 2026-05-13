@@ -15,6 +15,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import Dict, Optional
 from datetime import datetime, timedelta
+import json
 import logging
 import os
 import secrets
@@ -111,17 +112,39 @@ def _enforce_remote_access_gate(request: Request, user: User, db: Session) -> No
     )
 
 
+def _resolve_request_scheme(request: Request) -> str:
+    """
+    Resolve the user-facing scheme. Cloudflare Tunnel terminates TLS at the
+    edge and forwards plain HTTP to the origin proxy, so X-Forwarded-Proto
+    reflects the in-cluster hop (http) rather than the visitor's scheme.
+    Cloudflare injects the visitor's scheme into the ``cf-visitor`` JSON
+    header (e.g. ``{"scheme":"https"}``); honor it before falling back to the
+    proxy header chain.
+    """
+    cf_visitor = request.headers.get("cf-visitor")
+    if cf_visitor:
+        try:
+            parsed = json.loads(cf_visitor)
+            scheme = (parsed or {}).get("scheme")
+            if isinstance(scheme, str) and scheme.strip():
+                return scheme.strip().lower()
+        except (ValueError, TypeError):
+            pass
+    proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+        or ""
+    )
+    return proto.split(",")[0].strip().rstrip(":").lower()
+
+
 def _resolve_request_origin(request: Request, fallback_origin: str) -> str:
     """
     Resolve the user-facing origin for a request, preferring reverse-proxy
     headers so local HTTP and self-signed HTTPS can coexist safely.
     """
     fallback_origin = fallback_origin.rstrip("/")
-    proto = (
-        request.headers.get("x-forwarded-proto")
-        or request.url.scheme
-        or ""
-    )
+    proto = _resolve_request_scheme(request)
     host = (
         request.headers.get("x-forwarded-host")
         or request.headers.get("host")
@@ -129,7 +152,6 @@ def _resolve_request_origin(request: Request, fallback_origin: str) -> str:
         or ""
     )
 
-    proto = proto.split(",")[0].strip().rstrip(":")
     host = host.split(",")[0].strip()
 
     if proto and host:
@@ -177,12 +199,7 @@ def _set_session_cookie(
     """
     use_secure = False
     if request is not None:
-        proto = (
-            request.headers.get("x-forwarded-proto")
-            or request.url.scheme
-            or ""
-        )
-        use_secure = proto.split(",")[0].strip().rstrip(":").lower() == "https"
+        use_secure = _resolve_request_scheme(request) == "https"
     else:
         ssl_mode = os.environ.get("TSN_SSL_MODE", "").lower()
         use_secure = ssl_mode not in ("", "off", "none", "disabled")
@@ -243,27 +260,34 @@ def _resolve_auth_login_rate_limit() -> str:
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 
-def _env_flag_enabled(value: Optional[str]) -> bool:
-    """Interpret common truthy env-var values."""
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _resolve_auth_limit(default_limit: str, env_var: Optional[str] = None) -> str:
     """
     Resolve the effective auth throttle at import time.
 
-    TSN_DISABLE_AUTH_RATE_LIMIT provides a QA/dev escape hatch that effectively
-    disables throttling across auth endpoints after a backend restart.
+    SEC-AUDIT-2026-05: removed the TSN_DISABLE_AUTH_RATE_LIMIT escape hatch —
+    leaving it set in production made login brute-forceable. Tests that need
+    to bypass throttling should patch the limiter directly.
     """
-    if _env_flag_enabled(os.environ.get("TSN_DISABLE_AUTH_RATE_LIMIT")):
-        return "1000000/minute"
-
     if env_var:
         configured_limit = (os.environ.get(env_var) or "").strip()
         if configured_limit:
             return configured_limit
 
     return default_limit
+
+
+# Refuse to boot if the removed kill-switch is still set in the environment —
+# avoids a silent rollout where the operator believes throttling is disabled.
+if (os.environ.get("TSN_DISABLE_AUTH_RATE_LIMIT") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    raise RuntimeError(
+        "TSN_DISABLE_AUTH_RATE_LIMIT is no longer supported (removed in security "
+        "audit 2026-05). Unset it. Tests should patch the limiter directly."
+    )
 
 AUTH_LOGIN_RATE_LIMIT = _resolve_auth_limit(_resolve_auth_login_rate_limit(), env_var="TSN_AUTH_RATE_LIMIT")
 AUTH_SIGNUP_RATE_LIMIT = _resolve_auth_limit("3/hour")
@@ -455,8 +479,7 @@ async def login(request: Request, login_request: LoginRequest, db: Session = Dep
     Login endpoint
 
     Authenticates user with email and password, returns JWT access token.
-    Rate limit is configurable via TSN_AUTH_RATE_LIMIT and can be temporarily
-    disabled for QA/dev with TSN_DISABLE_AUTH_RATE_LIMIT=true.
+    Rate limit is configurable via TSN_AUTH_RATE_LIMIT.
     """
     auth_service = AuthService(db)
 

@@ -1,0 +1,162 @@
+'use client'
+
+import { useEffect } from 'react'
+import { useProviderWizard } from '@/contexts/ProviderWizardContext'
+
+function summarizeKey(apiKey: string, vendor: string | null, extra: Record<string, unknown> | undefined): string {
+  if (vendor === 'vertex_ai') {
+    const pk: string = (extra?.private_key || '') as string
+    if (!pk) return '(not provided)'
+    return `${pk.slice(0, 16)}…${pk.slice(-6)} (${pk.length} chars)`
+  }
+  if (!apiKey) return '(not provided)'
+  return `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`
+}
+
+/**
+ * Step 6 — review summary. Each row is click-to-edit which jumps the user
+ * back to the relevant step.
+ */
+export default function StepReview() {
+  const { state, markStepComplete, goToStep } = useProviderWizard()
+  const { draft } = state
+
+  useEffect(() => {
+    markStepComplete('review', true)
+  }, [markStepComplete])
+
+  const rows: Array<{ label: string; value: React.ReactNode; editStep: Parameters<typeof goToStep>[0] | null }> = [
+    {
+      label: 'Modality',
+      value:
+        draft.modality === 'llm'
+          ? 'Language Model'
+          : draft.modality === 'tts'
+            ? 'Text-to-Speech'
+            : draft.modality === 'asr'
+              ? 'Speech-to-Text'
+              : draft.modality === 'image'
+                ? 'Image Generation'
+                : '—',
+      editStep: 'modality',
+    },
+    {
+      label: 'Hosting',
+      value: draft.hosting === 'cloud' ? 'Cloud / API' : draft.hosting === 'local' ? 'Self-hosted container' : '—',
+      editStep: 'hosting',
+    },
+    { label: 'Vendor', value: draft.vendor || '—', editStep: 'vendor' },
+  ]
+  // ASR cloud has no instance row — the call path uses the existing OpenAI key.
+  const isAsrCloud = draft.modality === 'asr' && draft.hosting === 'cloud'
+  if (!isAsrCloud) {
+    rows.push({
+      label: 'Instance name',
+      value: draft.instance_name || '(unnamed)',
+      editStep: draft.hosting === 'local' ? 'container' : 'credentials',
+    })
+  }
+
+  if (isAsrCloud) {
+    rows.push({
+      label: 'Credential source',
+      value: <span className="text-xs text-tsushin-slate">Reuses your saved OpenAI API key</span>,
+      editStep: null,
+    })
+  } else if (draft.hosting === 'cloud') {
+    if (draft.base_url) {
+      rows.push({ label: 'Base URL', value: <span className="font-mono">{draft.base_url}</span>, editStep: 'credentials' })
+    }
+    rows.push({
+      label: 'API Key',
+      value: <span className="font-mono text-tsushin-accent">{summarizeKey(draft.api_key, draft.vendor, draft.extra_config)}</span>,
+      editStep: 'credentials',
+    })
+    if (draft.vendor === 'vertex_ai') {
+      rows.push({ label: 'GCP Project', value: draft.extra_config?.project_id || '—', editStep: 'credentials' })
+      rows.push({ label: 'Region', value: draft.extra_config?.region || '—', editStep: 'credentials' })
+      rows.push({ label: 'Service Account', value: <span className="font-mono text-xs break-all">{draft.extra_config?.sa_email || '—'}</span>, editStep: 'credentials' })
+    }
+  } else {
+    rows.push({ label: 'Memory limit', value: draft.mem_limit || '—', editStep: 'container' })
+    if (draft.vendor === 'ollama') {
+      rows.push({ label: 'GPU', value: draft.gpu_enabled ? 'Enabled' : 'Disabled', editStep: 'container' })
+    }
+    if (draft.modality === 'asr' && draft.vendor === 'openai_whisper') {
+      rows.push({
+        label: 'ASR engine',
+        value: <span className="text-xs">openai/whisper (model: <span className="font-mono">base</span>, locked at boot)</span>,
+        editStep: 'container',
+      })
+    }
+  }
+
+  // Single Models row — for Ollama local the model list is captured on the
+  // consolidated `pullModels` step (pull = expose); for cloud/image it lives
+  // on `testAndModels`. Point the row's editStep at whichever step is in
+  // the current flow so "click any row to jump back" works. For TTS modality,
+  // there is no per-instance model list (voices and TTS-model presets are
+  // discovered via /api/tts-providers/{provider}/voices and /models and
+  // selected per-agent in the Audio Agents Wizard) — surface that explicitly
+  // so the user doesn't see a red "Missing" prompt for a field that does
+  // not apply to TTS instances. ASR instances have a single model pinned at
+  // container boot, so the per-instance models row is irrelevant there too.
+  const modelsEditStep = draft.vendor === 'ollama' && draft.hosting === 'local' ? 'pullModels' : 'testAndModels'
+  if (draft.modality === 'asr') {
+    // No models row for ASR (already shown via "ASR engine" row above when local;
+    // cloud has nothing to show).
+  } else if (draft.modality === 'tts') {
+    rows.push({
+      label: 'Voices & models',
+      value: <span className="text-xs text-tsushin-slate">Picked per-agent in the Audio Agents Wizard</span>,
+      editStep: modelsEditStep,
+    })
+  } else {
+    rows.push({
+      label: draft.modality === 'image' ? 'Image models' : 'Models',
+      value: draft.available_models.length > 0
+        ? <span className="font-mono text-xs">{draft.available_models.join(', ')}</span>
+        : <span className="text-tsushin-vermilion">Missing — go back and add at least one.</span>,
+      editStep: modelsEditStep,
+    })
+  }
+  // The "Default instance" toggle only applies to surfaces that produce a
+  // ProviderInstance row (LLM cloud, Ollama local) or a TTSInstance row
+  // (Kokoro). For cloud TTS via api_keys (ElevenLabs / OpenAI / Gemini) the
+  // tenant has at most one api_key per service, so default-routing is
+  // meaningless — hide the row to avoid confusion.
+  const cloudTtsViaApiKey = draft.modality === 'tts' && (
+    draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini'
+  )
+  // ASR doesn't surface a default-instance toggle in the wizard; local
+  // Speech-to-Text instances are managed from Hub → AI Providers.
+  if (!cloudTtsViaApiKey && draft.modality !== 'asr') {
+    rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-white mb-1">Review</h3>
+        <p className="text-xs text-tsushin-slate">One last look before creating. Click any row to jump back and edit.</p>
+      </div>
+
+      <div className="rounded-xl border border-tsushin-border bg-tsushin-ink/40 divide-y divide-white/5 overflow-hidden">
+        {rows.map((r, i) => (
+          <button
+            key={i}
+            onClick={() => r.editStep && goToStep(r.editStep)}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
+          >
+            <span className="text-xs uppercase tracking-wider text-tsushin-slate">{r.label}</span>
+            <span className="text-sm text-white truncate ml-3 max-w-[60%] text-right">{r.value}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-tsushin-slate text-center">
+        Click <span className="text-teal-400 font-semibold">Create</span> below to save. {draft.hosting === 'local' ? 'Provisioning the container may take 1–2 minutes.' : 'Your key is encrypted at rest.'}
+      </p>
+    </div>
+  )
+}

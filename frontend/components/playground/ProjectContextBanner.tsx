@@ -19,14 +19,13 @@ interface ProjectContextBannerProps {
 
 export default function ProjectContextBanner({
   projectName,
-  projectId,
   documentCount = 0,
   onExit,
   isLoading = false
 }: ProjectContextBannerProps) {
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-purple-900/40 to-indigo-900/40 border-b border-purple-500/30 backdrop-blur-sm">
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {/* Project Icon */}
         <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
           <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -35,12 +34,12 @@ export default function ProjectContextBanner({
         </div>
 
         {/* Project Info */}
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-col">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-purple-300">
               Working in:
             </span>
-            <span className="text-sm font-semibold text-white">
+            <span className="truncate text-sm font-semibold text-white" title={projectName}>
               {projectName}
             </span>
           </div>
@@ -53,8 +52,6 @@ export default function ProjectContextBanner({
               </svg>
               {documentCount} document{documentCount !== 1 ? 's' : ''}
             </span>
-            <span>•</span>
-            <span>Project ID: {projectId}</span>
           </div>
         </div>
       </div>
@@ -63,7 +60,7 @@ export default function ProjectContextBanner({
       <button
         onClick={onExit}
         disabled={isLoading}
-        className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 hover:text-white border border-purple-500/30 hover:border-purple-500/50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex flex-shrink-0 items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 hover:text-white border border-purple-500/30 hover:border-purple-500/50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {isLoading ? (
           <>

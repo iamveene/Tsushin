@@ -37,7 +37,12 @@ class QueueWorker:
         self._poll_task: Optional[asyncio.Task] = None
         # Active processing tasks per (tenant_id, agent_id)
         self._active_tasks: Dict[Tuple[str, int], asyncio.Task] = {}
+        # Active processing tasks per (tenant_id, team_id, slot)
+        self._active_team_tasks: Dict[Tuple[str, int, int], asyncio.Task] = {}
+        self._team_task_seq = 0
         self.SessionLocal = sessionmaker(bind=engine)
+        from services.queue_router import queue_router
+        self.queue_router = queue_router
 
     async def start(self):
         """Start the queue worker."""
@@ -53,7 +58,7 @@ class QueueWorker:
             try:
                 from services.message_queue_service import MessageQueueService
                 service = MessageQueueService(db)
-                stale_count = service.reset_stale(threshold_seconds=300)
+                stale_count = service.reset_stale()
                 if stale_count > 0:
                     logger.info(f"QueueWorker reset {stale_count} stale processing items on startup")
             finally:
@@ -82,14 +87,16 @@ class QueueWorker:
                 pass
 
         # Wait for active tasks to finish (with timeout)
-        if self._active_tasks:
-            logger.info(f"Waiting for {len(self._active_tasks)} active tasks to finish...")
-            tasks = list(self._active_tasks.values())
+        active_count = len(self._active_tasks) + len(self._active_team_tasks)
+        if active_count:
+            logger.info(f"Waiting for {active_count} active tasks to finish...")
+            tasks = list(self._active_tasks.values()) + list(self._active_team_tasks.values())
             done, pending = await asyncio.wait(tasks, timeout=10)
             for task in pending:
                 task.cancel()
 
         self._active_tasks.clear()
+        self._active_team_tasks.clear()
         logger.info("QueueWorker stopped")
 
     async def _poll_loop(self):
@@ -119,10 +126,11 @@ class QueueWorker:
             service = MessageQueueService(db)
 
             # Also periodically reset stale items
-            service.reset_stale(threshold_seconds=300)
+            service.reset_stale()
 
             # Get all (tenant_id, agent_id) pairs with pending items
             pending_agents = service.get_pending_agents()
+            pending_teams = service.get_pending_teams()
 
             for tenant_id, agent_id in pending_agents:
                 task_key = (tenant_id, agent_id)
@@ -147,8 +155,60 @@ class QueueWorker:
                 )
                 self._active_tasks[task_key] = task
 
+            self._cleanup_done_team_tasks()
+            for tenant_id, team_id in pending_teams:
+                max_concurrent = self._get_team_max_concurrent_runs(db, tenant_id, team_id)
+                active_count = self._active_team_task_count(tenant_id, team_id)
+                processing_count = service.count_processing_team_runs(tenant_id, team_id)
+                manual_active_count = service.count_active_non_queued_team_runs(tenant_id, team_id)
+                occupied_slots = max(active_count, processing_count) + manual_active_count
+                available_slots = max_concurrent - occupied_slots
+                for _ in range(max(0, available_slots)):
+                    self._team_task_seq += 1
+                    task_key = (tenant_id, team_id, self._team_task_seq)
+                    task = asyncio.create_task(
+                        self._process_team_queue(tenant_id, team_id)
+                    )
+                    self._active_team_tasks[task_key] = task
+
         finally:
             db.close()
+
+    def _cleanup_done_team_tasks(self) -> None:
+        for task_key, task in list(self._active_team_tasks.items()):
+            if task.done():
+                del self._active_team_tasks[task_key]
+
+    def _active_team_task_count(self, tenant_id: str, team_id: int) -> int:
+        return sum(
+            1
+            for (task_tenant, task_team, _), task in self._active_team_tasks.items()
+            if task_tenant == tenant_id and task_team == team_id and not task.done()
+        )
+
+    def _get_team_max_concurrent_runs(self, db: Session, tenant_id: str, team_id: int) -> int:
+        try:
+            from models import AgentTeam
+
+            team = (
+                db.query(AgentTeam)
+                .filter(
+                    AgentTeam.id == team_id,
+                    AgentTeam.tenant_id == tenant_id,
+                )
+                .first()
+            )
+            if team is None:
+                return 1
+            return max(1, int(team.max_concurrent_runs or 1))
+        except Exception as e:
+            logger.warning(
+                "Failed to resolve AgentTeam.max_concurrent_runs for tenant=%s team=%s: %s",
+                tenant_id,
+                team_id,
+                e,
+            )
+            return 1
 
     def _should_defer_for_circuit_breaker(self, db: Session, tenant_id: str, agent_id: int) -> bool:
         """V060-HLT-003: Return True when the next pending item's channel CB
@@ -240,11 +300,11 @@ class QueueWorker:
 
                 queue_id = item.id
                 channel = item.channel
+                message_type = getattr(item, "message_type", None) or "inbound_message"
                 payload = item.payload
-
                 logger.info(
                     f"Processing queue item {queue_id} "
-                    f"(channel={channel}, tenant={tenant_id}, agent={agent_id})"
+                    f"(type={message_type}, channel={channel}, tenant={tenant_id}, agent={agent_id})"
                 )
 
                 # Send WebSocket notification that processing has started
@@ -254,25 +314,7 @@ class QueueWorker:
                     logger.warning(f"Failed to send processing_started WebSocket notification: {e}")
 
                 try:
-                    result = None
-                    if channel == "playground":
-                        result = await self._process_playground_message(db, item)
-                    elif channel == "whatsapp":
-                        await self._process_whatsapp_message(db, item)
-                    elif channel == "telegram":
-                        await self._process_telegram_message(db, item)
-                    elif channel == "webhook":
-                        result = await self._process_webhook_message(db, item)
-                    elif channel == "api":
-                        result = await self._process_api_message(db, item)
-                    elif channel == "slack":
-                        # V060-CHN-002
-                        await self._process_slack_message(db, item)
-                    elif channel == "discord":
-                        # V060-CHN-002
-                        await self._process_discord_message(db, item)
-                    else:
-                        raise ValueError(f"Unknown channel: {channel}")
+                    result = await self.queue_router.dispatch(self, db, item)
 
                     # Mark as completed, persisting result for poll retrieval
                     service.mark_completed(queue_id, result=result)
@@ -284,6 +326,45 @@ class QueueWorker:
 
             except Exception as e:
                 logger.error(f"Error in agent queue processing loop: {e}", exc_info=True)
+                break
+            finally:
+                db.close()
+
+    async def _process_team_queue(self, tenant_id: str, team_id: int):
+        """
+        Process pending team_run items for a specific (tenant_id, team_id) lane.
+        Multiple tasks may run for the same team up to AgentTeam.max_concurrent_runs.
+        """
+        while self._running:
+            db = self.SessionLocal()
+            try:
+                from services.message_queue_service import MessageQueueService
+                service = MessageQueueService(db)
+
+                item = service.claim_next_team_run(tenant_id, team_id)
+                if not item:
+                    break
+
+                queue_id = item.id
+                payload = item.payload
+                logger.info(
+                    "Processing team_run queue item %s (tenant=%s, team=%s, run=%s)",
+                    queue_id,
+                    tenant_id,
+                    team_id,
+                    getattr(item, "team_run_id", None),
+                )
+
+                try:
+                    result = await self.queue_router.dispatch(self, db, item)
+                    service.mark_completed(queue_id, result=result)
+                except Exception as e:
+                    error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    logger.error(f"Error processing team_run queue item {queue_id}: {error_msg}")
+                    service.mark_failed(queue_id, str(e))
+
+            except Exception as e:
+                logger.error(f"Error in team queue processing loop: {e}", exc_info=True)
                 break
             finally:
                 db.close()
@@ -594,9 +675,9 @@ class QueueWorker:
         v0.6.0: Process an inbound webhook message from the queue.
 
         Routes the normalized payload through AgentRouter with webhook_instance_id
-        set so the WebhookChannelAdapter is registered. If the webhook integration
+        set so the WebhookTrigger is registered. If the webhook integration
         has callback_enabled=True, the agent's response will be POSTed back to
-        the customer's callback URL.
+        the customer's callback URL via Trigger.notify_external_system().
 
         The LLM answer is returned for queue-result retrieval via
         GET /api/v1/queue/{id} (matches API channel poll semantics).
@@ -763,6 +844,7 @@ class QueueWorker:
             "thread_id": thread_id,
             "timestamp": result.get("timestamp"),
             "kb_used": result.get("kb_used"),
+            "agentic_scratchpad": result.get("agentic_scratchpad"),
         }
 
     @property

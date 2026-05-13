@@ -5,7 +5,7 @@ Uses regular JWT auth with audit.read / audit.export permissions.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -56,6 +56,33 @@ class AuditStatsResponse(BaseModel):
     by_category: Dict[str, int]
 
 
+def _parse_audit_datetime(value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
+    """Parse date-only filters as whole-day bounds for the audit UI."""
+    if not value:
+        return None
+
+    try:
+        if "T" not in value and len(value) == 10:
+            parsed_date = date.fromisoformat(value)
+            return datetime.combine(parsed_date, time.max if end_of_day else time.min)
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid date format. Use ISO 8601 (e.g. 2026-01-15)",
+        ) from exc
+
+
+def _parse_audit_date_range(from_date: Optional[str], to_date: Optional[str]) -> tuple[Optional[datetime], Optional[datetime]]:
+    parsed_from = _parse_audit_datetime(from_date, end_of_day=False)
+    parsed_to = _parse_audit_datetime(to_date, end_of_day=True)
+
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(status_code=400, detail="from_date must be earlier than or equal to to_date")
+
+    return parsed_from, parsed_to
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -78,12 +105,7 @@ async def get_audit_events(
     List tenant-scoped audit events with filtering and pagination.
     Requires audit.read permission.
     """
-    # Parse date strings
-    try:
-        parsed_from = datetime.fromisoformat(from_date) if from_date else None
-        parsed_to = datetime.fromisoformat(to_date) if to_date else None
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601 (e.g. 2026-01-15)")
+    parsed_from, parsed_to = _parse_audit_date_range(from_date, to_date)
 
     service = TenantAuditService(ctx.db)
     events = service.get_events(
@@ -167,11 +189,7 @@ async def export_audit_events(
     Export tenant audit events as CSV.
     Requires audit.export permission.
     """
-    try:
-        parsed_from = datetime.fromisoformat(from_date) if from_date else None
-        parsed_to = datetime.fromisoformat(to_date) if to_date else None
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601 (e.g. 2026-01-15)")
+    parsed_from, parsed_to = _parse_audit_date_range(from_date, to_date)
 
     service = TenantAuditService(ctx.db)
     csv_generator = service.export_events_csv(

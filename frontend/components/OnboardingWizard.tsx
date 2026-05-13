@@ -10,105 +10,21 @@
  * BUG-319: Removed step 9 (Setup Checklist) — it duplicated GettingStartedChecklist.
  *           Replaced with a "You're all set" message pointing to the checklist.
  * BUG-321: Channels step action button launches WhatsApp wizard directly (not just /hub nav).
- * BUG-323: Channels step navigates to /hub?tab=communication, not /hub.
+ * BUG-323: Channels step navigates to the Hub Channels tab, not /hub.
  * BUG-325: "Open User Guide" action button disabled when User Guide is already open.
  * BUG-334: Escape and Close button call dismissTour() which persists to localStorage immediately.
- * v0.6.0 showcase: Steps 2-5 highlight what's new — expanded AI providers, new channels,
- *           custom skills/MCP, and A2A + long-term memory (vector stores). Total steps: 12.
+ * v0.7.0 getting-started path: Tour now covers providers,
+ * agents, channels, flows, voice, Sentinel, triggers, and final next steps.
  */
 
-import React, { useEffect, useCallback, useState } from 'react'
+import React, { useEffect, useCallback, useMemo, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useOnboarding } from '@/contexts/OnboardingContext'
-import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
-import { useAudioWizard } from '@/contexts/AudioWizardContext'
 import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
 
-function SentinelTourPanel({ onAdvanced }: { onAdvanced: () => void }) {
-  const [isBlock, setIsBlock] = useState<boolean | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    api.getSentinelConfig().then((cfg) => {
-      if (cancelled) return
-      const enabled = cfg.is_enabled !== false
-      const mode = cfg.detection_mode
-      setIsBlock(enabled && mode === 'block')
-      setLoaded(true)
-    }).catch(() => { if (!cancelled) setLoaded(true) })
-    return () => { cancelled = true }
-  }, [])
-
-  const toggle = async (next: boolean) => {
-    setSaving(true)
-    setError(null)
-    try {
-      if (next) {
-        await api.updateSentinelConfig({
-          is_enabled: true,
-          detection_mode: 'block',
-          block_on_detection: true,
-          enable_prompt_analysis: true,
-          enable_tool_analysis: true,
-          enable_shell_analysis: true,
-        })
-      } else {
-        await api.updateSentinelConfig({
-          detection_mode: 'detect_only',
-          block_on_detection: false,
-        })
-      }
-      setIsBlock(next)
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save Sentinel setting')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="mt-4 p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 space-y-3">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="text-sm font-medium text-white">Sentinel detection mode</div>
-          <div className="text-xs text-gray-400 mt-0.5">
-            {!loaded ? 'Loading…' : isBlock
-              ? 'Block (recommended) — Sentinel blocks detections in real time.'
-              : 'Detect only — Sentinel logs detections but agents still run.'}
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={!loaded || saving}
-          onClick={() => toggle(!isBlock)}
-          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-            isBlock ? 'bg-emerald-500' : 'bg-gray-600'
-          } disabled:opacity-50`}
-        >
-          <span
-            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${
-              isBlock ? 'translate-x-5' : 'translate-x-0'
-            }`}
-          />
-        </button>
-      </div>
-      <p className="text-[11px] text-gray-400">
-        This is a tenant-wide setting. Per-agent overrides live in{' '}
-        <a href="/settings/sentinel" onClick={onAdvanced} className="text-emerald-400 underline">
-          Sentinel Settings
-        </a>
-        .
-      </p>
-      {error && <div className="text-xs text-red-400">{error}</div>}
-    </div>
-  )
-}
-
 interface TourStep {
+  sectionLabel: string
   title: string
   content: string
   highlightFeatures?: string[]
@@ -124,8 +40,6 @@ interface TourStep {
 
 export default function OnboardingWizard() {
   const { state, nextStep, previousStep, minimize, maximize, completeTour, dismissTour, skipTour } = useOnboarding()
-  const { openWizard: openWhatsAppWizard } = useWhatsAppWizard()
-  const { openWizard: openAudioWizard } = useAudioWizard()
   const router = useRouter()
   const pathname = usePathname()
   const isAuthPage = pathname?.startsWith('/auth/')
@@ -138,47 +52,6 @@ export default function OnboardingWizard() {
     minimize()
   }, [minimize])
 
-  // v0.7.0: Voice Capabilities step launches the AudioAgentsWizard and advances tour when closed
-  const openVoiceWizard = useCallback(() => {
-    openAudioWizard()
-    minimize()
-    const handleWizardClose = () => {
-      window.removeEventListener('tsushin:audio-wizard-closed', handleWizardClose)
-      setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('tsushin:advance-tour-step'))
-      }, 300)
-    }
-    window.addEventListener('tsushin:audio-wizard-closed', handleWizardClose)
-  }, [openAudioWizard, minimize])
-
-  // BUG-321: Step 5 launches WhatsApp wizard directly AND advances tour when wizard closes
-  const openChannelsWizard = useCallback(() => {
-    openWhatsAppWizard()
-    minimize()
-    // Listen for wizard close to advance tour to next step (step 6)
-    const handleWizardClose = () => {
-      // Advance to step 6 (Flows) when wizard is dismissed
-      window.removeEventListener('tsushin:whatsapp-wizard-closed', handleWizardClose)
-      // Use a small delay to allow wizard close animation to complete
-      setTimeout(() => {
-        // Only advance if tour is still minimized (user didn't manually reopen it)
-        // We signal to advance the step
-        window.dispatchEvent(new CustomEvent('tsushin:advance-tour-step'))
-      }, 300)
-    }
-    window.addEventListener('tsushin:whatsapp-wizard-closed', handleWizardClose)
-  }, [openWhatsAppWizard, minimize])
-
-  // Listen for advance-tour-step event (triggered after WhatsApp wizard closes)
-  useEffect(() => {
-    const handleAdvance = () => {
-      // Only advance if we're on step 5 or the wizard just closed
-      nextStep()
-    }
-    window.addEventListener('tsushin:advance-tour-step', handleAdvance)
-    return () => window.removeEventListener('tsushin:advance-tour-step', handleAdvance)
-  }, [nextStep])
-
   // Keep the tour's provider / skill bullets in sync with the internal wizards
   // by fetching the same catalogs the wizards use. Avoids drift between the
   // onboarding tour copy and what the user actually sees inside the wizards.
@@ -186,6 +59,13 @@ export default function OnboardingWizard() {
     Array<{ id: string; name: string; is_free: boolean; voice_count: number; status: string }>
   >([])
   useEffect(() => {
+    // BUG-683: skip the authenticated /api/tts-providers fetch on public
+    // surfaces (/setup, /auth/*). The tour isn't visible there anyway (see
+    // early-return below), and firing the request emits a 401 in the network
+    // tab before the user even has a session.
+    if (isAuthPage || pathname?.startsWith('/setup')) {
+      return
+    }
     let cancelled = false
     api.getTTSProviders()
       .then(providers => {
@@ -204,29 +84,32 @@ export default function OnboardingWizard() {
       })
       .catch(() => { /* leave empty; bullets fall back to static hints below */ })
     return () => { cancelled = true }
-  }, [])
+  }, [isAuthPage, pathname])
 
   // Derived bullet list for the Voice Capabilities tour step. Built from the
   // live /api/tts-providers catalog so a new backend provider auto-appears in
   // the tour without manual edits. Falls back to a single generic line if the
   // fetch failed.
-  const voiceProviderBullets: string[] = ttsProviderSummaries.length > 0
-    ? ttsProviderSummaries.map(p => {
-        const label = p.name
-        const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
-        const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
-        return `${label}${voiceCount}${cost}`
-      })
-    : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
+  const voiceProviderBullets: string[] = useMemo(() => (
+    ttsProviderSummaries.length > 0
+      ? ttsProviderSummaries.map(p => {
+          const label = p.name
+          const voiceCount = p.voice_count > 0 ? ` — ${p.voice_count} voice${p.voice_count === 1 ? '' : 's'}` : ''
+          const cost = p.is_free ? ' (free)' : p.status === 'preview' ? ' (preview)' : ''
+          return `${label}${voiceCount}${cost}`
+        })
+      : ['Multiple TTS providers: Kokoro (free/local), OpenAI, ElevenLabs, and Google Gemini TTS (preview)']
+  ), [ttsProviderSummaries])
 
-  const tourSteps: TourStep[] = [
+  const tourSteps: TourStep[] = useMemo(() => [
     {
       // Step 1
+      sectionLabel: 'Overview',
       title: 'Welcome to Tsushin!',
       targetSelector: null,
-      content: 'Tsushin is a powerful multi-agent platform that helps you build, deploy, and manage AI agents across multiple communication channels. This tour covers the mandatory setup steps to get you operational. For detailed documentation, open the User Guide anytime via the ? button in the header.',
+      content: 'Tsushin helps you build AI agents, connect them to channels, and monitor what they do. Quick walkthrough of the essentials. For detailed documentation, open the User Guide anytime via the ? button in the header.',
       highlightFeatures: [
-        'Multi-agent orchestration',
+        'Multiple agents working together',
         'WhatsApp & Telegram integration',
         'Skill-based agent capabilities',
         'Flow automation & scheduling'
@@ -238,17 +121,17 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 2 — v0.6.0 showcase: Expanded AI providers
-      title: "What's New in v0.6.0 — Nine AI Providers, One Hub",
+      // Step 2 — v0.7.0 getting-started path: AI providers
+      sectionLabel: 'Providers',
+      title: 'Set Up AI Providers',
       targetSelector: null,
-      content: 'Tsushin v0.6.0 speaks to nine LLM providers and three TTS engines out of the box. Each provider supports multiple instances per tenant (think: two OpenAI orgs, three Ollama servers) with per-instance base URLs, encrypted keys, live Test Connection, automatic model discovery, and a full ProviderConnectionAudit trail. A dedicated System AI routes intent classification and skill selection independently of your per-agent model choice, and model-pricing tables keep cost tracking honest across vendors.',
+      content: 'Start in Hub with the provider your agents will use for chat, tools, images, voice, or embeddings. Tsushin can keep separate providers for system tasks, agent replies, and specialized skills, so you can begin with one and add more later.',
       highlightFeatures: [
-        'Text LLMs: Anthropic, OpenAI, Google Gemini, Vertex AI (multi-publisher — Google + Claude + Mistral), Groq, Grok (xAI), DeepSeek, OpenRouter, and self-hosted Ollama',
-        'Voice / TTS: OpenAI TTS (MP3/opus/aac/flac/wav), Kokoro (free, open-source, PTBR + multilingual), and ElevenLabs',
-        'Multi-instance per vendor — run multiple endpoints in parallel for failover, A/B, or region routing',
-        'Separate System AI for intent classification & skill routing — pick a cheaper/faster model than your agents use',
-        'Tenant-scoped Fernet-encrypted credentials, SSRF-validated URLs, model discovery, and full connection audit log',
-        'Per-model pricing tables drive the Billing dashboard across every provider'
+        'Language models: OpenAI, Anthropic, Gemini, Vertex AI, Groq, Grok, DeepSeek, OpenRouter, or local Ollama',
+        `Voice providers: ${voiceProviderBullets.slice(0, 3).join('; ')}`,
+        'Image and embedding providers are configured in the same Hub area when you need them',
+        'Use Test Connection before assigning a provider to agents',
+        'Keep the System AI separate if you want lightweight routing and classification'
       ],
       actionButton: {
         label: 'Open Hub → AI Providers',
@@ -256,60 +139,50 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 3 — v0.6.0 showcase: New communication channels
-      title: "What's New in v0.6.0 — Slack, Discord, Webhooks & More",
+      // Step 3 — v0.7.0 getting-started path: channels vs triggers
+      sectionLabel: 'Channels & triggers',
+      title: 'Understand Channels and Triggers',
       targetSelector: null,
-      content: 'Tsushin now speaks six channels through a unified adapter layer. The router normalises every inbound message into the same shape so agents, skills, flows, and Sentinel behave identically whether the message came from WhatsApp, a Slack thread, a Discord guild, or your own service via a signed webhook. Each channel has its own guided setup wizard, per-instance health + circuit breakers, and per-agent routing via enabled_channels.',
+      content: 'Channels are for conversations. Triggers are for events that wake an agent or flow. Keeping those two paths separate makes setup easier: connect chat apps in Hub → Channels, and configure event sources in Hub → Triggers.',
       highlightFeatures: [
-        'WhatsApp — MCP Docker container per instance, QR-code auth, circuit breaker + failover',
-        'Telegram — bot-token polling or webhook, encrypted credentials, health checks',
-        'Slack — Socket Mode or HTTP Events, bot + app tokens, DM allowlist, per-channel config',
-        'Discord — Gateway + REST, Ed25519 interaction verification, guild/channel ACL matrix',
-        'Webhooks — HMAC-signed bidirectional HTTP, timestamp replay guard, IP allowlist, rate limit',
-        'Playground — built-in internal WebSocket channel for safe testing',
-        'Per-agent enabled_channels routing, group/number filters, dm_auto_mode, and Sentinel inline on every channel',
-        'Cloudflare Tunnel remote access gives inbound channels a public HTTPS URL with zero port-forwarding'
+        'Channels: WhatsApp, Telegram, Slack, Discord, and Playground testing',
+        'Triggers: Gmail, Jira, GitHub, and signed webhooks',
+        'Inbound services may need a public HTTPS URL through Remote Access or an ingress override',
+        'Route each connected channel or trigger to the agent that should handle it'
       ],
       actionButton: {
-        label: 'Open Hub → Communication',
-        action: () => router.push('/hub?tab=communication')
+        label: 'Open Hub → Channels',
+        action: () => router.push('/hub?tab=channels')
       }
     },
     {
-      // Step 4 — v0.6.0 showcase: Custom Skills & MCP Servers
-      title: "What's New in v0.6.0 — Custom Skills & MCP Servers",
+      // Step 4 — v0.7.0 getting-started path: agents and skills
+      sectionLabel: 'Agents & skills',
+      title: 'Build Agents and Add Skills',
       targetSelector: null,
-      content: 'Three ways to extend any agent: write a markdown-only Instruction skill (no code), drop in a Python / Bash / Node Script that runs inside the sandboxed Toolbox container, or wire an external MCP Server over SSE, HTTP-streamable, or stdio. Every skill is semantically versioned, Sentinel-scanned before it goes live, timeout-bounded, and fully auditable — and the same machinery powers the built-in /tool runner (dig, nmap, and friends) you can invoke directly from any channel.',
+      content: 'Studio is where you create agents, choose their personality, and give them the skills they need for real work. Start with one capable agent, then add more specialized agents when responsibilities become clear.',
       highlightFeatures: [
-        'Instruction skills — pure markdown with template substitution, zero code, shipped in seconds',
-        'Script skills — Python / Bash / Node.js in the sandboxed Toolbox container with JSON in/out and per-skill timeout',
-        'MCP Server skills — SSE, HTTP-streamable, or stdio transports with bearer / custom-header / API-key auth',
-        'Execution modes: tool (LLM-callable), hybrid (keyword + LLM), passive (response post-processor), instruction (static)',
-        'Semantic versioning, Sentinel security scan (pending → clean / rejected), trust levels (system / verified / untrusted)',
-        'Tool discovery namespaces MCP tools as {server}__{tool} with per-server health history',
-        'Per-tenant isolation — custom skills, MCP containers, and tool executions never leak across tenants',
-        'Sandboxed /tool runner ships ready-to-use: /tool dig lookup, /tool nmap quick_scan, and more'
+        'Agents: choose persona, channel routing, memory, and security defaults',
+        'Instruction skills: reusable guidance and response patterns',
+        'Script skills: Python, Bash, or Node actions in the toolbox environment',
+        'MCP servers: connect existing tool APIs to selected agents'
       ],
       actionButton: {
-        label: 'Open Custom Skills',
-        action: () => router.push('/agents/custom-skills')
+        label: 'Open Studio → Agents',
+        action: () => router.push('/agents')
       }
     },
     {
-      // Step 5 — v0.6.0 showcase: A2A + Long-term Memory via Vector Stores
-      title: "What's New in v0.6.0 — A2A & Long-Term Memory",
+      // Step 5 — v0.7.0 getting-started path: memory
+      sectionLabel: 'Memory & knowledge',
+      title: 'Prepare Memory and Knowledge',
       targetSelector: null,
-      content: 'Agents in v0.6.0 can talk to each other and remember across conversations. A2A (Agent-to-Agent) turns any agent into a callable teammate — ask questions, list accessible peers, or delegate an entire task with a configurable depth guard. Long-term memory is backed by four pluggable vector stores; Qdrant and MongoDB are auto-provisioned locally in Docker on fresh installs, while MongoDB Atlas and Pinecone are one connection string away. Every recall is scored, decayed, and MMR-reranked — all without a line of code from you.',
+      content: 'Use Knowledge Base and Vector Stores when agents need durable context from documents, prior cases, or shared memory. In v0.7.0, embedding providers and vector indexes are explicit choices, so pick them before loading important data.',
       highlightFeatures: [
-        'A2A skill: ask / list_agents / delegate — same-tenant discovery, per-call timeouts, infinite-loop depth guard',
-        'Four vector store vendors: Qdrant (local Docker or cloud), MongoDB (local Docker or Atlas with $vectorSearch), Pinecone (BYO), ChromaDB (built-in fallback)',
-        'Auto-provisioned in Docker on fresh installs — Qdrant + MongoDB both get containers, volumes, and dynamic ports',
-        'OKG memory types — fact, episodic, semantic, procedural, belief — with MemGuard blocking + full audit log',
-        'SharedMemory pool with explicit accessible_to ACL (empty = all agents; listed = allowlist), topic categorisation',
-        'Semantic recall with configurable top-k + similarity threshold, MMR reranking (lambda 0.5), exponential temporal decay (~69-day half-life)',
-        'Memory isolation modes — isolated (per-agent), shared (cross-agent), channel_isolated (per-channel)',
-        'Knowledge Base document ingestion — PDF, DOCX, TXT, CSV, JSON — chunked, embedded, and indexed per agent',
-        'Per-agent override — assign a dedicated vector store for sensitive agents without disturbing the default'
+        'Upload documents to Knowledge Base for agent-ready context',
+        'Choose embedding provider, model, and dimensions before indexing',
+        'Use separate vector indexes for different data shapes or sensitivity levels',
+        'Assign memory intentionally: per-agent, shared, or channel-aware'
       ],
       actionButton: {
         label: 'Open Vector Stores',
@@ -317,75 +190,16 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 6
-      title: 'Watcher - Real-Time Monitoring',
-      targetSelector: 'nav a[href="/"]',
-      content: 'The Watcher dashboard provides real-time visibility into all conversations across your agents and channels. Monitor message streams, track agent activity, and gain insights into user interactions.',
-      highlightFeatures: [
-        'Real-time message stream',
-        'Multi-channel monitoring',
-        'Agent activity tracking',
-        'Search and filter capabilities'
-      ]
-    },
-    {
-      // Step 7
-      title: 'Studio - Agent Management',
-      targetSelector: 'a[href="/agents"]',
-      content: 'The Studio is where you create, configure, and manage your AI agents. Define agent personalities, assign skills, and control how agents interact with users.',
-      highlightFeatures: [
-        'Create custom agents',
-        'Configure agent personalities (Personas)',
-        'Assign skills and tools',
-        'Set trigger conditions'
-      ],
-      actionButton: {
-        label: 'Go to Studio',
-        action: () => router.push('/agents')
-      }
-    },
-    {
-      // Step 8
-      title: 'Hub - AI Providers & System AI',
-      targetSelector: 'a[href="/hub"]',
-      content: 'The Hub centralizes all your external integrations. Your primary AI provider was automatically set as the System AI during setup — this powers intent classification, skill routing, and other system operations. You can add more providers or change the System AI here at any time.',
-      highlightFeatures: [
-        'System AI auto-configured from your setup provider',
-        'Add multiple AI providers for failover',
-        'Google OAuth for Gmail & Calendar (optional)',
-        'Encrypted API key storage'
-      ],
-      actionButton: {
-        label: 'Open Hub',
-        action: () => router.push('/hub')
-      }
-    },
-    {
-      // Step 9 — BUG-321, BUG-323: Open WhatsApp wizard directly; navigate to /hub?tab=communication
-      title: 'Communication Channels (Required)',
-      targetSelector: 'a[href="/hub"]',
-      content: 'To receive and respond to messages, you must connect at least one communication channel. Click "Set Up Channels" below to launch the guided WhatsApp setup wizard, or navigate to the Hub Communication tab. Without a channel, agents can only be tested in the Playground.',
-      highlightFeatures: [
-        'WhatsApp: scan QR code to connect your phone',
-        'Telegram: add your bot token',
-        'Webhooks: connect Slack, Discord, or custom services',
-        'Each channel can be independently routed to agents'
-      ],
-      actionButton: {
-        label: 'Set Up Channels (guided wizard)',
-        action: openChannelsWizard
-      }
-    },
-    {
-      // Step 10
-      title: 'Flows - Automation & Scheduling',
+      // Step 6 — v0.7.0 getting-started path: flows and continuous agents
+      sectionLabel: 'Automation',
+      title: 'Automate Work with Flows and Continuous Agents',
       targetSelector: 'a[href="/flows"]',
-      content: 'Flows enable you to create automated workflows, scheduled tasks, and multi-step agent orchestrations. Build complex automation without code.',
+      content: 'Use Flows for repeatable workflows and Continuous Agents for always-on work that reacts to events over time. Triggers can wake either path, and each run stays visible for review.',
       highlightFeatures: [
-        'Visual flow builder',
-        'Scheduled task execution',
-        'Multi-agent workflows',
-        'Trigger conditions and actions'
+        'Flows: multi-step automations with schedules, triggers, and run history',
+        'Continuous Agents: long-running agents configured from Studio',
+        'Wake Events: inspect what woke an agent or flow',
+        'Use dry-runs and poll-now actions before depending on live automation'
       ],
       actionButton: {
         label: 'Explore Flows',
@@ -393,85 +207,33 @@ export default function OnboardingWizard() {
       }
     },
     {
-      // Step 11
-      title: 'Playground - Safe Testing Environment',
+      // Step 7 — v0.7.0 getting-started path: monitoring and safety
+      sectionLabel: 'Monitoring & safety',
+      title: 'Watch Activity and Keep Sentinel On',
+      targetSelector: 'nav a[href="/"]',
+      content: "Watcher shows what agents, channels, flows, and security checks are doing. Sentinel is Tsushin's built-in safety layer, and starting with it on in block mode is the safest default.",
+      highlightFeatures: [
+        'Dashboard: message and run activity across channels',
+        'Graph: how agents, contacts, projects, and security events relate',
+        'Sentinel: prompt, tool, and command checks before agents act',
+        'Billing: AI usage and cost by agent or provider'
+      ],
+      actionButton: {
+        label: 'Open Watcher',
+        action: () => router.push('/')
+      }
+    },
+    {
+      // Step 8 — v0.7.0 getting-started path: test and finish
+      sectionLabel: 'Test & finish',
+      title: 'Test Safely in Playground',
       targetSelector: 'a[href="/playground"]',
-      content: 'The Playground is your safe space to test agents, experiment with prompts, and validate configurations before connecting real channels.',
+      content: 'Use Playground before connecting agents to real channels or triggers. It lets you test behavior, confirm memory and skills, then expand into a full conversation when you need more room.',
       highlightFeatures: [
-        'Test agents in isolation',
-        'Switch between agents',
-        'Thread-based conversations',
-        'Document context testing'
-      ],
-      actionButton: {
-        label: 'Try Playground',
-        action: () => router.push('/playground')
-      }
-    },
-    {
-      // Step 12 — v0.7.0: Voice Capabilities (optional)
-      title: 'Voice Capabilities (optional)',
-      targetSelector: null,
-      content: 'Want your agents to reply with audio or transcribe incoming voice messages? Launch the Audio Agents wizard — it walks you through picking a TTS provider, configuring a voice, and either scaffolding a brand-new Voice Assistant agent or attaching audio capabilities to an existing one. This step is entirely optional; skip if you do not need audio.',
-      // NOTE: The TTS-provider bullets are derived from the live /api/tts-providers
-      // catalog so adding a provider to backend/hub/providers/tts_registry.py
-      // auto-propagates here without touching this file. See voiceProviderBullets above.
-      highlightFeatures: [
-        ...voiceProviderBullets,
-        'Create a new Voice Assistant OR attach audio_tts/audio_transcript to an existing agent',
-        'Pick "Hybrid" to both transcribe incoming voice AND reply with synthesized audio',
-      ],
-      actionButton: {
-        label: 'Set up voice agent (guided wizard)',
-        action: openVoiceWizard
-      }
-    },
-    {
-      // Step 13 — v0.6.0: Playground Mini floating bubble
-      title: 'New: Playground Mini',
-      targetSelector: '[data-testid="playground-mini"]',
-      content: 'Test any agent from any page without leaving. Pick an agent, project, or thread, fire a quick message — then hit Expand if you want to continue in the full Playground. The conversation carries over intact.',
-      highlightFeatures: [
-        'Available on every authenticated page (hidden only inside the full Playground)',
-        'Quick agent + project + thread switcher',
-        'Expand-to-Playground handover preserves your conversation',
-        'Toggle anywhere with Ctrl/Cmd + Shift + L'
-      ],
-      actionButton: {
-        label: 'Open Playground Mini',
-        action: () => {
-          // If we're on the full Playground, bounce to home so the Mini renders.
-          if (typeof window !== 'undefined' && window.location.pathname.startsWith('/playground')) {
-            router.push('/')
-          }
-          window.dispatchEvent(new CustomEvent('tsushin:playground-mini:open'))
-        }
-      }
-    },
-    {
-      // Step 14 — v0.7.0-preview: Sentinel / MemGuard block-mode nudge before the finale.
-      title: 'Sentinel — Security Layer',
-      targetSelector: null,
-      content: "Sentinel is Tsushin's built-in security agent. It scans every prompt, tool call, and shell command before agents act on them, and can block prompt injection, agent takeover attempts, and memory poisoning (MemGuard). Start with it ON (block mode) — you can always relax it later.",
-      highlightFeatures: [
-        'Prompt injection + agent takeover detection on every message',
-        'Tool / shell / slash-command analysis before execution',
-        'Detect-only or warn-only modes for dev work',
-        'Full audit log of every decision',
-      ],
-      customBody: <SentinelTourPanel onAdvanced={() => minimize()} />,
-    },
-    {
-      // Step 15 — BUG-319: Replaced old "Setup Checklist" (step 9) with a brief completion message.
-      // Points users to the Getting Started Checklist on the dashboard instead of duplicating it.
-      title: "You're All Set!",
-      targetSelector: null,
-      content: "You've completed the Tsushin onboarding tour. Check the Getting Started checklist on the dashboard for your setup progress — it tracks channel setup, contacts, playground testing, and more. You can relaunch this tour anytime via the ? button in the header.",
-      highlightFeatures: [
-        'Default agents are already configured',
-        'Getting Started checklist tracks your progress on the dashboard',
-        'Connect a channel via the checklist or Hub → Communication tab',
-        'Access this tour anytime via the ? button'
+        'Test agents without sending messages to real users',
+        'Switch agents, projects, and threads',
+        'Inspect memory, skills, and tool behavior',
+        'Relaunch this tour anytime from the ? button'
       ],
       actionButton: {
         label: 'Finish & Go to Playground',
@@ -481,7 +243,14 @@ export default function OnboardingWizard() {
         }
       }
     }
-  ]
+  ], [
+    completeTour,
+    isUserGuideOpen,
+    minimize,
+    openUserGuide,
+    router,
+    voiceProviderBullets,
+  ])
 
   const currentStepData = tourSteps[state.currentStep - 1]
 
@@ -521,7 +290,7 @@ export default function OnboardingWizard() {
     return () => {
       document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'))
     }
-  }, [state.currentStep])
+  }, [state.currentStep, tourSteps])
 
   // BUG-122: Don't render tour on unauthenticated pages (placed after all hooks)
   if (isAuthPage) {
@@ -577,7 +346,7 @@ export default function OnboardingWizard() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              Step {state.currentStep} of {state.totalSteps}
+              Step {state.currentStep} of {state.totalSteps} — {currentStepData.sectionLabel}
             </span>
             <button
               onClick={skipTour}

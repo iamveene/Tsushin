@@ -48,6 +48,7 @@ class AutomationSkill(BaseSkill):
         """Initialize the automation skill."""
         super().__init__()
         self._flow_engine = None  # Lazy init when needed
+        self._intent_cache: Dict[str, str] = {}  # message.id -> "list" | "run" | "status" | "help" | "none"
 
     def _get_flow_engine(self):
         """Lazy initialization of flow engine."""
@@ -60,19 +61,9 @@ class AutomationSkill(BaseSkill):
         """
         Determine if this skill should handle the message.
 
-        Detects automation-related requests:
-        - "run my workflow"
-        - "execute the weekly report flow"
-        - "show me my flows"
-        - "list my automations"
-        - "start the data sync workflow"
-        - "trigger my automation"
-
-        Args:
-            message: The incoming message
-
-        Returns:
-            True if message is automation-related, False otherwise
+        Intent is decided by AISkillClassifier with workflow-automation examples —
+        no keyword lists. The classifier returns YES when the user is asking to
+        run, list, monitor, or get help on workflows / flows / automations.
         """
         config = getattr(self, '_config', {}) or {}
         if not self.is_legacy_enabled(config):
@@ -82,53 +73,57 @@ class AutomationSkill(BaseSkill):
         if not config.get('is_enabled', True):
             return False
 
-        body_lower = message.body.lower()
+        if not (message.body and message.body.strip()):
+            return False
 
-        # Automation keywords
-        automation_keywords = [
-            'workflow',
-            'automation',
-            'automate',
-            'flow',
-            'orchestration',
-            'orchestrate',
-            'process',
-            'run flow',
-            'execute flow',
-            'start flow',
-            'trigger flow',
-            'list flow',
-            'show flow',
-            'my flows',
-            'my automations',
-            'my workflows'
-        ]
+        return await self._ai_classify(message.body, config)
 
-        # Check for keyword matches
-        for keyword in automation_keywords:
-            if keyword in body_lower:
-                logger.info(f"AutomationSkill: Matched keyword '{keyword}' in message")
-                return True
+    async def _ai_classify(self, body: str, config: Dict[str, Any]) -> bool:
+        """LLM-based intent check for the workflow-automation skill."""
+        from agent.skills.ai_classifier import get_classifier
+        classifier = get_classifier()
 
-        # Check for specific action patterns
-        action_patterns = [
-            'run the',
-            'execute the',
-            'start the',
-            'trigger the',
-            'show me the',
-            'list my',
-            'what are my'
-        ]
+        custom_examples = {
+            "yes": [
+                "run my weekly report workflow",
+                "execute the data sync flow",
+                "start the onboarding automation",
+                "trigger flow X",
+                "show me my flows",
+                "list my workflows",
+                "what automations do I have?",
+                "status of my workflows",
+                "is the report flow still running?",
+                "how do automations work here?",
+                "rodar meu fluxo de relatórios",
+                "execute o flow de sincronização",
+                "liste minhas automações",
+                "quais workflows eu tenho?",
+                "status dos meus flows",
+            ],
+            "no": [
+                "what is a workflow?",
+                "tell me a joke",
+                "schedule a meeting tomorrow",  # scheduler, not workflow runner
+                "send an email to John",
+                "create an image of a cat",
+                "remind me to buy milk",
+                "qual é a previsão do tempo?",
+                "como você está?",
+                "agende uma reunião amanhã",
+            ],
+        }
 
-        for pattern in action_patterns:
-            if pattern in body_lower:
-                # Check if followed by automation-related terms
-                if any(term in body_lower for term in ['flow', 'workflow', 'automation']):
-                    logger.info(f"AutomationSkill: Matched pattern '{pattern}' with automation term")
-                    return True
-
-        return False
+        return await classifier.classify_intent(
+            message=body,
+            skill_name=self.skill_name,
+            skill_description=self.skill_description,
+            model=config.get("ai_model"),
+            custom_examples=custom_examples,
+            db=self._db_session,
+            token_tracker=self._token_tracker,
+            tenant_id=self._resolve_tenant_id_for_classifier(config),
+        )
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -151,10 +146,8 @@ class AutomationSkill(BaseSkill):
             # Store config for use in methods
             self._config = config
 
-            body_lower = message.body.lower()
-
-            # Detect intent
-            intent = self._detect_intent(body_lower)
+            # Detect intent via LLM (entity extraction over {list, run, status, help})
+            intent = await self._detect_intent(message, config)
             logger.info(f"AutomationSkill: Detected intent '{intent}'")
 
             # Route to appropriate handler
@@ -178,38 +171,46 @@ class AutomationSkill(BaseSkill):
                 metadata={"error": str(e)}
             )
 
-    def _detect_intent(self, body_lower: str) -> str:
+    async def _detect_intent(self, message: InboundMessage, config: Dict[str, Any]) -> str:
         """
-        Detect the user's intent from the message.
+        Detect the user's automation sub-intent via LLM entity extraction.
 
-        Args:
-            body_lower: Lowercased message body
-
-        Returns:
-            Intent string: 'list', 'run', 'status', 'help'
+        Returns one of: 'list', 'run', 'status', 'help'. Falls back to 'help' for
+        unclear input. Result is cached per-message so process() doesn't pay twice.
         """
-        # List intent
-        list_keywords = ['list', 'show', 'what are', 'display', 'see my']
-        if any(keyword in body_lower for keyword in list_keywords):
-            return 'list'
+        if message.id in self._intent_cache:
+            return self._intent_cache[message.id]
 
-        # Run intent
-        run_keywords = ['run', 'execute', 'start', 'trigger', 'launch']
-        if any(keyword in body_lower for keyword in run_keywords):
-            return 'run'
+        from agent.skills.ai_classifier import get_classifier
+        classifier = get_classifier()
 
-        # Status intent
-        status_keywords = ['status', 'check', 'progress', 'running', 'completed']
-        if any(keyword in body_lower for keyword in status_keywords):
-            return 'status'
+        prompt_message = (
+            f"User message: \"{message.body}\"\n\n"
+            "Classify the user's automation sub-intent:\n"
+            "- list: user wants to SEE their available workflows / flows / automations\n"
+            "- run: user wants to EXECUTE / START / TRIGGER a workflow\n"
+            "- status: user wants to CHECK the state of a running or recent workflow\n"
+            "- help: user is asking how automation works, or the message is ambiguous"
+        )
 
-        # Help intent
-        help_keywords = ['help', 'how', 'what can', 'explain']
-        if any(keyword in body_lower for keyword in help_keywords):
-            return 'help'
+        intent = await classifier.extract_entity(
+            message=prompt_message,
+            entity_type="automation sub-intent",
+            available_options=["list", "run", "status", "help"],
+            model=config.get("ai_model"),
+            db=self._db_session,
+            token_tracker=self._token_tracker,
+            tenant_id=self._resolve_tenant_id_for_classifier(config),
+        )
 
-        # Default to help
-        return 'help'
+        normalized = (intent or "help").strip().lower()
+        if normalized not in {"list", "run", "status", "help"}:
+            normalized = "help"
+
+        if len(self._intent_cache) >= 256:
+            self._intent_cache.pop(next(iter(self._intent_cache)))
+        self._intent_cache[message.id] = normalized
+        return normalized
 
     async def _handle_list(self, message: InboundMessage, config: Dict) -> SkillResult:
         """

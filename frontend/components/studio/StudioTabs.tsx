@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import TabStrip from '@/components/ui/TabStrip'
 
 /**
  * Single source of truth for all Studio sub-navigation tabs.
@@ -48,6 +49,27 @@ const STUDIO_TABS: StudioTab[] = [
     paths: [
       'M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z',
     ],
+  },
+  {
+    href: '/studio/continuous-agents',
+    label: 'Continuous Agents',
+    iconColor: 'text-emerald-400',
+    gradient: 'from-emerald-500 to-cyan-400',
+    paths: [
+      // Refresh / always-on circular arrow — captures the "wake on every event" loop
+      'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+    ],
+    prefixMatch: true,
+  },
+  {
+    href: '/studio/teams',
+    label: 'Teams',
+    iconColor: 'text-indigo-400',
+    gradient: 'from-indigo-500 to-cyan-400',
+    paths: [
+      'M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m0-4a4 4 0 118 0 4 4 0 01-8 0zm-2 0a3 3 0 11-6 0 3 3 0 016 0zm14 0a3 3 0 11-6 0 3 3 0 016 0z',
+    ],
+    prefixMatch: true,
   },
   {
     href: '/agents/projects',
@@ -109,46 +131,48 @@ export default function StudioTabs() {
 
   return (
     <div className="glass-card rounded-xl overflow-hidden">
-      <div className="border-b border-tsushin-border/50">
-        <nav className="flex">
-          {STUDIO_TABS.map((tab) => (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 ${
-                isActive(tab)
-                  ? 'text-white'
-                  : 'text-tsushin-slate hover:text-white'
-              }`}
-            >
-              <span className="relative z-10 flex items-center gap-1.5">
-                <svg
-                  className={`w-4 h-4 ${tab.iconColor}`}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  {tab.paths.map((d, i) => (
-                    <path
-                      key={i}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d={d}
-                    />
-                  ))}
-                </svg>
-                {tab.label}
-              </span>
-              {isActive(tab) && (
-                <span
-                  className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r ${tab.gradient}`}
-                />
-              )}
-            </Link>
-          ))}
-        </nav>
-      </div>
+      <TabStrip
+        className="border-b border-tsushin-border/50"
+        ariaLabel="Agent management sections"
+      >
+        {STUDIO_TABS.map((tab) => (
+          <Link
+            key={tab.href}
+            href={tab.href}
+            data-tab={tab.label.toLowerCase().replace(/\s+/g, '-')}
+            className={`relative px-6 py-3.5 font-medium text-sm transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
+              isActive(tab)
+                ? 'text-white'
+                : 'text-tsushin-slate hover:text-white'
+            }`}
+          >
+            <span className="relative z-10 flex items-center gap-1.5">
+              <svg
+                className={`w-4 h-4 ${tab.iconColor}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                {tab.paths.map((d, i) => (
+                  <path
+                    key={i}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d={d}
+                  />
+                ))}
+              </svg>
+              {tab.label}
+            </span>
+            {isActive(tab) && (
+              <span
+                className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r ${tab.gradient}`}
+              />
+            )}
+          </Link>
+        ))}
+      </TabStrip>
     </div>
   )
 }

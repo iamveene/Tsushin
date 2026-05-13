@@ -41,9 +41,8 @@ class SearchSkill(BaseSkill):
         "language": "en",              # Search language preference
         "country": "US",               # Search country preference
         "safe_search": true,           # Enable safe search filtering
-        "keywords": [...],             # Trigger keywords
-        "use_ai_fallback": true,       # Use AI to verify search intent
-        "execution_mode": "hybrid"     # "tool", "legacy", or "hybrid"
+        "ai_model": "gemini-2.5-flash", # Model for LLM intent classification
+        "execution_mode": "tool"       # "tool", "legacy", or "hybrid"
     }
 
     Skills-as-Tools (Phase 2):
@@ -144,41 +143,20 @@ class SearchSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains search intent.
+        Detect if message contains web-search intent.
 
-        Looks for search-related keywords in multiple languages.
-
-        Args:
-            message: Inbound message
-
-        Returns:
-            True if message is about web search
+        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
         """
-        # Skills-as-Tools: If in tool-only mode, don't handle via keywords
         config = getattr(self, '_config', {}) or self.get_default_config()
         if not self.is_legacy_enabled(config):
             return False
 
-        text = message.body.lower()
-        keywords = config.get('keywords', self.get_default_config()['keywords'])
-        use_ai_fallback = config.get('use_ai_fallback', True)
-
-        # Step 1: Keyword pre-filter
-        has_keywords = self._keyword_matches(message.body, keywords)
-
-        if not has_keywords:
-            logger.debug(f"SearchSkill: No keyword match in '{text[:50]}...'")
+        if not (message.body and message.body.strip()):
             return False
 
-        logger.info(f"SearchSkill: Keywords matched in '{text[:50]}...'")
-
-        # Step 2: AI fallback (optional, for intent verification)
-        if use_ai_fallback:
-            result = await self._ai_classify(message.body, config)
-            logger.info(f"SearchSkill: AI classification result={result}")
-            return result
-
-        return True
+        result = await self._ai_classify(message.body, config)
+        logger.info(f"SearchSkill: AI classification result={result}")
+        return result
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -542,8 +520,6 @@ Search query:"""
         """
         return {
             "provider": "brave",  # Default provider
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "max_results": 5,
             "language": "en",
@@ -571,16 +547,6 @@ Search query:"""
                     "enum": available_providers if available_providers else ["brave"],
                     "description": "Search provider to use",
                     "default": "brave"
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger web search"
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI to verify intent after keyword match",
-                    "default": True
                 },
                 "ai_model": {
                     "type": "string",
@@ -612,8 +578,8 @@ Search query:"""
                 "execution_mode": {
                     "type": "string",
                     "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (AI decides), legacy (keywords only), hybrid (both)",
-                    "default": "hybrid"
+                    "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
+                    "default": "tool"
                 }
             }
         }

@@ -16,6 +16,7 @@
 import { useState } from 'react'
 import {
   getOutputFieldsForStepType,
+  getSourceStepVariables,
   generateVariableTemplate,
   HELPER_FUNCTIONS,
   FLOW_CONTEXT_VARS,
@@ -44,6 +45,20 @@ const STEP_TYPE_ICONS: Record<string, string> = {
   skill: 'S',         // Brain/Skill
   slash_command: '/',  // Command
   summarization: 'D',  // Document
+  gate: 'G',          // Gate
+  source: '⚡',       // v0.7.0 — trigger source step
+}
+
+// v0.7.0 release-finishing fix: source steps need kind-aware deep payload
+// paths so the Notification step in an auto-generated Jira/Email flow can
+// reference {{step_1.payload.issue.key}} or {{step_1.payload.subject}}
+// directly. This helper picks the right list per step.
+function getStepFields(step: StepInfo): StepVariable[] {
+  if (step.type === 'source' || step.type === 'Source') {
+    const kind = (step.config?.trigger_kind || step.config?.triggerKind || null) as string | null
+    return getSourceStepVariables(kind)
+  }
+  return getOutputFieldsForStepType(step.type)
 }
 
 export default function StepVariablePanel({
@@ -61,7 +76,7 @@ export default function StepVariablePanel({
   const [copiedVar, setCopiedVar] = useState<string | null>(null)
 
   const previousSteps = allSteps.filter(s => s.position < currentStepPosition)
-  const stepsWithFields = previousSteps.filter(s => getOutputFieldsForStepType(s.type).length > 0)
+  const stepsWithFields = previousSteps.filter(s => getStepFields(s).length > 0)
 
   function toggleSection(key: string) {
     setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }))
@@ -138,9 +153,17 @@ export default function StepVariablePanel({
                 ) : (
                   <div className="space-y-3">
                     {stepsWithFields.map((step) => {
-                      const fields = getOutputFieldsForStepType(step.type)
+                      const fields = getStepFields(step)
                       const alias = step.config?.output_alias
                       const normalizedName = step.name.toLowerCase().replace(/[\s-]/g, '_')
+                      // v0.7.0 release-finishing — Source step has a special context
+                      // shape: lightweight identifiers (trigger_kind, instance_id,
+                      // etc.) ARE echoed as step_N.* output, but the deep payload
+                      // paths (`payload.issue.key`, `payload.subject`, ...) live
+                      // under the `source.*` root merge in flow_engine
+                      // _build_step_context, NOT under step_N.*. Emit the right
+                      // template syntax per chip.
+                      const isSource = step.type === 'source' || step.type === 'Source'
 
                       return (
                         <div key={step.position} className="rounded-lg border border-slate-700/60 overflow-hidden">
@@ -160,6 +183,9 @@ export default function StepVariablePanel({
                             <span className="text-[10px] text-slate-500">
                               Ref by position: <code className="text-amber-400/70">step_{step.position}</code>
                               {' | '}name: <code className="text-amber-400/70">{normalizedName}</code>
+                              {isSource && (
+                                <>{' | '}wake event: <code className="text-amber-400/70">source.payload</code></>
+                              )}
                               {alias && (
                                 <>{' | '}alias: <code className="text-amber-400/70">{alias}</code></>
                               )}
@@ -169,7 +195,15 @@ export default function StepVariablePanel({
                           {/* Variable chips */}
                           <div className="p-2 flex flex-wrap gap-1.5">
                             {fields.map((field: StepVariable) => {
-                              const template = generateVariableTemplate(step.position, field.field)
+                              // Source-step payload paths address the trigger-context
+                              // root merge as `{{source.payload.foo}}`; everything else
+                              // (and source identifiers like trigger_kind / instance_id
+                              // which ARE echoed by SourceStepHandler) keeps the
+                              // canonical `{{step_N.field}}` form.
+                              const isPayloadPath = field.field === 'payload' || field.field.startsWith('payload.')
+                              const template = (isSource && isPayloadPath)
+                                ? `{{source.${field.field}}}`
+                                : generateVariableTemplate(step.position, field.field)
                               const varKey = `${step.position}-${field.field}`
                               const isInserted = copiedVar === varKey
 
@@ -177,9 +211,14 @@ export default function StepVariablePanel({
                                 <button
                                   key={varKey}
                                   onClick={() => handleInsert(template, varKey)}
-                                  title={`${field.description} (${field.type})\nClick to insert: ${template}`}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData('text/plain', template)
+                                    e.dataTransfer.effectAllowed = 'copy'
+                                  }}
+                                  title={`${field.description} (${field.type})\nClick to insert or drag into a textarea: ${template}`}
                                   className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono
-                                    border transition-all cursor-pointer
+                                    border transition-all cursor-grab active:cursor-grabbing
                                     ${isInserted
                                       ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                                       : 'bg-slate-800/50 border-slate-700 text-amber-400/90 hover:bg-cyan-500/10 hover:border-cyan-500/30 hover:text-cyan-400'
@@ -230,8 +269,13 @@ export default function StepVariablePanel({
                     <button
                       key={helper.name}
                       onClick={() => handleInsert(helper.syntax, key)}
-                      title={helper.description}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', helper.syntax)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${helper.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'
@@ -273,8 +317,13 @@ export default function StepVariablePanel({
                     <button
                       key={i}
                       onClick={() => handleInsert(cond.syntax, key)}
-                      title={cond.description}
-                      className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', cond.syntax)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${cond.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-start gap-2 px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'
@@ -325,8 +374,13 @@ export default function StepVariablePanel({
                     <button
                       key={ctx.variable}
                       onClick={() => handleInsert(template, key)}
-                      title={ctx.description}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', template)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={`${ctx.description}\nClick to insert or drag into a textarea.`}
+                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all cursor-grab active:cursor-grabbing
                         ${isInserted
                           ? 'bg-emerald-500/10'
                           : 'hover:bg-slate-800/50'

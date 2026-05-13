@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import { useAgentWizard } from '@/contexts/AgentWizardContext'
 import { api } from '@/lib/client'
 import type { TTSInstance, ProviderInstance } from '@/lib/client'
-import { AudioProviderPicker, AudioVoiceFields } from '@/components/audio-wizard/AudioProviderFields'
-import type { AudioCapability } from '@/lib/agent-wizard/reducer'
+import { AudioProviderPicker, AudioTranscriptFields, AudioVoiceFields } from '@/components/audio-wizard/AudioProviderFields'
+import type { AudioCapability, AudioConfig } from '@/lib/agent-wizard/reducer'
 import { isAudioValid, DEFAULT_AUDIO_CONFIG } from '@/lib/agent-wizard/reducer'
 
 export default function StepAudio() {
@@ -39,6 +39,7 @@ export default function StepAudio() {
   const hasGeminiKey = providerInstances.some(p => p.vendor === 'gemini' && p.api_key_configured)
 
   const wantsTTS = audio ? (audio.capability === 'voice' || audio.capability === 'hybrid') : false
+  const wantsTranscript = audio ? (audio.capability === 'transcript' || audio.capability === 'hybrid') : false
   const providerOK = !wantsTTS
     || audio?.provider === 'kokoro'
     || (audio?.provider === 'openai' && hasOpenAIKey)
@@ -107,6 +108,7 @@ export default function StepAudio() {
             format: audio.format,
             memLimit: audio.memLimit,
             setAsDefaultTTS: audio.setAsDefaultTTS,
+            model: audio.model,
           }}
           onChange={patch => patchAudio(patch)}
           wantsTTS={wantsTTS}
@@ -117,6 +119,33 @@ export default function StepAudio() {
           hideDefaultTTSOption={false}
         />
       </div>
+
+      {wantsTranscript && (
+        <div className="pt-2 border-t border-white/5">
+          <h4 className="text-sm font-semibold text-white mb-3">Transcription backend</h4>
+          <AudioTranscriptFields
+            value={{
+              language: audio.language,
+              model: audio.transcriptModel,
+              asrMode: audio.asrMode,
+              asrInstanceId: audio.asrInstanceId,
+              vadFilter: audio.vadFilter,
+              rememberTranscript: audio.rememberTranscript,
+            }}
+            onChange={(patch) => {
+              const next: Partial<AudioConfig> = {}
+              if (patch.language !== undefined) next.language = patch.language
+              if (patch.model !== undefined) next.transcriptModel = patch.model
+              if (patch.asrMode !== undefined) next.asrMode = patch.asrMode
+              if (patch.asrInstanceId !== undefined) next.asrInstanceId = patch.asrInstanceId
+              if (patch.vadFilter !== undefined) next.vadFilter = patch.vadFilter
+              if (patch.rememberTranscript !== undefined) next.rememberTranscript = patch.rememberTranscript
+              patchAudio(next)
+            }}
+            showResponseMode={false}
+          />
+        </div>
+      )}
 
       {!providerOK && wantsTTS && (
         <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">

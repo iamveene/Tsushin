@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
+import Link from 'next/link'
 import StudioAgentSelector from './StudioAgentSelector'
 import StudioLeftPanel from './StudioLeftPanel'
 import { NodeConfigPanel } from './config'
@@ -16,6 +17,8 @@ import { api, type SkillDefinition } from '@/lib/client'
 import type { StudioCanvasRef } from './StudioCanvas'
 import type { DragTransferData, BuilderNodeData, BuilderNodeType, ConfigPanelTarget } from './types'
 import { DragProvider } from './context/DragContext'
+import { UsersIcon } from '@/components/ui/icons'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import './studio.css'
 
 const StudioCanvasComponent = dynamic(() => import('./StudioCanvas'), {
@@ -27,7 +30,7 @@ const StudioCanvasComponent = dynamic(() => import('./StudioCanvas'), {
           <div className="absolute inset-0 rounded-full border-4 border-tsushin-surface"></div>
           <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-tsushin-indigo animate-spin"></div>
         </div>
-        <p className="text-tsushin-slate font-medium">Loading Agent Studio...</p>
+        <p className="text-tsushin-slate font-medium">Loading Studio builder...</p>
       </div>
     </div>
   ),
@@ -48,6 +51,7 @@ const MinimizeIcon = ({ className }: { className?: string }) => (
 export default function AgentStudioTab() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
   const [isMaximized, setIsMaximized] = useState(false)
+  const maximizedBackdropDismiss = useBackdropDismiss(() => setIsMaximized(false))
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null)
   const [configPanel, setConfigPanel] = useState<ConfigPanelTarget | null>(null)
   const [skillDefinitions, setSkillDefinitions] = useState<SkillDefinition[]>([])
@@ -216,7 +220,29 @@ export default function AgentStudioTab() {
         </div>
       </div>
 
-      {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setIsMaximized(false)} />}
+      {studioData.agent?.id === selectedAgentId && studioData.agent.is_team_member && (
+        <div className="rounded-xl border border-tsushin-indigo/25 bg-tsushin-indigo/10 px-4 py-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-3">
+              <UsersIcon size={18} className="mt-0.5 flex-shrink-0 text-tsushin-indigo-glow" />
+              <div>
+                <h2 className="text-sm font-semibold text-white">Team member agent</h2>
+                <p className="mt-1 text-sm text-tsushin-slate">
+                  Direct conversations stay separate from team executions, but Studio changes may affect team behavior.
+                </p>
+              </div>
+            </div>
+            <Link
+              href={studioData.agent.current_team_id ? `/studio/teams/${studioData.agent.current_team_id}` : '/studio/teams'}
+              className="inline-flex items-center justify-center rounded-lg border border-tsushin-indigo/30 bg-tsushin-indigo/10 px-4 py-2 text-sm font-medium text-tsushin-indigo-glow transition-colors hover:bg-tsushin-indigo/20"
+            >
+              Open Teams
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {isMaximized && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" {...maximizedBackdropDismiss} />}
 
       <div className={`${isMaximized ? 'fixed inset-4 z-50 h-auto' : 'h-[calc(100vh-19rem)] min-h-[350px] relative'} glass-card rounded-xl p-1 transition-all duration-300`}>
         {isMaximized && (

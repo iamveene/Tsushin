@@ -90,6 +90,14 @@ class ClearHistoryResponse(BaseModel):
     message: str
 
 
+def _get_visible_agent(db: Session, agent_id: int, tenant_id: str) -> Optional[Agent]:
+    return db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_internal == False,
+    ).first()
+
+
 # ============================================================================
 # Playground Endpoints
 # ============================================================================
@@ -111,7 +119,8 @@ async def get_available_agents(
         # HIGH-011: Get only active agents belonging to user's tenant
         agents = db.query(Agent).filter(
             Agent.is_active == True,
-            Agent.tenant_id == current_user.tenant_id
+            Agent.tenant_id == current_user.tenant_id,
+            Agent.is_internal == False,
         ).all()
 
         result = []
@@ -154,7 +163,7 @@ async def send_chat_message(
     request: PlaygroundChatRequest,
     sync: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Send a message to an agent and get a response.
@@ -166,12 +175,16 @@ async def send_chat_message(
     """
     try:
         # HIGH-011: Get agent with tenant validation to prevent cross-tenant access
-        agent = db.query(Agent).filter(
-            Agent.id == request.agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, request.agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {request.agent_id} not found")
+
+        # BUG-680: inactive agents must not execute via direct agent_id call
+        if not agent.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent {request.agent_id} not found",
+            )
 
         from services.playground_thread_service import (
             PlaygroundThreadService,
@@ -406,6 +419,12 @@ async def send_chat_message(
 
         return PlaygroundChatResponse(**result)
 
+    except HTTPException:
+        # Preserve intended HTTP status codes (e.g., 404 for inactive/missing
+        # agents per BUG-680, 403 for cross-tenant access). Without this,
+        # the blanket `except Exception` below swallowed HTTPExceptions
+        # into a 200 with `status=error`.
+        raise
     except Exception as e:
         return PlaygroundChatResponse(
             status="error",
@@ -429,10 +448,7 @@ async def get_conversation_history(
     """
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -478,10 +494,7 @@ async def clear_conversation_history(
     """
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -554,10 +567,7 @@ async def upload_audio(
 
     try:
         # HIGH-011: Verify agent exists AND belongs to user's tenant
-        agent = db.query(Agent).filter(
-            Agent.id == agent_id,
-            Agent.tenant_id == current_user.tenant_id
-        ).first()
+        agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
         if not agent:
             return PlaygroundAudioResponse(
                 status="error",
@@ -712,10 +722,7 @@ async def get_agent_audio_capabilities(
     HIGH-011 Fix: Added tenant validation to prevent cross-tenant capability checks.
     """
     # HIGH-011: Verify agent exists AND belongs to user's tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 
@@ -1137,10 +1144,7 @@ async def get_memory_layers(
     )
 
     # Verify agent exists and user has access
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1405,10 +1409,7 @@ async def get_debug_info(
     import json
 
     # Verify agent exists
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1562,10 +1563,7 @@ async def get_available_tools(
     from models import Agent, SandboxedTool, SandboxedToolCommand, SandboxedToolParameter, AgentSandboxedTool
 
     # Verify agent exists
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
 
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1692,12 +1690,13 @@ async def list_threads(
 async def create_thread(
     request: ThreadCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Create a new conversation thread.
 
     Phase 14.1: Thread Management
+    BUG-672: gated on `agents.execute` so read-only roles cannot create threads.
     """
     from services.playground_thread_service import PlaygroundThreadService
 
@@ -2574,10 +2573,7 @@ async def playground_sse_stream(
         raise HTTPException(status_code=400, detail="Message too long (max 10000 chars)")
 
     # Verify agent exists and belongs to tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == current_user.tenant_id
-    ).first()
+    agent = _get_visible_agent(db, agent_id, current_user.tenant_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
 

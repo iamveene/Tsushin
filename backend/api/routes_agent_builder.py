@@ -69,6 +69,12 @@ SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", 
 logger = logging.getLogger(__name__)
 
 
+def _forbid_internal_agent(agent: Agent, *, status_code: int = 403) -> None:
+    if getattr(agent, "is_internal", False):
+        detail = "Agent not found" if status_code == 404 else "Internal coordinator agents cannot be managed through Agent Builder"
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
 # =============================================================================
 # Pydantic Models — builder-data response
 # =============================================================================
@@ -362,6 +368,7 @@ async def get_builder_data(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+    _forbid_internal_agent(agent, status_code=404)
 
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
     contact_name = contact.friendly_name if contact else "Unknown"
@@ -468,7 +475,7 @@ async def get_builder_data(
     if include_globals:
         # Agents list
         agents_query = db.query(Agent, Contact.friendly_name).join(Contact, Agent.contact_id == Contact.id)
-        agents_query = ctx.filter_by_tenant(agents_query, Agent.tenant_id)
+        agents_query = ctx.filter_by_tenant(agents_query, Agent.tenant_id).filter(Agent.is_internal == False)
         agents_rows = agents_query.all()
 
         global_agents = [
@@ -571,6 +578,7 @@ async def save_builder_data(
         raise HTTPException(status_code=404, detail="Agent not found")
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
+    _forbid_internal_agent(agent)
 
     try:
         # --- Step 1: Agent core fields ---

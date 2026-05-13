@@ -14,8 +14,21 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { api, type FlowRun, type ConversationThread } from '@/lib/client'
-import { parseUTCTimestamp } from '@/lib/dateUtils'
+import { formatDateTimeFull, parseUTCTimestamp } from '@/lib/dateUtils'
 import { LightningIcon, MessageIcon } from '@/components/ui/icons'
+
+function label(value?: string | null): string {
+  if (!value) return 'Unknown'
+  return value.split('_').join(' ').replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function flowName(run: FlowRun): string {
+  return run.flow_name || run.flow_definition_name || 'Unnamed flow'
+}
+
+function agentName(thread: ConversationThread): string {
+  return thread.agent_name || 'Assigned agent'
+}
 
 export default function FlowsTab() {
   const router = useRouter()
@@ -70,7 +83,9 @@ export default function FlowsTab() {
   }
 
   function formatDate(dateString: string) {
-    return parseUTCTimestamp(dateString).toLocaleString('pt-BR', {
+    const date = parseUTCTimestamp(dateString)
+    if (Number.isNaN(date.getTime())) return 'Unknown time'
+    return date.toLocaleString('pt-BR', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -91,10 +106,21 @@ export default function FlowsTab() {
     }
   }
 
-  function calculateDuration(startedAt: string, completedAt: string | null): string {
+  function calculateDuration(startedAt: string, completedAt: string | null, durationMs?: number | null): string {
+    if (durationMs !== undefined && durationMs !== null) {
+      if (durationMs < 0) return '-'
+      if (durationMs < 1000) return '<1s'
+      const seconds = Math.round(durationMs / 1000)
+      if (seconds < 60) return `${seconds}s`
+      const minutes = Math.floor(seconds / 60)
+      const remainingSeconds = seconds % 60
+      return `${minutes}m ${remainingSeconds}s`
+    }
     if (!completedAt) return 'In progress...'
-    const durationMs = new Date(completedAt).getTime() - new Date(startedAt).getTime()
-    const seconds = Math.round(durationMs / 1000)
+    const computedDurationMs = new Date(completedAt).getTime() - new Date(startedAt).getTime()
+    if (!Number.isFinite(computedDurationMs) || computedDurationMs < 0) return '-'
+    const seconds = Math.round(computedDurationMs / 1000)
+    if (durationMs > 0 && seconds === 0) return '<1s'
     if (seconds < 60) return `${seconds}s`
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
@@ -128,7 +154,7 @@ export default function FlowsTab() {
   return (
     <div className="space-y-6">
       {/* Tab Switcher and Actions */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="inline-flex rounded-lg bg-gray-800 p-1 border border-gray-700">
           <button
             onClick={() => setActiveTab('runs')}
@@ -167,7 +193,7 @@ export default function FlowsTab() {
                 className="px-3 py-1.5 border border-gray-700 rounded-md text-sm text-white bg-gray-800
                            focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
               >
-                <option value="">All Statuses</option>
+                <option value="">All statuses</option>
                 <option value="pending">Pending</option>
                 <option value="running">Running</option>
                 <option value="completed">Completed</option>
@@ -180,7 +206,7 @@ export default function FlowsTab() {
             onClick={() => router.push('/flows')}
             className="px-3 py-1.5 text-sm text-cyan-400 hover:text-white transition-colors"
           >
-            Manage Flows →
+            Manage Flows
           </button>
         </div>
       </div>
@@ -197,7 +223,7 @@ export default function FlowsTab() {
             <table className="min-w-full divide-y divide-gray-800">
               <thead className="bg-gray-800/50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Run ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Run</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Flow</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Steps</th>
@@ -216,13 +242,15 @@ export default function FlowsTab() {
                 ) : (
                   filteredFlowRuns.map((run) => (
                     <tr key={run.id} className="hover:bg-gray-800/50 transition-colors">
-                      <td className="px-4 py-3 text-sm font-medium text-white">#{run.id}</td>
+                      <td className="px-4 py-3 text-sm font-medium text-white">Run #{run.id}</td>
                       <td className="px-4 py-3 text-sm text-gray-300">
-                        Flow #{run.flow_definition_id}
+                        <span className="block max-w-[18rem] truncate" title={flowName(run)}>
+                          {flowName(run)}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(run.status)}`}>
-                          {run.status}
+                          {label(run.status)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-400">
@@ -234,7 +262,7 @@ export default function FlowsTab() {
                         {formatDate(run.started_at)}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-400">
-                        {calculateDuration(run.started_at, run.completed_at)}
+                        {calculateDuration(run.started_at, run.completed_at, run.duration_ms)}
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <div className="flex items-center gap-2">
@@ -294,11 +322,11 @@ export default function FlowsTab() {
                     <div>
                       <div className="font-medium text-white">{thread.recipient}</div>
                       {thread.agent_id && (
-                        <div className="text-xs text-gray-400">Agent #{thread.agent_id}</div>
+                        <div className="text-xs text-gray-400" title={thread.agent_name || undefined}>{agentName(thread)}</div>
                       )}
                     </div>
                     <span className={`px-2 py-0.5 text-xs rounded-full border ${getStatusColor(thread.status)}`}>
-                      {thread.status}
+                      {label(thread.status)}
                     </span>
                   </div>
 
@@ -308,7 +336,7 @@ export default function FlowsTab() {
 
                   <div className="flex items-center justify-between text-xs text-gray-400">
                     <span>Turn {thread.current_turn}/{thread.max_turns}</span>
-                    <span>{formatDate(thread.last_activity_at)}</span>
+                    <span title={formatDateTimeFull(thread.last_activity_at)}>{formatDate(thread.last_activity_at)}</span>
                   </div>
 
                   {/* Progress bar */}

@@ -1,0 +1,688 @@
+"""GitHub trigger CRUD.
+
+v0.7.0-fix Phase 3: GitHub triggers MUST link to a Hub `GitHubIntegration`.
+Per-trigger PAT/auth_method/installation_id is gone. The "test connection"
+endpoints are gone with it — the integration's own creation flow is the
+single source of truth for connectivity validation.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
+
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from channels.github.criteria import evaluate_pr_criteria, validate_pr_criteria
+from channels.github.trigger import (
+    encrypt_webhook_secret,
+    generate_webhook_secret,
+    normalize_github_events,
+    normalize_path_filters,
+    normalize_repo_part,
+    preview_secret,
+)
+from channels.trigger_criteria import validate_criteria
+from db import get_db
+from models import Agent, Contact, GitHubChannelInstance, GitHubIntegration
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+)
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
+)
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/api/triggers/github",
+    tags=["GitHub Triggers"],
+    redirect_slashes=False,
+)
+
+
+class GitHubTriggerCreate(BaseModel):
+    integration_name: str = Field(..., min_length=1, max_length=100)
+    github_integration_id: int = Field(..., ge=1)
+    repo_owner: str = Field(..., min_length=1, max_length=100)
+    repo_name: str = Field(..., min_length=1, max_length=100)
+    webhook_secret: Optional[str] = Field(default=None, min_length=8, max_length=500)
+    events: Optional[list[str]] = None
+    branch_filter: Optional[str] = Field(default=None, max_length=255)
+    path_filters: Optional[list[str]] = None
+    author_filter: Optional[str] = Field(default=None, max_length=255)
+    trigger_criteria: Optional[dict[str, Any]] = None
+    default_agent_id: Optional[int] = Field(default=None, ge=1)
+    is_active: bool = True
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
+
+    @field_validator("integration_name")
+    @classmethod
+    def _normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("integration_name must not be empty")
+        return normalized
+
+    @field_validator("repo_owner")
+    @classmethod
+    def _normalize_owner(cls, value: str) -> str:
+        return normalize_repo_part(value, "repo_owner")
+
+    @field_validator("repo_name")
+    @classmethod
+    def _normalize_repo_name(cls, value: str) -> str:
+        return normalize_repo_part(value, "repo_name")
+
+    @field_validator("events")
+    @classmethod
+    def _normalize_events(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        try:
+            return normalize_github_events(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("path_filters")
+    @classmethod
+    def _normalize_path_filters(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        return normalize_path_filters(value)
+
+    @field_validator("branch_filter", "author_filter")
+    @classmethod
+    def _normalize_optional_string(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("trigger_criteria must be an object")
+        if str(value.get("event") or "").strip().lower() == "pull_request":
+            try:
+                return validate_pr_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_pr_criteria: {exc}") from exc
+        try:
+            return validate_criteria(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class GitHubTriggerUpdate(BaseModel):
+    integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    github_integration_id: Optional[int] = Field(default=None, ge=1)
+    repo_owner: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    repo_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    webhook_secret: Optional[str] = Field(default=None, min_length=8, max_length=500)
+    events: Optional[list[str]] = None
+    branch_filter: Optional[str] = Field(default=None, max_length=255)
+    path_filters: Optional[list[str]] = None
+    author_filter: Optional[str] = Field(default=None, max_length=255)
+    trigger_criteria: Optional[dict[str, Any]] = None
+    default_agent_id: Optional[int] = Field(default=None, ge=1)
+    is_active: Optional[bool] = None
+
+    @field_validator("integration_name")
+    @classmethod
+    def _normalize_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("integration_name must not be empty")
+        return normalized
+
+    @field_validator("repo_owner")
+    @classmethod
+    def _normalize_owner(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_repo_part(value, "repo_owner")
+
+    @field_validator("repo_name")
+    @classmethod
+    def _normalize_repo_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_repo_part(value, "repo_name")
+
+    @field_validator("events")
+    @classmethod
+    def _normalize_events(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        try:
+            return normalize_github_events(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("path_filters")
+    @classmethod
+    def _normalize_path_filters(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        return normalize_path_filters(value)
+
+    @field_validator("branch_filter", "author_filter")
+    @classmethod
+    def _normalize_optional_string(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("trigger_criteria must be an object")
+        if str(value.get("event") or "").strip().lower() == "pull_request":
+            try:
+                return validate_pr_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_pr_criteria: {exc}") from exc
+        try:
+            return validate_criteria(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class GitHubTriggerRead(BaseModel):
+    id: int
+    tenant_id: str
+    integration_name: str
+    github_integration_id: int
+    github_integration_name: Optional[str] = None
+    repo_owner: str
+    repo_name: str
+    webhook_secret_preview: Optional[str] = None
+    events: list[str]
+    branch_filter: Optional[str] = None
+    path_filters: Optional[list[str]] = None
+    author_filter: Optional[str] = None
+    trigger_criteria: Optional[dict[str, Any]] = None
+    default_agent_id: Optional[int] = None
+    default_agent_name: Optional[str] = None
+    is_active: bool
+    status: str
+    health_status: str
+    health_status_reason: Optional[str] = None
+    last_health_check: Optional[datetime] = None
+    last_activity_at: Optional[datetime] = None
+    last_cursor: Optional[str] = None
+    last_delivery_id: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    inbound_url: str
+    auto_flow_id: Optional[int] = None
+
+
+class GitHubCriteriaTestRequest(BaseModel):
+    """Body for the unsaved-criteria dry-run endpoint."""
+
+    criteria: dict[str, Any] = Field(..., description="Candidate trigger_criteria envelope")
+    payload: dict[str, Any] = Field(..., description="Sample GitHub webhook payload")
+
+
+class GitHubCriteriaPayloadRequest(BaseModel):
+    """Body for the saved-trigger dry-run endpoint."""
+
+    payload: dict[str, Any] = Field(..., description="Sample GitHub webhook payload")
+
+
+class GitHubCriteriaTestResponse(BaseModel):
+    matched: bool
+    reason: str
+
+
+def _can_access(ctx: TenantContext, tenant_id: Optional[str]) -> bool:
+    if hasattr(ctx, "can_access_resource"):
+        return ctx.can_access_resource(tenant_id)
+    return tenant_id == getattr(ctx, "tenant_id", None)
+
+
+def _tenant_query(ctx: TenantContext, db: Session):
+    query = db.query(GitHubChannelInstance)
+    if hasattr(ctx, "filter_by_tenant"):
+        return ctx.filter_by_tenant(query, GitHubChannelInstance.tenant_id)
+    return query.filter(GitHubChannelInstance.tenant_id == getattr(ctx, "tenant_id", None))
+
+
+def _load_github_trigger(db: Session, ctx: TenantContext, trigger_id: int) -> GitHubChannelInstance:
+    instance = db.query(GitHubChannelInstance).filter(GitHubChannelInstance.id == trigger_id).first()
+    if instance is None or not _can_access(ctx, instance.tenant_id):
+        raise HTTPException(status_code=404, detail="GitHub trigger not found")
+    return instance
+
+
+def _load_active_agent(db: Session, tenant_id: str, agent_id: int) -> Agent:
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_active == True,  # noqa: E712
+    ).first()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+def _load_github_integration(
+    db: Session, tenant_id: str, integration_id: int
+) -> GitHubIntegration:
+    integration = (
+        db.query(GitHubIntegration)
+        .filter(
+            GitHubIntegration.id == integration_id,
+            GitHubIntegration.tenant_id == tenant_id,
+            GitHubIntegration.type == "github",
+        )
+        .first()
+    )
+    if integration is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "github_integration_not_found",
+                "message": "GitHub integration not found for this tenant. Create one under Hub → Developer Tools first.",
+            },
+        )
+    return integration
+
+
+def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optional[str]:
+    if not agent_id:
+        return None
+    row = db.query(Contact.friendly_name).join(
+        Agent,
+        Agent.contact_id == Contact.id,
+    ).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+    ).first()
+    return row.friendly_name if row else None
+
+
+def _integration_name(db: Session, integration_id: Optional[int], tenant_id: str) -> Optional[str]:
+    if not integration_id:
+        return None
+    row = db.query(GitHubIntegration.display_name, GitHubIntegration.name).filter(
+        GitHubIntegration.id == integration_id,
+        GitHubIntegration.tenant_id == tenant_id,
+        GitHubIntegration.type == "github",
+    ).first()
+    if not row:
+        return None
+    return row.display_name or row.name
+
+
+def _inbound_url(instance: GitHubChannelInstance) -> str:
+    return f"/api/triggers/github/{instance.id}/inbound"
+
+
+def _to_read(db: Session, instance: GitHubChannelInstance) -> GitHubTriggerRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=instance.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=instance.id,
+    )
+    return GitHubTriggerRead(
+        id=instance.id,
+        tenant_id=instance.tenant_id,
+        integration_name=instance.integration_name,
+        github_integration_id=instance.github_integration_id,
+        github_integration_name=_integration_name(db, instance.github_integration_id, instance.tenant_id),
+        repo_owner=instance.repo_owner,
+        repo_name=instance.repo_name,
+        webhook_secret_preview=instance.webhook_secret_preview,
+        events=normalize_github_events(instance.events),
+        branch_filter=instance.branch_filter,
+        path_filters=normalize_path_filters(instance.path_filters),
+        author_filter=instance.author_filter,
+        trigger_criteria=instance.trigger_criteria,
+        default_agent_id=instance.default_agent_id,
+        default_agent_name=_agent_name(db, instance.tenant_id, instance.default_agent_id),
+        is_active=bool(instance.is_active),
+        status=instance.status or "active",
+        health_status=instance.health_status or "unknown",
+        health_status_reason=instance.health_status_reason,
+        last_health_check=instance.last_health_check,
+        last_activity_at=instance.last_activity_at,
+        last_cursor=instance.last_cursor,
+        last_delivery_id=instance.last_delivery_id,
+        created_at=instance.created_at,
+        updated_at=instance.updated_at,
+        inbound_url=_inbound_url(instance),
+        auto_flow_id=auto_flow.id if auto_flow else None,
+    )
+
+
+@router.get("", response_model=list[GitHubTriggerRead])
+def list_github_triggers(
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> list[GitHubTriggerRead]:
+    rows = _tenant_query(ctx, db).order_by(
+        GitHubChannelInstance.created_at.desc(),
+        GitHubChannelInstance.id.desc(),
+    ).all()
+    return [_to_read(db, row) for row in rows]
+
+
+@router.post("", response_model=GitHubTriggerRead, status_code=status.HTTP_201_CREATED)
+def create_github_trigger(
+    payload: GitHubTriggerCreate,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> GitHubTriggerRead:
+    tenant_id = ctx.tenant_id
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant context required")
+    if payload.default_agent_id is not None:
+        _load_active_agent(db, tenant_id, payload.default_agent_id)
+
+    # Enforce integration linkage. Connectivity was tested at integration
+    # creation time — we do NOT re-verify here.
+    _load_github_integration(db, tenant_id, payload.github_integration_id)
+
+    webhook_secret = payload.webhook_secret or generate_webhook_secret()
+    instance = GitHubChannelInstance(
+        tenant_id=tenant_id,
+        integration_name=payload.integration_name,
+        github_integration_id=payload.github_integration_id,
+        repo_owner=payload.repo_owner,
+        repo_name=payload.repo_name,
+        webhook_secret_encrypted=encrypt_webhook_secret(db, tenant_id, webhook_secret),
+        webhook_secret_preview=preview_secret(webhook_secret),
+        events=normalize_github_events(payload.events),
+        branch_filter=payload.branch_filter,
+        path_filters=payload.path_filters,
+        author_filter=payload.author_filter,
+        trigger_criteria=payload.trigger_criteria,
+        default_agent_id=payload.default_agent_id,
+        is_active=payload.is_active,
+        status="active" if payload.is_active else "paused",
+        health_status="unknown",
+        created_by=current_user.id,
+    )
+    db.add(instance)
+    db.commit()
+    db.refresh(instance)
+    logger.info("Created GitHub trigger %s for tenant %s", instance.id, tenant_id)
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=tenant_id,
+                trigger_kind="github",
+                trigger_instance_id=instance.id,
+                default_agent_id=instance.default_agent_id,
+                notification_recipient=payload.notification_recipient,
+                notification_enabled=payload.notification_enabled,
+            )
+            db.commit()
+    except Exception:
+        logger.exception("Auto-flow generation failed for github trigger %s; trigger persists", instance.id)
+        db.rollback()
+
+    return _to_read(db, instance)
+
+
+@router.post("/test-criteria", response_model=GitHubCriteriaTestResponse)
+def dry_run_github_pr_criteria_unsaved(
+    payload: GitHubCriteriaTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> GitHubCriteriaTestResponse:
+    """Dry-run a candidate criteria envelope against a sample webhook payload.
+
+    Used by the trigger wizard before the row exists, so it doesn't persist
+    anything. Validation errors return a 400 with ``invalid_pr_criteria``.
+    """
+    del ctx, db
+    try:
+        validated = validate_pr_criteria(payload.criteria)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
+    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+    return GitHubCriteriaTestResponse(matched=matched, reason=reason)
+
+
+@router.post("/{trigger_id}/test-criteria", response_model=GitHubCriteriaTestResponse)
+def dry_run_github_pr_criteria_saved(
+    trigger_id: int,
+    payload: GitHubCriteriaPayloadRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> GitHubCriteriaTestResponse:
+    """Dry-run the saved trigger's criteria envelope against a sample payload.
+
+    Returns a 409 if the saved row has no ``trigger_criteria`` configured (so
+    callers don't accidentally interpret a no-op envelope as "matches anything").
+    """
+    instance = _load_github_trigger(db, ctx, trigger_id)
+    criteria = instance.trigger_criteria
+    if not criteria:
+        raise HTTPException(status_code=409, detail="trigger_criteria not configured")
+    if not isinstance(criteria, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="trigger_criteria is not an object — cannot dry-run",
+        )
+    envelope_event = str(criteria.get("event") or "").strip().lower()
+    if not envelope_event:
+        raise HTTPException(
+            status_code=409,
+            detail="trigger_criteria has no 'event' field — only PR-shaped envelopes can be dry-run.",
+        )
+    if envelope_event != "pull_request":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"trigger_criteria.event='{envelope_event}' is not yet supported by the dry-run endpoint "
+                "(only 'pull_request' envelopes can be dry-run today)."
+            ),
+        )
+    try:
+        validated = validate_pr_criteria(criteria)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
+    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+    return GitHubCriteriaTestResponse(matched=matched, reason=reason)
+
+
+@router.get("/{trigger_id}", response_model=GitHubTriggerRead)
+def get_github_trigger(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> GitHubTriggerRead:
+    return _to_read(db, _load_github_trigger(db, ctx, trigger_id))
+
+
+@router.patch("/{trigger_id}", response_model=GitHubTriggerRead)
+def update_github_trigger(
+    trigger_id: int,
+    payload: GitHubTriggerUpdate,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> GitHubTriggerRead:
+    instance = _load_github_trigger(db, ctx, trigger_id)
+    data = payload.model_dump(exclude_unset=True)
+
+    if "default_agent_id" in data:
+        if data["default_agent_id"] is not None:
+            _load_active_agent(db, instance.tenant_id, data["default_agent_id"])
+        instance.default_agent_id = data["default_agent_id"]
+
+    if "github_integration_id" in data and data["github_integration_id"] is not None:
+        _load_github_integration(db, instance.tenant_id, data["github_integration_id"])
+        instance.github_integration_id = data["github_integration_id"]
+
+    for field_name in ("integration_name", "repo_owner", "repo_name"):
+        if field_name in data and data[field_name] is not None:
+            setattr(instance, field_name, data[field_name])
+    if "webhook_secret" in data and data["webhook_secret"]:
+        instance.webhook_secret_encrypted = encrypt_webhook_secret(db, instance.tenant_id, data["webhook_secret"])
+        instance.webhook_secret_preview = preview_secret(data["webhook_secret"])
+    if "events" in data and data["events"] is not None:
+        instance.events = normalize_github_events(data["events"])
+    if "branch_filter" in data:
+        instance.branch_filter = data["branch_filter"]
+    if "path_filters" in data:
+        instance.path_filters = data["path_filters"]
+    if "author_filter" in data:
+        instance.author_filter = data["author_filter"]
+    if "trigger_criteria" in data:
+        instance.trigger_criteria = data["trigger_criteria"]
+    if "is_active" in data and data["is_active"] is not None:
+        instance.is_active = data["is_active"]
+        instance.status = "active" if data["is_active"] else "paused"
+
+    instance.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(instance)
+    return _to_read(db, instance)
+
+
+@router.delete("/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_github_trigger(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> None:
+    instance = _load_github_trigger(db, ctx, trigger_id)
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    db.delete(instance)
+    db.commit()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def get_github_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_github_trigger(db, ctx, trigger_id)
+    return get_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+
+
+@router.put("/{trigger_id}/recap-config", response_model=TriggerRecapConfigRead)
+def put_github_trigger_recap_config(
+    trigger_id: int,
+    payload: TriggerRecapConfigWrite,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _load_github_trigger(db, ctx, trigger_id)
+    return put_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{trigger_id}/recap-config", status_code=status.HTTP_204_NO_CONTENT)
+def delete_github_trigger_recap_config(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> None:
+    _load_github_trigger(db, ctx, trigger_id)
+    delete_recap_config_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+    )
+    return None
+
+
+@router.post("/{trigger_id}/test-recap", response_model=TriggerRecapTestResponse)
+def post_github_trigger_test_recap(
+    trigger_id: int,
+    payload: TriggerRecapTestRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.read")),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _load_github_trigger(db, ctx, trigger_id)
+    return run_test_recap_for(
+        db,
+        tenant_id=ctx.tenant_id,
+        trigger_kind="github",
+        trigger_instance_id=trigger_id,
+        body=payload,
+    )

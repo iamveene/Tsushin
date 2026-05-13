@@ -96,7 +96,8 @@ def _compile_jsonb_sqlite(_type, _compiler, **_kw):
 
 
 from api.routes_playground import get_memory_layers
-from models import Base, Agent, Contact, ConversationThread, Memory
+from agent.skills.base import SkillResult
+from models import Base, Agent, AgentSkill, Contact, ConversationThread, Memory
 from services.playground_service import PlaygroundService
 from services.playground_thread_service import (
     PlaygroundThreadService,
@@ -140,6 +141,51 @@ def _seed_agent(session, isolation_mode: str) -> Agent:
     session.add_all([contact, agent])
     session.commit()
     return agent
+
+
+def _seed_audio_skill(session, agent_id: int, config: dict) -> AgentSkill:
+    skill = AgentSkill(
+        agent_id=agent_id,
+        skill_type="audio_transcript",
+        is_enabled=True,
+        config=config,
+    )
+    session.add(skill)
+    session.commit()
+    return skill
+
+
+def _install_playground_sentinel(monkeypatch, *, blocked: bool = False):
+    sentinel_module = types.ModuleType("services.sentinel_service")
+
+    class FakeSentinelService:
+        def __init__(self, db, tenant_id):
+            self.db = db
+            self.tenant_id = tenant_id
+
+        async def analyze_prompt(self, **_kwargs):
+            return SimpleNamespace(
+                is_threat_detected=blocked,
+                action="blocked" if blocked else "allowed",
+                detection_type="prompt_injection" if blocked else "none",
+                threat_reason="blocked transcript" if blocked else None,
+                threat_score=0.9 if blocked else 0,
+            )
+
+    sentinel_module.SentinelService = FakeSentinelService
+    monkeypatch.setitem(sys.modules, "services.sentinel_service", sentinel_module)
+
+    skill_context_module = types.ModuleType("services.skill_context_service")
+
+    class FakeSkillContextService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_agent_skill_context(self, _agent_id):
+            return {"formatted_context": None}
+
+    skill_context_module.SkillContextService = FakeSkillContextService
+    monkeypatch.setitem(sys.modules, "services.skill_context_service", skill_context_module)
 
 
 def _seed_threads(session, agent_id: int):
@@ -429,5 +475,164 @@ def test_playground_detect_only_keeps_thread_transcript_but_not_context_reuse(mo
         assert any(msg["content"] == "response for remember this exact token: alpha-123" for msg in history)
         assert "alpha-123" in captured_messages[0]
         assert "alpha-123" not in captured_messages[1]
+    finally:
+        session.close()
+
+
+def test_process_audio_transcript_only_missing_remember_persists_user_memory(monkeypatch):
+    session = _make_session()
+    try:
+        _install_playground_sentinel(monkeypatch, blocked=False)
+        agent = _seed_agent(session, "isolated")
+        _seed_audio_skill(session, agent.id, {"response_mode": "transcript_only"})
+
+        async def fake_process(self, inbound_msg, config):
+            return SkillResult(
+                success=True,
+                output="📝 Transcript:\n\nplayground remembered transcript",
+                metadata={
+                    "skill_type": "audio_transcript",
+                    "source": "audio_transcript",
+                    "response_mode": "transcript_only",
+                    "provider": "openai",
+                    "model": "whisper-1",
+                    "language": "auto",
+                    "original_message_id": inbound_msg.id,
+                    "transcript": "playground remembered transcript",
+                    "remember_transcript": True,
+                },
+                processed_content=None,
+            )
+
+        monkeypatch.setattr(
+            "agent.skills.audio_transcript.AudioTranscriptSkill.process",
+            fake_process,
+        )
+
+        service = PlaygroundService(session)
+        result = asyncio.run(
+            service.process_audio(
+                user_id=7,
+                agent_id=agent.id,
+                audio_data=b"fake-audio",
+                audio_format="webm",
+                tenant_id="tenant-playground",
+            )
+        )
+
+        memories = session.query(Memory).filter(Memory.agent_id == agent.id).all()
+        assert result["status"] == "success"
+        assert result["response_mode"] == "transcript_only"
+        assert len(memories) == 1
+        assert memories[0].sender_key == "sender_playground_user_7"
+        saved = memories[0].messages_json[0]
+        assert saved["role"] == "user"
+        assert saved["content"] == "playground remembered transcript"
+        assert saved["metadata"]["source"] == "audio_transcript"
+        assert saved["metadata"]["response_mode"] == "transcript_only"
+        assert saved["metadata"]["provider"] == "openai"
+        assert saved["metadata"]["model"] == "whisper-1"
+        assert saved["metadata"]["language"] == "auto"
+        assert saved["metadata"]["original_message_id"].startswith("playground_audio_7_")
+    finally:
+        session.close()
+
+
+def test_process_audio_transcript_only_remember_false_does_not_persist(monkeypatch):
+    session = _make_session()
+    try:
+        agent = _seed_agent(session, "isolated")
+        _seed_audio_skill(
+            session,
+            agent.id,
+            {"response_mode": "transcript_only", "remember_transcript": False},
+        )
+
+        async def fake_process(self, inbound_msg, config):
+            return SkillResult(
+                success=True,
+                output="📝 Transcript:\n\nplayground skipped transcript",
+                metadata={
+                    "skill_type": "audio_transcript",
+                    "source": "audio_transcript",
+                    "response_mode": "transcript_only",
+                    "provider": "openai",
+                    "model": "whisper-1",
+                    "language": "auto",
+                    "original_message_id": inbound_msg.id,
+                    "transcript": "playground skipped transcript",
+                    "remember_transcript": False,
+                },
+                processed_content=None,
+            )
+
+        monkeypatch.setattr(
+            "agent.skills.audio_transcript.AudioTranscriptSkill.process",
+            fake_process,
+        )
+
+        service = PlaygroundService(session)
+        result = asyncio.run(
+            service.process_audio(
+                user_id=7,
+                agent_id=agent.id,
+                audio_data=b"fake-audio",
+                audio_format="webm",
+                tenant_id="tenant-playground",
+            )
+        )
+
+        assert result["status"] == "success"
+        assert result["response_mode"] == "transcript_only"
+        assert session.query(Memory).filter(Memory.agent_id == agent.id).count() == 0
+    finally:
+        session.close()
+
+
+def test_process_audio_transcript_only_blocked_sentinel_does_not_persist(monkeypatch):
+    session = _make_session()
+    try:
+        _install_playground_sentinel(monkeypatch, blocked=True)
+        agent = _seed_agent(session, "isolated")
+        _seed_audio_skill(session, agent.id, {"response_mode": "transcript_only"})
+
+        async def fake_process(self, inbound_msg, config):
+            return SkillResult(
+                success=True,
+                output="📝 Transcript:\n\nblocked transcript should not persist",
+                metadata={
+                    "skill_type": "audio_transcript",
+                    "source": "audio_transcript",
+                    "response_mode": "transcript_only",
+                    "provider": "openai",
+                    "model": "whisper-1",
+                    "language": "auto",
+                    "original_message_id": inbound_msg.id,
+                    "transcript": "blocked transcript should not persist",
+                    "remember_transcript": True,
+                },
+                processed_content=None,
+            )
+
+        monkeypatch.setattr(
+            "agent.skills.audio_transcript.AudioTranscriptSkill.process",
+            fake_process,
+        )
+
+        service = PlaygroundService(session)
+        result = asyncio.run(
+            service.process_audio(
+                user_id=7,
+                agent_id=agent.id,
+                audio_data=b"fake-audio",
+                audio_format="webm",
+                tenant_id="tenant-playground",
+            )
+        )
+
+        assert result["status"] == "blocked"
+        assert result["message"] == "blocked transcript"
+        assert result["response_mode"] == "transcript_only"
+        assert session.query(Memory).filter(Memory.agent_id == agent.id).count() == 0
     finally:
         session.close()

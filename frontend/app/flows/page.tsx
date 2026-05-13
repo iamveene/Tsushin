@@ -13,7 +13,8 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -33,16 +34,27 @@ import {
   type CustomTool,
   type EditableStepData,
   type FlowStepConfig,
+  type FlowHeaderConfig,
+  type FlowSecretReferenceConfig,
+  type BrowserSelectorConfig,
+  type DataExtractionRuleConfig,
+  type DataParserRuleConfig,
+  type TriggerKind,
   flowNodeToEditable,
   editableToUpdatePayload,
   editableToCreatePayload
 } from '@/lib/client'
 import FlowsStatCards from '@/components/flows/FlowsStatCards'
 import TemplateTextarea from '@/components/flows/TemplateTextarea'
+import TemplateInput from '@/components/flows/TemplateInput'
+import SourceStepConfig from '@/components/flows/SourceStepConfig'
+import StepSamplePreview from '@/components/flows/StepSamplePreview'
+import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
 import {
   MessageIcon,
   BellIcon,
   LightningIcon,
+  ZapIcon,
   WrenchIcon,
   PlayIcon,
   CalendarIcon,
@@ -63,10 +75,14 @@ import {
   SlackIcon,
   DiscordIcon,
   WebhookIcon,
+  LockIcon,
   LightbulbIcon,
   FileTextIcon,
   ClipboardIcon,
   ShieldCheckIcon,
+  CodeIcon,
+  GitHubIcon,
+  DatabaseIcon,
   type IconProps
 } from '@/components/ui/icons'
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
@@ -87,18 +103,182 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'scheduled', label: 'Scheduled', Icon: CalendarIcon },
   { value: 'recurring', label: 'Recurring', Icon: RefreshIcon },
   { value: 'keyword', label: 'Keyword', Icon: HashIcon },  // BUG-336
+  { value: 'triggered', label: 'Triggered', Icon: ZapIcon },  // v0.7.0 Wave 2: Triggers \u2194 Flows unification
+]
+
+const FLOW_TRIGGER_KINDS: TriggerKind[] = ['email', 'jira', 'github', 'webhook']
+
+type TriggerOption = {
+  kind: TriggerKind
+  id: number
+  label: string
+  description: string
+  status: string
+  isActive: boolean
+}
+
+const TRIGGER_KIND_OPTIONS: { value: TriggerKind; label: string; description: string; Icon: React.FC<IconProps> }[] = [
+  { value: 'email', label: 'Gmail / Email', description: 'New messages or Gmail query matches', Icon: MailIcon },
+  { value: 'jira', label: 'Jira', description: 'JQL matches from a Jira integration', Icon: ClipboardIcon },
+  { value: 'github', label: 'GitHub', description: 'Repository webhook events', Icon: GitHubIcon },
+  { value: 'webhook', label: 'Webhook', description: 'Inbound webhook payloads', Icon: WebhookIcon },
 ]
 
 const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; description: string }[] = [
+  // v0.7.0 Wave 2: 'source' step is locked at position 1, max 1 per flow.
+  // The dropdown filters this out when a source step already exists; the
+  // step row hides Delete + reorder buttons when type === 'source'.
+  { value: 'source', label: 'Source', Icon: ZapIcon, description: 'Trigger event that wakes this flow' },
   { value: 'conversation', label: 'Conversation', Icon: MessageIcon, description: 'Multi-turn dialogue step' },
   { value: 'message', label: 'Message', Icon: EnvelopeIcon, description: 'Send a single message' },
   { value: 'notification', label: 'Notification', Icon: BellIcon, description: 'Send a notification' },
   { value: 'tool', label: 'Tool', Icon: WrenchIcon, description: 'Execute a tool or action' },
+  { value: 'password_vault', label: 'Password Vault', Icon: LockIcon, description: 'Resolve a stored vault reference programmatically' },
+  { value: 'browser_automation', label: 'Browser Automation', Icon: GlobeIcon, description: 'Open a site and perform explicit browser actions' },
+  { value: 'http_request', label: 'HTTP Request', Icon: CodeIcon, description: 'Call an API with editable URL, method, headers, body, and secrets' },
+  { value: 'data_transform', label: 'Data Transform', Icon: ClipboardIcon, description: 'Extract and normalize fields from prior step output' },
+  { value: 'financial_record_store', label: 'Financial Record Store', Icon: DatabaseIcon, description: 'Persist and dedupe financial records by kind' },
+  { value: 'financial_bill_store', label: 'Utility Bill Store', Icon: DatabaseIcon, description: 'Utility-specific alias for bill storage and dedupe' },
   { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
   { value: 'gate', label: 'Gate', Icon: ShieldCheckIcon, description: 'Conditional check \u2014 block or pass' },
 ]
+
+function isBoundSourceStep(step: { type?: string; config?: Record<string, unknown> | null }): boolean {
+  if (step.type !== 'source') return true
+  const config = step.config || {}
+  return isValidTriggerKind(config.trigger_kind) && Number(config.trigger_instance_id) > 0
+}
+
+function hasUnboundSourceStep(steps?: Array<{ type?: string; config?: Record<string, unknown> | null }>): boolean {
+  return Boolean(steps?.some(step => !isBoundSourceStep(step)))
+}
+
+function getAddableStepTypes(
+  steps: Array<{ type?: string }>,
+  allowSourceStep: boolean,
+): typeof STEP_TYPES {
+  return STEP_TYPES.filter((type) => (
+    type.value !== 'source'
+    || (allowSourceStep && !steps.some((s) => s.type === 'source'))
+  ))
+}
+
+function isValidTriggerKind(value: unknown): value is TriggerKind {
+  return typeof value === 'string' && FLOW_TRIGGER_KINDS.includes(value as TriggerKind)
+}
+
+function triggerKindLabel(kind: TriggerKind): string {
+  return TRIGGER_KIND_OPTIONS.find(option => option.value === kind)?.label || kind
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function triggerOptionFromRecord(kind: TriggerKind, raw: unknown): TriggerOption {
+  const record = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const id = Number(record.id || 0)
+  const integrationName = readString(record, 'integration_name')
+  const defaultLabel = `${triggerKindLabel(kind)} trigger #${id || '?'}`
+  let label = integrationName || defaultLabel
+  const details: string[] = []
+
+  if (kind === 'email') {
+    label = integrationName || readString(record, 'gmail_integration_name') || readString(record, 'gmail_account_email') || defaultLabel
+    const account = readString(record, 'gmail_account_email')
+    const query = readString(record, 'search_query')
+    if (account) details.push(account)
+    if (query) details.push(`Query: ${query}`)
+  } else if (kind === 'jira') {
+    const project = readString(record, 'project_key')
+    const jql = readString(record, 'jql')
+    label = integrationName || project || defaultLabel
+    if (project) details.push(`Project: ${project}`)
+    if (jql) details.push(`JQL: ${jql}`)
+  } else if (kind === 'github') {
+    const owner = readString(record, 'repo_owner')
+    const repo = readString(record, 'repo_name')
+    const repoLabel = owner && repo ? `${owner}/${repo}` : null
+    label = integrationName || repoLabel || defaultLabel
+    if (repoLabel) details.push(repoLabel)
+    const events = Array.isArray(record.events) ? record.events.filter((event): event is string => typeof event === 'string') : []
+    if (events.length > 0) details.push(`Events: ${events.join(', ')}`)
+  } else if (kind === 'webhook') {
+    const slug = readString(record, 'slug')
+    label = integrationName || slug || defaultLabel
+    if (slug) details.push(`/${slug}`)
+    const callback = readString(record, 'callback_url')
+    if (callback) details.push(callback)
+  }
+
+  const status = readString(record, 'status') || readString(record, 'health_status') || 'unknown'
+  const isActive = record.is_active === undefined ? status !== 'paused' : Boolean(record.is_active)
+
+  return {
+    kind,
+    id,
+    label,
+    description: details.join(' - ') || `ID ${id}`,
+    status,
+    isActive,
+  }
+}
+
+function buildBoundSourceStep(kind: TriggerKind, id: number): CreateFlowStepData {
+  return {
+    name: 'Source',
+    type: 'source',
+    position: 1,
+    config: {
+      trigger_kind: kind,
+      trigger_instance_id: id,
+    } as FlowStepConfig,
+  }
+}
+
+function upsertBoundSourceStep(
+  steps: CreateFlowStepData[] = [],
+  kind: TriggerKind,
+  id: number
+): CreateFlowStepData[] {
+  const nonSourceSteps = steps.filter(step => step.type !== 'source')
+  return [buildBoundSourceStep(kind, id), ...nonSourceSteps].map((step, index) => ({
+    ...step,
+    position: index + 1,
+  }))
+}
+
+function removeSourceSteps(steps: CreateFlowStepData[] = []): CreateFlowStepData[] {
+  return steps.filter(step => step.type !== 'source').map((step, index) => ({
+    ...step,
+    position: index + 1,
+  }))
+}
+
+function defaultRecurrenceRule(): NonNullable<CreateFlowData['recurrence_rule']> {
+  return {
+    frequency: 'daily',
+    interval: 1,
+    timezone: 'America/Sao_Paulo',
+  }
+}
+
+function toDateTimeLocalValue(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function fromDateTimeLocalValue(value: string): string | undefined {
+  if (!value) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
 
 const CHANNEL_OPTIONS: { value: 'whatsapp' | 'telegram' | 'slack' | 'discord' | 'webhook'; label: string; Icon: React.FC<IconProps>; activeColor: string; enabled: boolean; badge?: string }[] = [
   { value: 'whatsapp', label: 'WhatsApp', Icon: WhatsAppIcon, activeColor: 'text-green-400', enabled: true },
@@ -136,10 +316,1383 @@ const AVAILABLE_SKILLS: { value: string; label: string; Icon: React.FC<IconProps
   { value: 'scheduler', label: 'Scheduler', Icon: CalendarIcon, description: 'Manage calendar events and reminders' },
   { value: 'scheduler_query', label: 'Scheduler Query', Icon: CalendarDaysIcon, description: 'Query calendar events' },
   { value: 'gmail', label: 'Gmail', Icon: MailIcon, description: 'Send and manage emails' },
+  { value: 'password_vault', label: 'Password Vault', Icon: LockIcon, description: 'Resolve a stored password vault reference without placing secrets in the flow' },
   { value: 'knowledge_sharing', label: 'Knowledge Sharing', Icon: BookOpenIcon, description: 'Share knowledge base content' },
   { value: 'flows', label: 'Flows', Icon: RefreshIcon, description: 'Trigger and manage flows' },
   { value: 'automation', label: 'Automation', Icon: LightningIcon, description: 'Execute automation tasks' },
 ]
+
+function passwordVaultReferenceToToolArguments(next: PasswordVaultReferenceValue): Record<string, any> {
+  const integrationId = next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null
+  const vault = next.password_vault_vault_id || next.password_vault_vault_name || null
+  const itemRef = next.password_vault_item_id || next.password_vault_item_title || null
+  const fieldName = next.password_vault_field_name || null
+  return {
+    password_vault_integration_id: integrationId,
+    password_vault_provider: next.password_vault_provider || null,
+    password_vault_vault_id: next.password_vault_vault_id || null,
+    password_vault_vault_name: next.password_vault_vault_name || null,
+    password_vault_item_id: next.password_vault_item_id || null,
+    password_vault_item_title: next.password_vault_item_title || null,
+    password_vault_field_name: fieldName,
+    password_vault_reference: next.password_vault_reference || null,
+    action: fieldName ? 'read_item' : itemRef ? 'list_items' : 'test_connection',
+    integration_id: integrationId,
+    vault,
+    item_id: next.password_vault_item_id || null,
+    item_ref: itemRef,
+    field_name: fieldName,
+    reference: next.password_vault_reference || null,
+  }
+}
+
+function passwordVaultReferenceFromToolArguments(args: Record<string, any> | undefined | null): PasswordVaultReferenceValue {
+  const source = args || {}
+  const hasExplicitVaultId = Boolean(source.password_vault_vault_id || source.vault_id)
+  const hasExplicitItemId = Boolean(source.password_vault_item_id || source.item_id)
+  return {
+    password_vault_integration_id: source.password_vault_integration_id ?? source.integration_id ?? null,
+    password_vault_provider: source.password_vault_provider ?? null,
+    password_vault_vault_id: source.password_vault_vault_id ?? source.vault_id ?? null,
+    password_vault_vault_name: source.password_vault_vault_name ?? (!hasExplicitVaultId ? source.vault : null) ?? null,
+    password_vault_item_id: source.password_vault_item_id ?? source.item_id ?? null,
+    password_vault_item_title: source.password_vault_item_title ?? (!hasExplicitItemId ? source.item_ref : null) ?? null,
+    password_vault_field_name: source.password_vault_field_name ?? source.field_name ?? null,
+    password_vault_reference: source.password_vault_reference ?? source.reference ?? null,
+  }
+}
+
+const PASSWORD_VAULT_ACTION_OPTIONS = [
+  { value: 'read_item', label: 'Read field' },
+  { value: 'read_totp', label: 'Read TOTP' },
+  { value: 'compose_basic_auth', label: 'Compose Basic Auth' },
+  { value: 'list_items', label: 'List items' },
+  { value: 'test_connection', label: 'Test connection' },
+]
+
+function PasswordVaultStepConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const action = current.action || (current.field_name ? 'read_item' : 'test_connection')
+  const isCompose = action === 'compose_basic_auth'
+
+  function setAction(nextAction: string) {
+    if (nextAction === 'compose_basic_auth') {
+      onChange({
+        action: nextAction,
+        username_handle: current.username_handle || '{{vault_username.secret_handle}}',
+        password_handle: current.password_handle || '{{vault_password.secret_handle}}',
+        scheme: current.scheme || 'Basic',
+      })
+    } else {
+      onChange({ action: nextAction })
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Operation</label>
+        <select
+          value={action}
+          onChange={(event) => setAction(event.target.value)}
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+        >
+          {PASSWORD_VAULT_ACTION_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {isCompose ? (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Username handle</label>
+              <TemplateInput
+                value={current.username_handle || ''}
+                onValueChange={(value) => onChange({ username_handle: value })}
+                placeholder="{{vault_username.secret_handle}}"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                allSteps={allSteps}
+                currentStepPosition={currentStepPosition}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Password or customer-code handle</label>
+              <TemplateInput
+                value={current.password_handle || ''}
+                onValueChange={(value) => onChange({ password_handle: value })}
+                placeholder="{{vault_password.secret_handle}}"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                allSteps={allSteps}
+                currentStepPosition={currentStepPosition}
+              />
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Scheme</label>
+              <select
+                value={current.scheme || 'Basic'}
+                onChange={(event) => onChange({ scheme: event.target.value })}
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              >
+                <option value="Basic">Basic</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                Output Alias
+                <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
+              </label>
+              <CursorSafeInput
+                type="text"
+                value={current.output_alias || ''}
+                onValueChange={(value) => onChange({ output_alias: value })}
+                placeholder="e.g. vault_basic_auth"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <PasswordVaultReferencePicker
+            value={passwordVaultReferenceFromToolArguments(current)}
+            onChange={(next) => onChange({
+              ...next,
+              ...passwordVaultReferenceToToolArguments(next),
+              action,
+            })}
+            compact
+          />
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              Output Alias (optional)
+              <span className="text-slate-500 text-xs ml-2">For referencing in later steps</span>
+            </label>
+            <CursorSafeInput
+              type="text"
+              value={current.output_alias || ''}
+              onValueChange={(value) => onChange({ output_alias: value })}
+              placeholder="e.g. vault_secret"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+const HTTP_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+
+const BROWSER_ACTION_OPTIONS = [
+  { value: 'navigate', label: 'Navigate' },
+  { value: 'extract', label: 'Extract data' },
+  { value: 'click', label: 'Click' },
+  { value: 'fill', label: 'Fill form' },
+  { value: 'type_text', label: 'Type text' },
+  { value: 'wait_for', label: 'Wait for selector' },
+  { value: 'wait_for_url', label: 'Wait for URL' },
+  { value: 'dismiss_modal', label: 'Dismiss modal' },
+  { value: 'solve_captcha', label: 'Solve CAPTCHA' },
+  { value: 'execute_script', label: 'Execute script' },
+  { value: 'screenshot', label: 'Screenshot' },
+  { value: 'scroll', label: 'Scroll' },
+  { value: 'select_option', label: 'Select option' },
+  { value: 'hover', label: 'Hover' },
+  { value: 'get_attribute', label: 'Get attribute' },
+  { value: 'get_page_url', label: 'Get page URL' },
+  { value: 'go_back', label: 'Go back' },
+  { value: 'go_forward', label: 'Go forward' },
+  { value: 'open_tab', label: 'Open tab' },
+  { value: 'switch_tab', label: 'Switch tab' },
+  { value: 'close_tab', label: 'Close tab' },
+  { value: 'list_tabs', label: 'List tabs' },
+]
+
+const DATA_TRANSFORM_MODE_OPTIONS = [
+  { value: 'extract_fields', label: 'Extract fields' },
+  { value: 'parse_table', label: 'Parse table' },
+  { value: 'normalize_record', label: 'Normalize record' },
+  { value: 'filter_records', label: 'Filter records' },
+  { value: 'financial_parser', label: 'Financial parser' },
+  { value: 'record_mapping', label: 'Record mapping' },
+]
+
+const FINANCIAL_PARSER_MODE_OPTIONS = [
+  { value: '', label: 'None / generic rules' },
+  { value: 'consigaz_utility_bill', label: 'Consigaz utility bill' },
+  { value: 'medsenior_utility_bill', label: 'Medsenior utility bill' },
+]
+
+const FINANCIAL_RECORD_KIND_OPTIONS = [
+  { value: 'utility_bill', label: 'Utility bill' },
+  { value: 'tax_obligation', label: 'Tax obligation' },
+  { value: 'income_transfer', label: 'Income transfer' },
+  { value: 'investment_snapshot', label: 'Investment snapshot' },
+]
+
+function normalizeHeaderRows(value: FlowStepConfig['headers'] | FlowHeaderConfig[] | undefined): FlowHeaderConfig[] {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
+  }
+  return []
+}
+
+function coerceToolArgumentValue(key: string, value: string): string | number | boolean {
+  const normalized = key.trim()
+  if (['timeout_ms', 'x', 'y', 'delay_ms'].includes(normalized)) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : value
+  }
+  if (normalized === 'full_page') {
+    if (value.toLowerCase() === 'true') return true
+    if (value.toLowerCase() === 'false') return false
+  }
+  return value
+}
+
+function rowsToToolArguments(rows: FlowHeaderConfig[]): Record<string, any> {
+  return rows.reduce<Record<string, any>>((acc, row) => {
+    const key = (row.key || '').trim()
+    if (!key) return acc
+    acc[key] = coerceToolArgumentValue(key, row.value || '')
+    return acc
+  }, {})
+}
+
+function normalizeStringMapRows(value: Record<string, any> | undefined | null): FlowHeaderConfig[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
+}
+
+function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
+  return rows.reduce<Record<string, string>>((acc, row) => {
+    const key = (row.key || '').trim()
+    if (!key) return acc
+    acc[key] = row.value || ''
+    return acc
+  }, {})
+}
+
+function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
+  if (stepType === 'browser_automation') {
+    return {
+      mode: 'container',
+      provider_type: 'playwright',
+      timeout_seconds: 30,
+      use_tool_mode: true,
+      tool_action: 'navigate',
+      tool_arguments: {},
+      selectors: [],
+      browser_secret_references: [],
+      session_persistence: true,
+      session_ttl_seconds: 300,
+      browser_session_profile_name: '',
+    }
+  }
+  if (stepType === 'http_request') {
+    return {
+      method: 'GET',
+      http_method: 'GET',
+      headers: [],
+      http_headers: [],
+      secret_references: [],
+      http_secret_references: [],
+    }
+  }
+  if (stepType === 'data_transform') {
+    return {
+      transform_mode: 'extract_fields',
+      extraction_rules: [],
+      parser_rules: [],
+    }
+  }
+  if (stepType === 'financial_record_store' || stepType === 'financial_bill_store') {
+    return {
+      record_kind: 'utility_bill',
+      financial_record_dedupe_key: '{{provider}}:{{unit_id}}:{{reference_month}}',
+      financial_record_key_fields: 'provider, unit_id, reference_month',
+    }
+  }
+  if (stepType === 'password_vault') {
+    return { action: 'read_item' }
+  }
+  if (['message', 'notification', 'conversation'].includes(stepType)) {
+    return { channel: 'whatsapp' }
+  }
+  return {}
+}
+
+function BrowserAutomationConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const selectors = (current.selectors || []) as BrowserSelectorConfig[]
+  const secretReferences = (current.browser_secret_references || []) as FlowSecretReferenceConfig[]
+  const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
+
+  function updateSelector(index: number, update: BrowserSelectorConfig) {
+    const next = selectors.map((selector, selectorIndex) => selectorIndex === index ? { ...selector, ...update } : selector)
+    onChange({ selectors: next })
+  }
+
+  function updateSecretReference(index: number, update: FlowSecretReferenceConfig) {
+    const next = secretReferences.map((ref, refIndex) => refIndex === index ? { ...ref, ...update } : ref)
+    onChange({ browser_secret_references: next })
+  }
+
+  function setToolArgumentRows(next: FlowHeaderConfig[]) {
+    onChange({ tool_arguments: rowsToToolArguments(next) })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label htmlFor="browser-step-tool-action" className="block text-sm font-medium text-slate-300 mb-1.5">Tool action</label>
+          <select
+            id="browser-step-tool-action"
+            value={current.tool_action || 'navigate'}
+            onChange={(e) => onChange({
+              tool_action: e.target.value,
+              use_tool_mode: true,
+              tool_arguments: { ...(current.tool_arguments || {}), action: e.target.value },
+            })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {BROWSER_ACTION_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="browser-step-url" className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+          <TemplateInput
+            id="browser-step-url"
+            value={current.url || ''}
+            onValueChange={(value) => onChange({ url: value })}
+            placeholder="https://portal.example.com/login"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Prompt</label>
+        <TemplateTextarea
+          value={current.prompt || ''}
+          onValueChange={(value) => onChange({ prompt: value })}
+          rows={3}
+          placeholder="Describe the browser task. Keep credentials as references, not literal secrets."
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Mode</label>
+          <select
+            value={current.mode || 'container'}
+            onChange={(e) => onChange({ mode: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            <option value="container">Container</option>
+            <option value="host">Host</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
+          <CursorSafeInput
+            type="text"
+            value={current.provider_type || 'playwright'}
+            onValueChange={(value) => onChange({ provider_type: value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Timeout seconds</label>
+          <input
+            type="number"
+            min={5}
+            value={current.timeout_seconds || 30}
+            onChange={(e) => onChange({ timeout_seconds: Number(e.target.value) || 30 })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2">
+          <span className="text-sm font-medium text-slate-300">Persist browser session</span>
+          <input
+            type="checkbox"
+            checked={current.session_persistence !== false}
+            onChange={(e) => onChange({ session_persistence: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Session TTL seconds</label>
+          <input
+            type="number"
+            min={0}
+            value={current.session_ttl_seconds ?? 300}
+            onChange={(e) => onChange({ session_ttl_seconds: Number(e.target.value) || 0 })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser session profile</label>
+          <CursorSafeInput
+            type="text"
+            value={current.browser_session_profile_name || ''}
+            onValueChange={(value) => onChange({ browser_session_profile_name: value })}
+            placeholder="edp"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+          <p className="mt-1 text-xs text-slate-500">Named profile from Hub &gt; Tool APIs. Leave blank for a fresh isolated context.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser profile integration ID</label>
+          <input
+            type="number"
+            min={0}
+            value={current.browser_session_integration_id ?? ''}
+            onChange={(e) => onChange({ browser_session_integration_id: e.target.value ? Number(e.target.value) : null })}
+            placeholder="optional"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 md:col-span-2">
+          <span>
+            <span className="block text-sm font-medium text-slate-300">Optional browser action</span>
+            <span className="block text-xs text-slate-500">Use with step behavior “Continue” to mark expected portal/login misses as skipped.</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={current.optional === true || current.treat_failure_as_skipped === true}
+            onChange={(e) => onChange({ optional: e.target.checked, treat_failure_as_skipped: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Selectors and actions</label>
+          <button
+            type="button"
+            onClick={() => onChange({ selectors: [...selectors, { name: '', action: 'extract', selector: '', value: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add selector
+          </button>
+        </div>
+        {selectors.length === 0 ? (
+          <p className="text-xs text-slate-500">No selectors yet. Add explicit selectors when the action needs click, fill, or extract targets.</p>
+        ) : (
+          <div className="space-y-2">
+            {selectors.map((selector, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_120px_1.4fr_1fr_1.4fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={selector.name || ''}
+                  onValueChange={(value) => updateSelector(index, { name: value })}
+                  placeholder="field name"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <select
+                  value={selector.action || 'extract'}
+                  onChange={(e) => updateSelector(index, { action: e.target.value })}
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                >
+                  {BROWSER_ACTION_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <CursorSafeInput
+                  type="text"
+                  value={selector.selector || ''}
+                  onValueChange={(value) => updateSelector(index, { selector: value })}
+                  placeholder="CSS selector"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={selector.value || ''}
+                  onValueChange={(value) => updateSelector(index, { value })}
+                  placeholder="value"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={selector.fallback_selector || ''}
+                  onValueChange={(value) => updateSelector(index, { fallback_selector: value })}
+                  placeholder="fallback selector"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => onChange({ selectors: selectors.filter((_, selectorIndex) => selectorIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Tool arguments</label>
+          <button
+            type="button"
+            onClick={() => setToolArgumentRows([...toolArgumentRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add argument
+          </button>
+        </div>
+        {toolArgumentRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No extra arguments configured. Use this for script, timeout_ms, url_contains, state, attribute, wait_until, tab_id, fallback_selector, or fallback_script.</p>
+        ) : (
+          <div className="space-y-2">
+            {toolArgumentRows.map((argument, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={argument.key || ''}
+                  onValueChange={(value) => {
+                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setToolArgumentRows(next)
+                  }}
+                  placeholder="script"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateTextarea
+                  value={argument.value || ''}
+                  onValueChange={(value) => {
+                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setToolArgumentRows(next)
+                  }}
+                  rows={(argument.key || '').trim() === 'script' ? 5 : 1}
+                  placeholder="Argument value or {{previous_step.field}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-y font-mono"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setToolArgumentRows(toolArgumentRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SecretReferenceRows
+        references={secretReferences}
+        onAdd={() => onChange({ browser_secret_references: [...secretReferences, { target: '', key: '', reference: '' }] })}
+        onChange={updateSecretReference}
+        onRemove={(index) => onChange({ browser_secret_references: secretReferences.filter((_, refIndex) => refIndex !== index) })}
+      />
+    </div>
+  )
+}
+
+function HttpRequestConfigPanel({
+  config,
+  onChange,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const headers = normalizeHeaderRows(current.http_headers || current.headers)
+  const secretReferences = (current.http_secret_references || current.secret_references || []) as FlowSecretReferenceConfig[]
+  const method = current.http_method || current.method || 'GET'
+  const url = current.http_url || current.url || ''
+  const body = current.http_body || current.body || ''
+
+  function setHeaders(next: FlowHeaderConfig[]) {
+    onChange({ headers: next, http_headers: next })
+  }
+
+  function setSecretReferences(next: FlowSecretReferenceConfig[]) {
+    onChange({ secret_references: next, http_secret_references: next })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-[160px_1fr]">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Method</label>
+          <select
+            value={method}
+            onChange={(e) => onChange({ method: e.target.value, http_method: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {HTTP_METHOD_OPTIONS.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
+          <TemplateInput
+            value={url}
+            onValueChange={(value) => onChange({ url: value, http_url: value })}
+            placeholder="https://api.example.com/bills"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Headers</label>
+          <button
+            type="button"
+            onClick={() => setHeaders([...headers, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add header
+          </button>
+        </div>
+        {headers.length === 0 ? (
+          <p className="text-xs text-slate-500">No headers configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {headers.map((header, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={header.key || ''}
+                  onValueChange={(value) => {
+                    const next = headers.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setHeaders(next)
+                  }}
+                  placeholder="Header"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <CursorSafeInput
+                  type="text"
+                  value={header.value || ''}
+                  onValueChange={(value) => {
+                    const next = headers.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setHeaders(next)
+                  }}
+                  placeholder="Value or {{step_N.field}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setHeaders(headers.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Body</label>
+        <TemplateTextarea
+          value={body}
+          onValueChange={(value) => onChange({ body: value, http_body: value })}
+          rows={5}
+          placeholder='{"amount": "{{step_2.amount}}"}'
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <SecretReferenceRows
+        references={secretReferences}
+        onAdd={() => setSecretReferences([...secretReferences, { target: '', key: '', reference: '' }])}
+        onChange={(index, update) => {
+          const next = secretReferences.map((ref, refIndex) => refIndex === index ? { ...ref, ...update } : ref)
+          setSecretReferences(next)
+        }}
+        onRemove={(index) => setSecretReferences(secretReferences.filter((_, refIndex) => refIndex !== index))}
+      />
+    </div>
+  )
+}
+
+function DataTransformConfigPanel({
+  config,
+  allSteps,
+  currentStepPosition,
+  onChange,
+}: {
+  config: FlowStepConfig | undefined
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+  onChange: (update: Partial<FlowStepConfig>) => void
+}) {
+  const current = config || {}
+  const extractionRules = (current.extraction_rules || []) as DataExtractionRuleConfig[]
+  const parserRules = (current.parser_rules || []) as DataParserRuleConfig[]
+  const sourceStepRows = normalizeStringMapRows(current.source_steps)
+  const rawHandleRows = normalizeStringMapRows(current.raw_response_handles)
+  const recordMappingRows = normalizeStringMapRows(current.record_mapping)
+  const recordKind = current.record_kind || 'utility_bill'
+
+  function setSourceStepRows(next: FlowHeaderConfig[]) {
+    onChange({ source_steps: rowsToStringMap(next) })
+  }
+
+  function setRawHandleRows(next: FlowHeaderConfig[]) {
+    onChange({ raw_response_handles: rowsToStringMap(next) })
+  }
+
+  function setRecordMappingRows(next: FlowHeaderConfig[]) {
+    onChange({ record_mapping: rowsToStringMap(next) })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source step</label>
+          <TemplateInput
+            value={current.source_step || ''}
+            onValueChange={(value) => onChange({ source_step: value })}
+            placeholder="step_1 or browser_fetch"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Transform mode</label>
+          <select
+            value={current.transform_mode || 'extract_fields'}
+            onChange={(e) => onChange({ transform_mode: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {DATA_TRANSFORM_MODE_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source path</label>
+          <CursorSafeInput
+            type="text"
+            value={current.source_path || current.json_path || ''}
+            onValueChange={(value) => onChange({ source_path: value, json_path: value })}
+            placeholder="json.data.rows[0] or metadata.result"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Financial parser</label>
+          <select
+            value={current.financial_parser_mode || ''}
+            onChange={(event) => {
+              const value = event.target.value
+              onChange({
+                financial_parser_mode: value || null,
+                transform_mode: value ? 'financial_parser' : (current.transform_mode || 'extract_fields'),
+              })
+            }}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            {FINANCIAL_PARSER_MODE_OPTIONS.map(option => (
+              <option key={option.value || 'none'} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Named source steps</label>
+          <button
+            type="button"
+            onClick={() => setSourceStepRows([...sourceStepRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add source
+          </button>
+        </div>
+        {sourceStepRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No named source steps configured. Use this when a transform combines more than one previous step.</p>
+        ) : (
+          <div className="space-y-2">
+            {sourceStepRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = sourceStepRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setSourceStepRows(next)
+                  }}
+                  placeholder="boleto, nota, rows"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = sourceStepRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setSourceStepRows(next)
+                  }}
+                  placeholder="previous step name or {{step.output}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setSourceStepRows(sourceStepRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-4">
+        <label className="text-sm font-medium text-slate-300">Financial record metadata</label>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Record kind</label>
+            <select
+              value={recordKind}
+              onChange={(event) => onChange({ record_kind: event.target.value })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            >
+              {FINANCIAL_RECORD_KIND_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+              <option value="generic">Generic</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Provider</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_provider || ''}
+              onValueChange={(value) => onChange({ financial_provider: value })}
+              placeholder="consigaz, moderna, edp"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Automation key</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_automation_key || ''}
+              onValueChange={(value) => onChange({ financial_automation_key: value })}
+              placeholder="provider_unit_period_kind"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Unit</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_unit_id || ''}
+              onValueChange={(value) => onChange({ financial_unit_id: value })}
+              placeholder="unit, account, CPF, plate, installation"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Asset</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_asset || ''}
+              onValueChange={(value) => onChange({ financial_asset: value })}
+              placeholder="property name, vehicle plate, broker account"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Address / issuer context</label>
+            <CursorSafeInput
+              type="text"
+              value={current.financial_address || ''}
+              onValueChange={(value) => onChange({ financial_address: value })}
+              placeholder="Provider address or issuer context"
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={current.emit_raw_bill_handle ?? recordKind === 'utility_bill'}
+              onChange={(event) => onChange({ emit_raw_bill_handle: event.target.checked })}
+              className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
+            />
+            Emit raw bill handle
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={current.emit_financial_record_handle ?? true}
+              onChange={(event) => onChange({ emit_financial_record_handle: event.target.checked })}
+              className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
+            />
+            Emit financial record handle
+          </label>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Record mapping</label>
+          <button
+            type="button"
+            onClick={() => setRecordMappingRows([...recordMappingRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add mapping
+          </button>
+        </div>
+        {recordMappingRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No mapping configured. Extraction rules will be used directly.</p>
+        ) : (
+          <div className="space-y-2">
+            {recordMappingRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = recordMappingRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setRecordMappingRows(next)
+                  }}
+                  placeholder="reference_month"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = recordMappingRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setRecordMappingRows(next)
+                  }}
+                  placeholder="{{extract_due_date.metadata.text}} or literal"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setRecordMappingRows(recordMappingRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Advanced response references</label>
+          <button
+            type="button"
+            onClick={() => setRawHandleRows([...rawHandleRows, { key: '', value: '' }])}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add handle
+          </button>
+        </div>
+        {rawHandleRows.length === 0 ? (
+          <p className="text-xs text-slate-500">No direct response references configured. Most flows you build in the UI should reference source steps instead.</p>
+        ) : (
+          <div className="space-y-2">
+            {rawHandleRows.map((row, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                <CursorSafeInput
+                  type="text"
+                  value={row.key || ''}
+                  onValueChange={(value) => {
+                    const next = rawHandleRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                    setRawHandleRows(next)
+                  }}
+                  placeholder="boleto_json"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                />
+                <TemplateInput
+                  value={row.value || ''}
+                  onValueChange={(value) => {
+                    const next = rawHandleRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                    setRawHandleRows(next)
+                  }}
+                  placeholder="{{fetch_boletos.raw_response_handle}}"
+                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={allSteps}
+                  currentStepPosition={currentStepPosition}
+                />
+                <button
+                  type="button"
+                  onClick={() => setRawHandleRows(rawHandleRows.filter((_, itemIndex) => itemIndex !== index))}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Extraction rules</label>
+          <button
+            type="button"
+            onClick={() => onChange({ extraction_rules: [...extractionRules, { target: '', source_step: '', path: '', value: '', pattern: '', default: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add rule
+          </button>
+        </div>
+        {extractionRules.length === 0 ? (
+          <p className="text-xs text-slate-500">No extraction rules configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {extractionRules.map((rule, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_1.25fr_1.25fr_1fr_1fr_auto]">
+                {([
+                  ['target', 'target/field'],
+                  ['source_step', 'source step'],
+                  ['path', 'path/selector'],
+                  ['value', 'literal value'],
+                  ['pattern', 'pattern'],
+                  ['default', 'default'],
+                ] as const).map(([key, placeholder]) => (
+                  <CursorSafeInput
+                    key={key}
+                    type="text"
+                    value={
+                      key === 'target'
+                        ? (rule.target || rule.field || '')
+                        : key === 'source_step'
+                          ? (rule.source_step || rule.source || '')
+                          : key === 'path'
+                            ? (rule.path || rule.json_path || rule.selector || '')
+                            : String(rule[key] ?? '')
+                    }
+                    onValueChange={(value) => {
+                      const next = extractionRules.map((item, itemIndex) => {
+                        if (itemIndex !== index) return item
+                        if (key === 'target') return { ...item, target: value, field: value }
+                        if (key === 'source_step') return { ...item, source_step: value, source: value }
+                        if (key === 'path') return { ...item, path: value, selector: value }
+                        return { ...item, [key]: value }
+                      })
+                      onChange({ extraction_rules: next })
+                    }}
+                    placeholder={placeholder}
+                    className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onChange({ extraction_rules: extractionRules.filter((_, itemIndex) => itemIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">Parser rules</label>
+          <button
+            type="button"
+            onClick={() => onChange({ parser_rules: [...parserRules, { field: '', parser: 'text', options: '' }] })}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Add parser
+          </button>
+        </div>
+        {parserRules.length === 0 ? (
+          <p className="text-xs text-slate-500">No parser rules configured.</p>
+        ) : (
+          <div className="space-y-2">
+            {parserRules.map((rule, index) => (
+              <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_2fr_auto]">
+                {(['field', 'parser', 'options'] as const).map(key => (
+                  <CursorSafeInput
+                    key={key}
+                    type="text"
+                    value={rule[key] || ''}
+                    onValueChange={(value) => {
+                      const next = parserRules.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item)
+                      onChange({ parser_rules: next })
+                    }}
+                    placeholder={key}
+                    className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => onChange({ parser_rules: parserRules.filter((_, itemIndex) => itemIndex !== index) })}
+                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FinancialRecordStoreConfigPanel({
+  config,
+  onChange,
+  isUtilityAlias = false,
+  allSteps,
+  currentStepPosition,
+}: {
+  config: FlowStepConfig | undefined
+  onChange: (update: Partial<FlowStepConfig>) => void
+  isUtilityAlias?: boolean
+  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
+  currentStepPosition: number
+}) {
+  const current = config || {}
+  const recordKind = isUtilityAlias ? 'utility_bill' : (current.record_kind || 'utility_bill')
+  const sourceStep = current.financial_record_source_step || current.financial_source_step || current.source_step || ''
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Source step</label>
+          <TemplateInput
+            value={sourceStep}
+            onValueChange={(value) => onChange({
+              source_step: value,
+              financial_record_source_step: value,
+              financial_source_step: value,
+            })}
+            placeholder="step_2 or normalized_record"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            allSteps={allSteps}
+            currentStepPosition={currentStepPosition}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Record kind</label>
+          <select
+            value={recordKind}
+            disabled={isUtilityAlias}
+            onChange={(e) => onChange({ record_kind: e.target.value })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none disabled:opacity-60"
+          >
+            {FINANCIAL_RECORD_KIND_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          {isUtilityAlias && (
+            <p className="text-xs text-slate-500 mt-1">Utility Bill Store is an alias for Financial Record Store with utility_bill kind.</p>
+          )}
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Automation key</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_automation_key || current.financial_automation_template || ''}
+            onValueChange={(value) => onChange({ financial_automation_key: value })}
+            placeholder="provider_unit_invoice"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_provider || ''}
+            onValueChange={(value) => onChange({ financial_provider: value })}
+            placeholder="provider slug"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Unit</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_unit_id || ''}
+            onValueChange={(value) => onChange({ financial_unit_id: value })}
+            placeholder="unit, account, CPF, CNPJ, or asset id"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Asset</label>
+          <CursorSafeInput
+            type="text"
+            value={current.financial_asset || ''}
+            onValueChange={(value) => onChange({ financial_asset: value })}
+            placeholder="apartment, vehicle plate, broker account, etc."
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Dedupe key</label>
+        <TemplateInput
+          value={current.financial_record_dedupe_key || ''}
+          onValueChange={(value) => onChange({ financial_record_dedupe_key: value })}
+          placeholder="{{provider}}:{{unit_id}}:{{reference_month}}"
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Dedupe fields</label>
+        <CursorSafeInput
+          type="text"
+          value={current.financial_record_key_fields || ''}
+          onValueChange={(value) => onChange({ financial_record_key_fields: value })}
+          placeholder="provider, unit_id, reference_month"
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Record payload mapping</label>
+        <TemplateTextarea
+          value={current.financial_record_payload || ''}
+          onValueChange={(value) => onChange({ financial_record_payload: value })}
+          rows={4}
+          placeholder='{"amount_cents": "{{step_2.amount_cents}}", "due_date": "{{step_2.due_date}}"}'
+          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+          allSteps={allSteps}
+          currentStepPosition={currentStepPosition}
+        />
+      </div>
+    </div>
+  )
+}
+
+function SecretReferenceRows({
+  references,
+  onAdd,
+  onChange,
+  onRemove,
+}: {
+  references: FlowSecretReferenceConfig[]
+  onAdd: () => void
+  onChange: (index: number, update: FlowSecretReferenceConfig) => void
+  onRemove: (index: number) => void
+}) {
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium text-slate-300">Secret references</label>
+        <button type="button" onClick={onAdd} className="text-xs text-cyan-400 hover:text-cyan-300">
+          + Add secret
+        </button>
+      </div>
+      {references.length === 0 ? (
+        <p className="text-xs text-slate-500">No secret references configured. Use references instead of literal credentials.</p>
+      ) : (
+        <div className="space-y-2">
+          {references.map((ref, index) => (
+            <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_2fr_auto]">
+              <CursorSafeInput
+                type="text"
+                value={ref.target || ''}
+                onValueChange={(value) => onChange(index, { target: value })}
+                placeholder="target e.g. header.Authorization"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <CursorSafeInput
+                type="text"
+                value={ref.key || ''}
+                onValueChange={(value) => onChange(index, { key: value })}
+                placeholder="field key"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <CursorSafeInput
+                type="text"
+                value={ref.reference || ''}
+                onValueChange={(value) => onChange(index, { reference: value })}
+                placeholder="vault/reference/path"
+                className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => onRemove(index)}
+                className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 type SortField = 'id' | 'name' | 'flow_type' | 'is_active' | 'node_count' | 'execution_method' | 'updated_at' | 'last_executed_at'
 type SortDirection = 'asc' | 'desc'
@@ -149,6 +1702,7 @@ type SortDirection = 'asc' | 'desc'
 export default function FlowsPage() {
   const toast = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   // BUG-610 FIX: Gate every write control (Create, From Template, Edit,
   // Run, Delete, Bulk actions) on flows.write so a read-only user gets
   // a clean list view instead of buttons that 403 on click.
@@ -191,6 +1745,89 @@ export default function FlowsPage() {
   // Selected rows for bulk actions
   const [selectedFlows, setSelectedFlows] = useState<Set<number>>(new Set())
   const [bulkActionLoading, setBulkActionLoading] = useState(false)
+
+  // v0.7.0 Wave 4: deep-link prefill for "Create flow from this trigger".
+  // The trigger detail page lives at /hub/triggers/{kind}/{id} and CTAs link to
+  //   /flows?source_trigger_kind={kind}&source_trigger_id={id}
+  // When both params are present and valid we auto-open the Create modal,
+  // pre-fill execution_method='triggered', and insert a Source step at
+  // position 0 with the trigger binding baked into config_json.
+  const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
+  const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
+  const prefillKind: TriggerKind | null =
+    prefillKindParam && ['jira', 'email', 'github', 'webhook'].includes(prefillKindParam)
+      ? prefillKindParam
+      : null
+  const prefillTriggerId =
+    Number.isFinite(prefillTriggerIdParam) && prefillTriggerIdParam > 0 ? prefillTriggerIdParam : 0
+  const prefillReady = Boolean(prefillKind && prefillTriggerId > 0)
+
+  const [prefillTriggerName, setPrefillTriggerName] = useState<string>('')
+  const [prefillTriggerLoaded, setPrefillTriggerLoaded] = useState(false)
+  const prefillConsumedRef = useRef(false)
+
+  // ?edit={flow_id} deep link from Wired Flows rows: open the EditFlowModal
+  const editParamRaw = searchParams?.get('edit') || ''
+  const editParam = Number(editParamRaw)
+  const editParamValid = Number.isFinite(editParam) && editParam > 0
+  const editConsumedRef = useRef(false)
+
+  useEffect(() => {
+    if (!editParamValid) return
+    if (editConsumedRef.current) return
+    editConsumedRef.current = true
+    setEditingFlowId(editParam)
+    // Strip ?edit= so back/forward + refresh don't re-trigger the modal.
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('edit')
+      window.history.replaceState(null, '', url.toString())
+    }
+  }, [editParamValid, editParam])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!prefillReady || !prefillKind) return
+    setPrefillTriggerLoaded(false)
+    api.getTriggerDetail(prefillKind, prefillTriggerId)
+      .then((d) => {
+        if (cancelled) return
+        const name = (d as { integration_name?: string }).integration_name || ''
+        setPrefillTriggerName(name)
+        setPrefillTriggerLoaded(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPrefillTriggerName('')
+        setPrefillTriggerLoaded(true)
+      })
+    return () => { cancelled = true }
+  }, [prefillReady, prefillKind, prefillTriggerId])
+
+  useEffect(() => {
+    if (!prefillReady) return
+    if (prefillConsumedRef.current) return
+    if (!canWriteFlows) {
+      // Read-only users can't create flows; surface a toast and clear the params.
+      toast.warning('Insufficient permissions', 'You need flows.write to create flows from a trigger.')
+      prefillConsumedRef.current = true
+      clearPrefillParams()
+      return
+    }
+    // Wait for trigger name to resolve so the auto-filled flow name carries
+    // the integration label rather than `${Kind} #${id}`.
+    if (!prefillTriggerLoaded) return
+    prefillConsumedRef.current = true
+    setShowCreateFlow(true)
+  }, [prefillReady, canWriteFlows, prefillTriggerLoaded, toast])
+
+  function clearPrefillParams() {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('source_trigger_kind')
+    url.searchParams.delete('source_trigger_id')
+    window.history.replaceState(null, '', url.toString())
+  }
 
   useEffect(() => {
     loadData()
@@ -790,10 +2427,11 @@ export default function FlowsPage() {
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-medium text-white group-hover:text-teal-400 transition-colors">
                                   {flow.name}
                                 </span>
+                                <TriggerOriginBadge flow={flow} />
                                 {threadCount > 0 && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                     <span className="relative flex h-1.5 w-1.5">
@@ -816,11 +2454,13 @@ export default function FlowsPage() {
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleToggleActive(flow)}
+                              onClick={() => canWriteFlows && handleToggleActive(flow)}
+                              disabled={!canWriteFlows}
+                              title={canWriteFlows ? (flow.is_active ? 'Click to disable' : 'Click to enable') : 'Requires flows.write permission'}
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all ${flow.is_active
                                   ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
                                   : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
-                                }`}
+                                } ${!canWriteFlows ? 'opacity-60 cursor-not-allowed' : ''}`}
                             >
                               <span className={`w-1.5 h-1.5 rounded-full ${flow.is_active ? 'bg-emerald-400' : 'bg-slate-500'}`} />
                               {flow.is_active ? 'Enabled' : 'Disabled'}
@@ -881,15 +2521,29 @@ export default function FlowsPage() {
                                     </svg>
                                   )}
                                 </button>
-                                <button
-                                  onClick={() => handleDeleteFlow(flow.id)}
-                                  className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                                  title="Delete"
-                                >
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
+                                {(() => {
+                                  const canDelete = flow.deletable_by_tenant !== false
+                                  return (
+                                    <button
+                                      onClick={() => canDelete && handleDeleteFlow(flow.id)}
+                                      disabled={!canDelete}
+                                      className={`p-2 rounded-lg transition-colors ${
+                                        canDelete
+                                          ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+                                          : 'text-red-400/30 cursor-not-allowed'
+                                      }`}
+                                      title={
+                                        canDelete
+                                          ? 'Delete'
+                                          : 'Auto-generated from a trigger — delete the trigger to remove this flow.'
+                                      }
+                                    >
+                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  )
+                                })()}
                               </>
                             )}
                           </div>
@@ -995,7 +2649,10 @@ export default function FlowsPage() {
                     <tr key={run.id} className="hover:bg-slate-700/20 transition-colors">
                       <td className="px-4 py-3 text-sm text-slate-200">#{run.id}</td>
                       <td className="px-4 py-3 text-sm text-slate-300">
-                        Flow #{run.flow_definition_id}
+                        <span className="block max-w-[18rem] truncate text-slate-100" title={run.flow_name || run.flow_definition_name || 'Unnamed flow'}>
+                          {run.flow_name || run.flow_definition_name || 'Unnamed flow'}
+                        </span>
+                        <span className="text-xs text-slate-500">#{run.flow_definition_id}</span>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={run.status} />
@@ -1073,9 +2730,17 @@ export default function FlowsPage() {
           personas={personas}
           customTools={customTools}
           customSkills={customSkills}
-          onClose={() => setShowCreateFlow(false)}
+          // v0.7.0 Wave 4: Trigger prefill from deep link
+          prefillTriggerKind={prefillReady ? prefillKind : null}
+          prefillTriggerId={prefillReady ? prefillTriggerId : 0}
+          prefillTriggerName={prefillTriggerName}
+          onClose={() => {
+            setShowCreateFlow(false)
+            clearPrefillParams()
+          }}
           onSuccess={() => {
             setShowCreateFlow(false)
+            clearPrefillParams()
             loadData()
           }}
         />
@@ -1170,6 +2835,36 @@ function TypeBadge({ type }: { type: FlowType }) {
   )
 }
 
+// v0.7.0 release-finishing — system-managed (auto-generated from a trigger)
+// flow badge. Trigger wizards mint a flow with `is_system_owned=true`; this
+// chip surfaces the origin so operators don't mistake it for a hand-built
+// flow. Renders nothing for user-authored flows.
+const TRIGGER_KIND_BADGE: Record<
+  'jira' | 'email' | 'github' | 'webhook',
+  { label: string; classes: string; Icon: React.FC<IconProps> }
+> = {
+  jira:     { label: 'Jira Trigger',     classes: 'bg-blue-500/10 border-blue-500/30 text-blue-300',         Icon: CodeIcon },
+  email:    { label: 'Email Trigger',    classes: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300', Icon: EnvelopeIcon },
+  github:   { label: 'GitHub Trigger',   classes: 'bg-violet-500/10 border-violet-500/30 text-violet-300',   Icon: GitHubIcon },
+  webhook:  { label: 'Webhook Trigger',  classes: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',         Icon: WebhookIcon },
+}
+
+function TriggerOriginBadge({ flow }: { flow: FlowDefinition }) {
+  if (!flow.is_system_owned) return null
+  const kind = (flow.system_trigger_kind || 'webhook') as keyof typeof TRIGGER_KIND_BADGE
+  const cfg = TRIGGER_KIND_BADGE[kind] || TRIGGER_KIND_BADGE.webhook
+  const Icon = cfg.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full border ${cfg.classes}`}
+      title={`Auto-generated from ${kind} trigger — editable, but not deletable. Delete the trigger to remove this flow.`}
+    >
+      <Icon size={12} />
+      {cfg.label}
+    </span>
+  )
+}
+
 function ExecutionBadge({ method }: { method: ExecutionMethod }) {
   const config: Record<string, { label: string; color: string; icon: JSX.Element }> = {
     immediate: {
@@ -1191,6 +2886,11 @@ function ExecutionBadge({ method }: { method: ExecutionMethod }) {
       label: 'Keyword',
       color: 'text-cyan-400',
       icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
+    },
+    triggered: {
+      label: 'Triggered',
+      color: 'text-emerald-400',
+      icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 3L4 14h7l-1 7 9-11h-7l1-7z" /></svg>
     },
   }
 
@@ -1228,6 +2928,7 @@ function StatusBadge({ status }: { status: string }) {
     pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
     running: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
     completed: 'bg-green-500/20 text-green-400 border-green-500/30',
+    skipped: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
     failed: 'bg-red-500/20 text-red-400 border-red-500/30',
     cancelled: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
   }
@@ -1366,7 +3067,7 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
 // ==================== CREATE FLOW MODAL ====================
 
-function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess }: {
+function CreateFlowModal({ agents, contacts, personas, customTools, customSkills, onClose, onSuccess, prefillTriggerKind = null, prefillTriggerId = 0, prefillTriggerName = '' }: {
   agents: Agent[]
   contacts: Contact[]
   personas: Persona[]
@@ -1374,43 +3075,260 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
   customSkills?: any[]
   onClose: () => void
   onSuccess: () => void
+  // v0.7.0 Wave 4: when invoked from a trigger detail page, pre-build a
+  // Source-only flow draft and auto-bind on success.
+  prefillTriggerKind?: TriggerKind | null
+  prefillTriggerId?: number
+  prefillTriggerName?: string
 }) {
   const toast = useToast()
   const [step, setStep] = useState<'config' | 'steps'>('config')
-  const [flowData, setFlowData] = useState<CreateFlowData>({
-    name: '',
-    description: '',
-    flow_type: 'workflow',
-    execution_method: 'immediate',
-    steps: []
-  })
+  const hasTriggerPrefill = Boolean(prefillTriggerKind && prefillTriggerId > 0)
+  const initialTriggerKind = prefillTriggerKind || 'email'
+  const initialTriggerId = hasTriggerPrefill ? prefillTriggerId : 0
+  const initialFlowData: CreateFlowData = useMemo(() => {
+    if (hasTriggerPrefill && prefillTriggerKind) {
+      const kindLabel = triggerKindLabel(prefillTriggerKind)
+      const namePart = prefillTriggerName ? `: ${prefillTriggerName}` : ` #${prefillTriggerId}`
+      return {
+        name: `${kindLabel}${namePart}`,
+        description: `Auto-prefilled from ${kindLabel} trigger ${prefillTriggerId}.`,
+        flow_type: 'workflow',
+        execution_method: 'triggered',
+        steps: [buildBoundSourceStep(prefillTriggerKind, prefillTriggerId)],
+      }
+    }
+    return {
+      name: '',
+      description: '',
+      flow_type: 'workflow',
+      execution_method: 'immediate',
+      steps: [],
+    }
+  }, [hasTriggerPrefill, prefillTriggerId, prefillTriggerKind, prefillTriggerName])
+  const [flowData, setFlowData] = useState<CreateFlowData>(initialFlowData)
+  const [selectedTriggerKind, setSelectedTriggerKind] = useState<TriggerKind>(initialTriggerKind)
+  const [selectedTriggerId, setSelectedTriggerId] = useState<number>(initialTriggerId)
+  const [triggerOptions, setTriggerOptions] = useState<TriggerOption[]>(() => (
+    hasTriggerPrefill && prefillTriggerKind
+      ? [{
+        kind: prefillTriggerKind,
+        id: prefillTriggerId,
+        label: prefillTriggerName || `${triggerKindLabel(prefillTriggerKind)} trigger #${prefillTriggerId}`,
+        description: `ID ${prefillTriggerId}`,
+        status: 'loading',
+        isActive: true,
+      }]
+      : []
+  ))
+  const [triggerOptionsLoading, setTriggerOptionsLoading] = useState(false)
+  const [triggerOptionsError, setTriggerOptionsError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const flowDataRef = useRef(flowData)
   flowDataRef.current = flowData
   // Flush callbacks registered by each StepConfigForm
   const createFlushRef = useRef<Map<number, () => void>>(new Map())
+  const selectedTrigger = triggerOptions.find(option => option.kind === selectedTriggerKind && option.id === selectedTriggerId) || null
+  const hasSelectedTrigger = flowData.execution_method === 'triggered' && selectedTriggerId > 0
+
+  const loadTriggerOptions = useCallback(async (kind: TriggerKind) => {
+    setTriggerOptionsLoading(true)
+    setTriggerOptionsError(null)
+    try {
+      let records: unknown[] = []
+      if (kind === 'email') {
+        records = await api.listEmailTriggers()
+      } else if (kind === 'jira') {
+        records = await api.listJiraTriggers()
+      } else if (kind === 'github') {
+        records = await api.listGitHubTriggers()
+      } else if (kind === 'webhook') {
+        records = await api.listWebhookIntegrations()
+      }
+      setTriggerOptions(records.map(record => triggerOptionFromRecord(kind, record)).filter(option => option.id > 0))
+    } catch (error) {
+      console.error('Failed to load trigger options:', error)
+      setTriggerOptionsError(error instanceof Error ? error.message : 'Failed to load triggers')
+    } finally {
+      setTriggerOptionsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (flowData.execution_method !== 'triggered') return
+    loadTriggerOptions(selectedTriggerKind)
+  }, [flowData.execution_method, loadTriggerOptions, selectedTriggerKind])
+
+  useEffect(() => {
+    if (flowData.execution_method !== 'triggered') return
+
+    if (selectedTriggerId > 0) {
+      setFlowData(prev => {
+        const nextSteps = upsertBoundSourceStep(prev.steps || [], selectedTriggerKind, selectedTriggerId)
+        const selectedName = selectedTrigger?.label || `${triggerKindLabel(selectedTriggerKind)} trigger #${selectedTriggerId}`
+        return {
+          ...prev,
+          name: prev.name.trim() ? prev.name : `${triggerKindLabel(selectedTriggerKind)}: ${selectedName}`,
+          description: prev.description?.trim()
+            ? prev.description
+            : `Auto-prefilled from ${triggerKindLabel(selectedTriggerKind)} trigger ${selectedTriggerId}.`,
+          steps: nextSteps,
+        }
+      })
+    } else {
+      setFlowData(prev => ({
+        ...prev,
+        steps: removeSourceSteps(prev.steps || []),
+      }))
+    }
+  }, [flowData.execution_method, selectedTrigger, selectedTriggerId, selectedTriggerKind])
+
+  function handleExecutionMethodChange(method: ExecutionMethod) {
+    setFlowData(prev => {
+      const next: CreateFlowData = {
+        ...prev,
+        execution_method: method,
+      }
+
+      if (method === 'triggered') {
+        next.steps = selectedTriggerId > 0
+          ? upsertBoundSourceStep(prev.steps || [], selectedTriggerKind, selectedTriggerId)
+          : removeSourceSteps(prev.steps || [])
+      } else {
+        next.steps = removeSourceSteps(prev.steps || [])
+      }
+
+      if (method === 'recurring' && !next.recurrence_rule) {
+        next.recurrence_rule = defaultRecurrenceRule()
+      }
+
+      return next
+    })
+  }
+
+  function handleTriggerKindChange(kind: TriggerKind) {
+    setSelectedTriggerKind(kind)
+    setSelectedTriggerId(0)
+    setFlowData(prev => ({
+      ...prev,
+      steps: removeSourceSteps(prev.steps || []),
+    }))
+  }
+
+  function validateFlowConfig(data: CreateFlowData = flowData): boolean {
+    if (!data.name.trim()) {
+      toast.warning('Validation', 'Please provide a flow name')
+      return false
+    }
+
+    if (data.execution_method === 'scheduled') {
+      if (!data.scheduled_at || Number.isNaN(Date.parse(data.scheduled_at))) {
+        toast.warning('Schedule time required', 'Choose when this scheduled flow should run.')
+        return false
+      }
+    }
+
+    if (data.execution_method === 'recurring' && !data.recurrence_rule) {
+      setFlowData(prev => ({ ...prev, recurrence_rule: defaultRecurrenceRule() }))
+    }
+
+    if (data.execution_method === 'keyword') {
+      const keywords = (data.trigger_keywords || []).map(keyword => keyword.trim()).filter(Boolean)
+      if (keywords.length === 0) {
+        toast.warning('Keyword required', 'Add at least one keyword or slash command.')
+        return false
+      }
+    }
+
+    if (data.execution_method === 'triggered') {
+      if (!selectedTriggerId || selectedTriggerId <= 0) {
+        toast.warning('Choose a trigger first', 'Select an existing Gmail, Jira, GitHub, or Webhook trigger to wire the Source step.')
+        return false
+      }
+    }
+
+    return true
+  }
+
+  function normalizedFlowPayload(data: CreateFlowData): CreateFlowData {
+    const payload: CreateFlowData = {
+      ...data,
+      steps: data.steps ? [...data.steps] : [],
+    }
+
+    if (payload.execution_method === 'recurring' && !payload.recurrence_rule) {
+      payload.recurrence_rule = defaultRecurrenceRule()
+    }
+
+    if (payload.execution_method === 'scheduled') {
+      payload.scheduled_at = fromDateTimeLocalValue(payload.scheduled_at || '')
+    }
+
+    if (payload.execution_method === 'keyword') {
+      payload.trigger_keywords = (payload.trigger_keywords || []).map(keyword => keyword.trim()).filter(Boolean)
+    }
+
+    if (payload.execution_method === 'triggered' && selectedTriggerId > 0) {
+      payload.steps = upsertBoundSourceStep(payload.steps, selectedTriggerKind, selectedTriggerId)
+    } else {
+      payload.steps = removeSourceSteps(payload.steps)
+    }
+
+    return payload
+  }
 
   async function handleSubmit() {
-    if (!flowData.name.trim()) {
-      toast.warning('Validation', 'Please provide a flow name')
-      return
-    }
-    if ((flowData.steps?.length || 0) === 0) {
+    if (!validateFlowConfig()) return
+
+    const pendingPayload = normalizedFlowPayload(flowData)
+    if ((pendingPayload.steps?.length || 0) === 0) {
       toast.warning('Validation', 'Please add at least one step to your flow')
       return
     }
+    if (hasUnboundSourceStep(pendingPayload.steps as Array<{ type?: string; config?: Record<string, unknown> | null }>)) {
+      toast.warning('Source step needs a trigger', 'Select an existing Hub trigger so the source step includes trigger_kind and trigger_instance_id.')
+      return
+    }
 
-    // Flush all pending step config form changes before submitting
+    // BUG-686 fix: flush callbacks may call setFlowData() which is async; the
+    // single setTimeout(0) await wasn't enough for the React reconciler to
+    // commit, leading to stale ref reads and "Create Flow" appearing to do
+    // nothing. Flush, await two microtasks, then read the ref freshly.
     createFlushRef.current.forEach(flush => flush())
+    await Promise.resolve()
     await new Promise(r => setTimeout(r, 0))
 
     setSubmitting(true)
     try {
-      await api.createFlowV2(flowDataRef.current)
+      const payload = normalizedFlowPayload(flowDataRef.current)
+      const created = await api.createFlowV2(payload)
+      // Create the flow_trigger_binding row for any triggered flow created
+      // from either a Hub deep-link or the Flows-page trigger selector.
+      if (payload.execution_method === 'triggered' && selectedTriggerId > 0 && created?.id) {
+        try {
+          await api.createFlowTriggerBinding({
+            flow_definition_id: created.id,
+            trigger_kind: selectedTriggerKind,
+            trigger_instance_id: selectedTriggerId,
+            suppress_default_agent: true,
+          })
+          toast.success('Flow created', 'Flow is wired to the trigger and will run when it fires.')
+        } catch (bindErr: unknown) {
+          const msg = bindErr instanceof Error ? bindErr.message : 'Could not create binding'
+          await api.deleteFlow(created.id, true).catch((deleteErr) => {
+            console.warn('Failed to clean up flow after binding failure:', deleteErr)
+          })
+          throw new Error(`Flow binding failed: ${msg}`)
+        }
+      }
       onSuccess()
     } catch (error) {
+      // BUG-686 fix: surface the real error message instead of a generic one.
       console.error('Failed to create flow:', error)
-      toast.error('Creation Failed', 'Failed to create flow')
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Failed to create flow'
+      toast.error('Creation Failed', message)
     } finally {
       setSubmitting(false)
     }
@@ -1512,7 +3430,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                       <button
                         key={method.value}
                         type="button"
-                        onClick={() => setFlowData(prev => ({ ...prev, execution_method: method.value }))}
+                        onClick={() => handleExecutionMethodChange(method.value)}
                         className={`p-3 rounded-lg border text-center transition-all ${flowData.execution_method === method.value
                             ? 'border-cyan-500 bg-cyan-500/10 text-white'
                             : 'border-slate-700 hover:border-slate-600 text-slate-300'
@@ -1526,15 +3444,145 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                     )
                   })}
                 </div>
+                {/* v0.7.0-fix Phase 7: per-kind hint so the operator knows
+                    what each method is for at the point of choice. */}
+                <p className="text-xs text-slate-500 mt-2">
+                  {flowData.execution_method === 'immediate' && 'Run once, right after Save. Best for ad-hoc workflows or testing the steps.'}
+                  {flowData.execution_method === 'scheduled' && 'Run once at a specific timestamp. Best for one-off future runs (e.g. send a digest tomorrow at 9am).'}
+                  {flowData.execution_method === 'recurring' && 'Run on a cron expression / RRule. Best for daily/weekly/hourly batch work.'}
+                  {flowData.execution_method === 'keyword' && 'Fires when a configured slash-command keyword is matched in chat. Best for on-demand workflows the operator triggers manually.'}
+                  {flowData.execution_method === 'triggered' && 'Bind to a Hub trigger so the flow fires when an external event arrives (Email/Jira/GitHub/Webhook).'}
+                </p>
               </div>
+
+              {flowData.execution_method === 'triggered' && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-cyan-50 mb-2">Trigger source</label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {TRIGGER_KIND_OPTIONS.map(option => {
+                        const KindIcon = option.Icon
+                        const active = selectedTriggerKind === option.value
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => handleTriggerKindChange(option.value)}
+                            className={`p-3 rounded-lg border text-left transition-all ${active
+                                ? 'border-cyan-400 bg-cyan-400/15 text-white'
+                                : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-slate-500'
+                              }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <KindIcon size={18} />
+                              <span className="text-sm font-medium">{option.label}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-400">{option.description}</p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <label className="block text-sm font-medium text-cyan-50">Existing trigger</label>
+                      <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
+                        Manage triggers
+                      </a>
+                    </div>
+
+                    {triggerOptionsLoading && (
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-sm text-slate-300">
+                        Loading {triggerKindLabel(selectedTriggerKind)} triggers...
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && triggerOptionsError && (
+                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
+                        <div>{triggerOptionsError}</div>
+                        <button
+                          type="button"
+                          onClick={() => loadTriggerOptions(selectedTriggerKind)}
+                          className="mt-2 text-xs text-red-100 underline underline-offset-2 hover:text-white"
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && !triggerOptionsError && triggerOptions.length === 0 && (
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-sm text-slate-300">
+                        <div>No {triggerKindLabel(selectedTriggerKind)} triggers found.</div>
+                        <a href="/hub?tab=triggers" className="mt-2 inline-flex text-xs text-cyan-200 hover:text-white">
+                          Create one in Hub Triggers
+                        </a>
+                      </div>
+                    )}
+
+                    {!triggerOptionsLoading && !triggerOptionsError && triggerOptions.length > 0 && (
+                      <div className="space-y-2">
+                        {triggerOptions.map(option => {
+                          const active = selectedTriggerKind === option.kind && selectedTriggerId === option.id
+                          return (
+                            <button
+                              key={`${option.kind}-${option.id}`}
+                              type="button"
+                              disabled={!option.isActive && !active}
+                              onClick={() => setSelectedTriggerId(option.id)}
+                              className={`w-full rounded-lg border p-3 text-left transition-all ${active
+                                  ? 'border-cyan-400 bg-cyan-400/15 text-white'
+                                  : option.isActive
+                                    ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:border-slate-500'
+                                    : 'border-slate-700 bg-slate-900/30 text-slate-500 cursor-not-allowed'
+                                }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-medium">{option.label}</div>
+                                  <div className="mt-1 text-xs text-slate-400">{option.description}</div>
+                                </div>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${option.isActive
+                                    ? 'border-green-500/30 bg-green-500/10 text-green-300'
+                                    : 'border-slate-600 bg-slate-700/40 text-slate-400'
+                                  }`}>
+                                  {option.status}
+                                </span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {hasSelectedTrigger && (
+                      <p className="mt-2 text-xs text-cyan-100/80">
+                        The Source step will be locked to {selectedTrigger?.label || `${triggerKindLabel(selectedTriggerKind)} trigger #${selectedTriggerId}`}.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {flowData.execution_method === 'scheduled' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-1.5">Schedule Time</label>
+                  <div className="flex items-center justify-between gap-3 mb-1.5">
+                    <label className="block text-sm font-medium text-slate-300">Schedule Time</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const oneHourFromNow = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+                        setFlowData(prev => ({ ...prev, scheduled_at: toDateTimeLocalValue(oneHourFromNow) }))
+                      }}
+                      className="text-xs px-2 py-1 rounded border border-cyan-500/30 text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 transition-colors"
+                    >
+                      In 1 hour
+                    </button>
+                  </div>
                   <input
                     type="datetime-local"
                     value={flowData.scheduled_at || ''}
-                    onChange={(e) => setFlowData(prev => ({ ...prev, scheduled_at: new Date(e.target.value).toISOString() }))}
+                    onChange={(e) => setFlowData(prev => ({ ...prev, scheduled_at: e.target.value }))}
                     className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white
                                focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
                   />
@@ -1599,6 +3647,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
               customSkills={customSkills}
               onChange={(steps) => setFlowData(prev => ({ ...prev, steps }))}
               flushCallbacksRef={createFlushRef}
+              allowSourceStep={hasSelectedTrigger}
             />
           )}
         </div>
@@ -1618,7 +3667,9 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
           <button
             type="button"
             onClick={() => {
-              if (step === 'config') setStep('steps')
+              if (step === 'config') {
+                if (validateFlowConfig()) setStep('steps')
+              }
               else handleSubmit()
             }}
             disabled={submitting || (step === 'steps' && (flowData.steps?.length || 0) === 0)}
@@ -1635,7 +3686,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 
 // ==================== STEP BUILDER ====================
 
-function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef }: {
+function StepBuilder({ steps, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allowSourceStep = false }: {
   steps: CreateFlowStepData[]
   agents: Agent[]
   contacts: Contact[]
@@ -1644,6 +3695,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   customSkills?: any[]
   onChange: (steps: CreateFlowStepData[]) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
+  allowSourceStep?: boolean
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [showAddStep, setShowAddStep] = useState(steps.length === 0)
@@ -1658,11 +3710,30 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function addStep(stepType: StepType) {
+    // Source steps are trigger-owned and locked at position 1.
+    if (stepType === 'source') {
+      if (!allowSourceStep) return
+      if (steps.some((s) => s.type === 'source')) return
+      const newStep: CreateFlowStepData = {
+        name: 'Source',
+        type: 'source',
+        position: 1,
+        config: {},
+        allow_multi_turn: false,
+        max_turns: undefined,
+      }
+      // Insert at the front and renumber.
+      const next = [newStep, ...steps].map((s, i) => ({ ...s, position: i + 1 }))
+      onChange(next)
+      setEditingIndex(0)
+      setShowAddStep(false)
+      return
+    }
     const newStep: CreateFlowStepData = {
       name: `Step ${steps.length + 1}`,
       type: stepType,
       position: steps.length + 1,
-      config: ['message', 'notification', 'conversation'].includes(stepType) ? { channel: 'whatsapp' } : {},
+      config: defaultConfigForStepType(stepType),
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
     }
@@ -1678,6 +3749,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   }
 
   function removeStep(index: number) {
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (steps[index]?.type === 'source') return
     const newSteps = steps.filter((_, i) => i !== index)
     // Update positions
     newSteps.forEach((step, i) => step.position = i + 1)
@@ -1687,9 +3760,14 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
 
   function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
 
     const newSteps = [...steps]
-    const targetIndex = direction === 'up' ? index - 1 : index + 1
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
     // Update positions and auto-rename "Step N" names to match new position
     newSteps.forEach((step, i) => {
@@ -1720,26 +3798,31 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 onClick={() => setEditingIndex(editingIndex === index ? null : index)}
               >
                 <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <div className="w-10 h-10 rounded-lg bg-slate-600 flex items-center justify-center text-slate-300">
@@ -1756,6 +3839,11 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -1782,15 +3870,18 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* v0.7.0 Wave 2: source step is non-removable while present; hide Delete. */}
+                {step.type !== 'source' && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); removeStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1824,7 +3915,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* Source steps are only created by trigger-prefilled Flow drafts. */}
+            {getAddableStepTypes(steps, allowSourceStep).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
@@ -2129,7 +4221,80 @@ function ToolParameterForm({
 
 // ==================== STEP CONFIG FORM ====================
 
-function StepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, allSteps, flushCallbacksRef, stepIndex }: {
+function StepBehaviorControls({
+  step,
+  onChange,
+}: {
+  step: Pick<CreateFlowStepData | EditableStepData, 'timeout_seconds' | 'retry_on_failure' | 'max_retries' | 'retry_delay_seconds' | 'on_failure'>
+  onChange: (update: Partial<CreateFlowStepData | EditableStepData>) => void
+}) {
+  const retryEnabled = step.retry_on_failure === true
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+      <label className="text-sm font-medium text-slate-300">Step behavior</label>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">Timeout seconds</label>
+          <input
+            type="number"
+            min={1}
+            value={step.timeout_seconds ?? ''}
+            onChange={(e) => onChange({ timeout_seconds: e.target.value ? Number(e.target.value) : undefined })}
+            placeholder="30"
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">On failure</label>
+          <select
+            value={step.on_failure || ''}
+            onChange={(e) => onChange({ on_failure: e.target.value || undefined })}
+            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+          >
+            <option value="">Stop flow</option>
+            <option value="continue">Continue</option>
+            <option value="skip">Skip remaining</option>
+          </select>
+        </div>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2">
+          <span className="text-sm font-medium text-slate-300">Retry</span>
+          <input
+            type="checkbox"
+            checked={retryEnabled}
+            onChange={(e) => onChange({ retry_on_failure: e.target.checked })}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
+          />
+        </label>
+      </div>
+      {retryEnabled && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Max retries</label>
+            <input
+              type="number"
+              min={1}
+              value={step.max_retries ?? 1}
+              onChange={(e) => onChange({ max_retries: Number(e.target.value) || 1 })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Retry delay seconds</label>
+            <input
+              type="number"
+              min={0}
+              value={step.retry_delay_seconds ?? 5}
+              onChange={(e) => onChange({ retry_delay_seconds: Number(e.target.value) || 0 })}
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, allSteps, flushCallbacksRef, stepIndex, flowIsSystemOwned = false }: {
   step: CreateFlowStepData
   agents: Agent[]
   contacts: Contact[]
@@ -2140,6 +4305,12 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
   allSteps: CreateFlowStepData[]
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
   stepIndex?: number
+  // True when the parent flow is system-managed (auto-generated by a
+  // trigger wizard). Used to suppress fields that don't apply to a
+  // system-managed Default-agent step (channel/recipient on an inbound
+  // conversation node) and to prepend the upstream-criteria callout on
+  // the gate step.
+  flowIsSystemOwned?: boolean
 }) {
   const [recipientInput, setRecipientInput] = useState(step.config?.recipient || '')
   const [showContactSuggestions, setShowContactSuggestions] = useState(false)
@@ -2225,8 +4396,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
     }))
   }
 
+  function updateConfigMany(values: Record<string, any>) {
+    debouncedSave(prev => ({
+      config: { ...step.config, ...prev.config, ...values }
+    }))
+  }
+
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
+
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
 
   return (
     <div className="space-y-4">
@@ -2242,8 +4427,56 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         />
       </div>
 
-      {/* Channel Selector - for message/notification/conversation */}
-      {['message', 'notification', 'conversation'].includes(step.type) && (
+      <StepBehaviorControls
+        step={currentStep}
+        onChange={(update) => debouncedSave(update as Partial<CreateFlowStepData>)}
+      />
+
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
+      {step.type === 'source' && (
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
+      )}
+
+      {/* Per-step sample-payload preview for non-source steps on
+          system-managed flows. Reads the source step's trigger binding
+          (allSteps[0].config) to know which trigger's wake events to
+          fetch. Lets operators see real data + the JSON paths their
+          step's config already references — closes the "what does this
+          step actually receive?" gap without spinning up a dry-run. */}
+      {flowIsSystemOwned && step.type !== 'source' && (() => {
+        const sourceCfg = (allSteps[0]?.config as Record<string, unknown> | undefined) || {}
+        const triggerKind = (sourceCfg.trigger_kind as string | undefined) || ''
+        const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+        if (!triggerKind || triggerInstanceId <= 0) return null
+        return (
+          <StepSamplePreview
+            triggerKind={triggerKind}
+            triggerInstanceId={triggerInstanceId}
+            stepConfig={(step.config as Record<string, unknown>) || {}}
+          />
+        )
+      })()}
+
+      {/* Inbound trigger note for system-managed Default-agent step.
+          Channel + recipient + initial_prompt are outbound-message fields
+          that don't apply when the conversation step is the entry point
+          for an inbound trigger event. Hide them and show a one-line
+          note instead so the editor reflects what the step actually does. */}
+      {flowIsSystemOwned && step.type === 'conversation' && (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+          <div className="text-xs text-slate-300">
+            <span className="font-medium text-white">Inbound step.</span>{' '}
+            This conversation receives the trigger event payload — the agent processes
+            it according to the objective below. No channel or recipient is needed.
+          </div>
+        </div>
+      )}
+
+      {/* Channel Selector - for message/notification + user-authored
+          conversation steps. System-managed conversation entry points
+          don't have a channel because they receive the trigger event. */}
+      {(['message', 'notification'].includes(step.type) ||
+        (step.type === 'conversation' && !flowIsSystemOwned)) && (
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
           <div className="grid grid-cols-2 gap-2">
@@ -2279,8 +4512,9 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         </div>
       )}
 
-      {/* Recipient - for message/notification/conversation */}
-      {['message', 'notification', 'conversation'].includes(step.type) && (
+      {/* Recipient - for message/notification + user-authored conversation. */}
+      {(['message', 'notification'].includes(step.type) ||
+        (step.type === 'conversation' && !flowIsSystemOwned)) && (
         <div className="relative">
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
           <input
@@ -2333,16 +4567,18 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
           </label>
           <TemplateTextarea
             value={step.type === 'notification'
-              ? (currentConfig?.content || '')
+              ? (currentConfig?.message_template || currentConfig?.content || '')
               : (currentConfig?.message_template || '')}
-            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
+            onValueChange={(v) => step.type === 'notification'
+              ? updateConfigMany({ message_template: v, content: v })
+              : updateConfig('message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -2353,7 +4589,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -2362,23 +4598,31 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
-              value={currentConfig?.initial_prompt || ''}
-              onValueChange={(v) => updateConfig('initial_prompt', v)}
-              rows={2}
-              placeholder="First message to send..."
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
-                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            />
-          </div>
+          {/* System-managed inbound steps don't take a hand-written initial
+              prompt — the trigger payload is the input. Hide it for clarity. */}
+          {!flowIsSystemOwned && (
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
+              <TemplateTextarea
+                value={currentConfig?.initial_prompt || ''}
+                onValueChange={(v) => updateConfig('initial_prompt', v)}
+                rows={2}
+                placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                           focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                allSteps={stepInfoList}
+                currentStepPosition={step.position}
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -2459,6 +4703,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 <>
                   <option value="google_search">Google Search</option>
                   <option value="send_message">Send Message</option>
+                  <option value="password_vault">Password Vault</option>
                 </>
               ) : (
                 <>
@@ -2490,6 +4735,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
             onChange={(params) => updateConfig('tool_parameters', params)}
             onCommandChange={(cmdId) => updateConfig('command_id', cmdId)}
           />
+
+          {(currentConfig?.tool_type || 'built_in') === 'built_in' && currentConfig?.tool_name === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_parameters)}
+              onChange={(next) => updateConfig('tool_parameters', passwordVaultReferenceToToolArguments(next))}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -2555,13 +4808,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -2585,6 +4840,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               </p>
             </div>
           )}
+          {currentConfig?.skill_type === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_arguments || currentConfig)}
+              onChange={(next) => updateConfigMany({
+                ...next,
+                use_tool_mode: true,
+                tool_arguments: passwordVaultReferenceToToolArguments(next),
+                skill_config: {
+                  ...(currentConfig?.skill_config || {}),
+                  integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+                  provider: next.password_vault_provider || 'onepassword',
+                },
+              })}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -2605,6 +4876,52 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
             </p>
           </div>
         </>
+      )}
+
+      {step.type === 'password_vault' && (
+        <PasswordVaultStepConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'browser_automation' && (
+        <BrowserAutomationConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'http_request' && (
+        <HttpRequestConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'data_transform' && (
+        <DataTransformConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+        <FinancialRecordStoreConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          isUtilityAlias={step.type === 'financial_bill_store'}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
       )}
 
       {/* Summarization Settings */}
@@ -2668,7 +4985,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 {step.config?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -2677,6 +4994,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -2711,13 +5030,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -2747,6 +5067,23 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
       {/* Gate Settings */}
       {step.type === 'gate' && (
         <>
+          {/* Upstream-criteria callout for system-managed flows.
+              The trigger's own filters (JQL / search_query / criteria.filters)
+              already gated the event before it reached this flow — see the
+              source step above. Conditions added here are a SECOND-LEVEL
+              filter applied after the trigger has already passed. */}
+          {flowIsSystemOwned && (
+            <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+              <div className="text-sm font-medium text-white">Filtering already happens upstream</div>
+              <p className="mt-1 text-xs text-slate-300 leading-relaxed">
+                The trigger&apos;s own criteria — visible on the Source step above and
+                editable in the Hub — already filter which events reach this flow.
+                Conditions added here are a <em>secondary</em> filter applied after
+                the upstream filter passes. Leave empty to accept everything the
+                trigger sends.
+              </p>
+            </div>
+          )}
           {/* Mode Toggle */}
           <div>
             <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
@@ -2953,13 +5290,15 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -3008,21 +5347,22 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -3032,6 +5372,8 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -3095,7 +5437,8 @@ function EditableStepBuilder({
   customTools,
   customSkills,
   onStepsChange,
-  flushCallbacksRef
+  flushCallbacksRef,
+  flowIsSystemOwned = false
 }: {
   flowId: number
   steps: EditableStepData[]
@@ -3104,6 +5447,7 @@ function EditableStepBuilder({
   personas: Persona[]
   customTools: CustomTool[]
   customSkills?: any[]
+  flowIsSystemOwned?: boolean
   onStepsChange: (steps: EditableStepData[]) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
 }) {
@@ -3114,12 +5458,18 @@ function EditableStepBuilder({
 
   // Add a new step
   async function addStep(stepType: StepType) {
+    // Source steps are trigger-owned; adding one manually cannot create the
+    // matching flow_trigger_binding row.
+    if (stepType === 'source') {
+      return
+    }
+
     const newPosition = steps.length + 1
     const newStep: EditableStepData = {
       name: `Step ${newPosition}`,
       type: stepType,
       position: newPosition,
-      config: ['message', 'notification', 'conversation'].includes(stepType) ? { channel: 'whatsapp' } : {},
+      config: defaultConfigForStepType(stepType),
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
       _saving: true,
@@ -3184,6 +5534,8 @@ function EditableStepBuilder({
   // Delete a step
   async function deleteStep(index: number) {
     const step = steps[index]
+    // v0.7.0 Wave 2: source step is non-removable while present.
+    if (step?.type === 'source') return
     if (!step.id) {
       // Just remove unsaved step
       const newSteps = steps.filter((_, i) => i !== index)
@@ -3222,7 +5574,13 @@ function EditableStepBuilder({
   async function moveStep(index: number, direction: 'up' | 'down') {
     if ((direction === 'up' && index === 0) || (direction === 'down' && index === steps.length - 1)) return
 
+    // v0.7.0 Wave 2: source step is locked at position 0; never move it,
+    // and never allow another step to slide above it.
+    const movingStep = steps[index]
+    if (movingStep?.type === 'source') return
     const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (steps[targetIndex]?.type === 'source') return
+
     const newSteps = [...steps]
       ;[newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]]
 
@@ -3281,24 +5639,29 @@ function EditableStepBuilder({
               >
                 {/* Reorder buttons */}
                 <div className="flex flex-col gap-1">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
-                    disabled={index === 0}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
-                    disabled={index === steps.length - 1}
-                    className="text-slate-500 hover:text-white disabled:opacity-30"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
+                  {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
+                  {step.type !== 'source' && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'up') }}
+                        disabled={index === 0 || steps[index - 1]?.type === 'source'}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); moveStep(index, 'down') }}
+                        disabled={index === steps.length - 1}
+                        className="text-slate-500 hover:text-white disabled:opacity-30"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 {/* Step icon */}
@@ -3317,6 +5680,11 @@ function EditableStepBuilder({
                 <div className="flex-1">
                   <div className="font-medium text-white flex items-center gap-2">
                     {step.name}
+                    {step.type === 'source' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                        Locked at top
+                      </span>
+                    )}
                     {step.type === 'gate' && (
                       <span className={`text-xs px-2 py-0.5 rounded-full ${
                         (step.config?.gate_mode || 'programmatic') === 'programmatic'
@@ -3349,15 +5717,17 @@ function EditableStepBuilder({
                   </div>
                 </div>
 
-                {/* Delete button */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
-                  className="text-red-400 hover:text-red-300 p-2"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+                {/* Delete button (v0.7.0 Wave 2: hide for source step) */}
+                {step.type !== 'source' && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
+                    className="text-red-400 hover:text-red-300 p-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                )}
 
                 {/* Expand/collapse indicator */}
                 <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3378,6 +5748,7 @@ function EditableStepBuilder({
                     onChange={(update) => updateStep(index, update)}
                     flushCallbacksRef={flushCallbacksRef}
                     allSteps={steps}
+                    flowIsSystemOwned={flowIsSystemOwned}
                   />
                 </div>
               )}
@@ -3391,11 +5762,13 @@ function EditableStepBuilder({
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {STEP_TYPES.map(type => {
+            {/* Source steps are trigger-owned and cannot be added manually while editing. */}
+            {getAddableStepTypes(steps, false).map(type => {
               const StepIcon = type.Icon
               return (
                 <button
                   key={type.value}
+                  type="button"
                   onClick={() => addStep(type.value)}
                   className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
                              text-center transition-all text-slate-300 hover:text-cyan-400"
@@ -3411,6 +5784,7 @@ function EditableStepBuilder({
           </div>
           {steps.length > 0 && (
             <button
+              type="button"
               onClick={() => setShowAddStep(false)}
               className="mt-4 text-sm text-slate-400 hover:text-white"
             >
@@ -3436,7 +5810,7 @@ function EditableStepBuilder({
 
 // ==================== EDITABLE STEP CONFIG FORM ====================
 
-function EditableStepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allSteps }: {
+function EditableStepConfigForm({ step, agents, contacts, personas, customTools, customSkills, onChange, flushCallbacksRef, allSteps, flowIsSystemOwned = false }: {
   step: EditableStepData
   agents: Agent[]
   contacts: Contact[]
@@ -3446,6 +5820,11 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
   onChange: (update: Partial<EditableStepData>) => void
   flushCallbacksRef?: React.MutableRefObject<Map<number, () => void>>
   allSteps: EditableStepData[]
+  // See StepConfigForm — same semantics: when the parent flow is
+  // system-managed (trigger-generated), the editor suppresses
+  // outbound-message fields on the Default-agent conversation node and
+  // prepends the upstream-criteria callout on the gate node.
+  flowIsSystemOwned?: boolean
 }) {
   const [recipientInput, setRecipientInput] = useState(step.config?.recipient || '')
   const [showContactSuggestions, setShowContactSuggestions] = useState(false)
@@ -3532,9 +5911,23 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
     }))
   }
 
+  function updateConfigMany(values: Record<string, any>) {
+    debouncedSave(prev => ({
+      config: { ...step.config, ...prev.config, ...values }
+    }))
+  }
+
   // Get current value considering local changes
   const currentStep = { ...step, ...localChanges }
   const currentConfig = { ...step.config, ...localChanges.config }
+
+  // Variable Reference panel input — shared across all templatable fields.
+  const stepInfoList = allSteps.map(s => ({
+    name: s.name,
+    type: s.type,
+    position: s.position,
+    config: s.config,
+  }))
 
   return (
     <div className="space-y-4">
@@ -3550,8 +5943,54 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         />
       </div>
 
-      {/* Channel Selector - for message/notification/conversation */}
-      {['message', 'notification', 'conversation'].includes(step.type) && (
+      <StepBehaviorControls
+        step={currentStep}
+        onChange={(update) => debouncedSave(update as Partial<EditableStepData>)}
+      />
+
+      {/* v0.7.0 Wave 4: Source step renders trigger summary + sample payload + variable hint. */}
+      {step.type === 'source' && (
+        <SourceStepConfig config={(step.config as Record<string, any>) || {}} />
+      )}
+
+      {/* Per-step sample-payload preview for non-source steps on
+          system-managed flows. Reads the source step's trigger binding
+          (allSteps[0].config) to know which trigger's wake events to
+          fetch. Mirrors the version in StepConfigForm. */}
+      {flowIsSystemOwned && step.type !== 'source' && (() => {
+        const sourceCfg = (allSteps[0]?.config as Record<string, unknown> | undefined) || {}
+        const triggerKind = (sourceCfg.trigger_kind as string | undefined) || ''
+        const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+        if (!triggerKind || triggerInstanceId <= 0) return null
+        return (
+          <StepSamplePreview
+            triggerKind={triggerKind}
+            triggerInstanceId={triggerInstanceId}
+            stepConfig={(step.config as Record<string, unknown>) || {}}
+          />
+        )
+      })()}
+
+      {/* Inbound trigger note for system-managed Default-agent step.
+          Channel + recipient + initial_prompt are outbound-message fields
+          that don't apply when the conversation step is the entry point
+          for an inbound trigger event. Hide them and show a one-line
+          note instead so the editor reflects what the step actually does. */}
+      {flowIsSystemOwned && step.type === 'conversation' && (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+          <div className="text-xs text-slate-300">
+            <span className="font-medium text-white">Inbound step.</span>{' '}
+            This conversation receives the trigger event payload — the agent processes
+            it according to the objective below. No channel or recipient is needed.
+          </div>
+        </div>
+      )}
+
+      {/* Channel Selector - for message/notification + user-authored
+          conversation steps. System-managed conversation entry points
+          don't have a channel because they receive the trigger event. */}
+      {(['message', 'notification'].includes(step.type) ||
+        (step.type === 'conversation' && !flowIsSystemOwned)) && (
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Channel</label>
           <div className="grid grid-cols-2 gap-2">
@@ -3587,8 +6026,9 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         </div>
       )}
 
-      {/* Recipient - for message/notification/conversation */}
-      {['message', 'notification', 'conversation'].includes(step.type) && (
+      {/* Recipient - for message/notification + user-authored conversation. */}
+      {(['message', 'notification'].includes(step.type) ||
+        (step.type === 'conversation' && !flowIsSystemOwned)) && (
         <div className="relative">
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
           <input
@@ -3641,16 +6081,18 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           </label>
           <TemplateTextarea
             value={step.type === 'notification'
-              ? (currentConfig?.content || '')
+              ? (currentConfig?.message_template || currentConfig?.content || '')
               : (currentConfig?.message_template || '')}
-            onValueChange={(v) => updateConfig(step.type === 'notification' ? 'content' : 'message_template', v)}
+            onValueChange={(v) => step.type === 'notification'
+              ? updateConfigMany({ message_template: v, content: v })
+              : updateConfig('message_template', v)}
             rows={3}
             placeholder={step.type === 'notification'
               ? 'What to notify about? Use {{step_1.field}} to inject previous step outputs'
               : 'Enter your message... Use {{step_1.field}} to inject previous step outputs'}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                        focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            allSteps={allSteps.map(s => ({ name: s.name, type: s.type, position: s.position, config: s.config }))}
+            allSteps={stepInfoList}
             currentStepPosition={step.position}
           />
         </div>
@@ -3661,7 +6103,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Conversation Objective</label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentStep.conversation_objective || currentConfig?.objective || ''}
               onValueChange={(v) => {
                 debouncedSave(prev => ({
@@ -3670,23 +6112,31 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 }))
               }}
               rows={2}
-              placeholder="What should this conversation achieve?"
+              placeholder="What should this conversation achieve? Use {{step_N.field}} to inject previous step outputs."
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
-            <CursorSafeTextarea
-              value={currentConfig?.initial_prompt || ''}
-              onValueChange={(v) => updateConfig('initial_prompt', v)}
-              rows={2}
-              placeholder="First message to send..."
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
-                         focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-            />
-          </div>
+          {/* System-managed inbound steps don't take a hand-written initial
+              prompt — the trigger payload is the input. Hide it for clarity. */}
+          {!flowIsSystemOwned && (
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Initial Prompt</label>
+              <TemplateTextarea
+                value={currentConfig?.initial_prompt || ''}
+                onValueChange={(v) => updateConfig('initial_prompt', v)}
+                rows={2}
+                placeholder="First message to send... Use {{step_N.field}} to inject previous step outputs."
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+                           focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                allSteps={stepInfoList}
+                currentStepPosition={step.position}
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -3763,6 +6213,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 <>
                   <option value="google_search">Google Search</option>
                   <option value="send_message">Send Message</option>
+                  <option value="password_vault">Password Vault</option>
                 </>
               ) : (
                 customTools.length === 0 ? (
@@ -3787,6 +6238,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             onChange={(params) => updateConfig('tool_parameters', params)}
             onCommandChange={(cmdId) => updateConfig('command_id', cmdId)}
           />
+
+          {(currentConfig?.tool_type || 'built_in') === 'built_in' && currentConfig?.tool_name === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_parameters)}
+              onChange={(next) => updateConfig('tool_parameters', passwordVaultReferenceToToolArguments(next))}
+              compact
+            />
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
@@ -3848,13 +6307,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               Prompt
               <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.prompt || ''}
               onValueChange={(v) => updateConfig('prompt', v)}
               rows={3}
               placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
@@ -3878,6 +6339,22 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </p>
             </div>
           )}
+          {currentConfig?.skill_type === 'password_vault' && (
+            <PasswordVaultReferencePicker
+              value={passwordVaultReferenceFromToolArguments(currentConfig?.tool_arguments || currentConfig)}
+              onChange={(next) => updateConfigMany({
+                ...next,
+                use_tool_mode: true,
+                tool_arguments: passwordVaultReferenceToToolArguments(next),
+                skill_config: {
+                  ...(currentConfig?.skill_config || {}),
+                  integration_id: next.password_vault_integration_id ? Number(next.password_vault_integration_id) : null,
+                  provider: next.password_vault_provider || 'onepassword',
+                },
+              })}
+              compact
+            />
+          )}
 
           {/* Output Alias for Step Output Injection */}
           <div>
@@ -3898,6 +6375,52 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
             </p>
           </div>
         </>
+      )}
+
+      {step.type === 'password_vault' && (
+        <PasswordVaultStepConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'browser_automation' && (
+        <BrowserAutomationConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'http_request' && (
+        <HttpRequestConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {step.type === 'data_transform' && (
+        <DataTransformConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
+      )}
+
+      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+        <FinancialRecordStoreConfigPanel
+          config={currentConfig}
+          onChange={(next) => updateConfigMany(next)}
+          isUtilityAlias={step.type === 'financial_bill_store'}
+          allSteps={stepInfoList}
+          currentStepPosition={step.position}
+        />
       )}
 
       {/* Summarization Settings */}
@@ -3961,7 +6484,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 {currentConfig?.prompt_mode === 'replace' ? '(Full prompt)' : '(Added to default)'}
               </span>
             </label>
-            <CursorSafeTextarea
+            <TemplateTextarea
               value={currentConfig?.summary_prompt || ''}
               onValueChange={(v) => updateConfig('summary_prompt', v)}
               rows={4}
@@ -3970,6 +6493,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 : 'Additional instructions to add to the default summary template...'}
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
           </div>
 
@@ -4004,13 +6529,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         <>
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">Command *</label>
-            <CursorSafeInput
-              type="text"
+            <TemplateInput
               value={currentConfig?.command || ''}
               onValueChange={(v) => updateConfig('command', v)}
               placeholder="/scheduler list week"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none font-mono"
+              allSteps={stepInfoList}
+              currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
               Enter the slash command to execute (e.g., /scheduler list week, /memory search &lt;query&gt;)
@@ -4040,6 +6566,23 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
       {/* Gate Settings */}
       {step.type === 'gate' && (
         <>
+          {/* Upstream-criteria callout for system-managed flows.
+              The trigger's own filters (JQL / search_query / criteria.filters)
+              already gated the event before it reached this flow — see the
+              source step above. Conditions added here are a SECOND-LEVEL
+              filter applied after the trigger has already passed. */}
+          {flowIsSystemOwned && (
+            <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+              <div className="text-sm font-medium text-white">Filtering already happens upstream</div>
+              <p className="mt-1 text-xs text-slate-300 leading-relaxed">
+                The trigger&apos;s own criteria — visible on the Source step above and
+                editable in the Hub — already filter which events reach this flow.
+                Conditions added here are a <em>secondary</em> filter applied after
+                the upstream filter passes. Leave empty to accept everything the
+                trigger sends.
+              </p>
+            </div>
+          )}
           {/* Mode Toggle */}
           <div>
             <label className="block text-sm font-semibold text-slate-200 mb-2">Gate Mode</label>
@@ -4246,13 +6789,15 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Gate Prompt</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_prompt || ''}
                   onValueChange={(v) => updateConfig('gate_prompt', v)}
                   rows={4}
-                  placeholder="Describe when the gate should PASS..."
+                  placeholder="Describe when the gate should PASS... Use {{step_N.field}} to reference previous step outputs."
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
 
@@ -4301,21 +6846,22 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Recipient</label>
-                <CursorSafeInput
-                  type="text"
+                <TemplateInput
                   value={currentConfig?.gate_fail_notification?.recipient || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
                     recipient: v
                   })}
-                  placeholder="e.g. +5527999999999"
+                  placeholder="e.g. +5527999999999 or {{step_N.field}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Message Template</label>
-                <CursorSafeTextarea
+                <TemplateTextarea
                   value={currentConfig?.gate_fail_notification?.message_template || ''}
                   onValueChange={(v) => updateConfig('gate_fail_notification', {
                     ...currentConfig?.gate_fail_notification,
@@ -4325,6 +6871,8 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                   placeholder="Gate blocked: {{gate.reasoning}}"
                   className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
                              focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
+                  allSteps={stepInfoList}
+                  currentStepPosition={step.position}
                 />
               </div>
             </div>
@@ -4390,6 +6938,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
   onSuccess: () => void
 }) {
   const toast = useToast()
+  // v0.7.0 Wave 3 — derive canWriteFlows locally. The variable existed only in
+  // FlowsPage scope, so the existing references at lines 4690-4696 inside
+  // this modal threw `ReferenceError: canWriteFlows is not defined` whenever
+  // a user opened a flow for editing. Caught by Wave 3 QA. Self-contained
+  // useAuth() avoids prop-drilling through every place EditFlowModal is rendered.
+  const { hasPermission } = useAuth()
+  const canWriteFlows = hasPermission('flows.write')
   const [flow, setFlow] = useState<FlowDefinition | null>(null)
   const [steps, setSteps] = useState<EditableStepData[]>([])
   const stepsRef = useRef<EditableStepData[]>([])
@@ -4502,7 +7057,10 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white">Edit Flow</h2>
-            <p className="text-sm text-slate-400">Flow #{flowId}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-sm text-slate-400">Flow #{flowId}</p>
+              {flow && <TriggerOriginBadge flow={flow} />}
+            </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4513,6 +7071,42 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* System-managed banner — auto-generated trigger flows have a
+              fixed Source → Gate → Default agent → Notification skeleton.
+              Filtering happens upstream on the trigger; this banner gives
+              a one-line orientation so operators don't try to repurpose
+              the channel/recipient fields they used to see on the
+              conversation step. The trigger deep-link is reconstructed
+              from the source step's config_json (FlowDefinition itself
+              does not surface the trigger_instance_id). */}
+          {flow.is_system_owned && (() => {
+            const sourceStep = steps.find((s) => s.type === 'source')
+            const sourceCfg = (sourceStep?.config as Record<string, unknown> | undefined) || {}
+            const triggerKind = (sourceCfg.trigger_kind as string | undefined) || flow.system_trigger_kind || null
+            const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+            const triggerHref = triggerKind && triggerInstanceId > 0
+              ? `/hub/triggers/${triggerKind}/${triggerInstanceId}`
+              : '/hub'
+            return (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+                <div className="text-sm font-medium text-white">System-managed flow</div>
+                <p className="mt-1 text-sm text-slate-300 leading-relaxed">
+                  This flow was auto-generated by the trigger wizard. To change
+                  <span className="text-white"> what fires</span> (filters, JQL, search query,
+                  source account), edit the trigger from
+                  {' '}
+                  <Link href={triggerHref} className="text-cyan-300 hover:text-cyan-200 underline">
+                    Hub
+                  </Link>
+                  . To change <span className="text-white">what happens after</span>, edit the
+                  steps below — the Source step shows the trigger config, the Gate runs
+                  secondary filtering, the Default agent processes the event, and the
+                  Notification fires once enabled.
+                </p>
+              </div>
+            )
+          })()}
+
           {/* Validation Errors */}
           {validationErrors.length > 0 && (
             <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
@@ -4556,11 +7150,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Status</label>
                 <button
-                  onClick={() => setFlow(prev => prev ? { ...prev, is_active: !prev.is_active } : null)}
+                  onClick={() => canWriteFlows && setFlow(prev => prev ? { ...prev, is_active: !prev.is_active } : null)}
+                  disabled={!canWriteFlows}
+                  title={canWriteFlows ? undefined : 'Requires flows.write permission'}
                   className={`px-4 py-2.5 rounded-lg font-medium transition-colors ${flow.is_active
                       ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                       : 'bg-slate-700/50 text-slate-400 border border-slate-600'
-                    }`}
+                    } ${!canWriteFlows ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
                   {flow.is_active ? 'Enabled' : 'Disabled'}
                 </button>
@@ -4569,7 +7165,11 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
               <div className="col-span-2">
                 <label className="block text-sm font-medium text-slate-300 mb-2">Execution Method</label>
                 <div className="grid grid-cols-3 gap-3">
-                  {EXECUTION_METHODS.map(method => {
+                  {EXECUTION_METHODS.filter(method => (
+                    flow.execution_method === 'triggered'
+                      ? method.value === 'triggered'
+                      : method.value !== 'triggered'
+                  )).map(method => {
                     const MethodIcon = method.Icon
                     return (
                       <button
@@ -4588,6 +7188,11 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                     )
                   })}
                 </div>
+                {flow.execution_method !== 'triggered' && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Triggered flows are wired from Hub Triggers so their Source step and binding stay in sync.
+                  </p>
+                )}
               </div>
 
               {flow.execution_method === 'scheduled' && (
@@ -4665,6 +7270,7 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
               customSkills={customSkills}
               onStepsChange={setSteps}
               flushCallbacksRef={flushCallbacksRef}
+              flowIsSystemOwned={!!flow.is_system_owned}
             />
           </div>
         </div>
@@ -4798,7 +7404,10 @@ function ViewRunModal({ runId, onClose }: {
                 Run #{run?.id || '...'}
                 {runIsActive && <span className="ml-2 text-sm font-normal text-cyan-400">Live</span>}
               </h2>
-              <p className="text-sm text-slate-400">Flow #{run?.flow_definition_id}</p>
+              <p className="text-sm text-slate-400">
+                {run?.flow_name || run?.flow_definition_name || 'Unnamed flow'}
+                {run?.flow_definition_id ? <span className="ml-2 text-xs text-slate-500">#{run.flow_definition_id}</span> : null}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white">

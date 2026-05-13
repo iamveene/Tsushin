@@ -11,7 +11,7 @@
 #                 the current compose file does not define a `testing` profile.
 #
 # Custom Tools Toolbox (per-tenant containers):
-#   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t tsushin-toolbox:base ./backend/containers
+#   Build base image: docker build -f backend/containers/Dockerfile.toolbox -t "${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}" .
 #   Note: Tenant containers are managed dynamically by ToolboxContainerService
 #
 # ============================================================================
@@ -99,6 +99,8 @@ services:
       tsushin.service: "proxy"
     volumes:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
     depends_on:
       backend:
         condition: service_healthy
@@ -145,6 +147,15 @@ services:
       - tsushin-images:/tmp/tsushin_images
       # User guide (served via /api/user-guide)
       - ./docs/user-guide.md:/app/USER_GUIDE.md:ro
+      # Frontend tree (read-only) — needed by backend wizard-drift tests that
+      # cross-check frontend fallback constants against backend registries.
+      # Without this mount, every wizard_drift assertion that resolves
+      # /frontend from inside the container short-circuits as "skip".
+      - ./frontend:/frontend:ro
+      # Operator-private playbooks (gitignored). Used by Finan flow templates
+      # to inflate browser_automation steps. Absent on fresh clones — seeding
+      # logs once and skips the affected templates.
+      - ./.private:/app/.private:ro
     security_opt:
       - label:disable
     environment:
@@ -155,6 +166,10 @@ services:
       - TSN_LOG_LEVEL=${TSN_LOG_LEVEL:-INFO}
       - TSN_LOG_FORMAT=${TSN_LOG_FORMAT:-text}
       - TSN_METRICS_ENABLED=${TSN_METRICS_ENABLED:-true}
+      # BUG-712: optional bearer-token gate for /metrics (enforced inside backend
+      # services/metrics_service.py). Empty = open. The proxy now passes /metrics
+      # straight through, so this single env is the only auth knob to flip.
+      - TSN_METRICS_SCRAPE_TOKEN=${TSN_METRICS_SCRAPE_TOKEN:-}
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
       - TSN_SECRET_BACKEND=${TSN_SECRET_BACKEND:-env}
       - TSN_CONTAINER_RUNTIME=${TSN_CONTAINER_RUNTIME:-docker}
@@ -162,14 +177,36 @@ services:
       # BUG-654: single authoritative declaration — the previous duplicate on
       # line 156 shadowed this value with an empty string when the var was unset.
       - TSN_AUTH_RATE_LIMIT=${TSN_AUTH_RATE_LIMIT:-5/minute}
-      - TSN_DISABLE_AUTH_RATE_LIMIT=${TSN_DISABLE_AUTH_RATE_LIMIT:-false}
+      - TSN_WHATSAPP_MCP_IMAGE=${TSN_WHATSAPP_MCP_IMAGE:-tsushin/whatsapp-mcp:latest}
+      - TSN_TOOLBOX_BASE_IMAGE=${TSN_TOOLBOX_BASE_IMAGE:-tsushin-toolbox:base}
+      # v0.7.0 Triggers↔Flows Unification env-var gates. Default off so
+      # the release ships byte-identical to 0.6.x. Operators flip per
+      # tenant in staging then production. See backend/config/feature_flags.py.
+      - TSN_FLOWS_TRIGGER_BINDING_ENABLED=${TSN_FLOWS_TRIGGER_BINDING_ENABLED:-false}
+      - TSN_FLOWS_AUTO_GENERATION_ENABLED=${TSN_FLOWS_AUTO_GENERATION_ENABLED:-false}
+      - TSN_FLOWS_BACKFILL_ENABLED=${TSN_FLOWS_BACKFILL_ENABLED:-false}
+      - TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY=${TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY:-false}
+      # Re-seed canonical dev/QA passwords on every backend boot. Default
+      # off; set to true ONLY in dev/CI fixtures so the documented
+      # test/testadmin/member credentials always work after a restart.
+      # See backend/config/feature_flags.py:dev_mode_seed_users_enabled.
+      - TSN_DEV_MODE_SEED_USERS=${TSN_DEV_MODE_SEED_USERS:-false}
+      # Operator-private finan playbook directory (gitignored on host, mounted
+      # read-only at /app/.private/finan_playbooks). Override to disable Finan
+      # templates entirely or point at a different path.
+      - TSN_FINAN_PLAYBOOK_DIR=${TSN_FINAN_PLAYBOOK_DIR:-/app/.private/finan_playbooks}
+      - TSN_FINAN_PROFILES_PATH=${TSN_FINAN_PROFILES_PATH:-/app/.private/finan_profiles.json}
       # Docker socket proxy (BUG-135: no direct socket mount)
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 
       # URL Configuration (for OAuth callbacks, redirects)
+      # Google/Asana redirect defaults INHERIT from TSN_BACKEND_URL/TSN_FRONTEND_URL
+      # so `.env` only needs to set the two public URLs to flip the whole stack
+      # between http://localhost:PORT and https://<domain>. Python settings also
+      # re-derives on its own as a safety net for the unset case.
       - TSN_BACKEND_URL=${TSN_BACKEND_URL:-http://localhost:8081}
       - TSN_FRONTEND_URL=${TSN_FRONTEND_URL:-http://localhost:3030}
-      - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8081/api/hub/google/oauth/callback}
+      - TSN_GOOGLE_OAUTH_REDIRECT_URI=${TSN_GOOGLE_OAUTH_REDIRECT_URI:-${TSN_BACKEND_URL:-http://localhost:8081}/api/hub/google/oauth/callback}
 
       # v0.6.1 Public Ingress Resolver — dev escape hatch for local setups without
       # a Cloudflare tunnel. Leave empty in production.
@@ -199,7 +236,7 @@ services:
 
       # Integrations
       - ASANA_ENCRYPTION_KEY=${ASANA_ENCRYPTION_KEY:-}
-      - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-http://localhost:3030/hub/asana/callback}
+      - ASANA_REDIRECT_URI=${ASANA_REDIRECT_URI:-${TSN_FRONTEND_URL:-http://localhost:3030}/hub/asana/callback}
 
       # External services (use host.docker.internal for host access)
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -233,6 +270,9 @@ services:
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8081}
         - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
+        - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
+        - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
+        - INTERNAL_API_URL=${INTERNAL_API_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
     container_name: ${TSN_STACK_NAME:-tsushin}-frontend
     labels:
       tsushin.managed: "true"
@@ -243,9 +283,13 @@ services:
     environment:
       - NODE_ENV=production
       - TSN_SSL_MODE=${TSN_SSL_MODE:-${SSL_MODE:-disabled}}
-      # v0.6.1 BUG-5/7/8 fix: runtime URL the Next.js rewrites() proxy targets.
-      # Read at request time from the Node.js process (NOT a build arg).
-      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend:8081}
+      - TSN_STACK_NAME=${TSN_STACK_NAME:-tsushin}
+      # v0.6.1 BUG-5/7/8 fix: backend URL used by the Next.js proxy layer.
+      # Fallback rewrites are compiled at image build time; route handlers also
+      # read the same value at runtime.
+      # BUG-723: keep this stack-scoped on the shared external tsushin-network.
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
+      - INTERNAL_API_URL=${INTERNAL_API_URL:-http://${TSN_STACK_NAME:-tsushin}-backend:8081}
     depends_on:
       backend:
         condition: service_healthy

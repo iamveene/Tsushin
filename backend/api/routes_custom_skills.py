@@ -952,6 +952,16 @@ class AgentCustomSkillResponse(BaseModel):
         from_attributes = True
 
 
+def _get_accessible_agent_for_custom_skills(db: Session, ctx: TenantContext, agent_id: int):
+    """Resolve an agent through the same tenant boundary used by the Agents API."""
+    from models import Agent
+
+    agent = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id).filter(Agent.id == agent_id).first()
+    if not agent or not ctx.can_access_resource(agent.tenant_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
 @router.get("/agents/{agent_id}/custom-skills", response_model=List[AgentCustomSkillResponse])
 async def list_agent_custom_skills(
     agent_id: int,
@@ -960,21 +970,14 @@ async def list_agent_custom_skills(
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """List custom skills assigned to an agent."""
-    from models import Agent
-
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == ctx.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_accessible_agent_for_custom_skills(db, ctx, agent_id)
 
     assignments = db.query(AgentCustomSkill, CustomSkill).join(
         CustomSkill,
         AgentCustomSkill.custom_skill_id == CustomSkill.id,
     ).filter(
         AgentCustomSkill.agent_id == agent_id,
-        CustomSkill.tenant_id == ctx.tenant_id,
+        CustomSkill.tenant_id == agent.tenant_id,
     ).order_by(AgentCustomSkill.created_at.asc(), AgentCustomSkill.id.asc()).all()
 
     return [
@@ -999,20 +1002,12 @@ async def assign_custom_skill(
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Assign a custom skill to an agent."""
-    from models import Agent
-
-    # Verify agent belongs to tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == ctx.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_accessible_agent_for_custom_skills(db, ctx, agent_id)
 
     # Verify custom skill belongs to same tenant
     skill = db.query(CustomSkill).filter(
         CustomSkill.id == payload.custom_skill_id,
-        CustomSkill.tenant_id == ctx.tenant_id,
+        CustomSkill.tenant_id == agent.tenant_id,
     ).first()
     if not skill:
         raise HTTPException(status_code=404, detail="Custom skill not found")
@@ -1056,15 +1051,7 @@ async def update_custom_skill_assignment(
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Update a custom skill assignment's config or enabled state."""
-    from models import Agent
-
-    # Verify agent belongs to tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == ctx.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = _get_accessible_agent_for_custom_skills(db, ctx, agent_id)
 
     assignment = db.query(AgentCustomSkill).filter(
         AgentCustomSkill.id == assignment_id,
@@ -1083,7 +1070,7 @@ async def update_custom_skill_assignment(
 
     skill = db.query(CustomSkill).filter(
         CustomSkill.id == assignment.custom_skill_id,
-        CustomSkill.tenant_id == ctx.tenant_id,
+        CustomSkill.tenant_id == agent.tenant_id,
     ).first()
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
@@ -1108,15 +1095,7 @@ async def remove_custom_skill_assignment(
     ctx: TenantContext = Depends(get_tenant_context),
 ):
     """Remove a custom skill assignment from an agent."""
-    from models import Agent
-
-    # Verify agent belongs to tenant
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.tenant_id == ctx.tenant_id,
-    ).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    _get_accessible_agent_for_custom_skills(db, ctx, agent_id)
 
     assignment = db.query(AgentCustomSkill).filter(
         AgentCustomSkill.id == assignment_id,

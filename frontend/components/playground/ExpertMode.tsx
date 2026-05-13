@@ -6,10 +6,12 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react'
+import { useAuth } from '@/contexts/AuthContext'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PlaygroundAgentInfo, PlaygroundMessage, SlashCommand, ProjectSession, Project, AudioCapabilities, PlaygroundThread, authenticatedFetch } from '@/lib/client'
 import { ConnectionState } from '@/lib/websocket'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import { formatTime } from '@/lib/dateUtils'
 import {
   BotIcon,
@@ -230,6 +232,10 @@ export default function ExpertMode({
   // Smart UX: paste handler
   onPaste
 }: ExpertModeProps) {
+  // BUG-681: gate composer + Send on agents.execute so read-only users can
+  // browse transcripts but cannot send messages.
+  const { hasPermission } = useAuth()
+  const canExecute = hasPermission('agents.execute')
   const [activeInspector, setActiveInspector] = useState<InspectorTab>('memory')
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
@@ -392,6 +398,9 @@ export default function ExpertMode({
     setRenamingThreadId(null)
     setRenameTitle('')
   }
+
+  const renameBackdropDismiss = useBackdropDismiss(handleCancelRename)
+  const lightboxBackdropDismiss = useBackdropDismiss(() => setLightboxImage(null))
 
   const handleSaveRename = async () => {
     if (!renamingThreadId || !renameTitle.trim()) {
@@ -1123,12 +1132,16 @@ export default function ExpertMode({
                 />
                 <textarea
                   ref={inputRef}
-                  placeholder={selectedAgentId ? "Type / for commands..." : "Select an agent"}
-                  disabled={!selectedAgentId || isSending || isRecording}
+                  placeholder={
+                    !canExecute
+                      ? 'Read-only — requires agents.execute permission'
+                      : (selectedAgentId ? 'Type / for commands...' : 'Select an agent')
+                  }
+                  disabled={!canExecute || !selectedAgentId || isSending || isRecording}
                   onChange={onInputChange}
                   onKeyDown={onKeyDown}
                   onPaste={onPaste}
-                  className="w-full bg-[var(--pg-elevated)] border border-[var(--pg-border)] rounded-lg px-4 py-3 text-[var(--pg-text)] text-sm resize-none outline-none focus:border-[var(--pg-accent)] focus:ring-2 focus:ring-[var(--pg-accent-glow)] transition-all min-h-[44px] max-h-[120px]"
+                  className="w-full bg-[var(--pg-elevated)] border border-[var(--pg-border)] rounded-lg px-4 py-3 text-[var(--pg-text)] text-sm resize-none outline-none focus:border-[var(--pg-accent)] focus:ring-2 focus:ring-[var(--pg-accent-glow)] transition-all min-h-[44px] max-h-[120px] disabled:opacity-60 disabled:cursor-not-allowed"
                   rows={1}
                   onInput={(e) => {
                     const target = e.currentTarget
@@ -1139,7 +1152,8 @@ export default function ExpertMode({
               </div>
               <button
                 onClick={onSendMessage}
-                disabled={!selectedAgentId || isSending || isRecording}
+                disabled={!canExecute || !selectedAgentId || isSending || isRecording}
+                title={!canExecute ? 'Requires agents.execute permission' : undefined}
                 className="h-11 px-4 rounded-lg bg-[var(--pg-accent)] text-[var(--pg-void)] font-medium text-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isSending ? (
@@ -1406,7 +1420,7 @@ export default function ExpertMode({
           <div
             className="fixed inset-0 z-50"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(4px)' }}
-            onClick={handleCancelRename}
+            {...renameBackdropDismiss}
           />
           <div
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1481,7 +1495,7 @@ export default function ExpertMode({
       {lightboxImage && (
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer"
-          onClick={() => setLightboxImage(null)}
+          {...lightboxBackdropDismiss}
         >
           <button
             className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"

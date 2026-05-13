@@ -332,6 +332,8 @@ def _format_display_name(model_name: str) -> str:
         "gpt-5.3": "GPT-5.3",
         "gpt-5.4": "GPT-5.4",
         "gpt-5.4-pro": "GPT-5.4 Pro",
+        "gpt-5.4-mini": "GPT-5.4 Mini",
+        "gpt-5.4-nano": "GPT-5.4 Nano",
         "gpt-5-mini": "GPT-5 Mini",
         "gpt-5-nano": "GPT-5 Nano",
         # OpenAI - GPT-4.1 series
@@ -381,6 +383,7 @@ def _format_display_name(model_name: str) -> str:
         "claude-3-haiku-20240307": "Claude 3 Haiku",
         # xAI Grok
         "grok-4.3": "Grok 4.3",
+        "grok-4.3-latest": "Grok 4.3 (Latest)",
         "grok-4.20-multi-agent-0309": "Grok 4.20 Multi-Agent",
         "grok-4.20-0309-reasoning": "Grok 4.20 Reasoning",
         "grok-4.20-0309-non-reasoning": "Grok 4.20 Non-Reasoning",

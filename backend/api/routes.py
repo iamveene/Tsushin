@@ -16,6 +16,7 @@ from schemas import (
 )
 from auth_dependencies import require_permission, require_global_admin, get_current_user_optional, get_tenant_context, TenantContext
 from services.audit_service import log_tenant_event, TenantAuditActions
+from services.agent_run_status import determine_agent_run_status
 from agent.router import AgentRouter
 # Import SenderMemory from the old location (agent/memory.py)
 import importlib.util
@@ -25,6 +26,31 @@ spec.loader.exec_module(sender_memory_module)
 SenderMemory = sender_memory_module.SenderMemory
 
 router = APIRouter()
+
+
+def _agent_run_contains_execution_error(*values: Optional[str]) -> bool:
+    """Detect legacy runs that captured tool/runtime failures as successful text."""
+    error_markers = (
+        "error executing ",
+        "traceback (most recent call last)",
+        "curl: (",
+        "command failed",
+    )
+    combined = "\n".join(value for value in values if value).lower()
+    return any(marker in combined for marker in error_markers)
+
+
+def _effective_agent_run_status(run: AgentRun) -> str:
+    """Return the status the UI should show for historical AgentRun rows."""
+    return determine_agent_run_status(
+        {
+            "error": run.error_text,
+            "output_preview": run.output_preview,
+            "tool_result": run.tool_result,
+        },
+        current_status=run.status,
+        output_text=run.output_preview,
+    )
 
 
 class HealthResponse(BaseModel):
@@ -103,6 +129,39 @@ def health_check():
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
         "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
+
+@router.get("/api/system/public-info")
+def public_system_info():
+    """
+    BUG-720: small public-info endpoint that lets client components reason
+    about the install (currently: SSL mode, so the beacon registration UI
+    can emit `curl -k` for self-signed deployments). No tenant data, no
+    secrets — only deployment-level posture flags.
+    """
+    import os
+    import settings
+
+    raw_mode = (
+        os.environ.get("TSN_SSL_MODE")
+        or os.environ.get("SSL_MODE")
+        or ""
+    ).strip().lower()
+    if raw_mode in ("", "off", "none", "disabled"):
+        normalized_mode = "disabled"
+    elif raw_mode in ("self-signed", "selfsigned"):
+        normalized_mode = "selfsigned"
+    elif raw_mode in ("letsencrypt", "le"):
+        normalized_mode = "letsencrypt"
+    elif raw_mode == "manual":
+        normalized_mode = "manual"
+    else:
+        normalized_mode = raw_mode
+
+    return {
+        "ssl_mode": normalized_mode,
+        "version": settings.SERVICE_VERSION,
     }
 
 
@@ -655,7 +714,7 @@ def get_agent_runs(
             "tool_result": run.tool_result,
             "model_used": run.model_used,
             "output_preview": run.output_preview,
-            "status": run.status,
+            "status": _effective_agent_run_status(run),
             "error_text": run.error_text,
             "execution_time_ms": run.execution_time_ms,
             "created_at": run.created_at
@@ -677,6 +736,7 @@ async def trigger_test(
     """
     from models import Agent, Contact
     import json
+    from services.default_agent_service import get_default_agent
 
     # Load agent configuration with tenant check
     if request.agent_id:
@@ -686,12 +746,17 @@ async def trigger_test(
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found or access denied")
     else:
-        # Use default agent from user's tenant
+        resolved_agent_id = get_default_agent(
+            db=db,
+            tenant_id=ctx.tenant_id,
+            channel_type="playground",
+            user_identifier=request.sender_key,
+        )
+        if not resolved_agent_id:
+            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
         agent = ctx.filter_by_tenant(
             db.query(Agent), Agent.tenant_id
-        ).filter(Agent.is_default == True).first()
-        if not agent:
-            raise HTTPException(status_code=404, detail="No default agent found for this tenant")
+        ).filter(Agent.id == resolved_agent_id).first()
 
     # Build config_dict from agent
     # Get agent name from contact relationship
@@ -784,7 +849,6 @@ async def get_memory_stats(
 
     # Base stats
     stats = {
-        "semantic_search_enabled": config.enable_semantic_search if hasattr(config, 'enable_semantic_search') else False,
         "ring_buffer_size": config.memory_size,
     }
 
@@ -807,7 +871,16 @@ async def get_memory_stats(
         ).count()
         agents = db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).all()
 
-    # If semantic search is enabled, get vector store stats for visible agents
+    # Semantic search state is per-agent; the global Config.enable_semantic_search
+    # flag is vestigial and unused at runtime. Aggregate the per-agent flags so
+    # the Watcher badge reflects what's actually configured on agents in scope.
+    total_agents = len(agents)
+    agents_with_semantic_search = sum(1 for a in agents if a.enable_semantic_search)
+    stats["total_agents"] = total_agents
+    stats["agents_with_semantic_search"] = agents_with_semantic_search
+    stats["semantic_search_enabled"] = agents_with_semantic_search > 0
+
+    # If any in-scope agent has semantic search enabled, aggregate embedding counts
     if stats["semantic_search_enabled"]:
         try:
             from pathlib import Path
@@ -816,8 +889,10 @@ async def get_memory_stats(
             total_embeddings = 0
             agent_embeddings = {}
 
-            # Aggregate embeddings from each agent's ChromaDB using VectorStore manager
+            # Aggregate embeddings only from agents that actually have semantic search on
             for agent in agents:
+                if not agent.enable_semantic_search:
+                    continue
                 agent_chroma_path = f"./data/chroma/agent_{agent.id}"
                 if Path(agent_chroma_path).exists():
                     try:

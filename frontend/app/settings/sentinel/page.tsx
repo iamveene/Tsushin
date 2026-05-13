@@ -11,6 +11,19 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+
+/**
+ * Pre-fix the Assigned Profile dropdown rendered the raw profile.name
+ * which the server stores as `tenant_<encoded-tenant-id> Custom`. That
+ * leaked the internal tenant slug into a user-facing control. Strip the
+ * `tenant_<...>` prefix at the render boundary so the operator sees a
+ * clean name. Profiles whose name doesn't carry that prefix (system
+ * profiles, hand-named custom profiles) pass through unchanged.
+ */
+function displayProfileName(name: string | null | undefined): string {
+  if (!name) return ''
+  return name.replace(/^tenant_[\w-]+\s+/i, '').trim() || name
+}
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem, SentinelProfileAssignment, SentinelEffectiveConfig } from '@/lib/client'
 import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
@@ -548,26 +561,31 @@ export default function SentinelSettingsPage() {
         {/* Tab Navigation */}
         <div className="flex space-x-1 glass-card rounded-xl p-1 mb-6">
           {[
-            { id: 'general', label: 'General', Icon: SettingsIcon },
-            { id: 'profiles', label: 'Profiles', Icon: ShieldIcon },
-            { id: 'memguard', label: 'MemGuard', Icon: BrainIcon },
-            { id: 'prompts', label: 'Analysis Prompts', Icon: DocumentIcon },
-            { id: 'llm', label: 'LLM Configuration', Icon: BotIcon },
-            { id: 'stats', label: 'Statistics', Icon: ChartBarIcon },
-            { id: 'exceptions', label: 'Exceptions', Icon: CheckCircleIcon },
-            { id: 'hierarchy', label: 'Hierarchy', Icon: LayersIcon },
+            // Each tab carries a `hint` used as the native tooltip on
+            // hover so terms-of-art (MemGuard, Hierarchy) get a one-line
+            // definition without forcing the operator to click in to
+            // discover what the tab covers.
+            { id: 'general', label: 'General', Icon: SettingsIcon, hint: 'Detection toggles + assigned profile' },
+            { id: 'profiles', label: 'Profiles', Icon: ShieldIcon, hint: 'Reusable security configurations you can assign per agent' },
+            { id: 'memguard', label: 'MemGuard', Icon: BrainIcon, hint: 'Memory poisoning defense — blocks malicious data from being planted in agent memory' },
+            { id: 'prompts', label: 'Analysis Prompts', Icon: DocumentIcon, hint: 'The prompts Sentinel uses when scanning for threats' },
+            { id: 'llm', label: 'LLM Configuration', Icon: BotIcon, hint: 'Which AI model Sentinel uses for analysis' },
+            { id: 'stats', label: 'Statistics', Icon: ChartBarIcon, hint: 'Recent threat detection activity + outcomes' },
+            { id: 'exceptions', label: 'Exceptions', Icon: CheckCircleIcon, hint: 'Patterns that should be allowed even if Sentinel would normally block them' },
+            { id: 'hierarchy', label: 'Hierarchy', Icon: LayersIcon, hint: 'How tenant / profile / agent settings layer to produce the effective config at runtime' },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as TabType)}
+              title={tab.hint}
+              // v0.7.x — MemGuard used to flag itself purple to call out
+              // its newness, but the off-color tab read as a different
+              // surface to first-time operators. Unified to the standard
+              // teal active state so the tab strip is one visual rhythm.
               className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
                 activeTab === tab.id
-                  ? tab.id === 'memguard'
-                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/50'
-                    : 'bg-teal-500/20 text-teal-400 border border-teal-500/50'
-                  : tab.id === 'memguard'
-                    ? 'text-purple-400/60 hover:text-purple-300 hover:bg-purple-500/10'
-                    : 'text-tsushin-slate hover:text-white hover:bg-tsushin-dark/30'
+                  ? 'bg-teal-500/20 text-teal-400 border border-teal-500/50'
+                  : 'text-tsushin-slate hover:text-white hover:bg-tsushin-dark/30'
               }`}
             >
               <tab.Icon size={16} /> {tab.label}
@@ -620,7 +638,7 @@ export default function SentinelSettingsPage() {
                       <option value="">No profile assigned — use system default</option>
                       {profiles.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} ({p.detection_mode}){p.is_system ? ' [System]' : ''}{p.is_default ? ' [Default]' : ''}
+                          {displayProfileName(p.name)} ({p.detection_mode}){p.is_system ? ' [System]' : ''}{p.is_default ? ' [Default]' : ''}
                         </option>
                       ))}
                     </select>
@@ -632,7 +650,7 @@ export default function SentinelSettingsPage() {
                   </div>
                   {tenantAssignment && (
                     <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                      Currently using: <span className="text-teal-400 font-medium">{tenantAssignment.profile_name}</span>
+                      Currently using: <span className="text-teal-400 font-medium">{displayProfileName(tenantAssignment.profile_name)}</span>
                     </p>
                   )}
                 </div>
@@ -668,7 +686,7 @@ export default function SentinelSettingsPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <p className="text-sm text-blue-800 dark:text-blue-200">
-                  The settings below configure the legacy flat config. If a Security Profile is assigned above, the profile settings take precedence during analysis.{' '}
+                  The toggles below are the simple per-tenant Sentinel settings. If you&apos;ve assigned a Security Profile above, the profile&apos;s configuration is what runs at analysis time and these toggles act as a fallback.{' '}
                   <button onClick={() => setActiveTab('profiles')} className="text-blue-500 dark:text-blue-400 hover:underline font-medium">
                     Manage Profiles
                   </button>
@@ -764,7 +782,7 @@ export default function SentinelSettingsPage() {
                     <option value="">Custom Skill Scan [System] (recommended)</option>
                     {profiles.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} ({p.detection_mode}){p.is_system ? ' [System]' : ''}
+                        {displayProfileName(p.name)} ({p.detection_mode}){p.is_system ? ' [System]' : ''}
                       </option>
                     ))}
                   </select>
@@ -1557,7 +1575,7 @@ If you believe this is an error, please contact support."
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="font-semibold text-gray-900 dark:text-gray-100 truncate">
-                            {profile.name}
+                            {displayProfileName(profile.name)}
                           </h4>
                           {profile.is_system && (
                             <span className="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 flex-shrink-0">
@@ -1635,7 +1653,7 @@ If you believe this is an error, please contact support."
                       <button
                         onClick={() => {
                           setCloneSourceId(profile.id)
-                          setCloneForm({ name: `${profile.name} (Copy)`, slug: `${profile.slug}-copy` })
+                          setCloneForm({ name: `${displayProfileName(profile.name)} (Copy)`, slug: `${profile.slug}-copy` })
                           setShowCloneDialog(true)
                         }}
                         className="flex-1 px-3 py-1.5 text-sm text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded transition-colors"
@@ -2249,7 +2267,7 @@ If you believe this is an error, please contact support."
 
         {/* Profile Editor Modal (v1.6.0) */}
         {showProfileModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[210]">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
@@ -2701,7 +2719,7 @@ If you believe this is an error, please contact support."
 
         {/* Clone Profile Dialog (v1.6.0) */}
         {showCloneDialog && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[210]">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Clone Profile</h3>
@@ -2750,7 +2768,7 @@ If you believe this is an error, please contact support."
 
         {/* Exception Modal */}
         {showExceptionModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[210]">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">

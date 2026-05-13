@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href=""><img src="https://img.shields.io/badge/status-beta-orange" alt="Status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-v0.6.0-blue" alt="Version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-v0.7.0-blue" alt="Version"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -19,19 +19,22 @@
 ## Feature Highlights
 
 - **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
-- **6 channels** — WhatsApp (WAHA), Telegram, Slack, Discord, HTTP Webhook (HMAC-signed), and a built-in Playground web chat.
+- **Agent Teams** — line and mesh topologies, hidden internal coordinator, Studio Team Wizard + full Team Builder, Sentinel team-profile override, Watcher Team Runs observability with live WebSocket updates.
+- **Continuous Agents** — wake on event/schedule, queue-driven runs, required Purpose + action_kind contract, and a Watcher run history that surfaces every wake event and outcome. Configure in **Studio → Continuous Agents**, monitor in **Watcher → Agents → Continuous Agents**.
+- **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, and GitHub under Hub → Triggers; scheduled and recurring automation lives in Flows; Jira/GitHub/Password Vault credentials are managed under Hub → Tool APIs; auto-provisioned Whisper/Speaches/Kokoro/Ollama under Hub → Local Services.
 - **10+ LLM providers** — OpenAI, Anthropic, Gemini, Groq, Grok, DeepSeek, Ollama, OpenRouter, Vertex AI, and any OpenAI-compatible endpoint. Provider instances are configured per-tenant via the Hub.
-- **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph).
-- **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas.
-- **19 built-in skills** — audio TTS/transcription, web search, scraping, browser automation, Gmail, flight search, scheduler, knowledge sharing, OKG terms, sandboxed shell/network tools, and more.
+- **Latest frontier model catalog** — shared dynamic-first selectors for GPT-5.5 / GPT-5.5 Pro, Claude Opus 4.7, Grok 4.3 / 4.20 / 4.1 Fast, DeepSeek V4, OpenRouter gateway IDs, and Groq-hosted open models, with manual model IDs accepted everywhere.
+- **4-layer memory** — working, episodic, semantic (with temporal decay), and shared memory pool; optional OKG (Ontology Knowledge Graph) and experimental Trigger Case Memory v2.
+- **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas, with **multi-index per surface** (Agent KB, Project KB, long-term memory) and pluggable embedding providers.
+- **22 built-in skills** — audio TTS/transcription, web search, image analysis + generation/editing, browser automation, Password Vault (1Password), Gmail (with granular send/reply/draft capabilities), Code Repository (GitHub), Ticket Management (Jira), flight search, scheduler, flows, automation, knowledge sharing, OKG terms, agent switcher, A2A agent communication, sandboxed shell/network tools, and more.
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
 - **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
-- **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, or recurring (cron) execution; 8 step types with template-variable interpolation.
-- **Sentinel security** — AI-powered detection of prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), browser SSRF, and vector-store poisoning. Profiles with block / warn-only / detect-only / off modes.
-- **Studio** — visual agent builder, personas, contacts, projects (knowledge isolation), custom skills, and agent-to-agent communication.
+- **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, recurring, keyword, or triggered execution. Triggered flows select an existing Hub trigger and get a locked Source step plus `flow_trigger_binding`; Source is not manually addable.
+- **Sentinel security** — AI-powered detection across 9 threat types: prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), agent privilege escalation, browser SSRF, vector-store poisoning, and continuous-agent action approval. Per-tenant, per-agent, and per-team profiles with block / warn-only / detect-only / off modes; dynamic threat-type derivation from `DETECTION_REGISTRY`.
+- **Studio** — visual agent builder, personas, contacts, projects (knowledge isolation), custom skills, agent-to-agent communication, and Agent Teams.
 - **Playground** — real-time streaming chat, audio recording + Whisper transcription, document-only uploads, command palette, memory inspector, expert mode. Plus **Playground Mini**, a floating quick-test bubble available on every authenticated page with markdown-rendered replies and a one-click expand-to-full-Playground handover that preserves the conversation.
-- **Watcher** — observability dashboard with conversations, flows, security events, channel health, billing, and a graph view.
+- **Watcher** — observability dashboard with 7 top-level tabs (Dashboard · Graph View · Agents · Flows · Security · Channel Health · Billing); the **Agents** tab nests 5 agent-runtime sub-tabs (Continuous Agents · Wake Events · Conversations · Team Runs · A2A Comms).
 - **Public API v1** — OAuth2 client credentials + direct API key, rate-limited, 40+ endpoints (agents, chat, flows, hub, studio, resources).
 - **Multi-tenancy & RBAC** — 4 built-in roles (owner / admin / member / readonly), 47 permission scopes, per-tenant isolation, envelope-encrypted per-service keys.
 - **Audit & compliance** — tenant-scoped audit events, CSV export, per-tenant retention, RFC 5424 syslog streaming (TCP / UDP / TLS).
@@ -39,53 +42,32 @@
 
 ---
 
-## What's New in v0.6.0
+## v0.7.0 Highlights
 
-v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes since the last `main` release:
+v0.7.0 reshapes the Hub around four roles — **Channels** (conversational), **Triggers** (event sources), **Tool APIs** (programmatic credentials), and **Local Services** (auto-provisioned Whisper/Speaches/Kokoro/Ollama) — and adds Agent Teams, Continuous Agents, multi-index vector stores, and a self-hosted ASR engine. The v0.7.x sweeps further consolidate Watcher into 7 top-level tabs (with 5 agent-runtime sub-tabs nested under **Agents**) and introduce a Studio **Continuous Agents** tab plus a kind-chooser modal so the three creation surfaces (Agent / Continuous Agent / Team) are discoverable side-by-side. Configuration lives in Studio + Hub; observability lives in Watcher.
 
-**Channels & Communication**
-- **Slack and Discord — first complete end-to-end** (V060-CHN-001/002/031). Slack runs on both Socket Mode (self-managed `SocketModeClient` per integration) and HTTP Events; Discord runs on HTTP Interactions with per-tenant Ed25519 signature verification. Threaded replies are preserved (`thread_ts`), bot-authored messages are filtered to prevent reply loops, and every saved token uses per-tenant PBKDF2-derived Fernet encryption (closes a silent token-decrypt regression).
-- **Guided setup wizards** — `SlackSetupWizard` (5 steps, pre-filled Slack app manifest JSON) and `DiscordSetupWizard` (6 steps, including user-install fallback for accounts without Manage Server permission). Replaces the old bare-token modals that had users hunting the Slack/Discord portals blind.
-- **Tenant Public Base URL** — new `tenant.public_base_url` setting (migration `0034`) surfaces the exact webhook URLs to paste back into the Slack Events / Discord Interactions portals, with inline `cloudflared tunnel --url http://localhost:8081` guidance when unset.
-- **Remote Access via Cloudflare Tunnel** — per-tenant gated public exposure for HTTP-path channel integrations.
-- **Agent ↔ Channel binding UI** — `AgentChannelsManager` now renders Slack and Discord cards alongside Playground/WhatsApp/Telegram/Webhook, with an instance selector per channel.
+**Headline changes:**
 
-**Memory & Knowledge**
-- **Vector Stores** — per-agent override/complement/shadow modes with a creation wizard that can attach the new store to existing agents in one flow. Chroma (built-in), Qdrant (auto-provisioned when available), Pinecone, MongoDB Atlas.
-- **Own Knowledge Graph (OKG)** — `okg_store` / `okg_recall` / `okg_forget` multi-tool registration; LLM-argument coercion handles common string↔array and string↔boolean mismatches so tool calls don't fail on shape.
-- **Memory tenant-scoping** — defense-in-depth `tenant_id` filter added to every read/delete path (`agent_memory_system`, `memory_management_service`, `routes_memory`, playground services) in addition to the write-side column that shipped in 0.5.0.
+- **Hub split — Channels vs Triggers vs Tool APIs vs Local Services** — Channels host WhatsApp/Telegram/Slack/Discord/Playground; Triggers host Email/Webhook/Jira/GitHub; Tool APIs host Jira/GitHub/Password Vault credentials; Local Services hosts auto-provisioned ASR/TTS/LLM containers. Standalone Schedule Trigger removed (cron lives only on FlowDefinition); Wake Events moved under Watcher.
+- **Unified Trigger Creation Wizard + Visual Schedule Picker** — one wizard creates Email, Webhook, Jira, and GitHub triggers, selects or creates the required Hub integration, and hands off to the generated or wired flow at `/flows?edit=<auto_flow_id>` so operators configure outputs in the Flow editor.
+- **Triggers ↔ Flows Unification (Waves 1-5)** — every new trigger now mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification chain) in the same transaction. The Flow create path also supports **Triggered** by selecting an existing Email/Gmail, Jira, GitHub, or Webhook Hub trigger, then auto-generating a locked Source step and `flow_trigger_binding`. Source is a trigger-owned entry step, not a manual step type. The dispatcher fans wake events out to bound flows alongside the legacy ContinuousAgent path. All gated by env vars (`TSN_FLOWS_TRIGGER_BINDING_ENABLED`, `TSN_FLOWS_AUTO_GENERATION_ENABLED`, `TSN_FLOWS_BACKFILL_SUPPRESS_LEGACY`) for safe staged rollout.
+- **Agent Teams (Phases 1-10)** — line and mesh topologies, hidden internal coordinator, Studio **Team Wizard** (Custom/Template, Basics, Topology, Members, Tools, Triggers, Review, Create), full **Team Builder** with React Flow canvas + Sentinel team-profile override + run drilldown, **Watcher Team Runs** observability with live WebSocket updates, mesh coordinator decision log, member-run cards, and Sentinel decision visibility. Webhook/GitHub/Jira/Gmail trigger bindings; transactional A2A membership snapshot/restore; team-scoped scratch tools and run-scoped memory; team-archive and hard-delete.
+- **Continuous Agents** — wake-mode selector in the Studio New Agent modal (`Conversational` vs `Continuous`), required Purpose + action_kind contract, queue-driven runs, structured 409 detail surfaces actionable delete prompts, Watcher run history with wake-event evidence. v0.7.x adds a dedicated **Studio → Continuous Agents** tab plus a 3-way kind-chooser ("Compare options") modal that explains Agent / Continuous Agent / Team side-by-side so first-time users can pick the right surface up front.
+- **Multi-index vector stores + pluggable embedding providers** — Agent KB, Project KB, and long-term memory now select an index per surface; per-surface contracts let each subsystem pick its own embedding provider (default, Gemini external, etc.).
+- **Self-hosted Whisper as 2nd ASR engine + Hub ASR card** — Whisper and Speaches now ship as auto-provisioned local containers under Hub → Local Services, configured via the Hub > Add Provider > Speech-to-Text wizard, deletable through a cascade-aware banner that warns when the instance is still attached to agents. `/settings/asr` retired in favor of per-agent assignment from the Skills tab.
+- **Password Vault foundation + UI-first financial workflow migration** — Hub → Tool APIs supports a provider-neutral Password Vault integration with 1Password as the first provider; setup is UI-first through Hub pickers. Agents can attach the Password Vault skill, and Flows can resolve explicit vault references through visible Flow steps while persisting only redacted outputs. Migrated financial workflows are accepted only when they can be recreated and edited from scratch in the UI with primitive nodes for vault credentials, HTTP/browser automation, extraction/transform, storage/dedupe, gates, and notifications. JSON import/export may be added later for speed, but it is not an acceptance substitute for manual UI reconstruction. The legacy opaque `financial_utility_automation` step type was **removed in v0.7.x (2026-05-07)** along with its frontend templates, config panel, backend handler, and three site-specific runners — the 6 migrated `Finan | …` flows already use only generic primitives. Notification-state classifier (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `paid`, …) with per-state templates and `in` / `not_in` Gate operators landed in the v0.7.x patch series.
+- **Variable Reference panel everywhere** — every templated step-config field (skill prompt, conversation objective, agentic gate prompt, slash-command body, gate-fail notification, etc.) gets the live Variable Reference panel with previous-step outputs + per-trigger-kind deep payload paths (Jira `payload.issue.key`, GitHub `payload.pull_request.title`, etc.). Drag-and-drop chips into any field.
+- **Code Repository skill (GitHub)** — 12-action capability-gated skill (read on by default, write off by default) with a reusable encrypted `GitHubIntegration` Hub row and `pull_request` trigger criteria envelope. Same contract as `ticket_management` (Jira) — same `WRITE` badges in the agent UI, same tool-spec gating so the LLM never even sees disabled actions.
+- **Ticket Management skill (Jira) + final Jira trigger slice** — agents can search/read/act on tickets via the `ticket_operation` tool. Capability-gated; write actions (`update`, `add_comment`, `transition`) off by default and filtered out of the LLM's tool spec. The trigger slice runs live JQL polling on Jira Cloud's enhanced JQL search endpoint, once-per-issue dedupe, encrypted Hub → Tool APIs Jira credentials, and notification output configured through the generated Flow.
+- **Granular Gmail send capability** — `gmail` skill split into `search` / `read_message` (default ON) and `send` / `reply` / `draft` (default OFF). Same capability-gating contract; surfaces a real masked bug where `SkillManager` was ignoring saved per-agent capability config.
+- **Email trigger criteria parity + Trigger Case Memory v2 (default-off, experimental)** — saved Gmail queries are mirrored into `trigger_criteria`, operators can test sample messages and force a poll-now run, and output routing is configured through the generated Flow. Trigger Case Memory v2 adds a per-trigger recap with optional Gemini external embeddings, gated by tenant-scoped SaaS feature flags.
+- **Provider Wizard + Managed Container Panel** — guided multi-step provider setup (Hub > Add Provider), unified local-service controls (start/stop/restart/logs/status), Service API Keys disclosure, an LLM Providers Catalog endpoint, and a cascade-aware delete contract.
+- **Shared LLM model catalog + pricing refresh** — Setup, Hub AI Providers, System AI, Sentinel, Agent Wizard, Studio edit settings, Playground, Watcher/Studio selectors, and Billing/Model Pricing now use the same latest-model defaults and cached-input-aware cost baseline.
+- **Cloudflared sidecar opt-out** — Remote Access can now defer to an externally managed tunnel; the backend still owns config, audit, entitlement, and status. Closes the v0.6.0 pre-release-hardening item.
+- **Release-finishing UX** — `ConfirmDialog` with type-the-name protection for destructive trigger / flow / webhook-secret-rotation actions; tenantless-admin Hub gating (zero `400 User has no tenant` console errors when global admins browse `/hub` without a tenant context); shared agent-vs-flow explainer; Continuous-Agent purpose/action_kind enforcement.
+- **v0.7.x IA reshape (post-release)** — Watcher consolidated from 11 to 7 top-level tabs with a single **Agents** tab nesting 5 agent-runtime sub-tabs (Continuous Agents · Wake Events · Conversations · Team Runs · A2A Comms); Studio gains a **Continuous Agents** tab + 3-way kind-chooser; auto-flow editor surfaces the bound trigger's JQL/search-query/criteria with an "Edit in Hub" deep link, prepends an upstream-filter callout on the gate, hides outbound-message fields on the system-managed Default-agent step, adds a per-step "Sample data this step receives" preview that fetches the most-recent wake event payload, and replaces the "Suppress default agent" checkbox with a **Parallel fire ↔ Flow-only** pill toggle. UI rename of "Watcher Monitor" → "Continuous Agent" everywhere (backend model name unchanged). Plus two related bug fixes: flow-step `on_failure` / `on_success` / `retry_delay_seconds` now round-trip through the API (were dropped silently), and the auto-flow gate now writes the canonical `gate_mode` / `gate_conditions` / `gate_logic` keys the engine actually reads.
 
-**AI Provider Efficiency**
-- **Anthropic prompt caching** — 3 breakpoint `cache_control` with a relocation trick for the dynamic tail; 40–65% token-cost reduction for chat-heavy workloads.
-- **Default Anthropic model** bumped to `claude-haiku-4-5`.
-- **Latest model catalog support** — provider/model pickers now source the tenant's live provider-instance catalog at runtime, including dynamic model discovery and custom model entries, so newly exposed OpenAI-compatible models appear in setup, agent, Sentinel, Playground, and System AI flows without frontend list drift.
-- **DeepSeek V4 direct API** — direct DeepSeek defaults now use `deepseek-v4-flash`, expose `deepseek-v4-pro`, keep `deepseek-chat` / `deepseek-reasoner` as compatibility aliases, and seed usage pricing from DeepSeek's standard non-promotional rates including cached-input costs.
-
-**Security & Sentinel**
-- **Sentinel parser** now derives valid threat types dynamically from `DETECTION_REGISTRY` instead of a hard-coded 5-entry allowlist. Regression tests (`test_sentinel_unified_parse.py`, 10 cases) guard against future re-introduction.
-- **Docker hardening, per-client rate limits, PostgreSQL password rotation** (BUG-055/057/062).
-- **BUG-LOG-015** — memory tenant-scoping read-path bypass fully closed, with `test_memory_tenant_scoping.py` (7 cases) asserting tenant isolation at query level.
-
-**Installer & Deployment**
-- **IP-address installs** — self-signed SAN now emits `IP:<addr>,DNS:localhost,IP:127.0.0.1,IP:::1` (previously invalid `DNS:<IP>`, rejected by browsers/curl). Stale-SAN auto-detection and regeneration on installer re-runs.
-- **Let's Encrypt staging mode** (`--le-staging`) — uses the LE staging directory so operators can rehearse the full ACME flow without burning production rate-limit budget.
-- **Manual-cert pre-flight validation** — key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves deployments behind Sectigo/GoDaddy).
-- **SSL config persistence** across installer re-runs (`SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH`).
-- **Frontend rebuild on `NEXT_PUBLIC_API_URL` change** — the installer diffs the previous `.env` and rebuilds the image no-cache instead of silently shipping a stale cached bundle.
-- **Production deploy helper** — `scripts/deploy-prod.sh` is the guarded main-only deploy path: it refuses dirty or non-`main` local trees, SSHes to the configured production checkout, fast-forwards with `git pull --ff-only`, rebuilds backend/frontend with `docker-compose up -d --build --no-cache backend frontend` semantics, avoids `docker-compose down`, verifies service health, and checks the public `/api/health` URL.
-
-**Platform & Tooling**
-- **Next.js 16** upgrade — `outputFileTracingRoot`, `turbopack.root`, typed-routes reference in `next-env.d.ts`.
-- **Flows integration** — `flows_skill` now queries `AgentSkillIntegration` first (fixes Google Calendar provider being ignored in favor of config defaults). BUG-559 fully resolved.
-- **Automation skill** — strips embedded `"\"…\""` quotes around `flow_identifier` before lookup so LLM-formatted tool arguments stop failing with "Flow not found".
-- **Agent switcher** default execution mode → `hybrid` (keyword + LLM tool paths both active).
-- **WhatsApp LID migration** — Contact auto-linking, UserAgentSession fallback via phone number, and ContactAgentMapping dual-key lookup handle WhatsApp's phone-ID → Linked-ID transition.
-- **TTS pipeline** — `tenant_id` now propagates end-to-end (router → TTS skill → provider → `get_api_key`). Provider-instance fallback means tenants no longer need a duplicate "Service API Key" row just for TTS.
-- **Web search provider switching** (Brave ↔ Google/SerpAPI), **Flight search** (Google Flights via SerpAPI), **Gmail + Google Calendar** skills — all verified end-to-end against live providers.
-- **Logout spinner fix (BUG-544)** — hard navigation replaces the async `router.push('/auth/login')` that could leave `/` stuck on the loading screen.
-- **Graph View** — WebSocket resilience (indefinite reconnect + `visibilitychange` listener), brighter glow, target-node pulse during A2A, stale A2A-edge auto-cleanup.
-
-**Full change log**: [docs/changelog.md](docs/changelog.md) contains ~50 detailed entries for every fix, migration, wizard step, and regression-test suite that shipped in this release.
+**Full change log:** [docs/changelog.md](docs/changelog.md) — 80+ detailed entries covering every wave, phase, fix, and migration shipped in this release plus the in-progress v0.7.x patch series.
 
 ---
 
@@ -126,13 +108,28 @@ python3 install.py --help
 
 The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation.
 
+### UI-first financial automation setup
+
+New users configure and edit financial automations from the product UI:
+
+1. Go to Hub → Tool APIs → Password Vault and create/test the 1Password service-account connection.
+2. Attach the Password Vault skill from an agent's Skills tab or during the guided Agent Wizard; the UI must select the 1Password connection and capability toggles, not leave an unlinked skill row.
+3. Go to Flows and use **From Template** for the supported financial catalog, or build manually from visible primitives: vault credential, explicit HTTP/API calls or Browser Automation actions, extraction/transform, storage/dedupe, Gate, and Notification. Browser-based automations should be split into editable actions such as navigate, fill username, fill password/TOTP from Password Vault, click submit, wait for selectors/URLs, dismiss modals, handle CAPTCHA/manual-handoff boundaries, extract fields, and capture evidence. These controls must be understandable to an operator; they should not require editing raw JSON or programming-like node blobs.
+4. Save, manually run the Flow, confirm the local state update, run it a second time to prove dedupe, and validate conditional notification behavior for both notify and skip paths.
+
+Consigaz also requires an explicit Password Vault field named `basic_auth` for the API token bootstrap; it is resolved by a visible vault step and is not stored in the template JSON.
+
+Financial workflows are built exclusively from generic primitives — Password Vault, Browser Automation, HTTP Request, Data Transform, Financial Record Store / Utility Bill Store, Gate, and Notification. The previous opaque `financial_utility_automation` step (which dispatched to hardcoded site-specific scrapers) has been removed in favour of UI-recreatable flows. If a source flow cannot be recreated from a redacted manifest by using only the Flow UI, the missing control is a product bug; do not bypass the gap with backend row inserts or JSON import.
+
+Operator-private Finan flow templates and playbooks live under `.private/finan_profiles.json` and `.private/finan_playbooks/*.json` (gitignored). Override the locations with `TSN_FINAN_PROFILES_PATH` and `TSN_FINAN_PLAYBOOK_DIR`. A clone without those files boots cleanly with zero Finan templates registered.
+
+The template wizard is intentionally simple by default: it asks for the vault reference, Flow name, agent, channel, and recipient first, while technical overrides such as browser session profile, unit key, asset label, and timezone stay behind **Advanced options**. Created financial templates must remain editable like normal Flows, including Browser Automation URL/action controls and the ability to add Skill, Summarization, or Notification steps.
+
 For the Parallels Ubuntu VM workflow used in fresh-install audits, you can sync the repo from your Mac with `bash deploy-to-vm.sh`, then SSH to the VM and run `sudo python3 install.py` from `~/tsushin`.
 
-For SSL installs, the generated Caddy config now targets stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps `https://localhost` pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
+The generated Caddy config and frontend proxy build now target stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps both HTTP and HTTPS browser traffic pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
 
 → Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [docs/documentation.md §4 Deployment & Operations](docs/documentation.md#4-deployment--operations).
-
-Production deploys are main-only. Configure `TSUSHIN_PROD_SSH_TARGET` (or `.private/deploy-prod.env`) and run `bash scripts/deploy-prod.sh` from a clean `main` checkout after release PR merge; the helper rebuilds only backend/frontend and verifies `https://tsushin.archsec.io/api/health` by default.
 
 ### Verify
 
@@ -141,6 +138,16 @@ curl http://localhost:8081/api/health      # Liveness
 curl http://localhost:8081/api/readiness   # Readiness (checks PostgreSQL)
 docker compose ps                          # Container states
 ```
+
+### Development QA
+
+v0.7.0 adds a frontend visual baseline suite for release preparation:
+
+```bash
+npm --prefix frontend run test:visual
+```
+
+The committed baselines live under `frontend/tests/visual/`; private reports, traces, and temporary screenshots stay in `.private/qa/v0.7.0/`.
 
 ---
 
@@ -162,7 +169,7 @@ docker compose ps                          # Container states
 │  ┌──────────────┐     ┌───────────────┐     ┌─────────────────────┐         │
 │  │     CORE     │     │      HUB      │     │       STUDIO        │         │
 │  │ Agent Engine │     │ AI Providers  │     │ Agents   Personas   │         │
-│  │ 19 Skills    │     │ Comm Channels │     │ Contacts Projects   │         │
+│  │ 20 Skills    │     │ Comm Channels │     │ Contacts Projects   │         │
 │  │ Sentinel     │     │ Tool APIs     │     │ Tone Presets        │         │
 │  └──────┬───────┘     └───────┬───────┘     └─────────────────────┘         │
 │         │                     │                                              │
@@ -170,9 +177,9 @@ docker compose ps                          # Container states
 │  ┌──────────────┐     ┌───────────────┐     ┌─────────────────────┐         │
 │  │    FLOWS     │     │    MEMORY     │     │      WATCHER        │         │
 │  │ 4 types      │     │ Working       │     │ Dashboard  Billing  │         │
-│  │ 7 step types │     │ Episodic      │     │ Convos     Security │         │
-│  │ Scheduler    │     │ Semantic      │     │ Flows   Graph View  │         │
-│  │ Templates    │     │ Shared        │     │                     │         │
+│  │ 15+ step     │     │ Episodic      │     │ Agents     Security │         │
+│  │ Source/Gate  │     │ Semantic      │     │ Flows   Graph View  │         │
+│  │ Templates    │     │ Shared        │     │ Channel Health      │         │
 │  └──────────────┘     └───────────────┘     └─────────────────────┘         │
 │                                                                              │
 │  ┌──────────────────────────────┐     ┌──────────────────────────────────┐   │
@@ -200,7 +207,7 @@ docker compose ps                          # Container states
 | Memory, knowledge, vector stores | [§10](docs/documentation.md#10-memory--knowledge), [§11](docs/documentation.md#11-vector-stores) |
 | Sentinel security | [§12](docs/documentation.md#12-security--sentinel) |
 | Flows & scheduler | [§13](docs/documentation.md#13-flows), [§14](docs/documentation.md#14-scheduler--triggers) |
-| Channels (WhatsApp / Telegram / Slack / Discord / Webhook / Playground) | [§15](docs/documentation.md#15-channels) |
+| Channels and triggers (WhatsApp / Telegram / Slack / Discord / Playground; Email / Webhook / Jira / GitHub) | [§14](docs/documentation.md#14-scheduler--triggers), [§15](docs/documentation.md#15-channels) |
 | Contacts, projects, playground | [§16](docs/documentation.md#16-contacts--channel-mapping), [§17](docs/documentation.md#17-projects-studio), [§18](docs/documentation.md#18-playground) |
 | LLM providers & hub integrations | [§19](docs/documentation.md#19-llm-providers), [§20](docs/documentation.md#20-hub-integrations) |
 | Settings UI (every subpage) & system admin | [§21](docs/documentation.md#21-settings--ui-taxonomy), [§22](docs/documentation.md#22-system-admin-global-admin-only) |
@@ -248,7 +255,7 @@ TSN_METRICS_ENABLED=true
 
 **Operational notes for WhatsApp:**
 - Prefer `docker compose build --no-cache backend` followed by `docker compose up -d backend` (and the equivalent frontend commands) instead of `docker compose down`. The external `tsushin-network` now survives `down`, but routine rebuilds should still avoid tearing down the compose services.
-- Hub → Communication now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
+- Hub → Channels now exposes dedicated **QA Tester** controls for the current tester target and also lists runtime tester rows in the main WhatsApp table, so QA sessions stay visible without mixing them into normal agent operations.
 - Graph View now distinguishes explicit WhatsApp bindings, resolved-default bindings, and ambiguous/unassigned states; if an agent has WhatsApp enabled but no wire, check for the `WhatsApp Unassigned` warning node instead of assuming the graph failed to load.
 
 → Complete env-var reference (80+ variables, all defaults, all subsystems): [Appendix A](docs/documentation.md#29-appendix-a-complete-environment-variable-reference).
@@ -275,4 +282,4 @@ Tsushin is open-source software licensed under the [MIT License](LICENSE).
 
 ---
 
-**Version 0.6.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)
+**Version 0.7.0** · [Docs Index](docs/README.md) · [Changelog](docs/changelog.md) · [Documentation](docs/documentation.md) · [User Guide](docs/user-guide.md)

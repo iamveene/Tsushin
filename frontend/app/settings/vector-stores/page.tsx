@@ -3,7 +3,9 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, VectorStoreInstance } from '@/lib/client'
+import { formatVectorStoreIndex, getDefaultVectorStoreIndex, getVectorStoreIndexes } from '@/components/EmbeddingContractControls'
+import { api, VectorStoreEmbeddingTestResult } from '@/lib/client'
+import type { VectorStoreIndex, VectorStoreInstance } from '@/lib/client'
 
 const VENDOR_LABELS: Record<string, string> = {
   mongodb: 'MongoDB',
@@ -18,17 +20,30 @@ const STATUS_COLORS: Record<string, string> = {
   degraded: 'bg-yellow-400',
 }
 
+function isInternalVectorUrl(value: string | null | undefined): boolean {
+  return Boolean(value && /^https?:\/\/vs-[a-z0-9-]+:\d+/i.test(value))
+}
+
+function isInternalVectorName(value: string | null | undefined): boolean {
+  return Boolean(value && (/^case_memory_tenant_/i.test(value) || /^tsn_[a-z0-9]+_/i.test(value)))
+}
+
 export default function VectorStoresSettingsPage() {
   const { isLoading: authLoading, hasPermission } = useRequireAuth()
   const canEdit = hasPermission('org.settings.write')
 
   const [instances, setInstances] = useState<VectorStoreInstance[]>([])
+  const [indexesByInstanceId, setIndexesByInstanceId] = useState<Record<number, VectorStoreIndex[]>>({})
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [savedId, setSavedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  // v0.7.x Wave 2-D — per-instance embedding probe. Keyed by instance.id so a
+  // future iteration that lists multiple rows can render results inline.
+  const [embeddingTesting, setEmbeddingTesting] = useState<number | null>(null)
+  const [embeddingResults, setEmbeddingResults] = useState<Record<number, VectorStoreEmbeddingTestResult>>({})
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
@@ -45,6 +60,17 @@ export default function VectorStoresSettingsPage() {
         api.getDefaultVectorStore(),
       ])
       setInstances(instanceList)
+      const indexPairs = await Promise.all(instanceList.map(async (instance) => {
+        try {
+          const indexes = await api.getVectorStoreIndexes(instance.id)
+          return [instance.id, indexes] as const
+        } catch {
+          return [instance.id, undefined] as const
+        }
+      }))
+      setIndexesByInstanceId(Object.fromEntries(
+        indexPairs.filter((entry): entry is readonly [number, VectorStoreIndex[]] => Array.isArray(entry[1])),
+      ))
       setSelectedId(defaultData.default_vector_store_instance_id)
       setSavedId(defaultData.default_vector_store_instance_id)
     } catch (e: any) {
@@ -84,7 +110,43 @@ export default function VectorStoresSettingsPage() {
     }
   }
 
+  const handleTestEmbedding = async (instanceId: number) => {
+    setEmbeddingTesting(instanceId)
+    setEmbeddingResults((prev) => {
+      const next = { ...prev }
+      delete next[instanceId]
+      return next
+    })
+    try {
+      const result = await api.testEmbedding(instanceId, 'OAuth token refresh failure')
+      setEmbeddingResults((prev) => ({ ...prev, [instanceId]: result }))
+    } catch (e: any) {
+      setEmbeddingResults((prev) => ({
+        ...prev,
+        [instanceId]: {
+          success: false,
+          dims: 0,
+          sample_norm: 0,
+          latency_ms: 0,
+          provider: '',
+          model: '',
+          error: e?.message || 'Embedding test failed',
+        },
+      }))
+    } finally {
+      setEmbeddingTesting(null)
+    }
+  }
+
   const selectedInstance = instances.find(i => i.id === selectedId)
+  const legacyIndexes = getVectorStoreIndexes(selectedInstance)
+  const selectedIndexes = selectedId && indexesByInstanceId[selectedId] !== undefined
+    ? indexesByInstanceId[selectedId]
+    : legacyIndexes
+  const selectedInstanceWithIndexes = selectedInstance
+    ? { ...selectedInstance, indexes: selectedIndexes }
+    : undefined
+  const defaultIndex = getDefaultVectorStoreIndex(selectedInstanceWithIndexes)
   const hasChanges = selectedId !== savedId
 
   if (authLoading || loading) {
@@ -130,7 +192,7 @@ export default function VectorStoresSettingsPage() {
           disabled={!canEdit}
           className="w-full px-3 py-2.5 border border-white/10 rounded-lg text-white bg-[#0a0a0f] text-sm focus:border-teal-500/50 focus:outline-none"
         >
-          <option value="">ChromaDB (built-in)</option>
+          <option value="">Built-in store</option>
           {instances.map(inst => (
             <option key={inst.id} value={inst.id}>
               {inst.instance_name} ({VENDOR_LABELS[inst.vendor] || inst.vendor})
@@ -179,9 +241,13 @@ export default function VectorStoresSettingsPage() {
             )}
           </div>
           <div className="space-y-1 text-sm text-gray-400">
-            {selectedInstance.base_url && <p>Endpoint: <span className="text-gray-300">{selectedInstance.base_url}</span></p>}
+            {selectedInstance.base_url && !selectedInstance.is_auto_provisioned && !isInternalVectorUrl(selectedInstance.base_url) && (
+              <p>Endpoint: <span className="text-gray-300">{selectedInstance.base_url}</span></p>
+            )}
             {selectedInstance.extra_config?.collection_name && (
-              <p>Collection: <span className="text-gray-300">{selectedInstance.extra_config.collection_name}</span></p>
+              <p>Collection: <span className="text-gray-300">
+                {isInternalVectorName(selectedInstance.extra_config.collection_name) ? 'Default collection' : selectedInstance.extra_config.collection_name}
+              </span></p>
             )}
             {selectedInstance.container_port && (
               <p>Port: <span className="text-gray-300">{selectedInstance.container_port}</span></p>
@@ -189,7 +255,82 @@ export default function VectorStoresSettingsPage() {
             <p>Health: <span className={selectedInstance.health_status === 'healthy' ? 'text-emerald-400' : 'text-gray-300'}>
               {selectedInstance.health_status}
             </span></p>
+            <p>Default LTM Contract: <span className="text-gray-300">
+              {defaultIndex
+                ? `${defaultIndex.embedding_provider || 'local'} / ${defaultIndex.embedding_model || 'all-MiniLM-L6-v2'} / ${defaultIndex.embedding_dims || 384}d`
+                : `${selectedInstance.extra_config?.embedding_provider || 'local'} / ${selectedInstance.extra_config?.embedding_model || 'all-MiniLM-L6-v2'} / ${selectedInstance.extra_config?.embedding_dims || 384}d`}
+            </span></p>
           </div>
+
+          <div className="mt-4 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <h3 className="text-sm font-medium text-gray-300">Indexes</h3>
+              <span className="text-xs text-gray-500">{selectedIndexes.length} configured</span>
+            </div>
+            {selectedIndexes.length > 0 ? (
+              <div className="space-y-2">
+                {selectedIndexes.map((index) => (
+                  <div key={index.id} className="flex flex-col gap-1 rounded-md bg-[#0a0a0f] border border-white/5 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-gray-300 truncate" title={formatVectorStoreIndex(index)}>
+                        {formatVectorStoreIndex(index)}
+                      </span>
+                      {index.is_default && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 shrink-0">DEFAULT LTM</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                      {[index.collection_name, index.namespace]
+                        .filter(Boolean)
+                        .map((value) => isInternalVectorName(value) ? 'Default collection' : value)
+                        .join(' / ') || 'No collection namespace reported'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">
+                This backend has not reported index rows yet. Legacy collection/index fields are still used as the default contract.
+              </p>
+            )}
+          </div>
+
+          {/* v0.7.x Wave 2-D: Test Embedding button — probes the configured
+              embedding provider with a short test phrase and reports
+              dims/provider/model/latency or surfaces an inline error. */}
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={() => handleTestEmbedding(selectedInstance.id)}
+              disabled={embeddingTesting === selectedInstance.id}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 transition-colors"
+            >
+              {embeddingTesting === selectedInstance.id ? 'Testing embedding…' : 'Test Embedding'}
+            </button>
+          </div>
+
+          {embeddingResults[selectedInstance.id] && (
+            <div
+              className={`mt-3 p-3 rounded-lg text-xs ${
+                embeddingResults[selectedInstance.id].success
+                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                  : 'bg-red-500/10 border border-red-500/20 text-red-300'
+              }`}
+            >
+              {embeddingResults[selectedInstance.id].success ? (
+                <span>
+                  success ✓ | dims={embeddingResults[selectedInstance.id].dims}
+                  {' | '}
+                  provider={embeddingResults[selectedInstance.id].provider}
+                  {' | '}
+                  model={embeddingResults[selectedInstance.id].model}
+                  {' | '}
+                  latency_ms={embeddingResults[selectedInstance.id].latency_ms}
+                </span>
+              ) : (
+                <span>error ✗ | {embeddingResults[selectedInstance.id].error || 'unknown error'}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -199,7 +340,7 @@ export default function VectorStoresSettingsPage() {
         <div className="text-xs text-gray-500 space-y-1">
           <p>1. If an agent has a per-agent vector store override (Agent Builder), it uses that.</p>
           <p>2. Otherwise, it uses the tenant default selected above.</p>
-          <p>3. If no default is set, ChromaDB (built-in) is used automatically.</p>
+          <p>3. If no default is set, the built-in store is used automatically.</p>
           <p className="mt-2 text-gray-400">Configure vector store connections in <Link href="/hub" className="text-teal-400 hover:underline">Hub &gt; Vector Stores</Link>.</p>
         </div>
       </div>

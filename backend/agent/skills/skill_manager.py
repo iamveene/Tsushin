@@ -42,6 +42,25 @@ class SkillManager:
         self._register_builtin_skills()
         logger.info(f"SkillManager initialized with {len(self.registry)} registered skills")
 
+    # Reserved config keys that should stay out of per-skill AgentSkill.config
+    # payloads. Track A will eventually thread scratchpad/queue-style metadata
+    # through a separate contract; this audit surface is intentionally
+    # observational only for now.
+    RESERVED_AGENT_SKILL_CONFIG_KEYS = frozenset({
+        "execution_mode",
+        "keywords",
+        "use_ai_fallback",
+        "ai_model",
+        "scratchpad",
+        "queue",
+        "max_agentic_rounds",
+        "auto_inject_results",
+        "skip_ai_on_data_fetch",
+        "max_result_bytes",
+        "max_results_retained",
+        "max_turns_lookback",
+    })
+
     def _register_builtin_skills(self):
         """
         Register built-in skills.
@@ -77,9 +96,17 @@ class SkillManager:
             from agent.skills.audio_tts_skill import AudioTTSSkill
             self.register_skill(AudioTTSSkill)
 
-            # Phase 6.4 Week 5: Import Flows skill (replaces scheduler + scheduler_query)
+            # Scheduler skill abstraction. FlowsSkill is the provider-aware
+            # implementation that dispatches to Flows (built-in), Google
+            # Calendar, or Asana based on AgentSkillIntegration.scheduler_provider.
+            # Registered under BOTH "scheduler" (canonical abstraction name used
+            # by integration wizards, flow templates, and the Flows page
+            # dropdown) and "flows" (alias used by some DB rows created via
+            # AgentSkillsManager). Do not remove either alias without migrating
+            # the corresponding AgentSkill / AgentSkillIntegration rows.
             from agent.skills.flows_skill import FlowsSkill
             self.register_skill(FlowsSkill)
+            self.registry["scheduler"] = FlowsSkill
 
             # Automation Skill: Multi-step workflow automation
             from agent.skills.automation_skill import AutomationSkill
@@ -129,7 +156,31 @@ class SkillManager:
             from agent.skills.okg_term_memory_skill import OKGTermMemorySkill
             self.register_skill(OKGTermMemorySkill)
 
-            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory")
+            # v0.7.0: Ticket Management — Jira provider (read/write capability-gated)
+            from agent.skills.jira_skill import JiraSkill
+            self.register_skill(JiraSkill)
+
+            # v0.7.0: Code Repository — GitHub provider (read/write capability-gated)
+            from agent.skills.code_repository_skill import CodeRepositorySkill
+            self.register_skill(CodeRepositorySkill)
+
+            # v0.7.x: Password Vault — provider-neutral secret references.
+            from agent.skills.password_vault_skill import PasswordVaultSkill
+            self.register_skill(PasswordVaultSkill)
+
+            # v0.7.x: Trigger Case Memory — find_similar_past_cases always
+            # registered. Per-tenant opt-in is via Agent.vector_store_instance_id
+            # and per-trigger TriggerRecapConfig.enabled.
+            from agent.skills.find_similar_past_cases import FindSimilarPastCasesSkill
+            self.register_skill(FindSimilarPastCasesSkill)
+
+            # Agent Teams Phase 4: internal scratch tools are registered so
+            # team-run AgentService contexts can expose them without requiring a
+            # user-managed AgentSkill row.
+            from agent.skills.team_scratch_skill import TeamScratchSkill
+            self.register_skill(TeamScratchSkill)
+
+            logger.info("Built-in skills registered: flight_search, web_search, audio_transcript, audio_tts, flows, automation, adaptive_personality, knowledge_sharing, agent_switcher, agent_communication, gmail, shell, browser_automation, image_analysis, image, sandboxed_tools, okg_term_memory, ticket_management, code_repository, team_scratch")
         except Exception as e:
             logger.error(f"Error registering built-in skills: {e}", exc_info=True)
 
@@ -256,6 +307,44 @@ class SkillManager:
             logger.error(f"Error fetching skill config: {e}", exc_info=True)
             return None
 
+    @classmethod
+    def audit_agent_skill_config_key_collisions(
+        cls,
+        skill_configs: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Report top-level config key collisions against reserved agent-skill keys.
+
+        This is a prep-only audit helper. It does not mutate data or enforce any
+        schema/API contract. The goal is to surface keys that would clash with
+        future shared scratchpad/queue fields before Track A persists them.
+        """
+        collisions: List[Dict[str, Any]] = []
+        for skill_type, config in skill_configs.items():
+            config_keys = set((config or {}).keys())
+            overlapping_keys = sorted(config_keys & cls.RESERVED_AGENT_SKILL_CONFIG_KEYS)
+            if overlapping_keys:
+                collisions.append({
+                    "skill_type": skill_type,
+                    "colliding_keys": overlapping_keys,
+                })
+        return collisions
+
+    async def audit_agent_skill_config_collisions(
+        self,
+        db: Session,
+        agent_id: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Collect the current enabled skill configs and flag reserved-key overlap.
+
+        This is useful for prep-time audits, but it intentionally does not block
+        saves or imply any new persistence/API behavior.
+        """
+        skills = await self.get_agent_skills(db, agent_id)
+        skill_configs = {skill.skill_type: (skill.config or {}) for skill in skills}
+        return self.audit_agent_skill_config_key_collisions(skill_configs)
+
     async def get_skill_tool_definitions(
         self,
         db: Session,
@@ -298,6 +387,17 @@ class SkillManager:
 
                 # SKILL-002 Fix: Use centralized _create_skill_instance method
                 skill_instance = self._create_skill_instance(skill_class, db, agent_id)
+
+                # BUG-FIX: propagate the saved AgentSkill.config to the instance
+                # so per-agent capability filtering (JiraSkill / GmailSkill /
+                # any future skill that overrides to_openai_tool to read
+                # self._config) actually sees the persisted toggles. Without
+                # this, the instance always falls back to get_default_config(),
+                # silently ignoring saved capability changes — the bug was
+                # masked while saved configs happened to match the defaults.
+                if not hasattr(skill_instance, '_agent_id') or skill_instance._agent_id is None:
+                    skill_instance._agent_id = agent_id
+                skill_instance._config = skill_record.config or {}
 
                 # Check if skill has is_tool_enabled
                 if hasattr(skill_instance, 'is_tool_enabled'):
@@ -587,8 +687,16 @@ class SkillManager:
             skill_record = await self._get_skill_record(db, agent_id, skill_class.skill_type)
 
             if not skill_record or not skill_record.is_enabled:
+                team_run_context = (
+                    skill_class.skill_type == "team_scratch"
+                    and message is not None
+                    and getattr(message, "metadata", None)
+                    and message.metadata.get("team_run_id") is not None
+                )
+                if team_run_context:
+                    skill_record = None
                 # BUG-391 fix: For custom skills, check AgentCustomSkill table
-                if skill_class.skill_type.startswith("custom:"):
+                elif skill_class.skill_type.startswith("custom:"):
                     from models import AgentCustomSkill, CustomSkill
                     record = getattr(skill_class, '_custom_skill_record', None)
                     if record:
@@ -626,6 +734,8 @@ class SkillManager:
                         config['comm_depth'] = message.metadata['comm_depth']
                     if 'comm_parent_session_id' in message.metadata:
                         config['comm_parent_session_id'] = message.metadata['comm_parent_session_id']
+                    if 'team_run_id' in message.metadata:
+                        config['team_run_id'] = message.metadata['team_run_id']
 
             # Create skill instance (before schema validation so custom skills have self._record)
             skill_instance = self._create_skill_instance(skill_class, db, agent_id)

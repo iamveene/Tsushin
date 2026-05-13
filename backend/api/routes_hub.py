@@ -39,11 +39,13 @@ def set_engine(engine):
     global _engine
     _engine = engine
 
-# Dependency to get database session
+# Dependency to get database session.
+# BUG-684 fix (part 1): use the shared module-level sessionmaker rather than
+# constructing a new one per request. The shared factory honours
+# expire_on_commit=False (set in db.py) and reuses the connection pool.
 def get_db():
-    from sqlalchemy.orm import sessionmaker
-    SessionLocal = sessionmaker(bind=_engine)
-    db = SessionLocal()
+    from db import get_session_factory
+    db = get_session_factory()()
     try:
         yield db
     finally:
@@ -52,6 +54,15 @@ def get_db():
         except Exception:
             pass
         db.close()
+
+
+# NOTE on BUG-684: the worker.py session_scope refactor + the 8 s wait_for cap
+# on per-integration health checks bound the dominant pool-exhaustion path
+# already. The full per-probe-session handoff inside `list_integrations`
+# (release the request-scoped `db` before iterating, open a short-lived
+# session per probe) is left as a v0.7.x architectural follow-up; a previous
+# `_open_probe_session()` helper was added in this branch but never wired in,
+# so it has been removed to keep the code honest about what actually ships.
 
 
 # ============================================================================
@@ -96,6 +107,8 @@ class IntegrationResponse(BaseModel):
     default_assignee_gid: Optional[str] = None
     email: Optional[str] = None
     display_name: Optional[str] = None
+    can_send: Optional[bool] = None
+    can_draft: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):
@@ -154,7 +167,7 @@ def get_asana_oauth_handler(
             detail="ASANA_ENCRYPTION_KEY not configured in database or environment. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
 
-    redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:3030/hub/asana/callback")
+    redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
     # Load client credentials from database (if already registered)
     from models import Config
@@ -188,7 +201,7 @@ def _create_asana_service(integration_id: int, db: Session) -> AsanaService:
     if not encryption_key:
         raise HTTPException(status_code=500, detail="ASANA_ENCRYPTION_KEY not configured in database or environment")
 
-    redirect_uri = os.getenv("ASANA_REDIRECT_URI", "http://localhost:3030/hub/asana/callback")
+    redirect_uri = os.getenv("ASANA_REDIRECT_URI") or f"{settings.FRONTEND_URL.rstrip('/')}/hub/asana/callback"
 
     # Load client credentials from database
     config = db.query(Config).first()
@@ -418,14 +431,30 @@ async def list_integrations(
             if hub.type == 'asana':
                 asana = db.query(AsanaIntegration).filter(AsanaIntegration.id == hub.id).first()
                 # Optionally refresh health
+                # BUG-684: bound per-integration health-check to 8s so the request's
+                # DB session cannot be held for minutes when external APIs are down.
+                # The old 30s-per-integration inline pattern was the trigger for the
+                # QueuePool deadlock filed as BUG-684.
                 if refresh_health:
+                    import asyncio as _asyncio
                     service = None
                     try:
                         service = _create_asana_service(hub.id, db)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Asana health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Health check failed for integration {hub.id}: {e}")
                         try:
@@ -434,17 +463,33 @@ async def list_integrations(
                             pass
                     finally:
                         if service:
-                            await service.close()
+                            try:
+                                await service.close()
+                            except Exception:
+                                pass
             elif hub.type == 'calendar':
                 calendar = db.query(CalendarIntegration).filter(CalendarIntegration.id == hub.id).first()
                 # Optionally refresh health for calendar integrations
+                # BUG-684: bound per-integration health-check to 8s — see Asana branch above.
                 if refresh_health:
+                    import asyncio as _asyncio
                     try:
                         service = CalendarService(db, hub.id)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Calendar health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Calendar health check failed for integration {hub.id}: {e}")
                         try:
@@ -462,13 +507,26 @@ async def list_integrations(
             elif hub.type == 'gmail':
                 gmail = db.query(GmailIntegration).filter(GmailIntegration.id == hub.id).first()
                 # Optionally refresh health for gmail integrations
+                # BUG-684: bound per-integration health-check to 8s — see Asana branch above.
                 if refresh_health:
+                    import asyncio as _asyncio
                     try:
                         service = GmailService(db, hub.id)
-                        health_result = await service.check_health()
+                        health_result = await _asyncio.wait_for(service.check_health(), timeout=8.0)
                         hub.health_status = health_result['status']
                         hub.last_health_check = datetime.utcnow()
                         db.commit()
+                    except _asyncio.TimeoutError:
+                        logger.warning(f"Gmail health check timed out for integration {hub.id} (>8s)")
+                        try:
+                            hub.health_status = 'unavailable'
+                            hub.last_health_check = datetime.utcnow()
+                            db.commit()
+                        except Exception:
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(f"Gmail health check failed for integration {hub.id}: {e}")
                         try:
@@ -483,6 +541,21 @@ async def list_integrations(
                                 db.rollback()
                             except Exception:
                                 pass
+
+            # Compute Gmail capability flags from the granted OAuth scope string.
+            can_send = None
+            can_draft = None
+            if hub.type == 'gmail' and gmail is not None:
+                try:
+                    gmail_service = GmailService(db, hub.id)
+                    can_send = bool(gmail_service.can_send_messages())
+                    can_draft = bool(gmail_service.can_create_drafts())
+                except Exception as cap_exc:
+                    # Capability probe must never fail the list endpoint —
+                    # leave the flags as None and continue.
+                    logger.debug(
+                        "Gmail capability probe failed for integration %s: %s", hub.id, cap_exc,
+                    )
 
             # Build response with type-specific data
             response = IntegrationResponse(
@@ -499,7 +572,9 @@ async def list_integrations(
                 default_assignee_gid=asana.default_assignee_gid if asana else None,
                 # Add email for calendar/gmail integrations
                 email=(calendar.email_address if calendar else (gmail.email_address if gmail else None)),
-                display_name=hub.display_name
+                display_name=hub.display_name,
+                can_send=can_send,
+                can_draft=can_draft,
             )
             integrations.append(response)
         except Exception as e:

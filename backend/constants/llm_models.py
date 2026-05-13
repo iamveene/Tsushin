@@ -77,6 +77,7 @@ ANTHROPIC_LATEST_MODELS = [
 
 GROK_LATEST_MODELS = [
     "grok-4.3",
+    "grok-4.3-latest",
     "grok-4.20-multi-agent-0309",
     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning",
@@ -117,6 +118,7 @@ OPENROUTER_GATEWAY_MODELS = [
     "anthropic/claude-sonnet-4.6",
     "anthropic/claude-haiku-4.5",
     "x-ai/grok-4.3",
+    "x-ai/grok-4.3-latest",
     "x-ai/grok-4.20-multi-agent-0309",
     "x-ai/grok-4.20-0309-reasoning",
     "x-ai/grok-4.20-0309-non-reasoning",
@@ -168,6 +170,7 @@ LATEST_MODEL_PRICING: Dict[str, Dict[str, float]] = {
 
     # xAI.
     "grok-4.3": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
+    "grok-4.3-latest": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "grok-4.20-multi-agent-0309": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "grok-4.20-0309-reasoning": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "grok-4.20-0309-non-reasoning": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
@@ -177,8 +180,8 @@ LATEST_MODEL_PRICING: Dict[str, Dict[str, float]] = {
     # Groq hosted/open models.
     "llama-3.1-8b-instant": {"prompt": 0.05, "completion": 0.08},
     "llama-3.3-70b-versatile": {"prompt": 0.59, "completion": 0.79},
-    "openai/gpt-oss-120b": {"prompt": 0.15, "completion": 0.60},
-    "openai/gpt-oss-20b": {"prompt": 0.075, "completion": 0.30},
+    "openai/gpt-oss-120b": {"prompt": 0.15, "cached_input": 0.075, "completion": 0.60},
+    "openai/gpt-oss-20b": {"prompt": 0.075, "cached_input": 0.037, "completion": 0.30},
 
     # OpenRouter gateway IDs.
     "openai/gpt-5.5": {"prompt": 5.0, "cached_input": 0.5, "completion": 30.0},
@@ -188,6 +191,7 @@ LATEST_MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "anthropic/claude-opus-4.7": {"prompt": 5.0, "cached_input": 0.5, "completion": 25.0},
     "anthropic/claude-opus-4-7": {"prompt": 5.0, "cached_input": 0.5, "completion": 25.0},
     "x-ai/grok-4.3": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
+    "x-ai/grok-4.3-latest": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "x-ai/grok-4.20-multi-agent-0309": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "x-ai/grok-4.20-0309-reasoning": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},
     "x-ai/grok-4.20-0309-non-reasoning": {"prompt": 1.25, "cached_input": 0.20, "completion": 2.50},

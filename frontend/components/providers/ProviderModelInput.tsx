@@ -15,6 +15,7 @@ interface ProviderModelInputProps {
   className?: string
   listId?: string
   includeFallbacks?: boolean
+  dataTestId?: string
 }
 
 export default function ProviderModelInput({
@@ -29,6 +30,7 @@ export default function ProviderModelInput({
   className = '',
   listId,
   includeFallbacks,
+  dataTestId,
 }: ProviderModelInputProps) {
   const generatedId = useId()
   const resolvedListId = listId || `provider-models-${generatedId.replace(/[^a-zA-Z0-9_-]/g, '')}`
@@ -50,6 +52,7 @@ export default function ProviderModelInput({
         className={className}
         autoComplete="off"
         spellCheck={false}
+        data-testid={dataTestId}
       />
       <datalist id={resolvedListId}>
         {options.map(option => (
