@@ -17,7 +17,14 @@ from typing import Optional, Set, Dict, Any
 import requests
 from sqlalchemy.orm import Session
 
-from services.container_runtime import get_container_runtime, ContainerRuntime, ContainerNotFoundError, ContainerRuntimeError
+from services.container_runtime import (
+    PORT_RANGES,
+    get_container_runtime,
+    iter_port_range,
+    ContainerRuntime,
+    ContainerNotFoundError,
+    ContainerRuntimeError,
+)
 from services.docker_network_utils import resolve_tsushin_network_name
 
 logger = logging.getLogger(__name__)
@@ -38,8 +45,7 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-PORT_RANGE_START = 6300
-PORT_RANGE_END = 6399
+PORT_RANGE_START, PORT_RANGE_END = PORT_RANGES["vector_store"]
 HEALTH_CHECK_TIMEOUT = 90
 
 
@@ -69,14 +75,47 @@ class VectorStoreContainerManager:
         ).all()
         return {r[0] for r in rows}
 
+    def _docker_published_ports(self) -> Set[int]:
+        """BUG-682: enumerate every host port already published by ANY running
+        Docker container on this host, so side-by-side Tsushin stacks don't
+        each grab port 6300 from their own DB and then race on docker run.
+
+        Returns an empty set on any error — falls back to the socket-bind
+        check in `_allocate_port` rather than failing provisioning.
+        """
+        published: Set[int] = set()
+        try:
+            client = self.runtime.raw_client
+            for container in client.containers.list(all=False):
+                try:
+                    ports = (container.attrs or {}).get("NetworkSettings", {}).get("Ports") or {}
+                    for _container_port, host_bindings in ports.items():
+                        if not host_bindings:
+                            continue
+                        for binding in host_bindings:
+                            hp = binding.get("HostPort")
+                            if not hp:
+                                continue
+                            try:
+                                published.add(int(hp))
+                            except (TypeError, ValueError):
+                                continue
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"docker-published-ports enumeration skipped: {e}")
+        return published
+
     def _allocate_port(self, db: Session) -> int:
         import socket
         used = self._get_used_ports(db)
-        for port in range(PORT_RANGE_START, PORT_RANGE_END):
-            if port in used:
+        docker_used = self._docker_published_ports()
+        for port in iter_port_range("vector_store"):
+            if port in used or port in docker_used:
                 continue
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
                     s.bind(("127.0.0.1", port))
                 return port
             except OSError:

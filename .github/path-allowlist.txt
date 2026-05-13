@@ -1,0 +1,75 @@
+# =============================================================================
+# Public-Repo Path Allowlist
+# =============================================================================
+# Positive list of paths that ARE allowed in the public repo. Any tracked file
+# whose path is NOT matched by a pattern below will be REJECTED by CI
+# (.github/workflows/path-allowlist.yml) and by the local pre-commit hook.
+#
+# Pattern syntax: gitignore-style globs.
+#   - `**` matches any depth.
+#   - Trailing `/**` matches everything under a directory recursively.
+#   - Leading `!` negates (use to carve internal subdirs out of a wildcard).
+#
+# IMPORTANT — adding a new public-facing path?
+#   1. Add a pattern below in the SAME PR that introduces it.
+#   2. Reviewers should ask: is this path actually needed by users to install
+#      or run Tsushin? If it's internal QA, audit, evidence, planning, or
+#      developer-only material, it does NOT belong here — keep it under
+#      `.private/` instead.
+#
+# This is the ONLY mechanism that keeps internal files out of the public repo.
+# Don't weaken it.
+# =============================================================================
+
+# --- Top-level config & docs (the user-facing landing surface) ---
+.gitignore
+.gitleaks.toml
+.pre-commit-config.yaml
+LICENSE
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+DOCKER.md
+DOCUMENTATION.md
+USER_GUIDE.md
+docker-compose.yml
+docker-compose.ssl.yml
+env.example
+env.docker.example
+install.py
+backup_installer.py
+deploy-to-vm.sh
+platform_utils.py
+
+# --- Source code subtrees (carve out dev/internal directories) ---
+backend/**
+!backend/dev_tests/**
+!backend/ops/create_test_users.py
+!backend/**/.private/**
+
+frontend/**
+!frontend/**/.private/**
+
+caddy/**
+proxy/**
+k8s/**
+ops/**
+images/**
+
+# --- Public-facing documentation only (everything in docs/ is reviewed) ---
+docs/README.md
+docs/changelog.md
+docs/contributing.md
+docs/docker.md
+docs/documentation.md
+docs/openapi.json
+docs/upgrading-to-postgres.md
+docs/user-guide.md
+# Note: docs/qa/, docs/internal/, docs/archive/qa_evidence/ are NOT allowed.
+# Internal QA/audit/evidence belongs under .private/, not docs/.
+
+# --- GitHub config (workflows, ISSUE_TEMPLATE, allowlist itself, etc.) ---
+.github/**
+
+# --- Repo helper scripts ---
+scripts/**

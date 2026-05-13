@@ -27,8 +27,19 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+# `install.py` lives at the host repo root, not inside the backend container.
+# When pytest runs inside the container (REPO_ROOT resolves to "/"), the file
+# isn't present — skip the whole module cleanly instead of crashing collection.
+_INSTALL_PATH = REPO_ROOT / "install.py"
+if not _INSTALL_PATH.is_file():
+    pytest.skip(
+        f"install.py not found at {_INSTALL_PATH}; this test runs only at the host "
+        "repo root, not inside the backend container.",
+        allow_module_level=True,
+    )
+
 # platform_utils is a sibling of install.py and is imported at module load.
-_spec = importlib.util.spec_from_file_location("install", REPO_ROOT / "install.py")
+_spec = importlib.util.spec_from_file_location("install", _INSTALL_PATH)
 install = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(install)  # type: ignore[union-attr]
 
@@ -198,19 +209,29 @@ def test_selfsigned_hostname_domain_emits_dns_san(installer, tmp_path, monkeypat
 # Caddyfile generation
 # ---------------------------------------------------------------------------
 
-def test_caddyfile_selfsigned_ip_uses_localhost_sni(installer, tmp_path):
+def test_caddyfile_selfsigned_ip_uses_port_only_explicit_cert(installer, tmp_path):
     installer.root_dir = tmp_path
     installer.config['SSL_MODE'] = 'selfsigned'
     installer.config['SSL_DOMAIN'] = '10.211.55.5'
     installer.config['TSN_STACK_NAME'] = 'tsushin'
+    certs_dir = tmp_path / "caddy" / "tsushin" / "certs"
+    certs_dir.mkdir(parents=True)
+    (certs_dir / "selfsigned.crt").write_text("test cert")
 
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
-    # Caddy rejects IP SNI — ensure we rewrote to localhost
-    assert "default_sni localhost" in caddyfile
+    # Caddy rejects IP SNI and clients omit SNI for IP literals. Use a
+    # port-only matcher with the installer-generated IP-SAN cert instead.
+    assert "default_sni localhost" not in caddyfile
     assert "default_sni 10.211.55.5" not in caddyfile
-    # Site block label is still the IP
-    assert "10.211.55.5 {" in caddyfile
+    assert ":443 {" in caddyfile
+    assert "10.211.55.5 {" not in caddyfile
+    assert "tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key" in caddyfile
+    assert "handle /tsushin-selfsigned-ca.pem" in caddyfile
+
+    bootstrap = tmp_path / "caddy" / "tsushin" / "beacon-selfsigned-bootstrap.sh"
+    assert bootstrap.exists()
+    assert "REQUESTS_CA_BUNDLE" in bootstrap.read_text()
 
 
 def test_caddyfile_selfsigned_hostname_uses_hostname_sni(installer, tmp_path):
@@ -218,10 +239,15 @@ def test_caddyfile_selfsigned_hostname_uses_hostname_sni(installer, tmp_path):
     installer.config['SSL_MODE'] = 'selfsigned'
     installer.config['SSL_DOMAIN'] = 'tsushin.local'
     installer.config['TSN_STACK_NAME'] = 'tsushin'
+    certs_dir = tmp_path / "caddy" / "tsushin" / "certs"
+    certs_dir.mkdir(parents=True)
+    (certs_dir / "selfsigned.crt").write_text("test cert")
 
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
     assert "default_sni tsushin.local" in caddyfile
+    assert "tls /etc/caddy/certs/selfsigned.crt /etc/caddy/certs/selfsigned.key" in caddyfile
+    assert "handle /tsushin-selfsigned-ca.pem" in caddyfile
 
 
 def test_caddyfile_letsencrypt_production_has_no_acme_ca(installer, tmp_path):
@@ -248,6 +274,90 @@ def test_caddyfile_letsencrypt_staging_emits_acme_ca(installer, tmp_path):
     installer.generate_caddyfile()
     caddyfile = (tmp_path / "caddy" / "tsushin" / "Caddyfile").read_text()
     assert "acme_ca https://acme-staging-v02.api.letsencrypt.org/directory" in caddyfile
+
+
+def test_helper_image_refs_are_legacy_for_default_stack(installer):
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    assert installer._get_helper_image_refs() == {
+        "whatsapp_mcp": "tsushin/whatsapp-mcp:latest",
+        "toolbox": "tsushin-toolbox:base",
+    }
+
+
+def test_helper_image_refs_are_stack_scoped_for_custom_stack(installer):
+    installer.config['TSN_STACK_NAME'] = 'Audit_5.Local'
+    assert installer._get_helper_image_refs() == {
+        "whatsapp_mcp": "audit_5-local/whatsapp-mcp:latest",
+        "toolbox": "audit_5-local/toolbox:base",
+    }
+
+
+def test_generated_env_includes_stack_scoped_helper_images(installer, tmp_path):
+    installer.root_dir = tmp_path
+    installer.env_file = tmp_path / ".env"
+    installer.backend_data_dir = tmp_path / "backend" / "data"
+    installer.config.update({
+        'TSN_STACK_NAME': 'audit5local',
+        'TSN_APP_PORT': '8091',
+        'FRONTEND_PORT': '3091',
+        'SSL_MODE': 'disabled',
+        'ACCESS_TYPE': 'localhost',
+        'PUBLIC_HOST': 'localhost',
+    })
+
+    installer.generate_env_file()
+    env_text = installer.env_file.read_text()
+    assert "TSN_WHATSAPP_MCP_IMAGE=audit5local/whatsapp-mcp:latest" in env_text
+    assert "TSN_TOOLBOX_BASE_IMAGE=audit5local/toolbox:base" in env_text
+
+
+def test_whatsapp_helper_image_build_failure_is_fatal(installer, tmp_path, monkeypatch):
+    """Fresh installs must not continue without the runtime WhatsApp image."""
+    installer.root_dir = tmp_path
+    installer.buildx_available = False
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    (tmp_path / "backend" / "whatsapp-mcp").mkdir(parents=True)
+
+    class FailedBuild:
+        def __init__(self, *args, **kwargs):
+            self.stdout = iter(["failed\n"])
+            self.returncode = 1
+
+        def wait(self):
+            return None
+
+    monkeypatch.setattr(install.subprocess, "Popen", FailedBuild)
+
+    with pytest.raises(SystemExit):
+        installer.build_additional_images()
+
+
+def test_whatsapp_helper_image_build_success_requires_inspect(installer, tmp_path, monkeypatch):
+    installer.root_dir = tmp_path
+    installer.buildx_available = False
+    installer.config['TSN_STACK_NAME'] = 'tsushin'
+    (tmp_path / "backend" / "whatsapp-mcp").mkdir(parents=True)
+
+    class SuccessfulBuild:
+        def __init__(self, *args, **kwargs):
+            self.stdout = iter(["Successfully built\n"])
+            self.returncode = 0
+
+        def wait(self):
+            return None
+
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "Popen", SuccessfulBuild)
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    installer.build_additional_images()
+
+    assert ["docker", "image", "inspect", "tsushin/whatsapp-mcp:latest"] in calls
 
 
 # ---------------------------------------------------------------------------

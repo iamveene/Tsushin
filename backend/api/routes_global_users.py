@@ -585,10 +585,18 @@ async def delete_user(
         from models import UserContactMapping
         from sqlalchemy import text as sa_text
 
-        # SET NULL on nullable FK columns
+        # SET NULL on nullable FK columns.
+        # audit_event is append-only (BUG-704); UPDATE is rejected by a Postgres
+        # trigger unless the session declares it is performing the privileged
+        # FK-cleanup-on-user-delete operation. SET LOCAL scopes the GUC to the
+        # current transaction so it cannot leak to other code paths.
+        if db.bind.dialect.name == "postgresql":
+            db.execute(sa_text("SET LOCAL app.audit_event_user_fk_cleanup = 'true'"))
         db.query(AuditEvent).filter(AuditEvent.user_id == user.id).update(
             {AuditEvent.user_id: None}, synchronize_session=False
         )
+        if db.bind.dialect.name == "postgresql":
+            db.execute(sa_text("SET LOCAL app.audit_event_user_fk_cleanup = 'false'"))
         db.query(UserRole).filter(UserRole.assigned_by == user.id).update(
             {UserRole.assigned_by: None}, synchronize_session=False
         )

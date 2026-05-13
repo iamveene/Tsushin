@@ -21,8 +21,9 @@ docker_stub.DockerClient = object
 sys.modules.setdefault("docker", docker_stub)
 
 from models import WhatsAppMCPInstance
-from services.container_runtime import ContainerNotFoundError
-from services.mcp_container_manager import MCPContainerManager
+import models_rbac  # noqa: F401  # Registers User/Tenant mappers for model construction.
+from services.container_runtime import ContainerNotFoundError, ContainerRuntimeError
+from services.mcp_container_manager import MCPContainerManager, MCPContainerProvisioningError
 
 
 @pytest.fixture
@@ -177,9 +178,10 @@ class TestMCPContainerManager:
         tester_instance = MagicMock(spec=WhatsAppMCPInstance)
         tester_instance.id = 88
         tester_instance.tenant_id = "tenant_123"
-        tester_instance.container_name = "runtime-tester-88"
+        tester_instance.container_name = "tsushin-mcp-tester-tenant_123_1712400000"
         tester_instance.instance_type = "tester"
         tester_instance.status = "running"
+        expected_alias = manager._build_runtime_dns_alias(tester_instance)
 
         class FakeQuery:
             def filter(self, *args, **kwargs):
@@ -249,8 +251,12 @@ class TestMCPContainerManager:
 
         assert tester_status["source"] == "runtime"
         assert tester_status["name"] == tester_instance.container_name
-        assert tester_status["api_url"] == f"http://{tester_instance.container_name}:8080/api"
+        assert tester_status["api_url"] == f"http://{expected_alias}:8080/api"
         assert tester_status["qr_available"] is True
+        assert any(
+            call.kwargs.get("aliases") == [expected_alias]
+            for call in mock_runtime.ensure_container_on_network.call_args_list
+        )
 
     @patch("services.mcp_container_manager.requests.get")
     def test_health_check_recovers_when_container_id_is_blank_but_container_name_resolves(
@@ -355,4 +361,73 @@ class TestMCPContainerManager:
         )
         assert changes["mcp_port"] == 8085
         assert mock_instance.container_id == "container-from-name"
+        mock_db.commit.assert_called_once()
+
+    def test_start_container_fails_before_create_when_image_missing(
+        self,
+        manager,
+        mock_runtime,
+        tmp_path,
+    ):
+        mock_runtime.image_exists.return_value = False
+
+        with pytest.raises(MCPContainerProvisioningError) as exc_info:
+            manager._start_container(
+                "tsushin-mcp-agent-tenant_123_1712400000",
+                8099,
+                str(tmp_path),
+                "+5527988290533",
+                "secret",
+            )
+
+        assert "WhatsApp MCP image is not available" in str(exc_info.value)
+        mock_runtime.get_or_create_network.assert_not_called()
+        mock_runtime.create_container.assert_not_called()
+
+    @patch("services.mcp_container_manager.generate_mcp_secret", return_value="secret")
+    @patch("services.mcp_container_manager.get_port_allocator")
+    def test_create_instance_retries_next_port_when_docker_host_port_is_busy(
+        self,
+        mock_get_allocator,
+        _mock_secret,
+        manager,
+        mock_runtime,
+        mock_db,
+        tmp_path,
+    ):
+        allocator = MagicMock()
+        allocator.MAX_PORTS = 3
+        allocator.allocate_port.side_effect = [8080, 8081]
+        mock_get_allocator.return_value = allocator
+
+        created_container = MagicMock()
+        created_container.id = "container-8081"
+        manager._create_session_directory = MagicMock(
+            side_effect=[
+                str(tmp_path / "failed" / "store"),
+                str(tmp_path / "created" / "store"),
+            ]
+        )
+        manager._start_container = MagicMock(
+            side_effect=[
+                ContainerRuntimeError("failed to bind port 127.0.0.1:8080: address already in use"),
+                created_container,
+            ]
+        )
+        manager.reconcile_instance = MagicMock()
+
+        instance = manager.create_instance(
+            tenant_id="tenant_123",
+            phone_number="+5527988290533",
+            db=mock_db,
+            created_by=7,
+            instance_type="agent",
+        )
+
+        assert instance.mcp_port == 8081
+        assert instance.container_id == "container-8081"
+        assert instance.container_name.endswith("_8081")
+        assert allocator.allocate_port.call_args_list[1].kwargs["excluded_ports"] == {8080}
+        mock_runtime.remove_container.assert_called_once()
+        mock_db.add.assert_called_once_with(instance)
         mock_db.commit.assert_called_once()

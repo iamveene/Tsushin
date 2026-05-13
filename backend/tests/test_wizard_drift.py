@@ -34,12 +34,32 @@ FRONTEND = REPO_ROOT / "frontend"
 
 # Skills intentionally hidden from the wizard (require post-creation setup
 # the wizard doesn't collect inline). Must match the BaseSkill subclass attr.
-WIZARD_HIDDEN_SKILLS: Set[str] = {"gmail", "shell", "flows", "agent_communication"}
+# Note: ``scheduler`` is registered as an alias of ``FlowsSkill``; since
+# FlowsSkill has wizard_visible=False the alias inherits the flag and shows
+# up here too — the wizard already renders the unified Scheduler card via
+# the ``flows`` entry, so the alias staying hidden is correct.
+WIZARD_HIDDEN_SKILLS: Set[str] = {
+    "gmail",
+    "shell",
+    "flows",
+    "agent_communication",
+    "scheduler",
+    "team_scratch",
+}
 
 # TTS provider IDs registered at startup in TTSProviderRegistry.initialize_providers().
 # If you add a provider there, add its ID here AND ensure a matching entry exists
 # in frontend/components/audio-wizard/defaults.ts (the fallback list).
 EXPECTED_TTS_PROVIDERS: Set[str] = {"openai", "kokoro", "elevenlabs", "gemini"}
+
+# ASR provider IDs registered at startup in ASRProviderRegistry.initialize_providers().
+# If you add a provider there, add its ID here AND wire it through the wizard +
+# settings/asr UI so tenants can pick it.
+EXPECTED_ASR_PROVIDERS: Set[str] = {"openai", "speaches", "openai_whisper"}
+# Subset of ASR providers that auto-provision a tenant-scoped container — these
+# are the ones that need a vendor entry in StepVendorSelect's ASR_LOCAL list AND
+# a SUPPORTED_VENDORS entry in WhisperInstanceService.
+EXPECTED_LOCAL_ASR_VENDORS: Set[str] = {"speaches", "openai_whisper"}
 
 
 def _read(path: Path) -> str:
@@ -72,10 +92,57 @@ def _install_lightweight_backend_import_stubs() -> None:
     sys.modules.setdefault("argon2", argon2_stub)
     sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
 
+    dateparser_stub = types.ModuleType("dateparser")
+    dateparser_stub.parse = lambda *args, **kwargs: None
+    sys.modules.setdefault("dateparser", dateparser_stub)
+
+    sentence_transformers_stub = types.ModuleType("sentence_transformers")
+
+    class _SentenceTransformer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def encode(self, values, *args, **kwargs):
+            import numpy as _np
+
+            count = len(values) if isinstance(values, list) else 1
+            return _np.zeros((count, 384))
+
+    sentence_transformers_stub.SentenceTransformer = _SentenceTransformer
+    sys.modules.setdefault("sentence_transformers", sentence_transformers_stub)
+
+    chromadb_stub = types.ModuleType("chromadb")
+    chromadb_config_stub = types.ModuleType("chromadb.config")
+    chromadb_config_stub.Settings = object
+    sys.modules.setdefault("chromadb", chromadb_stub)
+    sys.modules.setdefault("chromadb.config", chromadb_config_stub)
+
 
 # ---------------------------------------------------------------------------
 # Guard 1 — Skill catalog drift
 # ---------------------------------------------------------------------------
+
+def _evict_stale_skill_modules():
+    """Remove any stale `agent.skills.*` modules that other tests in the
+    same pytest session loaded via `_load_module()`.
+
+    Several tests (e.g. test_audio_transcript_skill_asr.py,
+    test_agent_communication_service.py) bypass the regular import system to
+    avoid heavy dependencies. Each call to `_load_module("agent.skills.base",
+    ...)` puts a fresh `BaseSkill` instance in sys.modules. Any skill class
+    that was imported earlier (against a different `BaseSkill`) ends up
+    failing `issubclass(SkillCls, BaseSkill)` inside SkillManager.
+
+    By dropping all `agent.skills.*` and `agent.skills` entries here, the
+    next `from agent.skills.skill_manager import SkillManager` re-imports
+    everything from the real package against the SAME `BaseSkill`.
+    """
+    _install_lightweight_backend_import_stubs()
+    import sys
+    stale = [name for name in sys.modules if name == "agent.skills" or name.startswith("agent.skills.")]
+    for name in stale:
+        sys.modules.pop(name, None)
+
 
 def test_skill_catalog_frontend_matches_backend_registry():
     """
@@ -87,6 +154,7 @@ def test_skill_catalog_frontend_matches_backend_registry():
     This catches the recurring bug where a new skill is added to the backend
     but the frontend skill card / wizard row is never updated.
     """
+    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -138,6 +206,7 @@ def test_skill_wizard_visible_matches_expected_hidden_set():
     the top of this file. If you add wizard_visible=False to a skill, add the
     skill_type to WIZARD_HIDDEN_SKILLS; if you remove it, remove it here too.
     """
+    _evict_stale_skill_modules()
     from agent.skills.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -164,6 +233,8 @@ def test_tts_providers_registered_match_frontend_fallback():
     so the wizard's static fallback can render the provider before the
     /api/tts-providers live fetch resolves.
     """
+    _install_lightweight_backend_import_stubs()
+
     from hub.providers.tts_registry import TTSProviderRegistry
 
     TTSProviderRegistry.initialize_providers()
@@ -194,9 +265,200 @@ def test_tts_providers_registered_match_frontend_fallback():
         f"Update frontend/components/audio-wizard/defaults.ts."
     )
 
+    # Surface 2: AudioProviderFields.tsx — `FALLBACK_PROVIDER_CARDS` (cards
+    # rendered before the live /api/tts-providers fetch resolves) AND
+    # `PROVIDER_COPY` (marketing copy keyed by provider id). Both must contain
+    # every backend-registered provider so the offline / first-paint UX matches
+    # what the backend will serve a moment later.
+    fields_path = FRONTEND / "components" / "audio-wizard" / "AudioProviderFields.tsx"
+    assert fields_path.exists(), f"AudioProviderFields.tsx not found at {fields_path}"
+    fields_text = _read(fields_path)
+
+    fallback_block = re.search(
+        r"FALLBACK_PROVIDER_CARDS[^=]*=\s*\[(.*?)\n\]",
+        fields_text,
+        re.DOTALL,
+    )
+    assert fallback_block, "FALLBACK_PROVIDER_CARDS not found in AudioProviderFields.tsx"
+    fallback_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_block.group(1)))
+    missing_in_fallback = registered - fallback_ids
+    assert not missing_in_fallback, (
+        f"TTS providers registered in backend but missing from "
+        f"FALLBACK_PROVIDER_CARDS: {sorted(missing_in_fallback)}. "
+        f"Add a card entry in frontend/components/audio-wizard/AudioProviderFields.tsx."
+    )
+
+    copy_block = re.search(
+        r"PROVIDER_COPY[^=]*=\s*\{(.*?)\n\}",
+        fields_text,
+        re.DOTALL,
+    )
+    assert copy_block, "PROVIDER_COPY not found in AudioProviderFields.tsx"
+    copy_ids = set(re.findall(r"^\s*([a-z_]+):\s*\{", copy_block.group(1), re.MULTILINE))
+    missing_in_copy = registered - copy_ids
+    assert not missing_in_copy, (
+        f"TTS providers registered in backend but missing from "
+        f"PROVIDER_COPY: {sorted(missing_in_copy)}. "
+        f"Add a copy entry in frontend/components/audio-wizard/AudioProviderFields.tsx."
+    )
+
+    # Surface 3: VOICE_AGENT_DEFAULTS — system-prompt template per provider.
+    # If a provider can be picked it needs a default agent template, otherwise
+    # the AudioAgentsWizard New-Agent path can't seed sensible defaults.
+    defaults_block = re.search(
+        r"VOICE_AGENT_DEFAULTS[^=]*=\s*\{(.*?)\n\}",
+        text,
+        re.DOTALL,
+    )
+    assert defaults_block, "VOICE_AGENT_DEFAULTS not found in defaults.ts"
+    voice_agent_ids = set(re.findall(r"^\s*([a-z_]+):\s*\{", defaults_block.group(1), re.MULTILINE))
+    missing_in_voice_agent = registered - voice_agent_ids
+    assert not missing_in_voice_agent, (
+        f"TTS providers registered in backend but missing from "
+        f"VOICE_AGENT_DEFAULTS: {sorted(missing_in_voice_agent)}. "
+        f"Add a defaults entry in frontend/components/audio-wizard/defaults.ts."
+    )
+
+    # Surface 4: ProviderWizard's TTS_CLOUD + TTS_LOCAL. This is the Hub →
+    # Add Provider → modality=tts → hosting picker → vendor list. Historically
+    # this list missed OpenAI + Gemini because the registry exposed them but
+    # the wizard's hardcoded array only had ElevenLabs / Kokoro — that drift
+    # made tenants unable to add Gemini TTS via the standard provider flow
+    # despite the backend supporting it.
+    pw_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepVendorSelect.tsx"
+    assert pw_path.exists(), f"StepVendorSelect.tsx not found at {pw_path}"
+    pw_text = _read(pw_path)
+
+    tts_cloud_block = re.search(
+        r"TTS_CLOUD[^=]*=\s*\[(.*?)\n\]",
+        pw_text,
+        re.DOTALL,
+    )
+    assert tts_cloud_block, "TTS_CLOUD not found in StepVendorSelect.tsx"
+    tts_cloud_ids = set(re.findall(r"id:\s*'([^']+)'", tts_cloud_block.group(1)))
+
+    tts_local_block = re.search(
+        r"TTS_LOCAL[^=]*=\s*\[(.*?)\n\]",
+        pw_text,
+        re.DOTALL,
+    )
+    assert tts_local_block, "TTS_LOCAL not found in StepVendorSelect.tsx"
+    tts_local_ids = set(re.findall(r"id:\s*'([^']+)'", tts_local_block.group(1)))
+
+    pw_combined = tts_cloud_ids | tts_local_ids
+    missing_in_pw = registered - pw_combined
+    assert not missing_in_pw, (
+        f"TTS providers registered in backend but missing from ProviderWizard "
+        f"TTS_CLOUD + TTS_LOCAL: {sorted(missing_in_pw)}. "
+        f"Add the vendor card in "
+        f"frontend/components/provider-wizard/steps/StepVendorSelect.tsx."
+    )
+
+    # Surface 5: ProviderWizard's StepProgress save branch. Cloud TTS providers
+    # whose key is persisted via /api/api-keys (i.e. NOT Kokoro, which has its
+    # own TTSInstance path) must be enumerated in the save-branch condition,
+    # otherwise the wizard finalize step will silently fall through to the LLM
+    # /api/provider-instances path, which then 400s on missing available_models.
+    progress_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepProgress.tsx"
+    assert progress_path.exists(), f"StepProgress.tsx not found at {progress_path}"
+    progress_text = _read(progress_path)
+
+    # Look for the TTS-cloud branch condition. Format: a guard clause referencing
+    # `draft.modality === 'tts'` plus an OR-chain of `draft.vendor === '<id>'`.
+    save_branch = re.search(
+        r"draft\.modality\s*===\s*'tts'\s*&&\s*\(([^)]+)\)",
+        progress_text,
+    )
+    assert save_branch, (
+        "Could not locate the cloud-TTS save branch in StepProgress.tsx — "
+        "if you refactored the conditional shape, update this regex."
+    )
+    save_vendor_ids = set(re.findall(r"draft\.vendor\s*===\s*'([^']+)'", progress_text))
+
+    cloud_tts = registered - {"kokoro"}  # Kokoro has its own TTSInstance path
+    missing_in_save = cloud_tts - save_vendor_ids
+    assert not missing_in_save, (
+        f"Cloud TTS providers in backend registry but missing from the cloud "
+        f"save branch in StepProgress.tsx: {sorted(missing_in_save)}. The "
+        f"save will silently fall through to the LLM provider-instances path "
+        f"and 400 on missing available_models. Add the vendor to the OR-chain."
+    )
+
 
 # ---------------------------------------------------------------------------
-# Guard 3 — PREDEFINED_MODELS single source of truth
+# Guard 3 — ASR provider catalog drift
+# ---------------------------------------------------------------------------
+
+def test_asr_providers_registered_match_frontend_wizard():
+    """
+    Every ASR provider registered in ASRProviderRegistry must be reflected in:
+      - SUPPORTED_VENDORS / AUTO_PROVISIONABLE_VENDORS for local ones
+      - VENDOR_CONFIGS in WhisperContainerManager for local ones
+      - StepVendorSelect's ASR_CLOUD / ASR_LOCAL arrays
+    so the Hub > Add Provider > ASR flow stays in sync with backend dispatch.
+    """
+    _install_lightweight_backend_import_stubs()
+
+    from hub.providers.asr_registry import ASRProviderRegistry
+    from services.whisper_instance_service import (
+        SUPPORTED_VENDORS as WHISPER_SUPPORTED,
+        AUTO_PROVISIONABLE_VENDORS as WHISPER_AUTO,
+    )
+    from services.whisper_container_manager import VENDOR_CONFIGS as WHISPER_VENDOR_CONFIGS
+
+    ASRProviderRegistry.initialize_providers()
+    registered = set(ASRProviderRegistry._providers.keys())
+    assert registered, "ASRProviderRegistry came up empty — registration broken?"
+    assert registered == EXPECTED_ASR_PROVIDERS, (
+        f"ASR provider registry drift: registered={sorted(registered)}, "
+        f"test expects {sorted(EXPECTED_ASR_PROVIDERS)}. Update "
+        f"EXPECTED_ASR_PROVIDERS in this test (and the wizard) when "
+        f"adding/removing an ASR provider."
+    )
+
+    # Local ASR vendors must be registered as auto-provisionable + container-mgr
+    assert WHISPER_SUPPORTED == EXPECTED_LOCAL_ASR_VENDORS, (
+        f"WhisperInstanceService.SUPPORTED_VENDORS drift: {sorted(WHISPER_SUPPORTED)} "
+        f"vs expected {sorted(EXPECTED_LOCAL_ASR_VENDORS)}."
+    )
+    assert WHISPER_AUTO == EXPECTED_LOCAL_ASR_VENDORS, (
+        f"WhisperInstanceService.AUTO_PROVISIONABLE_VENDORS drift: "
+        f"{sorted(WHISPER_AUTO)} vs expected {sorted(EXPECTED_LOCAL_ASR_VENDORS)}."
+    )
+    missing_in_container_mgr = EXPECTED_LOCAL_ASR_VENDORS - set(WHISPER_VENDOR_CONFIGS.keys())
+    assert not missing_in_container_mgr, (
+        f"Local ASR vendors missing from WhisperContainerManager.VENDOR_CONFIGS: "
+        f"{sorted(missing_in_container_mgr)}."
+    )
+
+    # Frontend wizard
+    pw_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepVendorSelect.tsx"
+    assert pw_path.exists(), f"StepVendorSelect.tsx not found at {pw_path}"
+    pw_text = _read(pw_path)
+
+    asr_cloud_block = re.search(r"ASR_CLOUD[^=]*=\s*\[(.*?)\n\]", pw_text, re.DOTALL)
+    assert asr_cloud_block, "ASR_CLOUD not found in StepVendorSelect.tsx"
+    asr_cloud_ids = set(re.findall(r"id:\s*'([^']+)'", asr_cloud_block.group(1)))
+
+    asr_local_block = re.search(r"ASR_LOCAL[^=]*=\s*\[(.*?)\n\]", pw_text, re.DOTALL)
+    assert asr_local_block, "ASR_LOCAL not found in StepVendorSelect.tsx"
+    asr_local_ids = set(re.findall(r"id:\s*'([^']+)'", asr_local_block.group(1)))
+
+    # ASR cloud always = openai (the cloud Whisper API).
+    assert "openai" in asr_cloud_ids, (
+        "Hub > Add Provider > ASR > Cloud should expose 'openai' (Whisper API). "
+        "Add it back to ASR_CLOUD in StepVendorSelect.tsx."
+    )
+    missing_local = EXPECTED_LOCAL_ASR_VENDORS - asr_local_ids
+    assert not missing_local, (
+        f"Local ASR vendors registered in backend but missing from ASR_LOCAL: "
+        f"{sorted(missing_local)}. "
+        f"Add the vendor card in frontend/components/provider-wizard/steps/StepVendorSelect.tsx."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 4 — PREDEFINED_MODELS single source of truth
 # ---------------------------------------------------------------------------
 
 def test_predefined_models_single_source():
@@ -206,6 +468,8 @@ def test_predefined_models_single_source():
     re-export is identity — drift re-introduces the historical Gemini-list
     divergence this test was written to prevent.
     """
+    _install_lightweight_backend_import_stubs()
+
     from api.routes_provider_instances import PREDEFINED_MODELS as A
     from services.model_discovery_service import PREDEFINED_MODELS as B
     assert A is B, (
@@ -213,6 +477,54 @@ def test_predefined_models_single_source():
         "same object as api.routes_provider_instances.PREDEFINED_MODELS. "
         "Someone reintroduced a parallel copy — remove it and re-import."
     )
+
+
+def test_image_models_are_isolated_from_llm_suggestions():
+    """
+    Image-only Gemini/Imagen/OpenAI IDs belong in image setup buckets and the
+    ImageSkill schema, not normal LLM suggestion lists that feed agent model
+    pickers.
+    """
+    image_skill_path = _resolve_backend_site("agent/skills/image_skill.py")
+    routes_path = _resolve_backend_site("api/routes_provider_instances.py")
+    constants_path = _resolve_backend_site("constants/llm_models.py")
+    image_text = _read(image_skill_path)
+    routes_text = _read(routes_path)
+    constants_text = _read(constants_path)
+
+    supported_block = re.search(
+        r"SUPPORTED_MODELS\s*=\s*\{(.*?)\n\s{4}\}",
+        image_text,
+        re.DOTALL,
+    )
+    assert supported_block, "ImageSkill.SUPPORTED_MODELS block not found"
+    image_models = set(re.findall(r'^\s*"([^"]+)":', supported_block.group(1), re.MULTILINE))
+
+    def _models_from_list_constant(source_text: str, name: str) -> set[str]:
+        bucket = re.search(
+            rf"{name}\s*=\s*\[(.*?)\n\]",
+            source_text,
+            re.DOTALL,
+        )
+        assert bucket, f"{name} block not found"
+        return set(re.findall(r'"([^"]+)"', bucket.group(1)))
+
+    gemini_image_models = _models_from_list_constant(routes_text, "GEMINI_IMAGE_MODELS")
+    openai_image_models = _models_from_list_constant(routes_text, "OPENAI_IMAGE_MODELS")
+    predefined_image_models = gemini_image_models | openai_image_models
+
+    assert '"gemini": get_provider_models("gemini")' in routes_text
+    assert '"openai": get_provider_models("openai")' in routes_text
+    generic_gemini_models = _models_from_list_constant(constants_text, "GEMINI_LATEST_MODELS")
+    generic_openai_models = _models_from_list_constant(constants_text, "OPENAI_LATEST_MODELS")
+
+    assert predefined_image_models == image_models
+    assert gemini_image_models.isdisjoint(generic_gemini_models)
+    assert openai_image_models.isdisjoint(generic_openai_models)
+    assert '"gemini_image": GEMINI_IMAGE_MODELS' in routes_text
+    assert '"openai_image": OPENAI_IMAGE_MODELS' in routes_text
+    assert "if _is_gemini_image_model(model_id):" in routes_text
+    assert 'vendor == "openai" and _is_openai_image_model(model_id)' in routes_text
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +640,7 @@ def test_latest_llm_catalogs_shared_by_provider_and_sentinel_routes():
     assert "gpt-5.5-pro" in PREDEFINED_MODELS["openai"]
     assert "claude-opus-4-7" in PREDEFINED_MODELS["anthropic"]
     assert "grok-4.3" in PREDEFINED_MODELS["grok"]
+    assert "grok-4.3-latest" in PREDEFINED_MODELS["grok"]
     assert "grok-4-1-fast-non-reasoning" in LLM_MODELS["grok"]
     assert "openai/gpt-oss-120b" in PREDEFINED_MODELS["groq"]
     assert "mixtral-8x7b-32768" not in PREDEFINED_MODELS["groq"]
@@ -344,6 +657,7 @@ def test_latest_model_provider_inference():
     assert infer_provider_from_model("gpt-5.5") == "openai"
     assert infer_provider_from_model("claude-opus-4-7") == "anthropic"
     assert infer_provider_from_model("grok-4.20-0309-reasoning") == "grok"
+    assert infer_provider_from_model("grok-4.3-latest") == "grok"
     assert infer_provider_from_model("x-ai/grok-4.3") == "grok"
     assert infer_provider_from_model("openai/gpt-5.5") == "openai"
     assert infer_provider_from_model("openai/gpt-oss-120b") == "groq"
@@ -370,10 +684,21 @@ def test_latest_pricing_lookup_and_cached_input_costs():
         "cached_input": 0.20,
         "completion": 2.50,
     }
+    assert MODEL_PRICING["grok-4.3-latest"] == MODEL_PRICING["grok-4.3"]
     assert MODEL_PRICING["grok-4-1-fast-reasoning"] == {
         "prompt": 0.20,
         "cached_input": 0.05,
         "completion": 0.50,
+    }
+    assert MODEL_PRICING["openai/gpt-oss-120b"] == {
+        "prompt": 0.15,
+        "cached_input": 0.075,
+        "completion": 0.60,
+    }
+    assert MODEL_PRICING["openai/gpt-oss-20b"] == {
+        "prompt": 0.075,
+        "cached_input": 0.037,
+        "completion": 0.30,
     }
     assert MODEL_PRICING["x-ai/grok-4.20-0309-non-reasoning"] == {
         "prompt": 1.25,
@@ -775,6 +1100,227 @@ def test_flight_providers_registered_match_wizard_fallback():
         f"missing from the AddIntegrationWizard fallback array: "
         f"{sorted(missing_in_frontend)}. Add matching rows to "
         f"frontend/components/integrations/AddIntegrationWizard.tsx."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 8 — Productivity catalog drift
+# ---------------------------------------------------------------------------
+
+def test_productivity_catalog_frontend_fallback_matches_backend():
+    """
+    Every service in ``backend/hub/productivity_catalog.PRODUCTIVITY_CATALOG``
+    must have a matching entry in the ``FALLBACK_SERVICES`` array inside
+    ``frontend/components/integrations/ProductivityWizard.tsx``. The wizard
+    renders the fallback when the live ``/api/hub/productivity-services``
+    fetch fails (offline/degraded boot), and drift would mean a service
+    registered in the backend catalog is invisible in the picker.
+
+    Also asserts every backend entry carries a non-empty display_name and a
+    recognised category so a silently-blank or mis-categorised card can't
+    ship.
+    """
+    from hub.productivity_catalog import PRODUCTIVITY_CATALOG
+
+    assert PRODUCTIVITY_CATALOG, "PRODUCTIVITY_CATALOG is empty — registration broken?"
+
+    valid_categories = {"calendar", "email", "tasks", "knowledge_base"}
+    backend_ids: Set[str] = set()
+    for svc in PRODUCTIVITY_CATALOG:
+        assert svc.id, "Productivity entry with missing id"
+        assert svc.display_name and svc.display_name.strip(), (
+            f"Productivity entry {svc.id!r} has empty display_name."
+        )
+        assert svc.category in valid_categories, (
+            f"Productivity entry {svc.id!r} has unknown category "
+            f"{svc.category!r}. Allowed: {sorted(valid_categories)}."
+        )
+        backend_ids.add(svc.id)
+
+    wizard_path = FRONTEND / "components" / "integrations" / "ProductivityWizard.tsx"
+    assert wizard_path.exists(), f"ProductivityWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const FALLBACK_SERVICES[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback FALLBACK_SERVICES array not found in ProductivityWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_frontend = backend_ids - frontend_ids
+    extra_in_frontend = frontend_ids - backend_ids
+
+    assert not missing_in_frontend, (
+        f"Productivity services registered in backend PRODUCTIVITY_CATALOG "
+        f"are missing from the frontend FALLBACK_SERVICES array in "
+        f"ProductivityWizard.tsx: {sorted(missing_in_frontend)}. Add matching "
+        f"entries so offline mode still renders them."
+    )
+    assert not extra_in_frontend, (
+        f"Services present in ProductivityWizard.tsx fallback but not in "
+        f"backend PRODUCTIVITY_CATALOG: {sorted(extra_in_frontend)}. Either "
+        f"register them in backend/hub/productivity_catalog.py or remove "
+        f"from the frontend fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 9 — ChannelsWizard fallback vs. backend channel catalog
+# ---------------------------------------------------------------------------
+
+def test_channels_wizard_fallback_matches_backend():
+    """
+    Sibling to Guard 5. Guard 5 asserts the Agent Wizard's StepChannels
+    fallback matches backend CHANNEL_CATALOG; this one does the same for the
+    Hub > Communication tab's ChannelsWizard (the "+ Add Channel" launcher).
+    The two fallbacks aren't literally the same array — ChannelsWizard drops
+    'playground' because it is not actionable from the Hub — but every
+    *actionable* channel id registered in CHANNEL_CATALOG must appear in the
+    ChannelsWizard fallback.
+    """
+    from channels.catalog import CHANNEL_CATALOG
+
+    actionable_backend_ids = {ch.id for ch in CHANNEL_CATALOG if ch.requires_setup}
+
+    wizard_path = FRONTEND / "components" / "integrations" / "ChannelsWizard.tsx"
+    assert wizard_path.exists(), f"ChannelsWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const FALLBACK_CHANNELS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback FALLBACK_CHANNELS array not found in ChannelsWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    # ``id: '…'`` fields — the wizard's channel_id (typed union) mirrors id.
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_wizard = actionable_backend_ids - frontend_ids
+    assert not missing_in_wizard, (
+        f"Actionable channels in backend CHANNEL_CATALOG are missing from "
+        f"the ChannelsWizard FALLBACK_CHANNELS array: "
+        f"{sorted(missing_in_wizard)}. Every channel the backend accepts "
+        f"setup for must also be offered in the + Add Channel launcher."
+    )
+
+    extra_in_wizard = frontend_ids - actionable_backend_ids
+    assert not extra_in_wizard, (
+        f"ChannelsWizard fallback has channel ids not in actionable "
+        f"CHANNEL_CATALOG: {sorted(extra_in_wizard)}. Either register them "
+        f"in backend/channels/catalog.py or remove them from the fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 10 — Trigger wizard fallback vs. backend trigger catalog
+# ---------------------------------------------------------------------------
+
+def test_trigger_wizard_fallback_matches_backend():
+    """
+    The Hub trigger launcher keeps a static fallback in
+    ``frontend/components/triggers/TriggerCreationWizard.tsx`` (the
+    ``KIND_CATALOG`` array) for degraded mode. That fallback must stay
+    aligned with ``TRIGGER_CATALOG`` so Email/Webhook/Jira/GitHub remain
+    discoverable even if ``/api/triggers`` is temporarily unavailable.
+
+    Note: ``TriggerWizard.tsx`` was retired in v0.7.0 (commit 5c154d3)
+    and replaced by ``TriggerCreationWizard.tsx`` with ``KIND_CATALOG``
+    as the canonical fallback constant.
+    """
+    from channels.catalog import TRIGGER_CATALOG
+
+    backend_ids = {entry.id for entry in TRIGGER_CATALOG if entry.requires_setup}
+
+    wizard_path = FRONTEND / "components" / "triggers" / "TriggerCreationWizard.tsx"
+    assert wizard_path.exists(), f"TriggerCreationWizard.tsx not found at {wizard_path}"
+    text = _read(wizard_path)
+
+    fallback_match = re.search(
+        r"const KIND_CATALOG[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert fallback_match, (
+        "Fallback KIND_CATALOG array not found in TriggerCreationWizard.tsx. "
+        "If you refactored the fallback shape, update this regex too."
+    )
+    frontend_ids = set(re.findall(r"id:\s*'([^']+)'", fallback_match.group(1)))
+
+    missing_in_frontend = backend_ids - frontend_ids
+    extra_in_frontend = frontend_ids - backend_ids
+
+    assert not missing_in_frontend, (
+        f"Triggers registered in backend TRIGGER_CATALOG are missing from "
+        f"TriggerCreationWizard.tsx KIND_CATALOG: {sorted(missing_in_frontend)}. "
+        f"Add matching entries so offline mode still renders them."
+    )
+    assert not extra_in_frontend, (
+        f"Triggers present in TriggerCreationWizard.tsx KIND_CATALOG but not "
+        f"in backend TRIGGER_CATALOG: {sorted(extra_in_frontend)}. Either "
+        f"register them in backend/channels/catalog.py or remove them from "
+        f"the frontend fallback."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 11 — Gemini TTS model catalog drift
+# ---------------------------------------------------------------------------
+
+def test_gemini_tts_models_frontend_fallback_matches_backend():
+    """
+    GeminiTTSProvider.SUPPORTED_MODELS is the authoritative catalog of Gemini
+    TTS preview models. The frontend's offline fallback in
+    `frontend/components/audio-wizard/defaults.ts` (`GEMINI_TTS_MODELS`) must
+    list the same model_ids — otherwise a degraded /api/tts-providers/gemini/models
+    response will surface a different set than what the backend can actually
+    invoke, causing silent fallback to the default model on save.
+    """
+    from hub.providers.gemini_tts_provider import GeminiTTSProvider
+
+    backend_models = set(GeminiTTSProvider.SUPPORTED_MODELS.keys())
+    assert backend_models, "GeminiTTSProvider.SUPPORTED_MODELS is empty"
+    assert GeminiTTSProvider.DEFAULT_MODEL in backend_models, (
+        f"DEFAULT_MODEL='{GeminiTTSProvider.DEFAULT_MODEL}' is not in SUPPORTED_MODELS"
+    )
+
+    defaults_path = FRONTEND / "components" / "audio-wizard" / "defaults.ts"
+    assert defaults_path.exists(), f"defaults.ts not found at {defaults_path}"
+    text = _read(defaults_path)
+
+    block = re.search(
+        r"GEMINI_TTS_MODELS[^=]*=\s*\[(.*?)\n\]",
+        text,
+        re.DOTALL,
+    )
+    assert block, (
+        "GEMINI_TTS_MODELS array not found in defaults.ts. If you renamed it, "
+        "update this regex too."
+    )
+    frontend_models = set(re.findall(r"id:\s*'([^']+)'", block.group(1)))
+
+    assert backend_models == frontend_models, (
+        f"GEMINI_TTS_MODELS drift: backend SUPPORTED_MODELS={sorted(backend_models)}, "
+        f"frontend GEMINI_TTS_MODELS={sorted(frontend_models)}. "
+        f"Add/remove the matching entry in defaults.ts."
+    )
+
+    # Default-model constant in defaults.ts must match the backend default.
+    default_match = re.search(
+        r"GEMINI_TTS_DEFAULT_MODEL\s*=\s*'([^']+)'",
+        text,
+    )
+    assert default_match, "GEMINI_TTS_DEFAULT_MODEL constant missing in defaults.ts"
+    assert default_match.group(1) == GeminiTTSProvider.DEFAULT_MODEL, (
+        f"Default model drift: backend='{GeminiTTSProvider.DEFAULT_MODEL}', "
+        f"frontend='{default_match.group(1)}'."
     )
 
 

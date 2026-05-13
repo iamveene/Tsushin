@@ -36,6 +36,8 @@ class ConfigResponse(BaseModel):
     ollama_api_key: Optional[str]
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: float
+    platform_min_agentic_rounds: Optional[int] = None
+    platform_max_agentic_rounds: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -73,6 +75,8 @@ class ConfigUpdate(BaseModel):
     ollama_api_key: Optional[str] = None
     # Phase 18: Global WhatsApp conversation delay
     whatsapp_conversation_delay_seconds: Optional[float] = None
+    platform_min_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
+    platform_max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
 
     @field_validator('ollama_base_url')
     @classmethod
@@ -144,6 +148,13 @@ class ExecutionMethod(str, Enum):
     SCHEDULED = "scheduled"
     RECURRING = "recurring"
     KEYWORD = "keyword"  # BUG-336: Fired when a message matches trigger_keywords
+    # v0.7.0 Wave 2/4: Triggers↔Flows Unification — flow is woken by a trigger
+    # event (jira/email/github/webhook) via flow_trigger_binding.
+    # Wave 2 already added 'triggered' to the legacy VALID_EXECUTION_METHODS set
+    # used by the BUG-342 path, but the Pydantic enum used by POST /api/flows/create
+    # was missed — caught by Wave 4 deep-link prefill QA when the modal silently
+    # 422'd.
+    TRIGGERED = "triggered"
 
 
 class FlowType(str, Enum):
@@ -167,6 +178,17 @@ class StepType(str, Enum):
     # safe — no DB migration required.
     CUSTOM_SKILL = "custom_skill"  # Phase 22: Custom skill (alias for skill)
     BROWSER_AUTOMATION = "browser_automation"  # Phase 14.5: Browser automation
+    PASSWORD_VAULT = "password_vault"  # v0.7.x: provider-neutral vault references
+    HTTP_REQUEST = "http_request"  # UI-authored deterministic HTTP/API step
+    DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step
+    FINANCIAL_BILL_STORE = "financial_bill_store"  # Utility-bill storage/dedupe only
+    FINANCIAL_RECORD_STORE = "financial_record_store"  # Generic financial record storage/dedupe
+    # v0.7.0 Wave 2/4: Triggers↔Flows Unification — Source step is the
+    # canonical entry point for triggered flows. Wave 4 deep-link prefill
+    # (Create flow from this trigger) sends a Source step with config
+    # {trigger_kind, trigger_instance_id} via POST /api/flows/create. Without
+    # this enum value the v2 endpoint silently 422s and the modal stays open.
+    SOURCE = "source"
 
 
 class FlowStatus(str, Enum):
@@ -206,6 +228,12 @@ class FlowStepConfig(BaseModel):
 
     # Notification-specific
     message_template: Optional[str] = None
+    # State-aware message templates. When present, the notification step picks
+    # the template whose key matches the upstream step's notification_state
+    # (e.g. {"new_boleto": "...", "pending_no_barcode": "...", "default": "..."}).
+    # If no key matches, falls back to message_template.
+    message_templates_by_state: Optional[Dict[str, str]] = None
+    notification_templates_by_state: Optional[Dict[str, str]] = None
 
     # Message-specific
     content: Optional[str] = None
@@ -216,6 +244,145 @@ class FlowStepConfig(BaseModel):
     tool_id: Optional[str] = None  # Alias for tool_name
     tool_parameters: Optional[Dict[str, Any]] = None
     parameters: Optional[Dict[str, Any]] = None  # Alias for tool_parameters
+
+    # Password Vault-specific
+    action: Optional[str] = None  # list_items, read_item, read_totp, compose_basic_auth, test_connection
+    integration_id: Optional[int] = None
+    vault: Optional[str] = None
+    item_ref: Optional[str] = None
+    item_id: Optional[str] = None
+    field_name: Optional[str] = None
+    username_handle: Optional[str] = None
+    password_handle: Optional[str] = None
+    scheme: Optional[str] = None
+    # UI preservation fields for the Password Vault reference picker. The
+    # programmatic handler reads the compact fields above; these keep the
+    # selected Hub integration/vault/item labels round-trippable on edit.
+    password_vault_integration_id: Optional[int] = None
+    password_vault_provider: Optional[str] = None
+    password_vault_vault_id: Optional[str] = None
+    password_vault_vault_name: Optional[str] = None
+    password_vault_item_id: Optional[str] = None
+    password_vault_item_title: Optional[str] = None
+    password_vault_field_name: Optional[str] = None
+    password_vault_reference: Optional[str] = None
+
+    # Financial utility automation-specific. These are UI-authored so the
+    # canary boleto automation is reproducible without seeds or scripts.
+    financial_automation_template: Optional[str] = None
+    financial_provider: Optional[str] = None
+    financial_unit_id: Optional[str] = None
+    financial_asset: Optional[str] = None
+    financial_address: Optional[str] = None
+    financial_customer_code: Optional[str] = None
+    financial_delivery_location: Optional[str] = None
+    financial_username_field: Optional[str] = None
+    financial_password_field: Optional[str] = None
+    financial_browser_timeout_ms: Optional[int] = None
+    financial_notification_enabled: Optional[bool] = None
+    financial_notification_recipient: Optional[str] = None
+    financial_notification_agent_id: Optional[int] = None
+    financial_password_vault_integration_id: Optional[int] = None
+    financial_password_vault_provider: Optional[str] = None
+    financial_password_vault_vault_id: Optional[str] = None
+    financial_password_vault_vault_name: Optional[str] = None
+    financial_password_vault_item_id: Optional[str] = None
+    financial_password_vault_item_title: Optional[str] = None
+    financial_password_vault_field_name: Optional[str] = None
+    financial_password_vault_reference: Optional[str] = None
+
+    # Browser automation primitive-specific. These fields keep a UI-authored
+    # browser step round-trippable as explicit actions/selectors rather than a
+    # natural-language-only prompt.
+    url: Optional[str] = None
+    mode: Optional[str] = None
+    provider_type: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    use_tool_mode: Optional[bool] = None
+    tool_action: Optional[str] = None
+    tool_arguments: Optional[Dict[str, Any]] = None
+    selectors: Optional[Any] = None
+    browser_secret_references: Optional[Any] = None
+    session_persistence: Optional[bool] = None
+    session_ttl_seconds: Optional[int] = None
+    browser_session_profile_name: Optional[str] = None
+    browser_session_integration_id: Optional[int] = None
+    optional: Optional[bool] = None
+    treat_failure_as_skipped: Optional[bool] = None
+
+    # HTTP request primitive-specific. These fields intentionally mirror the
+    # UI control groups so imported financial automations can be rebuilt as
+    # visible request/transform/store flows instead of opaque mega-steps.
+    method: Optional[str] = None
+    headers: Optional[Any] = None
+    query: Optional[Any] = None
+    params: Optional[Any] = None
+    body: Optional[Any] = None
+    form: Optional[Any] = None
+    secret_references: Optional[Any] = None
+    http_secret_references: Optional[Any] = None
+    fail_on_http_error: Optional[bool] = None
+    http_method: Optional[str] = None
+    http_url: Optional[str] = None
+    http_headers: Optional[Any] = None
+    http_query: Optional[Any] = None
+    http_body: Optional[Any] = None
+    http_json: Optional[Any] = None
+    http_form: Optional[Any] = None
+    http_timeout_seconds: Optional[float] = None
+    http_capture_raw_response: Optional[bool] = None
+    http_query_params: Optional[Any] = None
+    http_body_type: Optional[str] = None
+    http_json_body: Optional[Any] = None
+    http_form_fields: Optional[Any] = None
+    http_raw_body: Optional[str] = None
+    http_follow_redirects: Optional[bool] = None
+    http_raw_response_handle: Optional[bool] = None
+
+    # Data transform primitive-specific. `source_step` is shared with
+    # summarization; these fields add deterministic extraction and financial
+    # parser modes.
+    transform_mode: Optional[str] = None
+    parser_mode: Optional[str] = None
+    source_steps: Optional[Dict[str, Any]] = None
+    source_handle_path: Optional[str] = None
+    source_path: Optional[str] = None
+    raw_response_handle: Optional[str] = None
+    raw_response_handles: Optional[Dict[str, str]] = None
+    json_path: Optional[str] = None
+    extraction_rules: Optional[Any] = None
+    parser_rules: Optional[Any] = None
+    record_mapping: Optional[Dict[str, Any]] = None
+    issue_record_handle: Optional[bool] = None
+    financial_parser_mode: Optional[str] = None
+    emit_raw_bill_handle: Optional[bool] = None
+    emit_financial_record_handle: Optional[bool] = None
+
+    # Generic financial record store primitive-specific. `financial_bill_store`
+    # is a utility-bill alias; broader Finan workflows can use
+    # `financial_record_store` with record_kind values such as tax_obligation,
+    # income_transfer, and investment_snapshot.
+    record_kind: Optional[str] = None
+    financial_record_kind: Optional[str] = None
+    financial_automation_key: Optional[str] = None
+    financial_subject_key: Optional[str] = None
+    financial_record: Optional[Dict[str, Any]] = None
+    financial_record_handle: Optional[str] = None
+    financial_record_handle_path: Optional[str] = None
+    financial_record_source_step: Optional[str] = None
+    financial_record_dedupe_key: Optional[str] = None
+    financial_record_key_fields: Optional[str] = None
+    financial_record_payload: Optional[str] = None
+    financial_source_step: Optional[str] = None
+    financial_dedupe_key: Optional[str] = None
+    financial_notify_on_update: Optional[bool] = None
+
+    # Financial bill store primitive-specific. The handler only stores or
+    # dedupes normalized bill data; notification remains an explicit later node.
+    financial_bill_handle: Optional[str] = None
+    financial_bill_source_step: Optional[str] = None
+    financial_bill_source: Optional[str] = None
+    financial_bill: Optional[Dict[str, Any]] = None
 
     # Conversation-specific
     objective: Optional[str] = None
@@ -237,6 +404,19 @@ class FlowStepConfig(BaseModel):
     # Slash command-specific
     command: Optional[str] = None  # e.g. "/scheduler list week"
     command_id: Optional[Union[str, int]] = None  # For tool commands
+
+    # v0.7.0 Wave 2/4: Source step config carries the trigger binding info.
+    # Used both at create-time (deep-link prefill from /hub/triggers/{kind}/{id})
+    # and at runtime (SourceStepHandler reads these as a fallback when
+    # trigger_context['source'] is absent).
+    trigger_kind: Optional[str] = Field(
+        default=None,
+        description="Source-step: 'jira'|'email'|'github'|'webhook'",
+    )
+    trigger_instance_id: Optional[int] = Field(
+        default=None,
+        description="Source-step: per-kind channel instance id this flow is bound to",
+    )
 
     # Gate-specific (conditional flow control)
     gate_mode: Optional[str] = Field(default=None, description="'programmatic' (zero LLM cost) or 'agentic' (AI-driven)")
@@ -457,6 +637,13 @@ class FlowResponse(BaseModel):
     # `node_count`. v2 callers should read `step_count` but the alias stays
     # populated so clients migrating from legacy don't break.
     node_count: int = 0
+
+    # v0.7.0 release-finishing — system-managed trigger flow metadata.
+    # Mirrors FlowDefinitionResponse so v2 callers see the same fields.
+    is_system_owned: bool = False
+    editable_by_tenant: bool = True
+    deletable_by_tenant: bool = True
+    system_trigger_kind: Optional[str] = None
 
     @model_validator(mode="after")
     def _mirror_step_node_count(self):

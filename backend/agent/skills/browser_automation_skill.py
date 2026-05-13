@@ -17,8 +17,13 @@ Actions supported:
 
 import logging
 import json
+import os
 import re
+import base64
+import tempfile
+import time
 from typing import Dict, Any, Optional, List
+import httpx
 from sqlalchemy.orm import Session
 
 from .base import BaseSkill, InboundMessage, SkillResult
@@ -83,17 +88,342 @@ class BrowserAutomationSkill(BaseSkill):
         self._db = db
         self.token_tracker = token_tracker
 
+    @staticmethod
+    def _captcha_expected_length(params: Dict[str, Any]) -> Optional[int]:
+        try:
+            length = int(str(params.get("captcha_length") or "").strip())
+            return length if 1 <= length <= 12 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _captcha_guess_lines(text: str, expected_length: Optional[int] = None) -> List[str]:
+        """Normalize model output into ordered, plausible CAPTCHA guesses."""
+        guesses: List[str] = []
+        fallback: List[str] = []
+        for line in str(text or "").splitlines():
+            cleaned = re.sub(r"[^a-zA-Z0-9]", "", line).strip().lower()
+            if expected_length:
+                if len(cleaned) == expected_length:
+                    guesses.append(cleaned)
+                elif 4 <= len(cleaned) <= 8:
+                    fallback.append(cleaned)
+            elif 4 <= len(cleaned) <= 8:
+                guesses.append(cleaned)
+        if not guesses:
+            cleaned = re.sub(r"[^a-zA-Z0-9]", "", str(text or "")).strip().lower()
+            if expected_length and len(cleaned) == expected_length:
+                guesses.append(cleaned)
+            elif not expected_length and 4 <= len(cleaned) <= 8:
+                guesses.append(cleaned)
+        if not guesses and not expected_length:
+            guesses.extend(fallback)
+        return list(dict.fromkeys(guesses))
+
+    async def _capture_captcha_image(self, provider, selector: str) -> tuple[Optional[str], str, Optional[BrowserResult]]:
+        """Capture the rendered CAPTCHA image at natural resolution when possible."""
+        try:
+            capture = await provider.execute_script(
+                """
+                async () => {
+                  const selector = arguments[0];
+                  const img = document.querySelector(selector);
+                  if (!img) return null;
+                  if (!img.complete) {
+                    await new Promise((resolve) => {
+                      img.addEventListener('load', resolve, { once: true });
+                      img.addEventListener('error', resolve, { once: true });
+                      setTimeout(resolve, 2500);
+                    });
+                  }
+                  const width = img.naturalWidth || img.width || Math.ceil(img.getBoundingClientRect().width);
+                  const height = img.naturalHeight || img.height || Math.ceil(img.getBoundingClientRect().height);
+                  if (!width || !height) return null;
+                  const canvas = document.createElement('canvas');
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  ctx.drawImage(img, 0, 0, width, height);
+                  return { dataUrl: canvas.toDataURL('image/png'), width, height };
+                }
+                """.replace("arguments[0]", json.dumps(selector))
+            )
+            data = capture.data.get("result") if capture.success else None
+            data_url = data.get("dataUrl") if isinstance(data, dict) else None
+            if isinstance(data_url, str) and data_url.startswith("data:image/") and "," in data_url:
+                header, payload = data_url.split(",", 1)
+                suffix = ".jpg" if "jpeg" in header or "jpg" in header else ".png"
+                screenshot_dir = os.path.join(tempfile.gettempdir(), "tsushin_screenshots")
+                os.makedirs(screenshot_dir, exist_ok=True)
+                filename = f"captcha_{int(time.time() * 1000)}{suffix}"
+                path = os.path.join(screenshot_dir, filename)
+                with open(path, "wb") as fh:
+                    fh.write(base64.b64decode(payload))
+                return path, "canvas", None
+        except Exception as exc:
+            logger.debug("CAPTCHA canvas capture failed; falling back to screenshot: %s", exc)
+
+        screenshot = await provider.screenshot(full_page=False, selector=selector)
+        if screenshot.success:
+            return str(screenshot.data.get("path") or ""), "screenshot", None
+        return None, "screenshot", screenshot
+
+    @staticmethod
+    def _captcha_image_variants(image_path: str, params: Dict[str, Any]) -> List[str]:
+        if str(params.get("preprocess_image", "true")).lower() in {"0", "false", "no"}:
+            return [image_path]
+        variants = [image_path]
+        try:
+            from PIL import Image, ImageEnhance, ImageFilter
+
+            img = Image.open(image_path).convert("L")
+            img = ImageEnhance.Contrast(img).enhance(2.2)
+            img = img.filter(ImageFilter.SHARPEN)
+            img = img.resize((max(1, img.width * 3), max(1, img.height * 3)))
+            base, _ = os.path.splitext(image_path)
+            enhanced_path = f"{base}_enhanced.png"
+            img.save(enhanced_path)
+            variants.append(enhanced_path)
+        except Exception as exc:
+            logger.debug("CAPTCHA preprocessing skipped: %s", exc)
+        return variants
+
+    async def _captcha_guesses_from_ollama(self, image_path: str, params: Dict[str, Any]) -> List[str]:
+        model = (
+            params.get("ollama_model")
+            or params.get("model")
+            or os.getenv("TSUSHIN_CAPTCHA_OLLAMA_MODEL")
+            or "gemma4:latest"
+        )
+        base_url = (
+            params.get("ollama_base_url")
+            or os.getenv("OLLAMA_BASE_URL")
+            or "http://host.docker.internal:11434"
+        ).rstrip("/")
+        expected_length = self._captcha_expected_length(params)
+        length_hint = str(expected_length or "").strip()
+        length_rule = (
+            f"The code is exactly {length_hint} characters."
+            if length_hint.isdigit()
+            else "The code is 5 or 6 characters."
+        )
+        prompt = str(params.get("prompt") or f"""
+Read this CAPTCHA image exactly.
+Rules:
+- {length_rule}
+- The code uses lowercase letters a-z and digits 0-9.
+- Ignore crossing lines, background noise, and dots.
+- Return up to 5 likely readings, one per line.
+- Output only the readings, no labels and no commentary.
+""").strip()
+
+        with open(image_path, "rb") as fh:
+            image_base64 = base64.b64encode(fh.read()).decode("ascii")
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [image_base64],
+            "stream": False,
+            "options": {
+                "temperature": float(params.get("temperature", 0)),
+            },
+        }
+        timeout = float(params.get("solver_timeout_seconds") or params.get("timeout_seconds") or 60)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{base_url}/api/generate", json=payload)
+            response.raise_for_status()
+            data = response.json()
+        return self._captcha_guess_lines(str(data.get("response") or ""), expected_length)
+
+    async def _solve_image_captcha(self, provider, params: Dict[str, Any]) -> BrowserResult:
+        selector = params.get("selector") or "img[src*='captcha'], img[alt*='captcha' i], img[id*='captcha' i], img[class*='captcha' i]"
+        input_selector = params.get("input_selector") or (
+            "input[name*='captcha' i], input[id*='captcha' i], "
+            "input[placeholder*='captcha' i], input[placeholder*='imagem' i]"
+        )
+        submit_selector = params.get("submit_selector") or (
+            "button:has-text('Consultar'), button:has-text('Pesquisar'), "
+            "button[type='submit'], input[type='submit']"
+        )
+        success_selector = params.get("success_selector")
+        error_text_regex = params.get("error_text_regex") or (
+            "incorreto|n[aã]o confere|captcha inv[aá]lido|captcha invalido|inv[aá]lido"
+        )
+        try:
+            max_attempts = max(1, min(10, int(params.get("max_attempts") or 3)))
+        except (TypeError, ValueError):
+            max_attempts = 3
+        try:
+            post_submit_wait_ms = max(250, min(15000, int(params.get("post_submit_wait_ms") or 5000)))
+        except (TypeError, ValueError):
+            post_submit_wait_ms = 5000
+
+        detection = await provider.execute_script(f"() => Boolean(document.querySelector({json.dumps(selector)}))")
+        if detection.success and not detection.data.get("result"):
+            return BrowserResult(success=True, action="solve_captcha", data={"selector": selector, "captcha_detected": False})
+
+        for attempt in range(1, max_attempts + 1):
+            image_path, capture_method, capture_error = await self._capture_captcha_image(provider, selector)
+            if not image_path:
+                screenshot = capture_error or BrowserResult(
+                    success=False,
+                    action="screenshot",
+                    error="Could not capture CAPTCHA image",
+                )
+                return BrowserResult(
+                    success=False,
+                    action="solve_captcha",
+                    data={"selector": selector, "captcha_detected": True, "attempt": attempt},
+                    error=screenshot.error or "Could not capture CAPTCHA image",
+                    error_code=screenshot.error_code,
+                    suggestions=screenshot.suggestions,
+                )
+
+            try:
+                guesses: List[str] = []
+                for candidate_path in self._captcha_image_variants(image_path, params):
+                    guesses = await self._captcha_guesses_from_ollama(candidate_path, params)
+                    if guesses:
+                        break
+            except Exception as exc:
+                from hub.providers.browser_automation_provider import BrowserErrorCode
+
+                return BrowserResult(
+                    success=False,
+                    action="solve_captcha",
+                    data={"selector": selector, "captcha_detected": True, "attempt": attempt, "solver_provider": "ollama"},
+                    error=f"CAPTCHA solver failed: {exc}",
+                    error_code=BrowserErrorCode.UNKNOWN,
+                    suggestions=["Check Ollama availability/model support or configure this step for manual execution."],
+                )
+
+            if not guesses:
+                await provider.execute_script("() => new Promise(resolve => setTimeout(() => resolve(true), 1000))")
+                continue
+
+            for guess in guesses:
+                fill_result = await provider.fill(input_selector, guess)
+                if not fill_result.success:
+                    return BrowserResult(
+                        success=False,
+                        action="solve_captcha",
+                        data={"selector": selector, "captcha_detected": True, "attempt": attempt},
+                        error=fill_result.error or "CAPTCHA input not found",
+                        error_code=fill_result.error_code,
+                        suggestions=fill_result.suggestions,
+                    )
+
+                click_result = await provider.click(submit_selector)
+                if not click_result.success:
+                    return BrowserResult(
+                        success=False,
+                        action="solve_captcha",
+                        data={"selector": selector, "captcha_detected": True, "attempt": attempt},
+                        error=click_result.error or "CAPTCHA submit control not found",
+                        error_code=click_result.error_code,
+                        suggestions=click_result.suggestions,
+                    )
+
+                await provider.execute_script(
+                    f"() => new Promise(resolve => setTimeout(() => resolve(true), {post_submit_wait_ms}))"
+                )
+                state = await provider.execute_script(
+                    "() => { "
+                    "const isVisible = (el) => { "
+                    "  if (!el) return false; "
+                    "  const style = window.getComputedStyle(el); "
+                    "  const rect = el.getBoundingClientRect(); "
+                    "  return style && style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0; "
+                    "}; "
+                    "const firstVisible = (sel) => { "
+                    "  if (!sel) return false; "
+                    "  try { return Array.from(document.querySelectorAll(sel)).some(isVisible); } catch (_) { return false; } "
+                    "}; "
+                    f"const captchaVisible = firstVisible({json.dumps(selector)}); "
+                    f"const successVisible = firstVisible({json.dumps(success_selector or '')}); "
+                    "const text = (document.body && document.body.innerText || '').toLowerCase(); "
+                    f"const errorRe = new RegExp({json.dumps(error_text_regex)}, 'i'); "
+                    "return { captchaVisible, successVisible, error: errorRe.test(text), url: location.href }; "
+                    "}"
+                )
+                state_data = state.data.get("result") if state.success else {}
+                if not isinstance(state_data, dict):
+                    state_data = {}
+                if state_data.get("successVisible") or not state_data.get("captchaVisible"):
+                    return BrowserResult(
+                        success=True,
+                        action="solve_captcha",
+                        data={
+                            "selector": selector,
+                            "captcha_detected": True,
+                            "attempt": attempt,
+                            "guesses_tried": guesses.index(guess) + 1,
+                            "solver_provider": "ollama",
+                            "model": params.get("ollama_model") or params.get("model") or os.getenv("TSUSHIN_CAPTCHA_OLLAMA_MODEL") or "gemma4:latest",
+                            "capture_method": capture_method,
+                            "url": state_data.get("url"),
+                            "success_selector_visible": bool(state_data.get("successVisible")),
+                            "captcha_visible": bool(state_data.get("captchaVisible")),
+                        },
+                    )
+
+                break
+
+        from hub.providers.browser_automation_provider import BrowserErrorCode
+
+        return BrowserResult(
+            success=False,
+            action="solve_captcha",
+            data={"selector": selector, "captcha_detected": True, "attempts": max_attempts, "solver_provider": "ollama"},
+            error=f"CAPTCHA was not solved after {max_attempts} attempt(s)",
+            error_code=BrowserErrorCode.UNKNOWN,
+            suggestions=["Increase max_attempts, adjust selectors, or run this Flow manually if the portal CAPTCHA has changed."],
+        )
+
+    def _load_browser_session_profile(
+        self,
+        tenant_id: Optional[str],
+        *,
+        integration_id: Optional[int] = None,
+        profile_name: Optional[str] = None,
+    ) -> tuple[Optional[dict], Optional[dict]]:
+        """Return sanitized profile metadata plus decrypted Playwright storage state."""
+        if not self._db or not tenant_id or (not integration_id and not profile_name):
+            return None, None
+        try:
+            from services.browser_session_profile_service import load_profile_storage_state
+
+            integration, storage_state = load_profile_storage_state(
+                self._db,
+                str(tenant_id),
+                integration_id=integration_id,
+                profile_name=profile_name,
+            )
+            if not integration:
+                return None, None
+            return {
+                "id": integration.id,
+                "profile_name": integration.session_profile_name,
+                "provider_type": integration.provider_type,
+                "mode": integration.mode,
+                "browser_type": integration.browser_type,
+                "headless": integration.headless,
+                "timeout_seconds": integration.timeout_seconds,
+                "viewport_width": integration.viewport_width,
+                "viewport_height": integration.viewport_height,
+                "session_ttl_seconds": integration.session_ttl_seconds,
+                "cdp_url": integration.cdp_url,
+            }, storage_state
+        except Exception as exc:
+            logger.warning("Could not load browser session profile: %s", exc)
+            return None, None
+
     async def can_handle(self, message: InboundMessage) -> bool:
         """
         Detect if message contains browser automation intent.
 
-        Uses keyword pre-filter followed by AI classification.
-
-        Args:
-            message: Inbound message
-
-        Returns:
-            True if message requests browser automation
+        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
         if not self.is_legacy_enabled(config):
@@ -103,26 +433,12 @@ class BrowserAutomationSkill(BaseSkill):
         if message.media_type:
             return False
 
-        text = message.body.lower()
-        keywords = config.get('keywords', self.get_default_config()['keywords'])
-        use_ai_fallback = config.get('use_ai_fallback', True)
-
-        # Step 1: Keyword pre-filter
-        has_keywords = self._keyword_matches(message.body, keywords)
-
-        if not has_keywords:
-            logger.debug(f"BrowserAutomationSkill: No keyword match in '{text[:50]}...'")
+        if not (message.body and message.body.strip()):
             return False
 
-        logger.info(f"BrowserAutomationSkill: Keywords matched in '{text[:50]}...'")
-
-        # Step 2: AI fallback (for intent verification)
-        if use_ai_fallback:
-            result = await self._ai_classify_browser(message.body, config)
-            logger.info(f"BrowserAutomationSkill: AI classification result={result}")
-            return result
-
-        return True
+        result = await self._ai_classify_browser(message.body, config)
+        logger.info(f"BrowserAutomationSkill: AI classification result={result}")
+        return result
 
     async def _ai_classify_browser(self, message: str, config: Dict[str, Any]) -> bool:
         """
@@ -356,6 +672,18 @@ Available actions:
 6. execute_script - Run JavaScript
    params: {"script": "JavaScript code"}
 
+7. wait_for - Wait for an element
+   params: {"selector": "CSS selector", "state": "visible"|"hidden"|"attached"|"detached", "timeout_ms": 10000}
+
+8. wait_for_url - Wait for URL navigation
+   params: {"url_contains": "/dashboard", "timeout_ms": 10000}
+
+9. dismiss_modal - Try a best-effort modal/banner dismissal without failing if missing
+   params: {"selector": "CSS selector"}
+
+10. solve_captcha - Explicit CAPTCHA boundary
+   params: {"selector": "CSS selector"}
+
 Return ONLY a JSON array of actions, no other text."""
 
             user_prompt = f"""Parse this browser command into actions:
@@ -557,6 +885,37 @@ Return JSON array only:"""
 
         logger.info(f"Executing action: {action_name} with params: {params}")
 
+        def _page_script(script: str) -> str:
+            stripped = (script or "").strip()
+            if not stripped:
+                return "() => null"
+            if stripped.startswith(("(", "async ", "function ")):
+                return stripped
+            return f"() => {{ {stripped} }}"
+
+        async def _quick_dom_click(selector: str) -> Optional[BrowserResult]:
+            selector = (selector or "").strip()
+            if not selector:
+                return None
+            try:
+                script = (
+                    "() => { "
+                    f"const el = document.querySelector({json.dumps(selector)}); "
+                    "if (!(el instanceof HTMLElement)) return false; "
+                    "el.click(); return true; "
+                    "}"
+                )
+                click_result = await provider.execute_script(script)
+                if click_result.success and click_result.data.get("result"):
+                    return BrowserResult(
+                        success=True,
+                        action='dismiss_modal',
+                        data={"selector": selector, "dismissed": True, "used_quick_dom_click": True},
+                    )
+            except Exception:
+                return None
+            return None
+
         if action_name == 'navigate':
             url = params.get('url', '')
             # Sentinel SSRF pre-check (LLM-based intent analysis)
@@ -578,9 +937,21 @@ Return JSON array only:"""
             )
 
         elif action_name == 'click':
-            return await provider.click(
+            result = await provider.click(
                 selector=params.get('selector', '')
             )
+            if result.success or not params.get("fallback_selector"):
+                return result
+            fallback_selector = params.get("fallback_selector")
+            fallback_result = await provider.click(selector=fallback_selector)
+            if fallback_result.success:
+                fallback_result.data = {
+                    **(fallback_result.data or {}),
+                    "selector": fallback_selector,
+                    "primary_selector": params.get("selector", ""),
+                    "used_fallback_selector": True,
+                }
+            return fallback_result
 
         elif action_name == 'fill':
             return await provider.fill(
@@ -626,6 +997,46 @@ Return JSON array only:"""
                 state=params.get('state', 'visible'),
                 timeout_ms=params.get('timeout_ms'),
             )
+        elif action_name == 'wait_for_url':
+            return await provider.wait_for_url(
+                url_contains=params.get('url_contains') or params.get('url') or '',
+                timeout_ms=params.get('timeout_ms'),
+            )
+        elif action_name == 'dismiss_modal':
+            result = await _quick_dom_click(params.get('selector', ''))
+            if result:
+                return result
+            if params.get("fallback_selector"):
+                fallback_result = await _quick_dom_click(params.get("fallback_selector"))
+                if fallback_result:
+                    fallback_result.data = {
+                        **(fallback_result.data or {}),
+                        "primary_selector": params.get('selector', ''),
+                        "used_fallback_selector": True,
+                    }
+                    return fallback_result
+            if params.get("fallback_script"):
+                script_result = await provider.execute_script(_page_script(params.get("fallback_script")))
+                if script_result.success:
+                    return BrowserResult(success=True, action='dismiss_modal', data={"selector": params.get('selector', ''), "dismissed": True, "used_fallback_script": True, "result": script_result.data.get("result")})
+            return BrowserResult(success=True, action='dismiss_modal', data={"selector": params.get('selector', ''), "dismissed": False, "skipped": True})
+        elif action_name == 'solve_captcha':
+            selector = params.get('selector') or "iframe[src*='captcha'], img[src*='captcha'], [class*='captcha']"
+            detection = await provider.execute_script(f"() => Boolean(document.querySelector({json.dumps(selector)}))")
+            if detection.success and not detection.data.get("result"):
+                return BrowserResult(success=True, action='solve_captcha', data={"selector": selector, "captcha_detected": False})
+            solver_provider = str(params.get("solver_provider") or params.get("captcha_solver_provider") or "ollama").strip().lower()
+            if solver_provider == "ollama":
+                return await self._solve_image_captcha(provider, {**params, "selector": selector})
+            from hub.providers.browser_automation_provider import BrowserErrorCode
+            return BrowserResult(
+                success=False,
+                action='solve_captcha',
+                data={"selector": selector, "captcha_detected": True, "solver_provider": solver_provider},
+                error=f"CAPTCHA solver provider '{solver_provider}' is not configured",
+                error_code=BrowserErrorCode.UNKNOWN,
+                suggestions=["Set solver_provider=ollama with an Ollama vision model, or replace this step with a manual challenge node before enabling scheduled runs."],
+            )
         elif action_name == 'go_back':
             return await provider.go_back()
         elif action_name == 'go_forward':
@@ -662,7 +1073,7 @@ Return JSON array only:"""
                 data={},
                 error=f"Unknown action: {action_name}",
                 error_code=BrowserErrorCode.UNKNOWN,
-                suggestions=[f"Available actions: navigate, click, fill, extract, screenshot, execute_script, scroll, select_option, hover, wait_for, go_back, go_forward, get_attribute, get_page_url, type_text, open_tab, switch_tab, close_tab, list_tabs"],
+                suggestions=[f"Available actions: navigate, click, fill, extract, screenshot, execute_script, scroll, select_option, hover, wait_for, wait_for_url, dismiss_modal, solve_captcha, go_back, go_forward, get_attribute, get_page_url, type_text, open_tab, switch_tab, close_tab, list_tabs"],
             )
 
     def _format_results(self, results: List[BrowserResult]) -> str:
@@ -733,8 +1144,6 @@ Return JSON array only:"""
             Default config dict
         """
         return {
-            "keywords": [],
-            "use_ai_fallback": True,
             "ai_model": "gemini-2.5-flash",
             "provider_type": "playwright",
             "timeout_seconds": 30,
@@ -751,16 +1160,6 @@ Return JSON array only:"""
         return {
             "type": "object",
             "properties": {
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger browser automation"
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI to verify intent after keyword match",
-                    "default": True
-                },
                 "ai_model": {
                     "type": "string",
                     "description": "AI model for intent classification",
@@ -857,13 +1256,13 @@ Return JSON array only:"""
                         "type": "string",
                         "enum": [
                             "navigate", "screenshot", "click", "fill", "extract", "execute_script",
-                            "scroll", "select_option", "hover", "wait_for",
+                            "scroll", "select_option", "hover", "wait_for", "wait_for_url", "dismiss_modal", "solve_captcha",
                             "go_back", "go_forward", "get_attribute", "get_page_url", "type_text",
                             "open_tab", "switch_tab", "close_tab", "list_tabs",
                         ],
                         "description": (
                             "Browser action to perform. Core: navigate, click, fill, extract, screenshot. "
-                            "Interaction: scroll, hover, select_option, wait_for, type_text, execute_script. "
+                            "Interaction: scroll, hover, select_option, wait_for, wait_for_url, dismiss_modal, solve_captcha, type_text, execute_script. "
                             "Navigation: go_back, go_forward, get_page_url, get_attribute. "
                             "Tabs: open_tab, switch_tab, close_tab, list_tabs."
                         ),
@@ -932,7 +1331,11 @@ Return JSON array only:"""
                     },
                     "timeout_ms": {
                         "type": "integer",
-                        "description": "Custom timeout in milliseconds (for wait_for action)"
+                        "description": "Custom timeout in milliseconds (for wait_for / wait_for_url actions)"
+                    },
+                    "url_contains": {
+                        "type": "string",
+                        "description": "URL substring to wait for (for wait_for_url action)"
                     },
                 },
                 "required": ["action"]
@@ -979,7 +1382,7 @@ Return JSON array only:"""
 
         ALL_ACTIONS = [
             "navigate", "screenshot", "click", "fill", "extract", "execute_script",
-            "scroll", "select_option", "hover", "wait_for",
+            "scroll", "select_option", "hover", "wait_for", "wait_for_url", "dismiss_modal", "solve_captcha",
             "go_back", "go_forward", "get_attribute", "get_page_url", "type_text",
             "open_tab", "switch_tab", "close_tab", "list_tabs",
         ]
@@ -1006,6 +1409,21 @@ Return JSON array only:"""
             # Determine if we should use persistent sessions
             # CDP mode defaults to persistent (Chrome is already running)
             use_session = config.get("session_persistence", provider_type == "cdp")
+            tenant_id = getattr(message, 'tenant_id', None) or self._resolve_tenant_id() or ''
+            profile_integration_id = config.get("browser_session_integration_id")
+            try:
+                profile_integration_id = int(profile_integration_id) if profile_integration_id else None
+            except (TypeError, ValueError):
+                profile_integration_id = None
+            profile_name = config.get("browser_session_profile_name") or config.get("session_profile_name")
+            profile_meta, storage_state = self._load_browser_session_profile(
+                tenant_id,
+                integration_id=profile_integration_id,
+                profile_name=profile_name,
+            )
+            if profile_meta:
+                provider_type = profile_meta.get("provider_type") or provider_type
+                use_session = True
 
             if use_session:
                 from hub.providers.browser_session_manager import BrowserSessionManager, BrowserSessionLimitError
@@ -1014,8 +1432,19 @@ Return JSON array only:"""
                     # Build config for session manager
                     session_config = _BrowserConfig(
                         provider_type=provider_type,
-                        cdp_url=config.get("cdp_url", "http://host.docker.internal:9222"),
-                        timeout_seconds=config.get("timeout_seconds", 30),
+                        mode=(profile_meta or {}).get("mode") or config.get("mode", "container"),
+                        browser_type=(profile_meta or {}).get("browser_type") or config.get("browser_type", "chromium"),
+                        headless=bool((profile_meta or {}).get("headless", config.get("headless", True))),
+                        timeout_seconds=(profile_meta or {}).get("timeout_seconds") or config.get("timeout_seconds") or 30,
+                        viewport_width=(profile_meta or {}).get("viewport_width") or config.get("viewport_width", 1280),
+                        viewport_height=(profile_meta or {}).get("viewport_height") or config.get("viewport_height", 720),
+                        cdp_url=(profile_meta or {}).get("cdp_url") or config.get("cdp_url", "http://host.docker.internal:9222"),
+                        session_persistence=True,
+                        session_ttl_seconds=(profile_meta or {}).get("session_ttl_seconds") or config.get("session_ttl_seconds", 300),
+                        tenant_id=str(tenant_id) if tenant_id else None,
+                        browser_session_profile_name=(profile_meta or {}).get("profile_name") or profile_name,
+                        browser_session_integration_id=(profile_meta or {}).get("id") or profile_integration_id,
+                        storage_state=storage_state,
                     )
                     # Resolve provider factory
                     provider_factory = None
@@ -1024,11 +1453,12 @@ Return JSON array only:"""
                         provider_factory = CDPProvider
 
                     session = await BrowserSessionManager.instance().get_or_create(
-                        tenant_id=getattr(message, 'tenant_id', '') or '',
+                        tenant_id=str(tenant_id) if tenant_id else '',
                         agent_id=getattr(message, 'agent_id', 0) or 0,
                         sender_key=getattr(message, 'sender_key', '') or '',
                         config=session_config,
-                        ttl_seconds=config.get("session_ttl_seconds", 300),
+                        ttl_seconds=session_config.session_ttl_seconds,
+                        max_sessions=session_config.max_concurrent_sessions,
                         provider_factory=provider_factory,
                     )
                     provider = session.provider
@@ -1142,6 +1572,10 @@ Return JSON array only:"""
                     "action": action,
                     "skip_ai": True
                 }
+            if profile_meta:
+                result.metadata["browser_session_profile_name"] = profile_meta.get("profile_name")
+                result.metadata["browser_session_integration_id"] = profile_meta.get("id")
+                result.metadata["browser_session_storage_state"] = "loaded" if storage_state else "missing"
 
             return result
 
@@ -1241,12 +1675,27 @@ Return JSON array only:"""
             )
 
         result = await provider.click(selector=selector)
+        used_fallback_selector = False
+        primary_error = result.error
+
+        if not result.success and arguments.get("fallback_selector"):
+            fallback_selector = arguments.get("fallback_selector")
+            fallback_result = await provider.click(selector=fallback_selector)
+            if fallback_result.success:
+                selector = fallback_selector
+                result = fallback_result
+                used_fallback_selector = True
 
         if result.success:
             return SkillResult(
                 success=True,
                 output=f"Clicked element: {selector}",
-                metadata={"selector": selector, "skip_ai": True}
+                metadata={
+                    "selector": selector,
+                    "primary_error": primary_error if used_fallback_selector else None,
+                    "used_fallback_selector": used_fallback_selector,
+                    "skip_ai": True,
+                }
             )
         else:
             return SkillResult(

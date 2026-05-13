@@ -14,8 +14,8 @@ export default function A2ACommunicationsPage() {
     <div className="min-h-screen">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Agent Studio</h1>
-          <p className="text-tsushin-slate">Wire agents together for inter-agent messaging and task delegation</p>
+          <h1 className="text-3xl font-bold text-white mb-2">A2A Communications</h1>
+          <p className="text-tsushin-slate">Allow agents to message each other and delegate tasks. Configure who can reach whom.</p>
         </div>
       </div>
 

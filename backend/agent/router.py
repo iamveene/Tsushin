@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import AgentRun, MessageCache, Memory, Agent, ContactAgentMapping, Contact, TonePreset, ScheduledEvent, ConversationThread
+from models import AgentRun, MessageCache, Memory, Agent, AgentSkill, ContactAgentMapping, Contact, TonePreset, ScheduledEvent, ConversationThread
 from .agent_service import AgentService
 from .interactive_selection import choose_interactive_option, get_menu_signature
 from .acknowledgment import should_acknowledge_status
@@ -39,6 +39,7 @@ from services.group_sender_resolver import GroupSenderResolver
 
 # Phase 8: Watcher activity events
 from services.watcher_activity_service import emit_agent_processing_async
+from services.agent_run_status import determine_agent_run_status
 
 # Item 38: Circuit breaker queuing — defer messages when a channel is OPEN
 
@@ -52,31 +53,7 @@ def _determine_agent_run_status(result: Dict) -> str:
     Determine the status of an agent run based on the result.
     Checks both explicit error field and failure indicators in the answer.
     """
-    # Check explicit error field
-    if result.get("error"):
-        return "error"
-
-    # Check for failure indicators in the answer
-    answer = (result.get("answer") or "").lower()
-    failure_indicators = [
-        "command failed",
-        "exit code: 1",
-        "exit code: 2",
-        "exit code:",
-        "error:",
-        "failed to",
-        "exception:",
-        "traceback",
-        "permission denied",
-        "not found",
-        "timed out",
-        "timeout"
-    ]
-
-    if answer and any(indicator in answer for indicator in failure_indicators):
-        return "error"
-
-    return "success"
+    return determine_agent_run_status(result)
 
 
 class AgentRouter:
@@ -162,13 +139,19 @@ class AgentRouter:
                 self.logger.error(f"Failed to initialize TelegramSender: {e}", exc_info=True)
 
         # Item 32: Channel Abstraction Layer — register adapters per channel
+        from channels.base import Channel
+        from channels.dispatch import dispatch_outbound
         from channels.registry import ChannelRegistry
+        from channels.trigger import Trigger
         from channels.whatsapp.adapter import WhatsAppChannelAdapter
         from channels.telegram.adapter import TelegramChannelAdapter
         from channels.playground.adapter import PlaygroundChannelAdapter
-        from channels.webhook.adapter import WebhookChannelAdapter
+        from channels.webhook.trigger import WebhookTrigger
 
         self.channel_registry = ChannelRegistry()
+        self._channel_base_type = Channel
+        self._dispatch_outbound = dispatch_outbound
+        self._trigger_base_type = Trigger
 
         if mcp_instance_id:
             self.channel_registry.register(
@@ -183,7 +166,7 @@ class AgentRouter:
         if webhook_instance_id:
             self.channel_registry.register(
                 "webhook",
-                WebhookChannelAdapter(db_session, webhook_instance_id, self.logger)
+                WebhookTrigger(db_session, webhook_instance_id, self.logger)
             )
         self.channel_registry.register(
             "playground",
@@ -374,6 +357,153 @@ class AgentRouter:
         except Exception as e:
             self.db.rollback()
             self.logger.warning(f"[LID AUTO-LINK] Failed to save: {e}")
+
+    @staticmethod
+    def _normalize_user_agent_identifier(identifier: Optional[str]) -> Optional[str]:
+        """Normalize a sender/session identifier without changing runtime sender keys."""
+        if not identifier:
+            return None
+        normalized = str(identifier).strip()
+        if not normalized:
+            return None
+        normalized = normalized.split("@", 1)[0].lstrip("+").strip()
+        return normalized or None
+
+    def _append_user_agent_alias(self, aliases: List[str], identifier: Optional[str]):
+        normalized = self._normalize_user_agent_identifier(identifier)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+
+    def _is_whatsapp_direct_message(self, message: Dict) -> bool:
+        if message.get("is_group"):
+            return False
+        channel = message.get("channel")
+        if channel is None:
+            return bool(self.mcp_instance_id)
+        return channel in ("whatsapp", "whatsapp_group")
+
+    def _get_direct_message_session_aliases(
+        self,
+        message: Dict,
+        sender_key: Optional[str] = None,
+        contact: Optional[Contact] = None,
+    ) -> List[str]:
+        """
+        Build equivalent UserAgentSession identifiers for a WhatsApp DM.
+
+        WhatsApp can deliver the same person as a phone JID on one message and
+        as a Linked Device ID (LID) on the next. Session aliases are intentionally
+        scoped to direct WhatsApp messages and tenant-resolved contacts so group
+        routing and other channels keep their existing sender keys.
+        """
+        primary_key = sender_key or self._get_sender_key(message)
+        if not self._is_whatsapp_direct_message(message):
+            return [primary_key] if primary_key else []
+
+        aliases: List[str] = []
+        self._append_user_agent_alias(aliases, primary_key)
+
+        self._append_user_agent_alias(aliases, message.get("sender"))
+
+        if not contact:
+            return aliases
+
+        self._append_user_agent_alias(aliases, contact.phone_number)
+        self._append_user_agent_alias(aliases, contact.whatsapp_id)
+
+        try:
+            for mapping in getattr(contact, "channel_mappings", []) or []:
+                if mapping.channel_type in ("phone", "whatsapp"):
+                    self._append_user_agent_alias(aliases, mapping.channel_identifier)
+        except Exception as e:
+            self.logger.debug(f"[SESSION ALIASES] Could not inspect contact mappings: {e}")
+
+        return aliases
+
+    def _get_user_agent_sessions_for_aliases(self, aliases: List[str]):
+        from models import UserAgentSession
+
+        if not aliases:
+            return []
+
+        sessions = self.db.query(UserAgentSession).filter(
+            UserAgentSession.user_identifier.in_(aliases)
+        ).all()
+        return sorted(
+            sessions,
+            key=lambda session: (
+                session.updated_at or session.created_at or datetime.min,
+                session.id or 0,
+            ),
+            reverse=True,
+        )
+
+    def _agent_is_usable_for_saved_session(self, agent: Optional[Agent], is_agent_valid_for_channel) -> bool:
+        if not agent or not agent.is_active:
+            return False
+        if self.tenant_id and agent.tenant_id and agent.tenant_id != self.tenant_id:
+            return False
+        return is_agent_valid_for_channel(agent)
+
+    def _select_saved_agent_from_aliases(self, aliases: List[str], is_agent_valid_for_channel):
+        if not aliases:
+            return None
+
+        try:
+            for saved_session in self._get_user_agent_sessions_for_aliases(aliases):
+                agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
+                if self._agent_is_usable_for_saved_session(agent, is_agent_valid_for_channel):
+                    if len(aliases) > 1:
+                        self._sync_user_agent_session_aliases(aliases, agent.id)
+                    self.logger.info(
+                        f"Using saved agent preference: {agent.id} for "
+                        f"{aliases[0]} (aliases={aliases})"
+                    )
+                    return agent
+
+                self.logger.warning(
+                    f"Skipping invalid saved agent preference for {saved_session.user_identifier}: "
+                    f"agent_id={saved_session.agent_id}"
+                )
+        except Exception as e:
+            self.logger.error(f"Error checking agent preference aliases {aliases}: {e}")
+
+        return None
+
+    def _sync_user_agent_session_aliases(self, aliases: List[str], agent_id: int):
+        """Persist the same selected agent across all known phone/LID aliases."""
+        if not aliases or not agent_id:
+            return
+
+        from models import UserAgentSession
+
+        try:
+            now = datetime.utcnow()
+            existing_sessions = {
+                session.user_identifier: session
+                for session in self.db.query(UserAgentSession).filter(
+                    UserAgentSession.user_identifier.in_(aliases)
+                ).all()
+            }
+
+            for alias in aliases:
+                session = existing_sessions.get(alias)
+                if session:
+                    session.agent_id = agent_id
+                    session.updated_at = now
+                else:
+                    self.db.add(UserAgentSession(
+                        user_identifier=alias,
+                        agent_id=agent_id,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+
+            self.db.commit()
+            self.logger.info(f"[SESSION ALIASES] Synced agent {agent_id} for aliases={aliases}")
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error(f"[SESSION ALIASES] Failed to sync aliases {aliases}: {e}", exc_info=True)
 
     def get_agent_config(self, agent: Agent) -> Dict:
         """
@@ -704,24 +834,389 @@ class AgentRouter:
             if channel == "slack" and self._inbound_slack_thread_ts:
                 send_kwargs["thread_ts"] = self._inbound_slack_thread_ts
 
-            result = await adapter.send_message(
-                to=recipient,
-                text=message_text,
+            result = await self._dispatch_outbound(
+                adapter,
+                recipient=recipient,
+                message_text=message_text,
                 media_path=media_path,
                 agent_id=agent_id,
                 **send_kwargs,
             )
 
-            if not result.success:
+            success = result.success if hasattr(result, "success") else bool(result.get("success"))
+            error = result.error if hasattr(result, "error") else result.get("error")
+
+            if not success:
                 self.logger.warning(
-                    f"Message send failed via {channel}: {result.error or 'unknown error'}"
+                    f"Message send failed via {channel}: {error or 'unknown error'}"
                 )
 
-            return result.success
+            return success
 
         except Exception as e:
             self.logger.error(f"Error sending message via {channel}: {e}", exc_info=True)
             return False
+
+    async def _send_skill_output_directly(
+        self,
+        *,
+        recipient: str,
+        message: Dict,
+        agent_id: int,
+        skill_output: str,
+        skill_media_paths: Optional[List[str]] = None,
+        context_label: str = "skill response",
+    ) -> bool:
+        """
+        Send a skill-owned response without routing an empty/media-only message
+        into normal AI processing. This is used by the regular path and by
+        active conversation/thread paths so media skill failures surface
+        consistently instead of becoming silent empty-message turns.
+        """
+        channel = message.get("channel", "whatsapp")
+
+        if skill_media_paths:
+            self.logger.info(f"{context_label}: sending {len(skill_media_paths)} media file(s)")
+            for media_path in skill_media_paths:
+                media_success = await self._send_message(
+                    recipient=recipient,
+                    message_text="",
+                    channel=channel,
+                    agent_id=agent_id,
+                    media_path=media_path,
+                )
+                if media_success:
+                    self.logger.info(f"{context_label}: media sent to {channel}: {media_path}")
+                else:
+                    self.logger.error(f"{context_label}: failed to send media to {channel}: {media_path}")
+
+                try:
+                    await asyncio.sleep(3)
+                    if os.path.exists(media_path):
+                        os.unlink(media_path)
+                        self.logger.info(f"{context_label}: cleaned up temporary media file: {media_path}")
+                except Exception as cleanup_error:
+                    self.logger.warning(f"{context_label}: failed to clean up media file: {cleanup_error}")
+
+        success = await self._send_message(
+            recipient=recipient,
+            message_text=skill_output,
+            channel=channel,
+            agent_id=agent_id,
+        )
+
+        if success:
+            self.logger.info(f"{context_label}: response sent to {channel}: {recipient}")
+        else:
+            self.logger.error(f"{context_label}: failed to send response to {channel}: {recipient}")
+
+        return success
+
+    @staticmethod
+    def _coerce_bool_default_true(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"false", "0", "no", "n", "off"}:
+                return False
+            if normalized in {"true", "1", "yes", "y", "on"}:
+                return True
+            return True
+        return bool(value)
+
+    @staticmethod
+    def _extract_transcript_from_skill_output(skill_output: Optional[str]) -> str:
+        output = (skill_output or "").strip()
+        prefixes = (
+            "📝 Transcript:\n\n",
+            "Transcript:\n\n",
+            "📝 ",
+        )
+        for prefix in prefixes:
+            if output.startswith(prefix):
+                return output[len(prefix):].strip()
+        return output
+
+    def _agent_memory_context_config(self, agent_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge global and selected-agent memory settings for prompt context."""
+        effective = dict(self.config or {})
+        for key in (
+            "memory_size",
+            "memory_isolation_mode",
+            "enable_semantic_search",
+            "semantic_search_results",
+            "semantic_similarity_threshold",
+            "enable_shared_memory",
+        ):
+            value = (agent_config or {}).get(key)
+            if value is not None:
+                effective[key] = value
+        return effective
+
+    @staticmethod
+    def _include_shared_memory_for_context(context_config: Dict[str, Any]) -> bool:
+        isolation_mode = context_config.get("memory_isolation_mode", "isolated") or "isolated"
+        return isolation_mode == "shared" and context_config.get("enable_shared_memory", True)
+
+    async def _transcript_memory_safety_allows(
+        self,
+        *,
+        agent_id: int,
+        tenant_id: Optional[str],
+        sender_key: str,
+        transcript: str,
+        message: Dict,
+        recipient: str,
+    ) -> bool:
+        """Run the same pre-storage safety gates used by normal user turns."""
+        if not tenant_id:
+            self.logger.warning(
+                "Skipping transcript memory persistence for agent %s because tenant_id is unavailable",
+                agent_id,
+            )
+            return False
+
+        sentinel = None
+        channel = message.get("channel", "whatsapp")
+        try:
+            from services.sentinel_service import SentinelService
+            sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+            skill_context_str = None
+            try:
+                from services.skill_context_service import SkillContextService
+                skill_ctx_service = SkillContextService(self.db)
+                skill_ctx = skill_ctx_service.get_agent_skill_context(agent_id)
+                skill_context_str = skill_ctx.get('formatted_context')
+            except Exception as skill_e:
+                self.logger.warning(f"Failed to load skill context for transcript Sentinel: {skill_e}")
+
+            sentinel_result = await sentinel.analyze_prompt(
+                prompt=transcript,
+                agent_id=agent_id,
+                sender_key=sender_key,
+                source=None,
+                skill_context=skill_context_str,
+            )
+
+            if sentinel_result.is_threat_detected and sentinel_result.action == "blocked":
+                self.logger.warning(
+                    "Sentinel blocked transcript before memory storage - %s: %s",
+                    sentinel_result.detection_type,
+                    sentinel_result.threat_reason,
+                )
+                try:
+                    from services.audit_service import log_tenant_event, TenantAuditActions
+                    log_tenant_event(
+                        self.db,
+                        tenant_id,
+                        None,
+                        TenantAuditActions.SECURITY_SENTINEL_BLOCK,
+                        "message",
+                        None,
+                        {
+                            "detection_type": sentinel_result.detection_type,
+                            "threat_score": sentinel_result.threat_score,
+                            "reason": sentinel_result.threat_reason,
+                            "sender": sender_key,
+                            "channel": channel,
+                            "agent_id": agent_id,
+                            "source": "audio_transcript",
+                        },
+                        severity="warning",
+                    )
+                except Exception:
+                    pass
+                await self._send_message(
+                    recipient=recipient,
+                    message_text=sentinel_result.threat_reason or "Message blocked for security reasons.",
+                    channel=channel,
+                    agent_id=agent_id,
+                )
+                return False
+
+            if sentinel_result.is_threat_detected:
+                self.logger.info(
+                    "Sentinel detect_only allowed transcript before memory storage - %s",
+                    sentinel_result.detection_type,
+                )
+                try:
+                    config = sentinel.get_effective_config(agent_id)
+                    await sentinel.send_threat_notification(
+                        result=sentinel_result,
+                        config=config,
+                        sender_key=sender_key,
+                        agent_id=agent_id,
+                        mcp_api_url=(getattr(self, "config", {}) or {}).get("mcp_api_url"),
+                        mcp_api_secret=(getattr(self, "config", {}) or {}).get("mcp_api_secret"),
+                    )
+                except Exception as notif_e:
+                    self.logger.warning(f"Failed to send transcript Sentinel notification: {notif_e}")
+        except Exception as e:
+            fail_behavior = "open"
+            try:
+                from models import Config as ConfigModel
+                cfg = self.db.query(ConfigModel).first()
+                if cfg:
+                    fail_behavior = getattr(cfg, "sentinel_fail_behavior", None) or "open"
+            except Exception:
+                pass
+
+            if fail_behavior == "closed":
+                self.logger.error(
+                    "Sentinel fail-closed blocked transcript before memory storage: %s",
+                    e,
+                )
+                await self._send_message(
+                    recipient=recipient,
+                    message_text="Message blocked: security analysis unavailable. Please try again later.",
+                    channel=channel,
+                    agent_id=agent_id,
+                )
+                return False
+            self.logger.warning(f"Transcript Sentinel pre-check failed, allowing message (fail-open): {e}")
+
+        try:
+            from services.memguard_service import MemGuardService
+
+            if not sentinel:
+                from services.sentinel_service import SentinelService
+                sentinel = SentinelService(self.db, tenant_id, token_tracker=self.token_tracker)
+
+            effective_config = sentinel.get_effective_config(agent_id)
+            memguard_enabled = effective_config.detection_config.get(
+                "memory_poisoning", {}
+            ).get("enabled", True)
+
+            if memguard_enabled:
+                memguard = MemGuardService(self.db, tenant_id)
+                memguard_result = await memguard.analyze_for_memory_poisoning(
+                    content=transcript,
+                    agent_id=agent_id,
+                    sender_key=sender_key,
+                    config=effective_config,
+                )
+
+                if memguard_result.blocked:
+                    self.logger.warning(
+                        "MemGuard blocked transcript before memory storage: %s",
+                        memguard_result.reason,
+                    )
+                    try:
+                        from services.audit_service import log_tenant_event, TenantAuditActions
+                        log_tenant_event(
+                            self.db,
+                            tenant_id,
+                            None,
+                            TenantAuditActions.SECURITY_MEMGUARD_BLOCK,
+                            "message",
+                            None,
+                            {
+                                "reason": memguard_result.reason,
+                                "threat_score": getattr(memguard_result, 'threat_score', None),
+                                "sender": sender_key,
+                                "channel": channel,
+                                "agent_id": agent_id,
+                                "source": "audio_transcript",
+                            },
+                            severity="warning",
+                        )
+                    except Exception:
+                        pass
+                    await self._send_message(
+                        recipient=recipient,
+                        message_text="Message blocked: memory poisoning attempt detected.",
+                        channel=channel,
+                        agent_id=agent_id,
+                    )
+                    return False
+        except Exception as e:
+            self.logger.warning(f"Transcript MemGuard check failed, allowing message: {e}")
+
+        return True
+
+    async def _remember_transcript_only_skill_output(
+        self,
+        *,
+        agent_id: int,
+        message: Dict,
+        sender_key: str,
+        sender_name: str,
+        recipient: str,
+        skill_type: Optional[str],
+        skill_output: Optional[str],
+        skill_metadata: Optional[Dict[str, Any]],
+        project_id: Optional[int] = None,
+        project_name: Optional[str] = None,
+    ) -> bool:
+        """
+        Persist transcript-only audio as a user turn before direct delivery.
+
+        Returns False when a pre-storage safety gate blocked the transcript and
+        the direct skill output should not be sent.
+        """
+        metadata = dict(skill_metadata or {})
+        resolved_skill_type = skill_type or metadata.get("skill_type")
+        if resolved_skill_type != "audio_transcript":
+            return True
+        if metadata.get("response_mode") != "transcript_only":
+            return True
+        if not self._coerce_bool_default_true(metadata.get("remember_transcript")):
+            return True
+
+        transcript = (metadata.get("transcript") or "").strip()
+        if not transcript:
+            transcript = self._extract_transcript_from_skill_output(skill_output)
+        if not transcript:
+            self.logger.warning("Transcript-only skill output had no transcript text to remember")
+            return True
+
+        tenant_id = self._get_agent_tenant_id(agent_id)
+        allowed = await self._transcript_memory_safety_allows(
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            sender_key=sender_key,
+            transcript=transcript,
+            message=message,
+            recipient=recipient,
+        )
+        if not allowed:
+            return False
+
+        is_group = message.get("is_group", False)
+        chat_id = message.get("chat_id") if is_group else None
+        memory_metadata = {
+            "source": "audio_transcript",
+            "response_mode": "transcript_only",
+            "provider": metadata.get("provider"),
+            "model": metadata.get("model"),
+            "language": metadata.get("language"),
+            "original_message_id": metadata.get("original_message_id") or message.get("id"),
+            "sender_name": sender_name,
+            "is_group": is_group,
+            "project_id": project_id,
+            "project_name": project_name,
+        }
+        memory_metadata = {key: value for key, value in memory_metadata.items() if value is not None}
+
+        await self.memory_manager.add_message(
+            agent_id=agent_id,
+            sender_key=sender_key,
+            role="user",
+            content=transcript,
+            message_id=message.get("id") or metadata.get("original_message_id"),
+            metadata=memory_metadata,
+            chat_id=chat_id,
+            whatsapp_id=message.get("sender"),
+            telegram_id=message.get("telegram_id"),
+            use_contact_mapping=True,
+            project_id=project_id,
+        )
+        self.logger.info("Remembered transcript-only audio as user memory for agent %s", agent_id)
+        return True
 
     def _check_mcp_connection(self, agent_id: int, mcp_api_url: str) -> bool:
         """
@@ -794,6 +1289,8 @@ class AgentRouter:
         message_text = message.get("body", "").lower()
         sender = message.get("sender", "")
         is_group = message.get("is_group", False)
+        sender_key = self._get_sender_key(message)
+        contact = None
 
         # Phase 10: Helper to check if agent is valid for this MCP instance
         def is_agent_valid_for_channel(agent: Agent) -> bool:
@@ -840,37 +1337,17 @@ class AgentRouter:
 
         # Step -1: Check for saved agent preference (agent switcher persistence)
         # This takes absolute priority - once user switches agents, it persists
-        from models import UserAgentSession
-        sender_key = self._get_sender_key(message)
         try:
-            saved_session = self.db.query(UserAgentSession).filter(
-                UserAgentSession.user_identifier == sender_key
-            ).first()
-
-            # WhatsApp LID migration: if sender is a LID, also try the contact's phone
-            if not saved_session and not message.get("is_group"):
-                _contact = self._resolve_direct_message_contact(message, sender)
-                if _contact and _contact.phone_number:
-                    _phone = _contact.phone_number.lstrip("+").strip()
-                    if _phone and _phone != sender_key:
-                        saved_session = self.db.query(UserAgentSession).filter(
-                            UserAgentSession.user_identifier == _phone
-                        ).first()
-                        if saved_session:
-                            saved_session.user_identifier = sender_key
-                            self.db.commit()
-                            self.logger.info(f"[LID MIGRATION] Updated UserAgentSession from phone {_phone} to LID {sender_key}")
-
-            if saved_session:
-                agent = self.db.query(Agent).filter(Agent.id == saved_session.agent_id).first()
-                if agent and agent.is_active and is_agent_valid_for_channel(agent):
-                    self.logger.info(f"Using saved agent preference: {agent.id} for {sender_key}")
-                    return self._agent_to_config(agent), agent.id, self._get_agent_name(agent)
-                else:
-                    # Saved agent no longer active or not valid for channel, clear preference
-                    self.db.delete(saved_session)
-                    self.db.commit()
-                    self.logger.warning(f"Cleared invalid agent preference for {sender_key}")
+            if self._is_whatsapp_direct_message(message):
+                contact = self._resolve_direct_message_contact(message, sender)
+            session_aliases = self._get_direct_message_session_aliases(
+                message,
+                sender_key=sender_key,
+                contact=contact,
+            )
+            agent = self._select_saved_agent_from_aliases(session_aliases, is_agent_valid_for_channel)
+            if agent:
+                return self._agent_to_config(agent), agent.id, self._get_agent_name(agent)
         except Exception as e:
             self.logger.error(f"Error checking agent preference: {e}")
 
@@ -921,7 +1398,8 @@ class AgentRouter:
                 except Exception:
                     pass
 
-            contact = self._resolve_direct_message_contact(message, sender)
+            if contact is None:
+                contact = self._resolve_direct_message_contact(message, sender)
 
             # If contact found (by either method), check for agent mapping
             # BUG-LOG-012 FIX: Scope mapping lookup by tenant_id to prevent cross-tenant agent assignment
@@ -947,12 +1425,34 @@ class AgentRouter:
             return None, None, None
 
         # Step 3: Default agent (fallback for DMs only - LOWEST PRIORITY)
-        # Phase 10: Also check channel validity for default agent
-        # MONITORING 2026-01-08: Log default agent usage for audit
-        default_query = self.db.query(Agent).filter(Agent.is_default == True)
-        if self.tenant_id:
-            default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
-        default_agent = default_query.first()
+        # Phase 1: centralize resolution through default_agent_service.
+        from services.default_agent_service import get_default_agent
+
+        default_channel_type = "playground"
+        default_instance_id = None
+        if self.webhook_instance_id:
+            default_channel_type = "webhook"
+            default_instance_id = self.webhook_instance_id
+        elif self.telegram_instance_id:
+            default_channel_type = "telegram"
+            default_instance_id = self.telegram_instance_id
+        elif self.mcp_instance_id:
+            default_channel_type = "whatsapp"
+            default_instance_id = self.mcp_instance_id
+
+        default_agent_id = get_default_agent(
+            db=self.db,
+            tenant_id=self.tenant_id,
+            channel_type=default_channel_type,
+            instance_id=default_instance_id,
+            user_identifier=sender,
+            contact_id=contact.id if contact else None,
+        )
+        default_agent = (
+            self.db.query(Agent).filter(Agent.id == default_agent_id).first()
+            if default_agent_id
+            else None
+        )
         if default_agent and is_agent_valid_for_channel(default_agent):
             self.logger.warning(f"⚠️ DEFAULT AGENT FALLBACK: Using agent {default_agent.id} for {sender} (no contact mapping, no mention, no keyword)")
             self.logger.warning(f"📊 AUDIT: Sender {sender} | Trigger: {trigger_type} | Default fallback used")
@@ -995,9 +1495,17 @@ class AgentRouter:
             "model_provider": agent.model_provider,
             "model_name": agent.model_name,
             "system_prompt": system_prompt,
-            "memory_size": self.config.get("memory_size", 10),  # Inherit from config
+            "memory_size": getattr(agent, "memory_size", None) or self.config.get("memory_size", 10),
+            "memory_isolation_mode": getattr(agent, "memory_isolation_mode", None) or self.config.get("memory_isolation_mode", "isolated"),
+            "enable_semantic_search": getattr(agent, "enable_semantic_search", None),
+            "semantic_search_results": getattr(agent, "semantic_search_results", None),
+            "semantic_similarity_threshold": getattr(agent, "semantic_similarity_threshold", None),
             "response_template": agent.response_template if hasattr(agent, 'response_template') else "@{agent_name}: {response}",
             "provider_instance_id": getattr(agent, 'provider_instance_id', None),
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+            "platform_min_agentic_rounds": self.config.get("platform_min_agentic_rounds"),
+            "platform_max_agentic_rounds": self.config.get("platform_max_agentic_rounds"),
         }
 
     def _build_persona_context(self, persona) -> str:
@@ -1078,7 +1586,12 @@ class AgentRouter:
                 if not contact:
                     from services.whatsapp_id_discovery import WhatsAppIDDiscovery
                     discovery = WhatsAppIDDiscovery(time_window_minutes=60)
-                    contact = discovery.auto_link_contact(self.db, normalized_sender, self.logger)
+                    contact = discovery.auto_link_contact(
+                        self.db,
+                        normalized_sender,
+                        self.logger,
+                        tenant_id=self.tenant_id,
+                    )
 
                     if contact:
                         self.logger.info(
@@ -1777,7 +2290,45 @@ class AgentRouter:
             # Process audio transcription if needed
             if thread_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation thread, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, _ = await self._process_with_skills(thread_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(thread_agent_id, message)
+                if skip_ai and skill_output:
+                    should_send_skill_output = await self._remember_transcript_only_skill_output(
+                        agent_id=thread_agent_id,
+                        message=message,
+                        sender_key=sender_key,
+                        sender_name=sender_name,
+                        recipient=active_thread.recipient,
+                        skill_type=skill_type,
+                        skill_output=skill_output,
+                        skill_metadata=skill_metadata,
+                    )
+                    if not should_send_skill_output:
+                        if thread_tenant_id:
+                            emit_agent_processing_async(
+                                tenant_id=thread_tenant_id,
+                                agent_id=thread_agent_id,
+                                status="end",
+                                sender_key=sender_key,
+                                channel=message.get("channel", "whatsapp")
+                            )
+                        return
+                    await self._send_skill_output_directly(
+                        recipient=active_thread.recipient,
+                        message=message,
+                        agent_id=thread_agent_id,
+                        skill_output=skill_output,
+                        skill_media_paths=skill_media_paths,
+                        context_label="[THREAD SKILL]",
+                    )
+                    if thread_tenant_id:
+                        emit_agent_processing_async(
+                            tenant_id=thread_tenant_id,
+                            agent_id=thread_agent_id,
+                            status="end",
+                            sender_key=sender_key,
+                            channel=message.get("channel", "whatsapp")
+                        )
+                    return
                 if processed_text != message_text:
                     self.logger.info(f"[SUCCESS] Audio transcribed for thread: {len(processed_text)} chars")
                     message_text = processed_text
@@ -1854,7 +2405,46 @@ class AgentRouter:
             # IMPORTANT: Process audio transcription BEFORE sending to conversation handler
             if conversation_agent_id and message.get("media_type"):
                 self.logger.info(f"Audio message detected in conversation, transcribing...")
-                processed_text, skip_ai, skill_output, skill_type, _ = await self._process_with_skills(conversation_agent_id, message)
+                processed_text, skip_ai, skill_output, skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(conversation_agent_id, message)
+                if skip_ai and skill_output:
+                    recipient = message.get("chat_id") or sender
+                    should_send_skill_output = await self._remember_transcript_only_skill_output(
+                        agent_id=conversation_agent_id,
+                        message=message,
+                        sender_key=sender_key,
+                        sender_name=sender_name,
+                        recipient=recipient,
+                        skill_type=skill_type,
+                        skill_output=skill_output,
+                        skill_metadata=skill_metadata,
+                    )
+                    if not should_send_skill_output:
+                        if conv_tenant_id:
+                            emit_agent_processing_async(
+                                tenant_id=conv_tenant_id,
+                                agent_id=conversation_agent_id,
+                                status="end",
+                                sender_key=sender_key,
+                                channel=message.get("channel", "whatsapp")
+                            )
+                        return
+                    await self._send_skill_output_directly(
+                        recipient=recipient,
+                        message=message,
+                        agent_id=conversation_agent_id,
+                        skill_output=skill_output,
+                        skill_media_paths=skill_media_paths,
+                        context_label="[CONVERSATION SKILL]",
+                    )
+                    if conv_tenant_id:
+                        emit_agent_processing_async(
+                            tenant_id=conv_tenant_id,
+                            agent_id=conversation_agent_id,
+                            status="end",
+                            sender_key=sender_key,
+                            channel=message.get("channel", "whatsapp")
+                        )
+                    return
                 if processed_text != message_text:
                     self.logger.info(f"[SUCCESS] Audio transcribed for conversation: {len(processed_text)} chars")
                     message_text = processed_text
@@ -1977,7 +2567,7 @@ class AgentRouter:
                 self.logger.info(f"[PROJECT] Processing message in project context: {current_project_name} (ID: {current_project_id})")
 
         # Phase 5.0: Process message with skills (e.g., audio transcription) BEFORE AI processing
-        processed_message_text, skip_ai, skill_output, processed_skill_type, skill_media_paths = await self._process_with_skills(agent_id, message)
+        processed_message_text, skip_ai, skill_output, processed_skill_type, skill_media_paths, skill_metadata = await self._process_with_skills(agent_id, message)
         if processed_message_text != message_text:
             self.logger.info(f"Message processed by skills: {len(message_text)} -> {len(processed_message_text)} chars")
             message_text = processed_message_text
@@ -1986,45 +2576,36 @@ class AgentRouter:
         if skip_ai and skill_output:
             self.logger.info("Skill requested to skip AI processing, sending output directly")
             recipient = message.get("chat_id") or message.get("sender")
-            channel = message.get("channel", "whatsapp")
-
-            # Phase 14.5: Send skill media files (screenshots, images) if available
-            if skill_media_paths:
-                self.logger.info(f"Skill produced {len(skill_media_paths)} media files to send")
-                for media_path in skill_media_paths:
-                    media_success = await self._send_message(
-                        recipient=recipient,
-                        message_text="",  # Empty caption for image
-                        channel=channel,
-                        agent_id=agent_id,
-                        media_path=media_path
-                    )
-                    if media_success:
-                        self.logger.info(f"Media sent to {channel}: {media_path}")
-                    else:
-                        self.logger.error(f"Failed to send media to {channel}: {media_path}")
-
-                    # Cleanup temporary file after sending (with delay for upload)
-                    try:
-                        await asyncio.sleep(3)  # Wait for upload to complete
-                        if os.path.exists(media_path):
-                            os.unlink(media_path)
-                            self.logger.info(f"Cleaned up temporary media file: {media_path}")
-                    except Exception as cleanup_error:
-                        self.logger.warning(f"Failed to clean up media file: {cleanup_error}")
-
-            # Phase 10.1.1: Use channel-aware sending for skill responses
-            success = await self._send_message(
+            should_send_skill_output = await self._remember_transcript_only_skill_output(
+                agent_id=agent_id,
+                message=message,
+                sender_key=sender_key,
+                sender_name=sender_name,
                 recipient=recipient,
-                message_text=skill_output,
-                channel=channel,
-                agent_id=agent_id
+                skill_type=processed_skill_type,
+                skill_output=skill_output,
+                skill_metadata=skill_metadata,
+                project_id=current_project_id,
+                project_name=current_project_name,
             )
-
-            if success:
-                self.logger.info(f"Response sent to {channel}: {recipient}")
-            else:
-                self.logger.error(f"Failed to send skill response to {channel}: {recipient}")
+            if not should_send_skill_output:
+                if agent_tenant_id_early:
+                    emit_agent_processing_async(
+                        tenant_id=agent_tenant_id_early,
+                        agent_id=agent_id,
+                        status="end",
+                        sender_key=sender_key,
+                        channel=message.get("channel", "whatsapp")
+                    )
+                return
+            await self._send_skill_output_directly(
+                recipient=recipient,
+                message=message,
+                agent_id=agent_id,
+                skill_output=skill_output,
+                skill_media_paths=skill_media_paths,
+                context_label="[SKILL]",
+            )
 
             # Note: We don't save agent_run here since no AI processing occurred
             # The skill handled everything
@@ -2059,8 +2640,52 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
         # CRITICAL SAFETY CHECK: Prevent empty messages from reaching AI
         # Empty messages can cause AI hallucination and unintended tool execution
         if not message_text or message_text.strip() == "":
-            self.logger.error(f"[SAFETY] Empty message detected for agent {agent_id}, blocking AI processing")
-            error_message = "❌ Sorry, I couldn't process your message. If you sent an audio message, there was an issue with the audio transcription. Please try sending a text message or resending the audio."
+            original_media_type = (message.get("media_type") or "").lower()
+            is_audio = original_media_type.startswith("audio")
+
+            if is_audio:
+                # agent_id can legally be None at this point if dispatch fell through
+                # without resolving a default — querying AgentSkill with NULL would
+                # silently return zero rows and misreport "no audio skill" when the
+                # real failure is upstream. Treat that as the empty-text path instead.
+                if agent_id is None:
+                    self.logger.error(
+                        "[SAFETY] Audio message reached SAFETY block with agent_id=None "
+                        "(dispatch did not resolve an agent) — surfacing generic empty error"
+                    )
+                    error_message = "❌ Sorry, your message came through empty. Please try sending it again."
+                else:
+                    has_audio_skill = self.db.query(AgentSkill).filter(
+                        AgentSkill.agent_id == agent_id,
+                        AgentSkill.skill_type == "audio_transcript",
+                        AgentSkill.is_enabled == True,
+                    ).first() is not None
+
+                    if not has_audio_skill:
+                        self.logger.warning(
+                            f"[SAFETY] Audio message received for agent {agent_id} "
+                            f"but audio_transcript skill is not enabled — voice not handled"
+                        )
+                        error_message = (
+                            "🎤 This assistant isn't set up to handle voice messages yet. "
+                            "Please send a text message instead."
+                        )
+                    else:
+                        self.logger.error(
+                            f"[SAFETY] audio_transcript ran for agent {agent_id} "
+                            f"but produced empty text — transcription failed silently"
+                        )
+                        error_message = (
+                            "❌ Sorry, I couldn't transcribe your audio message. "
+                            "Please try resending it or send a text message."
+                        )
+            else:
+                self.logger.error(
+                    f"[SAFETY] Empty non-audio message detected for agent {agent_id}, "
+                    f"blocking AI processing"
+                )
+                error_message = "❌ Sorry, your message came through empty. Please try sending it again."
+
             recipient = message.get("chat_id") or message.get("sender")
             channel = message.get("channel", "whatsapp")
 
@@ -2290,38 +2915,36 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # Item 10: Now with contact-based memory support
             # Phase 15: Project-scoped memory when in project context
             semantic_context = ""
-            if self.config.get("enable_semantic_search", False):
-                self.logger.info("Semantic search enabled for group message")
-                context = await self.memory_manager.get_context(
-                    agent_id=agent_id,
-                    sender_key=sender_key,
-                    current_message=message_text,
-                    max_semantic_results=self.config.get("semantic_search_results", 5),
-                    similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
-                    include_knowledge=True,  # Include learned facts
-                    include_shared=self.config.get("enable_shared_memory", True),  # Phase 4.8 Week 4
-                    chat_id=chat_id,  # For channel_isolated mode
-                    whatsapp_id=sender,  # Item 10: For contact resolution
-                    telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
-                    use_contact_mapping=True,  # Item 10: Enable contact-based memory
-                    project_id=current_project_id  # Phase 15: Project-scoped memory
-                )
-                # Format context for display (Phase 4.8 Week 3: pass sender_key for adaptive personality)
-                # Fix: Use freshness detection to determine if tool context should be included
-                agent_memory = self.memory_manager.get_agent_memory(agent_id)
-                include_tool_context = self._should_include_tool_context(message_text, context)
-                semantic_context = agent_memory.format_context_for_prompt(
-                    context,
-                    user_id=sender_key,
-                    include_tool_outputs=include_tool_context
-                )
-                self.logger.info(f"Semantic context generated: {len(semantic_context)} chars (tool_context={include_tool_context})")
+            context_config = self._agent_memory_context_config(agent_config)
+            context = await self.memory_manager.get_context(
+                agent_id=agent_id,
+                sender_key=sender_key,
+                current_message=message_text,
+                max_semantic_results=context_config.get("semantic_search_results", 5),
+                similarity_threshold=context_config.get("semantic_similarity_threshold", 0.3),
+                include_knowledge=True,  # Include learned facts
+                include_shared=self._include_shared_memory_for_context(context_config),
+                chat_id=chat_id,  # For channel_isolated mode
+                whatsapp_id=sender,  # Item 10: For contact resolution
+                telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
+                use_contact_mapping=True,  # Item 10: Enable contact-based memory
+                project_id=current_project_id  # Phase 15: Project-scoped memory
+            )
+            # Always include working memory. Semantic search only controls Layer 2 recall.
+            agent_memory = self.memory_manager.get_agent_memory(agent_id)
+            include_tool_context = self._should_include_tool_context(message_text, context)
+            semantic_context = agent_memory.format_context_for_prompt(
+                context,
+                user_id=sender_key,
+                include_tool_outputs=include_tool_context
+            )
+            self.logger.info(f"Memory context generated: {len(semantic_context)} chars (tool_context={include_tool_context})")
 
             # Combine all contexts
             parts = []
             if context_prefix:
                 parts.append(context_prefix)
-            if semantic_context and semantic_context != "No previous context":
+            if semantic_context and semantic_context not in {"[No previous context]", "No previous context"}:
                 parts.append(semantic_context)
 
             if parts:
@@ -2335,33 +2958,30 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             # Phase 4.8: Direct message - add semantic context from agent-scoped memory
             # Item 10: Now with contact-based memory support
             # Phase 15: Project-scoped memory when in project context
-            if self.config.get("enable_semantic_search", False):
-                context = await self.memory_manager.get_context(
-                    agent_id=agent_id,
-                    sender_key=sender_key,
-                    current_message=message_text,
-                    max_semantic_results=self.config.get("semantic_search_results", 5),
-                    similarity_threshold=self.config.get("semantic_similarity_threshold", 0.3),
-                    include_knowledge=True,  # Include learned facts
-                    include_shared=self.config.get("enable_shared_memory", True),  # Phase 4.8 Week 4
-                    whatsapp_id=sender,  # Item 10: For contact resolution
-                    telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
-                    use_contact_mapping=True,  # Item 10: Enable contact-based memory
-                    project_id=current_project_id  # Phase 15: Project-scoped memory
-                )
-                # Format and prepend semantic context (Phase 4.8 Week 3: pass sender_key for adaptive personality)
-                # Fix: Use freshness detection to determine if tool context should be included
-                agent_memory = self.memory_manager.get_agent_memory(agent_id)
-                include_tool_context = self._should_include_tool_context(message_text, context)
-                context_str = agent_memory.format_context_for_prompt(
-                    context,
-                    user_id=sender_key,
-                    include_tool_outputs=include_tool_context
-                )
-                if context_str and context_str != "[No previous context]":
-                    translated_message = f"{context_str}\n\n[Current message from {sender_name}]: {translated_message}"
-                else:
-                    translated_message = f"[Message from {sender_name}]: {translated_message}"
+            context_config = self._agent_memory_context_config(agent_config)
+            context = await self.memory_manager.get_context(
+                agent_id=agent_id,
+                sender_key=sender_key,
+                current_message=message_text,
+                max_semantic_results=context_config.get("semantic_search_results", 5),
+                similarity_threshold=context_config.get("semantic_similarity_threshold", 0.3),
+                include_knowledge=True,  # Include learned facts
+                include_shared=self._include_shared_memory_for_context(context_config),
+                whatsapp_id=sender,  # Item 10: For contact resolution
+                telegram_id=telegram_id,  # Phase 10.2: Telegram contact resolution
+                use_contact_mapping=True,  # Item 10: Enable contact-based memory
+                project_id=current_project_id  # Phase 15: Project-scoped memory
+            )
+            # Always include working memory. Semantic search only controls Layer 2 recall.
+            agent_memory = self.memory_manager.get_agent_memory(agent_id)
+            include_tool_context = self._should_include_tool_context(message_text, context)
+            context_str = agent_memory.format_context_for_prompt(
+                context,
+                user_id=sender_key,
+                include_tool_outputs=include_tool_context
+            )
+            if context_str and context_str not in {"[No previous context]", "No previous context"}:
+                translated_message = f"{context_str}\n\n[Current message from {sender_name}]: {translated_message}"
             else:
                 translated_message = f"[Message from {sender_name}]: {translated_message}"
 
@@ -2449,6 +3069,8 @@ INSTRUCTIONS: Present the skill results above in your response with your persona
             if result.get('tool_used'):
                 memory_metadata['is_tool_output'] = True
                 memory_metadata['tool_used'] = result.get('tool_used')
+                if result.get('tool_result_structured'):
+                    memory_metadata['tool_result'] = result.get('tool_result_structured')
 
                 # Layer 5: Store FULL tool output in ephemeral buffer for follow-up interactions
                 # This enables agentic analysis of tool results without polluting long-term memory
@@ -3414,6 +4036,16 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 original_query=message_content
             )
 
+            # BUG-707: Only persist the scratchpad when a tool actually fired
+            # this turn. A no-tool turn (e.g. follow-up question that answers
+            # purely from the prior DATA block) used to overwrite the column
+            # with [], wiping the trace from the earlier round and forcing the
+            # next follow-up to re-fetch.
+            if result.get("agentic_scratchpad") is not None and (
+                result.get("tool_was_called") or result.get("tool_used")
+            ):
+                thread.agentic_scratchpad = result.get("agentic_scratchpad")
+
             ai_reply = result.get("answer", "")
 
             if ai_reply:
@@ -3454,11 +4086,14 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 self.logger.info(f"Thread {thread.id}: Response clean, using: '{ai_reply[:80]}...')")
 
                 # Add AI response to history
-                history.append({
+                history_entry = {
                     "role": "agent",
                     "content": ai_reply,
                     "timestamp": datetime.utcnow().isoformat() + "Z"
-                })
+                }
+                if result.get("tool_result_structured"):
+                    history_entry["tool_result"] = result.get("tool_result_structured")
+                history.append(history_entry)
                 thread.conversation_history = history
 
                 # Check for goal completion in both user message and agent response
@@ -3894,7 +4529,6 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
             # Get agent for this user (for agent-specific commands)
             # Use override from @mention if provided (Phase 21)
-            from models import UserAgentSession
             sender = message.get("sender", "")
 
             agent_id = override_agent_id  # Use override from @mention if provided
@@ -3902,22 +4536,43 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             # If no override, try to get from saved session
             if not agent_id:
                 try:
-                    saved_session = self.db.query(UserAgentSession).filter(
-                        UserAgentSession.user_identifier == sender_key
-                    ).first()
+                    contact = None
+                    if self._is_whatsapp_direct_message(message):
+                        contact = self._resolve_direct_message_contact(message, sender)
+                    session_aliases = self._get_direct_message_session_aliases(
+                        message,
+                        sender_key=sender_key,
+                        contact=contact,
+                    )
+                    saved_session = next(iter(self._get_user_agent_sessions_for_aliases(session_aliases)), None)
                     if saved_session:
                         agent_id = saved_session.agent_id
                 except Exception:
                     pass
 
-            # If no saved session, try to get default agent
+            # If no saved session, try to get the resolved default agent
             if not agent_id:
-                default_query = self.db.query(Agent).filter(Agent.is_default == True)
-                if self.tenant_id:
-                    default_query = default_query.filter(Agent.tenant_id == self.tenant_id)
-                default_agent = default_query.first()
-                if default_agent:
-                    agent_id = default_agent.id
+                from services.default_agent_service import get_default_agent
+
+                default_channel_type = "playground"
+                default_instance_id = None
+                if channel.startswith("whatsapp"):
+                    default_channel_type = "whatsapp"
+                    default_instance_id = self.mcp_instance_id
+                elif channel == "telegram":
+                    default_channel_type = "telegram"
+                    default_instance_id = self.telegram_instance_id
+                elif channel == "webhook":
+                    default_channel_type = "webhook"
+                    default_instance_id = self.webhook_instance_id
+
+                agent_id = get_default_agent(
+                    db=self.db,
+                    tenant_id=self.tenant_id,
+                    channel_type=default_channel_type,
+                    instance_id=default_instance_id,
+                    user_identifier=sender_key,
+                )
 
             # Get tenant_id from agent
             tenant_id = "_system"  # Default to system commands
@@ -3991,20 +4646,16 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 # Save agent preference
                 new_agent_id = result["data"]["agent_id"]
                 try:
-                    existing = self.db.query(UserAgentSession).filter(
-                        UserAgentSession.user_identifier == sender_key
-                    ).first()
-                    if existing:
-                        existing.agent_id = new_agent_id
-                    else:
-                        from models import UserAgentSession
-                        session = UserAgentSession(
-                            user_identifier=sender_key,
-                            agent_id=new_agent_id
-                        )
-                        self.db.add(session)
-                    self.db.commit()
-                    self.logger.info(f"[SLASH] Agent preference saved: {new_agent_id} for {sender_key}")
+                    contact = None
+                    if self._is_whatsapp_direct_message(message):
+                        contact = self._resolve_direct_message_contact(message, sender)
+                    session_aliases = self._get_direct_message_session_aliases(
+                        message,
+                        sender_key=sender_key,
+                        contact=contact,
+                    )
+                    self._sync_user_agent_session_aliases(session_aliases, new_agent_id)
+                    self.logger.info(f"[SLASH] Agent preference saved: {new_agent_id} for {session_aliases}")
                 except Exception as e:
                     self.logger.error(f"[SLASH] Error saving agent preference: {e}")
 
@@ -4014,7 +4665,7 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             self.logger.error(f"Error handling slash command: {e}", exc_info=True)
             return None
 
-    async def _process_with_skills(self, agent_id: int, message: Dict) -> str:
+    async def _process_with_skills(self, agent_id: int, message: Dict) -> tuple:
         """
         Phase 5.0: Process message with enabled skills before AI processing.
 
@@ -4031,7 +4682,7 @@ Current turn: {thread.current_turn} of {thread.max_turns}
             message: Message dict from MCP database
 
         Returns:
-            Tuple of (processed_message_text, skip_ai_flag, skill_output, skill_type, media_paths)
+            Tuple of (processed_message_text, skip_ai_flag, skill_output, skill_type, media_paths, skill_metadata)
         """
         try:
             message_body = message.get("body", "")
@@ -4112,22 +4763,33 @@ Current turn: {thread.current_turn} of {thread.max_turns}
 
                 if skip_ai:
                     # Return: (message_text, skip_ai_flag, skill_output, skill_type, media_paths)
-                    return (message_body, True, skill_result.output, skill_type, media_paths)
+                    transcript_text = skill_result.metadata.get("transcript") if skill_result.metadata else None
+                    return (transcript_text or message_body, True, skill_result.output, skill_type, media_paths, skill_result.metadata or {})
                 elif skill_result.processed_content:
                     # Return: (transcribed_text, no_skip, None, skill_type, media_paths)
-                    return (skill_result.processed_content, False, None, skill_type, media_paths)
+                    return (skill_result.processed_content, False, None, skill_type, media_paths, skill_result.metadata or {})
                 else:
                     # Skill succeeded but wants AI to format the response
                     # Return skill output so it can be included in AI context
-                    return (message_body, False, skill_result.output, skill_type, media_paths)
+                    return (message_body, False, skill_result.output, skill_type, media_paths, skill_result.metadata or {})
 
             elif skill_result and not skill_result.success:
                 self.logger.warning(f"[ERROR] Skill processing failed: {skill_result.output}")
+                if media_type and self.media_downloader.is_audio_message(media_type):
+                    skill_type = skill_result.metadata.get("skill_type") if skill_result.metadata else None
+                    return (
+                        message_body,
+                        True,
+                        skill_result.output or "❌ Audio transcription failed.",
+                        skill_type,
+                        skill_result.media_paths,
+                        skill_result.metadata or {},
+                    )
 
             # No skill handled it or processing failed, return original
-            return (message_body, False, None, None, None)
+            return (message_body, False, None, None, None, {})
 
         except Exception as e:
             self.logger.error(f"Error processing message with skills: {e}", exc_info=True)
             # On error, return original message text
-            return (message.get("body", ""), False, None, None, None)
+            return (message.get("body", ""), False, None, None, None, {})

@@ -20,8 +20,13 @@ Design notes:
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from schemas import (
@@ -44,7 +49,7 @@ class TemplateParamSpec:
 
     key: str
     label: str
-    type: str  # text, number, select, time, contact, agent, channel, textarea, toggle, tool, persona
+    type: str  # text, number, select, time, contact, agent, channel, textarea, toggle, tool, persona, password_vault_integration
     required: bool = True
     default: Any = None
     options: Optional[List[Dict[str, Any]]] = None  # for select
@@ -588,6 +593,847 @@ def build_agentic_email_gate(params: Dict[str, Any], tenant_id: str) -> FlowCrea
 
 
 # ============================================================================
+# Financial UI-first workflow templates
+# ============================================================================
+
+VAULT_INTEGRATION_PARAM = TemplateParamSpec(
+    key="password_vault_integration_id",
+    label="Password Vault connection",
+    type="password_vault_integration",
+    required=False,
+    help="Choose a tenant Password Vault connection. You can still edit each vault reference in the Flow step picker after creation.",
+)
+VAULT_NAME_PARAM = TemplateParamSpec(
+    key="vault",
+    label="Vault",
+    type="text",
+    required=False,
+    default="FinanApp",
+)
+VAULT_ITEM_PARAM = TemplateParamSpec(
+    key="vault_item_ref",
+    label="Vault item",
+    type="text",
+    required=False,
+    help="1Password item title or id. You can edit this with the vault picker in the Flow step.",
+)
+
+
+def _load_financial_profiles() -> Dict[str, Dict[str, Any]]:
+    """Load operator-private Finan flow profiles.
+
+    The catalog of personal flow profiles (asset names, schedules, playbook bindings)
+    lives outside the public repo at `.private/finan_profiles.json`. A fresh clone
+    without that file boots with zero Finan templates registered.
+    """
+    env_path = os.environ.get("TSN_FINAN_PROFILES_PATH")
+    candidates = [Path(env_path)] if env_path else [
+        Path(__file__).resolve().parents[2] / ".private" / "finan_profiles.json",
+        Path("/app/.private/finan_profiles.json"),
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Failed to parse %s: %s; Finan templates will be skipped.", path, exc,
+                )
+                return {}
+    logging.getLogger(__name__).info(
+        "Finan profile catalog not found; Finan flow templates will be skipped. "
+        "Set TSN_FINAN_PROFILES_PATH or place .private/finan_profiles.json on disk.",
+    )
+    return {}
+
+
+FINANCIAL_PROFILES: Dict[str, Dict[str, Any]] = _load_financial_profiles()
+
+
+def _financial_params(profile: Dict[str, Any]) -> List[TemplateParamSpec]:
+    playbook = _load_finan_playbook(profile) or {}
+    unit_options = [
+        {
+            "value": str(unit.get("id") or ""),
+            "label": f"{unit.get('asset') or unit.get('id')} · {unit.get('installation') or unit.get('id')}",
+        }
+        for unit in playbook.get("units") or []
+        if isinstance(unit, dict) and unit.get("active", True) and unit.get("id")
+    ]
+    first_unit = str(unit_options[0]["value"]) if unit_options else None
+
+    unit_params: List[TemplateParamSpec]
+    if unit_options:
+        unit_params = [
+            TemplateParamSpec(
+                key="unit_preset",
+                label="Provider unit",
+                type="select",
+                required=False,
+                default=first_unit,
+                options=unit_options,
+                help="Pick the portal unit to build this Flow for. Create one Flow per active unit.",
+            ),
+            TemplateParamSpec(
+                key="unit_id",
+                label="Unit / subject key override",
+                type="text",
+                required=False,
+                default="",
+                help="Optional. Leave blank to use the selected provider unit.",
+            ),
+            TemplateParamSpec(
+                key="asset",
+                label="Asset label override",
+                type="text",
+                required=False,
+                default="",
+                help="Optional. Leave blank to use the selected provider unit label.",
+            ),
+        ]
+    else:
+        unit_params = [
+            TemplateParamSpec(
+                key="unit_id",
+                label="Unit / subject key",
+                type="text",
+                required=False,
+                default=profile["unit_id"],
+            ),
+            TemplateParamSpec(
+                key="asset",
+                label="Asset label",
+                type="text",
+                required=False,
+                default=profile["asset"],
+            ),
+        ]
+
+    return [
+        NAME_PARAM, AGENT_PARAM, CHANNEL_PARAM, RECIPIENT_PARAM,
+        VAULT_INTEGRATION_PARAM, VAULT_NAME_PARAM,
+        TemplateParamSpec(
+            key="vault_item_ref",
+            label="Vault item",
+            type="text",
+            required=False,
+            default=profile["credential_item"],
+            help="1Password item title or id. You can replace it with the picker in the Flow step.",
+        ),
+        TemplateParamSpec(
+            key="browser_session_profile_name",
+            label="Browser session profile",
+            type="text",
+            required=False,
+            default=profile.get("browser_session_profile_name", ""),
+            help="Optional named browser profile from Hub > Tool APIs. Use it for portals that require an authenticated browser session.",
+        ),
+        *unit_params,
+        TIMEZONE_PARAM,
+    ]
+
+
+def _browser_action_step(
+    position: int,
+    name: str,
+    action: str,
+    description: str,
+    *,
+    url: Optional[str] = None,
+    selector: Optional[str] = None,
+    fallback_selector: Optional[str] = None,
+    value: Optional[str] = None,
+    tool_arguments: Optional[Dict[str, Any]] = None,
+    on_failure: Optional[str] = None,
+    timeout_seconds: int = 60,
+    optional: bool = False,
+    browser_session_profile_name: Optional[str] = None,
+) -> FlowStepCreate:
+    config_kwargs: Dict[str, Any] = {
+        "mode": "container",
+        "provider_type": "playwright",
+        "use_tool_mode": True,
+        "tool_action": action,
+        "tool_arguments": tool_arguments or {},
+        "session_persistence": True,
+        "session_ttl_seconds": 300,
+        "output_alias": name,
+    }
+    if browser_session_profile_name:
+        config_kwargs["browser_session_profile_name"] = browser_session_profile_name
+    if optional:
+        config_kwargs["optional"] = True
+        config_kwargs["treat_failure_as_skipped"] = True
+    if url:
+        config_kwargs["url"] = url
+    if selector:
+        selector_config = {
+            "name": name,
+            "action": action,
+            "selector": selector,
+            "value": value or "",
+        }
+        if fallback_selector:
+            selector_config["fallback_selector"] = fallback_selector
+        config_kwargs["selectors"] = [selector_config]
+    return _step(
+        position,
+        StepType.BROWSER_AUTOMATION,
+        name,
+        FlowStepConfig(**config_kwargs),
+        on_failure=on_failure,
+        timeout_seconds=timeout_seconds,
+        description=description,
+    )
+
+
+def _resolve_finan_playbook_dir() -> Path:
+    """Resolve the finan playbook directory.
+
+    Priority: TSN_FINAN_PLAYBOOK_DIR env var, then host repo `.private/finan_playbooks`,
+    then container `/app/.private/finan_playbooks`. The first existing path wins; if none
+    exist we still return the most likely default so seeding can log a helpful warning.
+    """
+    env = os.environ.get("TSN_FINAN_PLAYBOOK_DIR")
+    if env:
+        return Path(env)
+    candidates = [
+        Path(__file__).resolve().parents[2] / ".private" / "finan_playbooks",
+        Path("/app/.private/finan_playbooks"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+FINAN_PLAYBOOK_DIR = _resolve_finan_playbook_dir()
+_FINAN_DIR_MISSING_LOGGED = False
+
+
+def _safe_flow_step_name(prefix: str, value: str, max_len: int = 72) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    if not slug:
+        slug = "step"
+    name = f"{prefix}_{slug}" if prefix else slug
+    return name[:max_len].strip("_") or "step"
+
+
+def _load_finan_playbook(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    global _FINAN_DIR_MISSING_LOGGED
+    filename = profile.get("playbook_file")
+    if not filename:
+        return None
+    if not FINAN_PLAYBOOK_DIR.exists():
+        if not _FINAN_DIR_MISSING_LOGGED:
+            logging.getLogger(__name__).info(
+                "Finan playbook directory not found at %s; Finan flow templates will be skipped. "
+                "Set TSN_FINAN_PLAYBOOK_DIR or place playbooks at .private/finan_playbooks/.",
+                FINAN_PLAYBOOK_DIR,
+            )
+            _FINAN_DIR_MISSING_LOGGED = True
+        return None
+    path = FINAN_PLAYBOOK_DIR / str(filename)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _selected_playbook_unit(profile: Dict[str, Any], unit_id: str, asset: str) -> Dict[str, Any]:
+    playbook = _load_finan_playbook(profile) or {}
+    units = [unit for unit in playbook.get("units") or [] if isinstance(unit, dict)]
+    for unit in units:
+        if str(unit.get("id") or "") == str(unit_id):
+            return {**unit, "id": unit_id, "asset": asset or unit.get("asset") or profile.get("asset")}
+    for unit in units:
+        if unit.get("active", True):
+            return {**unit, "id": unit.get("id") or unit_id, "asset": asset or unit.get("asset") or profile.get("asset")}
+    return {"id": unit_id, "asset": asset or profile.get("asset")}
+
+
+def _playbook_context_script(profile: Dict[str, Any], unit: Dict[str, Any]) -> str:
+    credentials: Dict[str, str] = {
+        "username": "{{vault_username.secret_handle}}",
+        "email": "{{vault_username.secret_handle}}",
+        "cpf": "{{vault_username.secret_handle}}",
+        "inscricao": "{{vault_username.secret_handle}}",
+        "password": "{{vault_password.secret_handle}}",
+        "senha": "{{vault_password.secret_handle}}",
+        "codigo_cliente": "{{vault_password.secret_handle}}",
+        "codigo_client": "{{vault_password.secret_handle}}",
+    }
+    if profile.get("username_field"):
+        credentials[str(profile["username_field"])] = "{{vault_username.secret_handle}}"
+    if profile.get("password_field"):
+        credentials[str(profile["password_field"])] = "{{vault_password.secret_handle}}"
+    if profile.get("totp"):
+        credentials["totp"] = "{{vault_totp.secret_handle}}"
+        credentials["otp"] = "{{vault_totp.secret_handle}}"
+    for extra_field in profile.get("extra_secret_fields", []):
+        if isinstance(extra_field, dict) and extra_field.get("field_name"):
+            alias = str(extra_field.get("alias") or _safe_flow_step_name("vault", str(extra_field["field_name"])))
+            credentials[str(extra_field["field_name"])] = "{{" + f"{alias}.secret_handle" + "}}"
+
+    context = {
+        "credentials": credentials,
+        "unit": unit,
+        "profile": {
+            "provider": profile.get("provider"),
+            "automation_id": profile.get("automation_id"),
+        },
+    }
+    context_json = json.dumps(context, ensure_ascii=False)
+    return f"(() => {{ window.__codexTemplateContext = {context_json}; return 'context_ready'; }})()"
+
+
+def _replace_playbook_templates(value: Any, profile: Dict[str, Any], field_aliases: Dict[str, Dict[str, str]], unit: Dict[str, Any]) -> Any:
+    if isinstance(value, list):
+        return [_replace_playbook_templates(item, profile, field_aliases, unit) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_playbook_templates(item, profile, field_aliases, unit) for key, item in value.items()}
+    if not isinstance(value, str):
+        return value
+
+    username_fields = {str(profile.get("username_field") or ""), "email", "username", "cpf", "inscricao"}
+    password_fields = {str(profile.get("password_field") or ""), "password", "senha", "codigo_cliente", "codigo_client", "cpf"}
+    extra_secret_fields = {
+        str(field.get("field_name") or ""): str(field.get("alias") or _safe_flow_step_name("vault", str(field.get("field_name") or "")))
+        for field in profile.get("extra_secret_fields", [])
+        if isinstance(field, dict) and field.get("field_name")
+    }
+    rendered = value
+    for field in username_fields:
+        if field:
+            rendered = rendered.replace(f"{{{{credentials.{field}}}}}", "{{vault_username.secret_handle}}")
+    for field in password_fields:
+        if field:
+            rendered = rendered.replace(f"{{{{credentials.{field}}}}}", "{{vault_password.secret_handle}}")
+    for field, alias in extra_secret_fields.items():
+        rendered = rendered.replace(f"{{{{credentials.{field}}}}}", "{{" + f"{alias}.secret_handle" + "}}")
+    rendered = rendered.replace("{{unit.id}}", str(unit.get("id") or ""))
+    rendered = rendered.replace("{{unit.installation}}", str(unit.get("installation") or unit.get("id") or ""))
+    rendered = rendered.replace("{{unit.asset}}", str(unit.get("asset") or profile.get("asset") or ""))
+    rendered = rendered.replace("{{unit.address}}", str(unit.get("address") or ""))
+    metadata = unit.get("metadata") if isinstance(unit.get("metadata"), dict) else {}
+    for key, val in metadata.items():
+        rendered = rendered.replace("{{" + f"unit.metadata.{key}" + "}}", str(val))
+    rendered = rendered.replace("{{plate}}", str(metadata.get("plate") or unit.get("id") or ""))
+    rendered = rendered.replace("{{asset_name}}", str(unit.get("asset") or profile.get("asset") or ""))
+    rendered = rendered.replace("{{renavam}}", str(metadata.get("renavam") or ""))
+
+    def replace_extract(match: re.Match[str]) -> str:
+        field = match.group(1)
+        alias = field_aliases.get(field)
+        if not alias:
+            return match.group(0)
+        return "{{" + f"{alias['alias']}.metadata_preview.{alias['path'].split('.', 1)[-1]}" + "}}"
+
+    return re.sub(r"\{\{extract\.([a-zA-Z0-9_]+)\}\}", replace_extract, rendered)
+
+
+def _record_targets_for_field(field_name: str) -> List[str]:
+    targets = [field_name]
+    if field_name in {"month", "reference", "referencia"}:
+        targets.append("reference_month")
+    if field_name == "barcode_cota_unica":
+        targets.append("barcode")
+    if field_name == "total_amount":
+        targets.append("amount")
+    if field_name in {"all_transfers", "all_positions", "all_transactions", "installments_json"}:
+        targets.append("details")
+    return list(dict.fromkeys(targets))
+
+
+def _append_finan_playbook_browser_steps(
+    steps: List[FlowStepCreate],
+    position: int,
+    profile: Dict[str, Any],
+    agent_id: int,
+    unit: Dict[str, Any],
+    browser_session_profile_name: Optional[str] = None,
+) -> tuple[int, List[Dict[str, Any]]]:
+    playbook = _load_finan_playbook(profile)
+    if not playbook:
+        return _append_browser_financial_steps(steps, position, profile, agent_id), []
+
+    extraction_rules: List[Dict[str, Any]] = [
+        {"target": "record_kind", "value": profile["record_kind"]},
+        {"target": "automation_key", "value": profile["automation_id"]},
+        {"target": "provider", "value": profile["provider"]},
+        {"target": "unit_id", "value": unit.get("id") or profile["unit_id"]},
+        {"target": "asset", "value": unit.get("asset") or profile["asset"]},
+        {"target": "period_key", "value": "latest"},
+    ]
+    field_aliases: Dict[str, Dict[str, str]] = {}
+
+    for raw_step in playbook.get("steps") or []:
+        if not isinstance(raw_step, dict):
+            continue
+        original_action = str(raw_step.get("action") or "").strip()
+        original_id = raw_step.get("id") or position
+        description = str(raw_step.get("description") or raw_step.get("name") or original_action)
+        timeout_seconds = max(5, int(raw_step.get("timeout") or 30000) // 1000)
+        effective_optional = bool(raw_step.get("optional") or original_action == "dismiss_modal")
+        on_failure = "continue" if effective_optional else None
+
+        if original_action == "extract" and isinstance(raw_step.get("fields"), dict):
+            for field_name, field in raw_step["fields"].items():
+                if not isinstance(field, dict):
+                    continue
+                extract_kind = field.get("extract") or "text"
+                alias = _safe_flow_step_name(f"extract_{original_id}", str(field_name))
+                selector = _replace_playbook_templates(field.get("selector") or raw_step.get("selector") or "body", profile, field_aliases, unit)
+                if extract_kind == "javascript":
+                    script = _replace_playbook_templates(field.get("script") or "", profile, field_aliases, unit)
+                    if "__codexTemplateContext" in script:
+                        context_step = _browser_action_step(
+                            position,
+                            _safe_flow_step_name(f"context_{original_id}", "set_playbook_context"),
+                            "execute_script",
+                            "Set the visible playbook context used by the following extraction script.",
+                            tool_arguments={"script": _playbook_context_script(profile, unit)},
+                            timeout_seconds=10,
+                            browser_session_profile_name=browser_session_profile_name,
+                        )
+                        context_step.agent_id = agent_id
+                        steps.append(context_step)
+                        position += 1
+                    browser_action = "execute_script"
+                    tool_arguments = {"script": script}
+                    source_path = "metadata.result"
+                elif extract_kind == "attribute":
+                    browser_action = "get_attribute"
+                    tool_arguments = {"attribute": _replace_playbook_templates(field.get("attribute") or "", profile, field_aliases, unit)}
+                    source_path = "metadata.value"
+                else:
+                    browser_action = "extract"
+                    tool_arguments = {}
+                    source_path = "metadata.text"
+                browser_step = _browser_action_step(
+                    position,
+                    alias,
+                    browser_action,
+                    description,
+                    selector=selector if browser_action != "execute_script" else None,
+                    tool_arguments=tool_arguments,
+                    on_failure=on_failure,
+                    timeout_seconds=timeout_seconds,
+                    optional=effective_optional,
+                    browser_session_profile_name=browser_session_profile_name,
+                )
+                browser_step.agent_id = agent_id
+                steps.append(browser_step)
+                field_aliases[str(field_name)] = {"alias": alias, "path": source_path}
+                if not str(field_name).startswith("_"):
+                    for target in _record_targets_for_field(str(field_name)):
+                        extraction_rules.append({"target": target, "source_step": alias, "path": source_path})
+                position += 1
+            continue
+
+        action = original_action
+        selector = _replace_playbook_templates(raw_step.get("selector"), profile, field_aliases, unit)
+        fallback_selector = _replace_playbook_templates(raw_step.get("fallback_selector"), profile, field_aliases, unit)
+        value = _replace_playbook_templates(raw_step.get("value"), profile, field_aliases, unit)
+        url = _replace_playbook_templates(raw_step.get("url"), profile, field_aliases, unit)
+        tool_arguments: Dict[str, Any] = {}
+        if fallback_selector:
+            tool_arguments["fallback_selector"] = fallback_selector
+        if raw_step.get("fallback"):
+            tool_arguments["fallback_script"] = _replace_playbook_templates(raw_step.get("fallback"), profile, field_aliases, unit)
+        if original_action == "execute_script":
+            tool_arguments["script"] = _replace_playbook_templates(raw_step.get("script") or "(() => null)()", profile, field_aliases, unit)
+        if raw_step.get("timeout"):
+            tool_arguments["timeout_ms"] = raw_step.get("timeout")
+        if raw_step.get("wait_until"):
+            tool_arguments["wait_until"] = raw_step.get("wait_until")
+        for key in (
+            "input_selector",
+            "submit_selector",
+            "solver_provider",
+            "captcha_solver_provider",
+            "ollama_model",
+            "ollama_base_url",
+            "max_attempts",
+            "post_submit_wait_ms",
+            "error_text_regex",
+            "success_selector",
+            "captcha_length",
+            "prompt",
+            "solver_timeout_seconds",
+            "temperature",
+        ):
+            if raw_step.get(key) is not None:
+                tool_arguments[key] = _replace_playbook_templates(raw_step.get(key), profile, field_aliases, unit)
+        if original_action == "wait_selector":
+            action = "wait_for"
+            tool_arguments["state"] = "visible"
+        elif original_action == "wait_navigation":
+            action = "wait_for_url"
+            tool_arguments["url_contains"] = raw_step.get("url_contains") or ""
+        elif original_action == "fill_totp":
+            action = "fill"
+            value = "{{vault_totp.secret_handle}}"
+        elif original_action == "solve_captcha":
+            action = "solve_captcha"
+        elif original_action not in {"navigate", "click", "fill", "extract", "screenshot", "execute_script", "dismiss_modal"}:
+            action = "execute_script"
+            tool_arguments["script"] = _replace_playbook_templates(raw_step.get("script") or "(() => null)()", profile, field_aliases, unit)
+
+        name = _safe_flow_step_name(f"browser_{original_id}", description)
+        browser_step = _browser_action_step(
+            position,
+            name,
+            action,
+            description,
+            url=url,
+            selector=selector,
+            fallback_selector=fallback_selector,
+            value=value,
+            tool_arguments=tool_arguments,
+            on_failure=on_failure,
+            timeout_seconds=timeout_seconds,
+            optional=effective_optional,
+            browser_session_profile_name=browser_session_profile_name,
+        )
+        browser_step.agent_id = agent_id
+        steps.append(browser_step)
+        position += 1
+
+    if any(rule.get("target") == "reference_month" for rule in extraction_rules):
+        extraction_rules.append({"target": "period_key", "source_step": next(rule["source_step"] for rule in extraction_rules if rule.get("target") == "reference_month"), "path": next(rule["path"] for rule in extraction_rules if rule.get("target") == "reference_month")})
+    elif any(rule.get("target") == "year" for rule in extraction_rules):
+        extraction_rules.append({"target": "period_key", "source_step": next(rule["source_step"] for rule in extraction_rules if rule.get("target") == "year"), "path": next(rule["path"] for rule in extraction_rules if rule.get("target") == "year")})
+
+    return position, extraction_rules
+
+
+def _append_browser_financial_steps(
+    steps: List[FlowStepCreate],
+    position: int,
+    profile: Dict[str, Any],
+    agent_id: int,
+) -> int:
+    provider = profile["provider"].replace("_", "-")
+    login_url = profile.get("login_url") or f"https://{provider}.example/login"
+    records_url = profile.get("records_url") or f"https://{provider}.example/financeiro"
+    username_selector = profile.get("username_selector") or "input[name='username'], input[type='email']"
+    password_selector = profile.get("password_selector") or "input[type='password']"
+    totp_selector = profile.get("totp_selector") or "input[name='totp'], input[name='otp']"
+    submit_selector = profile.get("submit_selector") or "button[type='submit']"
+    extract_selector = profile.get("extract_selector") or "body"
+
+    browser_steps = [
+        _browser_action_step(
+            position,
+            "open_portal_login",
+            "navigate",
+            "Open the provider login page. Edit the URL in the Flow UI.",
+            url=login_url,
+        ),
+        _browser_action_step(
+            position + 1,
+            "fill_login_identifier",
+            "fill",
+            "Fill the login/user field using the Password Vault username handle.",
+            selector=username_selector,
+            value="{{vault_username.secret_handle}}",
+        ),
+        _browser_action_step(
+            position + 2,
+            "fill_login_secret",
+            "fill",
+            "Fill the password/second credential using the Password Vault password handle.",
+            selector=password_selector,
+            value="{{vault_password.secret_handle}}",
+        ),
+    ]
+    position += 3
+
+    if profile.get("totp"):
+        browser_steps.append(_browser_action_step(
+            position,
+            "fill_totp",
+            "fill",
+            "Fill TOTP using the Password Vault TOTP handle.",
+            selector=totp_selector,
+            value="{{vault_totp.secret_handle}}",
+        ))
+        position += 1
+
+    browser_steps.extend([
+        _browser_action_step(
+            position,
+            "submit_login",
+            "click",
+            "Submit the login form. Edit the selector in the Flow UI.",
+            selector=submit_selector,
+        ),
+        _browser_action_step(
+            position + 1,
+            "open_financial_records",
+            "navigate",
+            "Open the financial records / invoices page. Edit the URL in the Flow UI.",
+            url=records_url,
+        ),
+        _browser_action_step(
+            position + 2,
+            "extract_financial_records",
+            "extract",
+            "Extract the visible financial records from the page. Edit the selector in the Flow UI.",
+            selector=extract_selector,
+            timeout_seconds=90,
+        ),
+    ])
+    steps.extend(browser_steps)
+    for browser_step in browser_steps:
+        browser_step.agent_id = agent_id
+    return position + 3
+
+
+def build_financial_ui_first_workflow(params: Dict[str, Any], tenant_id: str, profile_key: str) -> FlowCreate:
+    profile = FINANCIAL_PROFILES[profile_key]
+    agent_id = int(params["agent_id"])
+    channel = params.get("channel", "whatsapp")
+    recipient = params["recipient"]
+    timezone = params.get("timezone", "America/Sao_Paulo")
+    integration_id = params.get("password_vault_integration_id")
+    vault = params.get("vault") or "FinanApp"
+    item_ref = params.get("vault_item_ref") or profile["credential_item"]
+    browser_session_profile_name = str(params.get("browser_session_profile_name") or profile.get("browser_session_profile_name") or "").strip()
+    unit_preset = params.get("unit_preset")
+    unit_id = params.get("unit_id") or unit_preset or profile["unit_id"]
+    asset = params.get("asset") or ""
+    playbook_unit = _selected_playbook_unit(profile, unit_id, asset)
+    unit_id = str(playbook_unit.get("id") or unit_id)
+    asset = str(playbook_unit.get("asset") or asset or profile["asset"])
+
+    steps: List[FlowStepCreate] = [
+        _step(1, StepType.PASSWORD_VAULT, "vault_username", FlowStepConfig(
+            action="read_item",
+            integration_id=integration_id,
+            vault=vault,
+            item_ref=item_ref,
+            field_name=profile["username_field"],
+            output_alias="vault_username",
+        ), timeout_seconds=30, description="Resolve login/user identifier from Password Vault."),
+        _step(2, StepType.PASSWORD_VAULT, "vault_password", FlowStepConfig(
+            action="read_item",
+            integration_id=integration_id,
+            vault=vault,
+            item_ref=item_ref,
+            field_name=profile["password_field"],
+            output_alias="vault_password",
+        ), timeout_seconds=30, description="Resolve password or second credential from Password Vault."),
+    ]
+
+    position = 3
+    if profile.get("totp"):
+        steps.append(_step(position, StepType.PASSWORD_VAULT, "vault_totp", FlowStepConfig(
+            action="read_totp",
+            integration_id=integration_id,
+            vault=vault,
+            item_ref=item_ref,
+            output_alias="vault_totp",
+        ), timeout_seconds=30, description="Resolve TOTP only for providers that require it."))
+        position += 1
+
+    for extra_field in profile.get("extra_secret_fields", []):
+        if not isinstance(extra_field, dict) or not extra_field.get("field_name"):
+            continue
+        alias = str(extra_field.get("alias") or _safe_flow_step_name("vault", str(extra_field["field_name"])))
+        action = str(extra_field.get("action") or "read_item")
+        if action == "compose_basic_auth":
+            config = FlowStepConfig(
+                action="compose_basic_auth",
+                username_handle=str(extra_field.get("username_handle") or "{{vault_username.secret_handle}}"),
+                password_handle=str(extra_field.get("password_handle") or "{{vault_password.secret_handle}}"),
+                scheme=str(extra_field.get("scheme") or "Basic"),
+                output_alias=alias,
+            )
+        else:
+            config = FlowStepConfig(
+                action="read_item",
+                integration_id=integration_id,
+                vault=vault,
+                item_ref=item_ref,
+                field_name=str(extra_field["field_name"]),
+                output_alias=alias,
+            )
+        steps.append(_step(position, StepType.PASSWORD_VAULT, alias, config, timeout_seconds=30, description=str(extra_field.get("description") or f"Resolve {extra_field['field_name']} from Password Vault.")))
+        position += 1
+
+    extraction_rules: List[Dict[str, Any]] = []
+    if profile["steps"] == "http_dual":
+        steps.extend([
+            _step(position, StepType.HTTP_REQUEST, "fetch_boletos", FlowStepConfig(
+                http_method="GET",
+                http_url="https://provider.example/{{vault_username.value_preview}}/boletos",
+                http_headers={"Authorization": "Bearer {{vault_password.secret_handle}}"},
+                http_capture_raw_response=True,
+                output_alias="boletos",
+            ), timeout_seconds=60, description="Provider API call for boleto rows. Edit URL, params, and headers in the Flow UI."),
+            _step(position + 1, StepType.HTTP_REQUEST, "fetch_notas", FlowStepConfig(
+                http_method="GET",
+                http_url="https://provider.example/{{vault_username.value_preview}}/notas",
+                http_headers={"Authorization": "Bearer {{vault_password.secret_handle}}"},
+                http_capture_raw_response=True,
+                output_alias="notas",
+            ), timeout_seconds=60, description="Provider API call for fiscal note/details rows. Edit URL, params, and headers in the Flow UI."),
+        ])
+        position += 2
+        source_steps = {"boleto": "boletos", "nota": "notas"}
+    elif profile.get("playbook_file"):
+        position, extraction_rules = _append_finan_playbook_browser_steps(
+            steps,
+            position,
+            profile,
+            agent_id,
+            playbook_unit,
+            browser_session_profile_name,
+        )
+        source_steps = {}
+    else:
+        position = _append_browser_financial_steps(steps, position, profile, agent_id)
+        source_steps = {"source": "extract_financial_records"}
+
+    transform_config = FlowStepConfig(
+        transform_mode="extract_fields" if extraction_rules else ("financial_parser" if profile["parser"].endswith("_utility_bill") else "record_mapping"),
+        financial_parser_mode=None if extraction_rules else (profile["parser"] if profile["parser"].endswith("_utility_bill") else None),
+        source_steps=source_steps,
+        extraction_rules=extraction_rules or None,
+        record_kind=profile["record_kind"],
+        financial_provider=profile["provider"],
+        financial_automation_key=profile["automation_id"],
+        financial_unit_id=unit_id,
+        financial_asset=asset,
+        record_mapping={
+            "record_kind": profile["record_kind"],
+            "automation_id": profile["automation_id"],
+            "provider": profile["provider"],
+            "subject_key": unit_id,
+            "period_key": "{{flow.id}}",
+            "title": asset,
+            "status": "pending_extraction_mapping",
+        },
+        emit_raw_bill_handle=profile["record_kind"] == "utility_bill",
+        emit_financial_record_handle=True,
+        output_alias="normalized_financial_record",
+    )
+    steps.append(_step(position, StepType.DATA_TRANSFORM, "normalize_record", transform_config, timeout_seconds=30, description="Normalize provider output into a redacted financial record shape."))
+    position += 1
+
+    store_type = StepType.FINANCIAL_BILL_STORE if profile["record_kind"] == "utility_bill" else StepType.FINANCIAL_RECORD_STORE
+    steps.append(_step(position, store_type, "store_and_dedupe", FlowStepConfig(
+        record_kind=profile["record_kind"],
+        financial_record_kind=profile["record_kind"],
+        financial_record_source_step="normalized_financial_record",
+        financial_provider=profile["provider"],
+        financial_automation_key=profile["automation_id"],
+        financial_unit_id=unit_id,
+        financial_asset=asset,
+        output_alias="financial_store",
+    ), timeout_seconds=30, description="Persist local state and dedupe. No hidden browser/API/notification work happens here."))
+    position += 1
+
+    notify_states = profile.get("notify_states") or [
+        "new_boleto",
+        "barcode_changed",
+        "pending_no_barcode",
+    ]
+    gate_conditions = [
+        {
+            "field": "conditions.notification_state",
+            "operator": "in",
+            "value": list(notify_states),
+        }
+    ]
+
+    steps.append(_step(position, StepType.GATE, "new_record_gate", FlowStepConfig(
+        gate_mode="programmatic",
+        gate_source_step="financial_store",
+        gate_conditions=gate_conditions,
+        gate_logic="all",
+        gate_on_fail="skip",
+    ), on_failure="skip", timeout_seconds=10, description=(
+        "Pass only when storage detects a notifiable state. Default states: new_boleto, "
+        "barcode_changed, pending_no_barcode. Edit the value list to opt into "
+        "no_pending_bills, paid, unchanged, or error if you want."
+    )))
+    position += 1
+
+    profile_name = profile["name"]
+    templates_by_state = profile.get("message_templates_by_state") or {
+        "new_boleto": (
+            f"Novo boleto detectado em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}} "
+            "vence {{financial_store.due_date}} no valor {{financial_store.amount_display}}. "
+            "Linha digitável: {{financial_store.linha_digitavel}}"
+        ),
+        "barcode_changed": (
+            f"Atualização de boleto em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}. "
+            "Nova linha digitável: {{financial_store.linha_digitavel}} "
+            "(valor {{financial_store.amount_display}}, vence {{financial_store.due_date}})"
+        ),
+        "pending_no_barcode": (
+            f"Conta em aberto em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}} "
+            "ainda sem linha digitável disponível no portal. Acesse manualmente para regularizar."
+        ),
+        "no_pending_bills": (
+            f"Sem boleto pendente em {profile_name}: "
+            "{{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}"
+        ),
+        "default": (
+            f"Atualização financeira em {profile_name}: "
+            "{{financial_store.notification_state}} - {{financial_store.title}}{{financial_store.asset}} "
+            "{{financial_store.reference_month}}{{financial_store.period_key}}"
+        ),
+    }
+    fallback_template = templates_by_state.get("new_boleto") or templates_by_state.get("default") or ""
+
+    steps.append(_step(position, StepType.NOTIFICATION, "notify_financial_event", FlowStepConfig(
+        channel=channel,
+        recipient=recipient,
+        message_template=fallback_template,
+        message_templates_by_state=templates_by_state,
+    ), timeout_seconds=30, description=(
+        "State-aware notification. The message_templates_by_state dict maps the "
+        "upstream notification_state (new_boleto, barcode_changed, pending_no_barcode, "
+        "no_pending_bills, paid, unchanged, error) to a template. message_template is "
+        "the fallback when no state-keyed template matches."
+    )))
+
+    return FlowCreate(
+        name=params.get("name") or profile["name"],
+        description=profile["description"] + " UI-first: vault -> request/browser -> transform -> store/dedupe -> gate -> notification.",
+        execution_method=ExecutionMethod.RECURRING,
+        scheduled_at=_first_scheduled_at("08:00", timezone),
+        recurrence_rule=RecurrenceRule(
+            frequency="daily",
+            interval=1,
+            timezone=timezone,
+            cron_expression=profile["schedule"],
+        ),
+        flow_type=FlowType.WORKFLOW,
+        default_agent_id=agent_id,
+        steps=steps,
+    )
+
+
+def _make_financial_builder(profile_key: str) -> FlowBuilder:
+    return lambda params, tenant_id: build_financial_ui_first_workflow(params, tenant_id, profile_key)
+
+
+# ============================================================================
 # Registry
 # ============================================================================
 
@@ -802,6 +1648,25 @@ FLOW_TEMPLATES: List[FlowTemplate] = [
         ],
         build=build_agentic_email_gate,
     ),
+    *[
+        FlowTemplate(
+            id=f"financial_{profile_key}",
+            name=profile["name"],
+            description=profile["description"],
+            category="monitoring",
+            icon="vault" if profile.get("steps") == "http_dual" else "browser",
+            required_credentials=["password_vault"],
+            highlights=[
+                "UI-first visible steps, no opaque automation node",
+                "Password Vault -> HTTP/browser -> transform -> store/dedupe -> gate -> notification",
+                "Acceptance still requires manual run, local state update, second-run dedupe, and conditional notification",
+            ],
+            params_schema=_financial_params(profile),
+            build=_make_financial_builder(profile_key),
+        )
+        for profile_key, profile in FINANCIAL_PROFILES.items()
+        if profile.get("template_enabled", True)
+    ],
 ]
 
 

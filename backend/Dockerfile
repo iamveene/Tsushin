@@ -57,6 +57,11 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 
 RUN pip install -r requirements-phase4.txt
 
+# 1Password CLI binary used by the Password Vault provider. Pulling it from the
+# official CLI image keeps the runtime image lean and avoids distro-specific
+# package-repository bootstrap inside our Dockerfile.
+FROM 1password/op:2 AS onepassword_cli
+
 # ============================================================================
 # Stage 2: Runtime - Minimal production image
 # ============================================================================
@@ -169,6 +174,9 @@ RUN set -eux; \
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
+# Copy the official 1Password CLI for service-account based vault access.
+COPY --from=onepassword_cli /usr/local/bin/op /usr/local/bin/op
+RUN chmod 0755 /usr/local/bin/op && /usr/local/bin/op --version
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

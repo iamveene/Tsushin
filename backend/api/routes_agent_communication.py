@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_serializer
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import (
@@ -24,6 +25,10 @@ from models import (
 )
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from api.agent_visibility import (
+    communication_permission_has_internal_agent,
+    get_public_tenant_agent_or_404,
+)
 from services.agent_communication_service import AgentCommunicationService
 
 logger = logging.getLogger(__name__)
@@ -71,23 +76,67 @@ def _resolve_agent_name(db: Session, agent_id: int) -> str:
 
 
 def _build_agent_name_map(db: Session, agent_ids: set, tenant_id: str = None) -> dict:
-    """Batch-resolve agent IDs to friendly names to avoid N+1 queries."""
+    """Batch-resolve agent IDs to friendly names to avoid N+1 queries.
+
+    Uses a LEFT OUTER JOIN to Contact so that an agent whose contact row was
+    deleted (Agent.contact_id has no FK constraint and can dangle) is still
+    listed — labelled by id rather than as "(deleted)". Only agents that are
+    truly missing from the agent table get the "(deleted)" suffix.
+    """
     if not agent_ids:
         return {}
     q = (
         db.query(Agent.id, Contact.friendly_name)
-        .join(Contact, Contact.id == Agent.contact_id)
+        .outerjoin(Contact, Contact.id == Agent.contact_id)
         .filter(Agent.id.in_(agent_ids))
     )
     if tenant_id:
         q = q.filter(Agent.tenant_id == tenant_id)
     rows = q.all()
-    name_map = {row[0]: row[1] for row in rows}
-    # Fill in any missing (deleted agents)
+    name_map = {row[0]: (row[1] or f"Agent #{row[0]}") for row in rows}
+    # Only mark "(deleted)" for ids the agent table did not return at all.
     for aid in agent_ids:
         if aid not in name_map:
             name_map[aid] = f"Agent #{aid} (deleted)"
     return name_map
+
+
+def _cleanup_orphan_permissions(db: Session, tenant_id: str) -> int:
+    """Remove tenant-owned A2A rules whose endpoints no longer belong to the tenant."""
+    permissions = (
+        db.query(AgentCommunicationPermission)
+        .filter(AgentCommunicationPermission.tenant_id == tenant_id)
+        .all()
+    )
+    if not permissions:
+        return 0
+
+    agent_ids = set()
+    for perm in permissions:
+        agent_ids.add(perm.source_agent_id)
+        agent_ids.add(perm.target_agent_id)
+
+    owned_agent_ids = {
+        row[0]
+        for row in (
+            db.query(Agent.id)
+            .filter(
+                Agent.tenant_id == tenant_id,
+                Agent.id.in_(agent_ids),
+            )
+            .all()
+        )
+    }
+
+    deleted = 0
+    for perm in permissions:
+        if perm.source_agent_id not in owned_agent_ids or perm.target_agent_id not in owned_agent_ids:
+            db.delete(perm)
+            deleted += 1
+    if deleted:
+        db.commit()
+        logger.info("Cleaned up %s orphan A2A permission rule(s) for tenant=%s", deleted, tenant_id)
+    return deleted
 
 
 # Valid session statuses for query validation
@@ -370,8 +419,13 @@ async def list_permissions(
     db: Session = Depends(get_db),
 ):
     """List all agent communication permission rules for the tenant."""
+    _cleanup_orphan_permissions(db, ctx.tenant_id)
     svc = AgentCommunicationService(db, ctx.tenant_id)
-    perms = svc.list_permissions()
+    perms = [
+        perm
+        for perm in svc.list_permissions()
+        if not communication_permission_has_internal_agent(db, perm, ctx.tenant_id)
+    ]
 
     # Batch-resolve agent names
     agent_ids = set()
@@ -409,14 +463,12 @@ async def create_permission(
     """Create a new agent communication permission rule."""
     # Validate both agents exist and belong to the tenant
     for aid, label in [(body.source_agent_id, "Source"), (body.target_agent_id, "Target")]:
-        agent = (
-            db.query(Agent)
-            .join(Contact, Contact.id == Agent.contact_id)
-            .filter(Agent.id == aid, Agent.tenant_id == ctx.tenant_id)
-            .first()
+        get_public_tenant_agent_or_404(
+            db,
+            aid,
+            ctx.tenant_id,
+            detail=f"{label} agent {aid} not found in this tenant",
         )
-        if not agent:
-            raise HTTPException(status_code=404, detail=f"{label} agent {aid} not found in this tenant")
 
     if body.source_agent_id == body.target_agent_id:
         raise HTTPException(status_code=400, detail="Source and target agents must be different")
@@ -474,6 +526,17 @@ async def update_permission(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    existing = (
+        db.query(AgentCommunicationPermission)
+        .filter(
+            AgentCommunicationPermission.id == permission_id,
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+        )
+        .first()
+    )
+    if not existing or communication_permission_has_internal_agent(db, existing, ctx.tenant_id):
+        raise HTTPException(status_code=404, detail="Permission rule not found")
+
     perm = svc.update_permission(permission_id, **update_data)
     if not perm:
         raise HTTPException(status_code=404, detail="Permission rule not found")
@@ -503,8 +566,30 @@ async def delete_permission(
     db: Session = Depends(get_db),
 ):
     """Delete an agent communication permission rule."""
+    existing = (
+        db.query(AgentCommunicationPermission)
+        .filter(
+            AgentCommunicationPermission.id == permission_id,
+            AgentCommunicationPermission.tenant_id == ctx.tenant_id,
+        )
+        .first()
+    )
+    if not existing or communication_permission_has_internal_agent(db, existing, ctx.tenant_id):
+        raise HTTPException(status_code=404, detail="Permission rule not found")
+
     svc = AgentCommunicationService(db, ctx.tenant_id)
-    deleted = svc.delete_permission(permission_id)
+    try:
+        deleted = svc.delete_permission(permission_id)
+    except IntegrityError:
+        # Surface FK conflicts (e.g. lingering team-member snapshots that still
+        # reference the permission row) as a clear 409 instead of a generic 500.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Permission cannot be deleted because another record still "
+                "references it. Please report this with the permission ID."
+            ),
+        )
     if not deleted:
         raise HTTPException(status_code=404, detail="Permission rule not found")
     return None

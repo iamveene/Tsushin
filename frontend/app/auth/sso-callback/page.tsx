@@ -9,11 +9,27 @@
  * This prevents JWT exposure in browser history, server logs, and referrer headers.
  */
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 
 const API_URL = ''
+
+// Same-origin allowlist for post-auth redirects. Anything else falls back to '/'.
+function safeRedirect(target: string | null | undefined): string {
+  if (!target) return '/'
+  // Reject protocol-relative ("//evil.com") and absolute external URLs.
+  if (target.startsWith('/') && !target.startsWith('//')) return target
+  try {
+    const parsed = new URL(target, window.location.origin)
+    if (parsed.origin === window.location.origin) {
+      return parsed.pathname + parsed.search + parsed.hash
+    }
+  } catch {
+    /* fall through */
+  }
+  return '/'
+}
 
 function SSOCallbackContent() {
   const router = useRouter()
@@ -21,35 +37,28 @@ function SSOCallbackContent() {
   const { setAuthFromToken } = useAuth()
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(true)
+  const processedCallbackRef = useRef<string | null>(null)
 
   useEffect(() => {
     const processCallback = async () => {
-      // MED-009: Now receives 'code' instead of 'token'
+      // MED-009: receives one-time 'code' (legacy 'token' flow removed in v0.7).
       const code = searchParams.get('code')
       const errorMsg = searchParams.get('error')
+      const callbackKey = errorMsg
+        ? `error:${errorMsg}`
+        : code
+          ? `code:${code}`
+          : 'missing'
 
-      // Legacy support: still accept 'token' for backwards compatibility during rollout
-      const legacyToken = searchParams.get('token')
+      if (processedCallbackRef.current === callbackKey) {
+        return
+      }
+      processedCallbackRef.current = callbackKey
 
       if (errorMsg) {
         setError(decodeURIComponent(errorMsg))
         setProcessing(false)
         return
-      }
-
-      // Handle legacy token flow (backwards compatibility)
-      if (legacyToken && !code) {
-        try {
-          await setAuthFromToken(legacyToken)
-          const redirect = searchParams.get('redirect') || '/'
-          router.replace(redirect)
-          return
-        } catch (err: any) {
-          console.error('SSO callback error (legacy):', err)
-          setError(err.message || 'Failed to complete authentication')
-          setProcessing(false)
-          return
-        }
       }
 
       if (!code) {
@@ -81,9 +90,8 @@ function SSOCallbackContent() {
         // Store the token and fetch user info
         await setAuthFromToken(access_token)
 
-        // Redirect to the intended destination
-        const redirect = redirect_after || '/'
-        router.replace(redirect)
+        // Same-origin allowlist prevents open redirect via attacker-controlled redirect_after.
+        router.replace(safeRedirect(redirect_after))
       } catch (err: any) {
         console.error('SSO callback error:', err)
         setError(err.message || 'Failed to complete authentication')

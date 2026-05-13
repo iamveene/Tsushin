@@ -16,7 +16,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, Agent, PlaygroundSettings, ProviderInstance } from '@/lib/client'
-import { PROVIDER_MODEL_CATALOG, getProviderModelLabels } from '@/lib/provider-models'
 import {
   SettingsIcon,
   BotIcon,
@@ -24,8 +23,14 @@ import {
   DocumentIcon,
   LinkIcon
 } from '@/components/ui/icons'
+import { PROVIDER_MODEL_CATALOG, getProviderModelLabels } from '@/lib/provider-models'
 
-// Model pricing per 1M tokens (USD) for the inline cost badge.
+function redactPromptPreview(prompt?: string | null): string {
+  if (!prompt?.trim()) return 'No system instructions configured'
+  return 'Hidden by default. Use Show to inspect the agent instructions.'
+}
+
+// Model pricing per 1M tokens (USD) - synced with backend TokenTracker
 // Format: { prompt: input cost, completion: output cost }
 const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   // OpenAI
@@ -34,7 +39,7 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'gpt-5.4': { prompt: 2.5, completion: 15.0 },
   'gpt-5.4-pro': { prompt: 30.0, completion: 180.0 },
   'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
-  'gpt-5.4-nano': { prompt: 0.20, completion: 1.25 },
+  'gpt-5.4-nano': { prompt: 0.20, completion: 1.0 },
   'gpt-4o': { prompt: 2.5, completion: 10.0 },
   'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
   'gpt-4-turbo': { prompt: 10.0, completion: 30.0 },
@@ -59,16 +64,40 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'gemini-2.0-flash': { prompt: 0.10, completion: 0.40 },
   'gemini-1.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-1.5-flash': { prompt: 0.075, completion: 0.3 },
+  // Groq-hosted/open models
+  'openai/gpt-oss-120b': { prompt: 0.15, completion: 0.60 },
+  'openai/gpt-oss-20b': { prompt: 0.075, completion: 0.30 },
+  'llama-3.3-70b-versatile': { prompt: 0.59, completion: 0.79 },
+  'llama-3.1-8b-instant': { prompt: 0.05, completion: 0.08 },
+  // xAI Grok
+  'grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
+  'grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
+  // DeepSeek
+  'deepseek-v4-flash': { prompt: 0.14, completion: 0.28 },
+  'deepseek-v4-pro': { prompt: 0.55, completion: 2.19 },
   // Ollama models are always free — handled dynamically via getModelCostInfo fallback
   // OpenRouter (unified API gateway - prices vary by model)
+  'openai/gpt-5.5': { prompt: 5.0, completion: 30.0 },
+  'openai/gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
+  'anthropic/claude-opus-4.7': { prompt: 5.0, completion: 25.0 },
+  'anthropic/claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
+  'x-ai/grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'x-ai/grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
   'google/gemini-2.5-flash': { prompt: 0.075, completion: 0.3 },
   'google/gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
   'google/gemini-2.0-flash-thinking-exp': { prompt: 0.10, completion: 0.40 },
   'anthropic/claude-sonnet-4-5': { prompt: 3.0, completion: 15.0 },
-  'anthropic/claude-opus-4.7': { prompt: 5.0, completion: 25.0 },
-  'anthropic/claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
-  'openai/gpt-5.5': { prompt: 5.0, completion: 30.0 },
-  'openai/gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
   'anthropic/claude-3.5-sonnet': { prompt: 3.0, completion: 15.0 },
   'anthropic/claude-3-opus': { prompt: 15.0, completion: 75.0 },
   'openai/gpt-4o': { prompt: 2.5, completion: 10.0 },
@@ -80,25 +109,6 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'deepseek/deepseek-r1': { prompt: 0.55, completion: 2.19 },
   'deepseek/deepseek-r1:free': { prompt: 0.0, completion: 0.0 },
   'deepseek/deepseek-chat': { prompt: 0.14, completion: 0.28 },
-  'x-ai/grok-4.3': { prompt: 1.25, completion: 2.50 },
-  'x-ai/grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
-  'x-ai/grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
-  'x-ai/grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
-  'x-ai/grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
-  'x-ai/grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
-  // DeepSeek direct API
-  'deepseek-v4-flash': { prompt: 0.14, completion: 0.28 },
-  'deepseek-v4-pro': { prompt: 1.74, completion: 3.48 },
-  'deepseek-chat': { prompt: 0.14, completion: 0.28 },
-  'deepseek-reasoner': { prompt: 0.14, completion: 0.28 },
-  'grok-4.3': { prompt: 1.25, completion: 2.50 },
-  'grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
-  'grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
-  'grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
-  'grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
-  'grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
-  'openai/gpt-oss-120b': { prompt: 0.15, completion: 0.60 },
-  'openai/gpt-oss-20b': { prompt: 0.075, completion: 0.30 },
   'qwen/qwen-2.5-72b-instruct': { prompt: 0.35, completion: 0.4 },
   'cohere/command-r-plus': { prompt: 2.5, completion: 10.0 },
   'perplexity/llama-3.1-sonar-huge-128k-online': { prompt: 5.0, completion: 5.0 },
@@ -134,7 +144,7 @@ const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`
 }
 
-// Common models by provider, shared with the rest of the provider/model UI.
+// Common models by provider, shared with setup, provider instances, Studio, and Sentinel.
 const MODEL_OPTIONS = PROVIDER_MODEL_CATALOG
 
 interface ConfigPanelProps {
@@ -158,7 +168,6 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
   const [showCustomModelInput, setShowCustomModelInput] = useState(false)
   const [customModelInput, setCustomModelInput] = useState('')
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const [ollamaModels, setOllamaModels] = useState<{ value: string; label: string }[]>([])
   const [providerInstances, setProviderInstances] = useState<ProviderInstance[]>([])
 
   // Load settings from parent props or fetch from API
@@ -178,21 +187,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
     if (agentId) {
       loadAgentConfig()
     }
-    fetchOllamaModels()
   }, [agentId])
-
-  const fetchOllamaModels = async () => {
-    try {
-      const data = await api.getOllamaHealth()
-      if (data.available && data.models) {
-        setOllamaModels(
-          data.models.map((m) => ({ value: m.name, label: m.name }))
-        )
-      }
-    } catch {
-      // Ollama not available
-    }
-  }
 
   const loadAgentConfig = async () => {
     if (!agentId) return
@@ -238,10 +233,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
     }
   }, [agentId, settings, onSettingsChange])
 
-  const handleSettingChange = <K extends keyof typeof localSettings>(
-    key: K,
-    value: (typeof localSettings)[K]
-  ) => {
+  const handleSettingChange = (key: string, value: any) => {
     const newSettings = { ...localSettings, [key]: value }
     setLocalSettings(newSettings)
 
@@ -366,7 +358,6 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
 
                       {/* Provider models with pricing — sourced from configured instances */}
                       {(() => {
-                        const isOllama = agent.model_provider?.toLowerCase() === 'ollama'
                         // TTS-only models must not appear in the chat-model picker — they
                         // emit audio only and would fail at call time on a text agent.
                         const TTS_ONLY_SUFFIXES = ['-tts-preview', '-tts']
@@ -374,19 +365,20 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                           TTS_ONLY_SUFFIXES.some(s => m.endsWith(s))
                         // Build model list from configured instances; fall back to static MODEL_OPTIONS if none.
                         // Enrich raw model IDs with friendly labels from MODEL_OPTIONS when available.
-                        const vendorKey = agent.model_provider?.toLowerCase()
+                        const vendorKey = agent.model_provider?.toLowerCase() || ''
                         const staticOptions = MODEL_OPTIONS[vendorKey] || []
-                        const labelFor = (m: string) =>
-                          staticOptions.find(o => o.value === m)?.label || m
-                        const instanceModels = Array.from(
-                          new Set(providerInstances.flatMap(i => i.available_models))
-                        ).filter(m => !isTTSOnlyModel(m))
-                        const dynamicModels: { value: string; label: string }[] = isOllama
-                          ? ollamaModels
-                          : instanceModels.length > 0
-                            ? getProviderModelLabels(vendorKey, instanceModels).map(m => ({ ...m, label: labelFor(m.value) === m.value ? m.label : labelFor(m.value) }))
-                            : staticOptions.filter(o => !isTTSOnlyModel(o.value))
+                        const instanceModels = [
+                          ...new Set(providerInstances.flatMap(i => i.available_models))
+                        ].filter(m => !isTTSOnlyModel(m))
+                        // v0.7.0: Ollama models now flow through providerInstances like every
+                        // other vendor — single source of truth via the provider_instance catalog.
+                        const dynamicModels = instanceModels.length > 0
+                          ? getProviderModelLabels(vendorKey, instanceModels, {
+                              currentModel: localSettings.modelOverride || agent.model_name,
+                            })
+                          : staticOptions
                         return dynamicModels
+                          .filter(o => !isTTSOnlyModel(o.value))
                       })().map(model => {
                         const costInfo = getModelCostInfo(model.value, agent.model_provider)
                         const pricing = agent.model_provider?.toLowerCase() === 'ollama'
@@ -428,74 +420,70 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         )
                       })}
 
-                      {/* Custom model override for any provider */}
-                      {agent.model_provider?.toLowerCase() !== 'ollama' && (
-                        <>
-                          {!showCustomModelInput ? (
+                      {/* Custom Model Input */}
+                      {!showCustomModelInput ? (
+                        <button
+                          onClick={() => setShowCustomModelInput(true)}
+                          className="w-full px-2 py-2 text-left rounded text-xs transition-colors text-white/60 hover:bg-white/[0.04] hover:text-white border border-white/[0.06] border-dashed"
+                        >
+                          <div className="flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span className="font-medium">Use Custom Model</span>
+                          </div>
+                          <div className="text-[10px] text-white/40 mt-0.5">
+                            Type any model ID for this provider
+                          </div>
+                        </button>
+                      ) : (
+                        <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-2 space-y-2">
+                          <div className="text-xs text-white/60 font-medium">Custom Model Name</div>
+                          <input
+                            type="text"
+                            value={customModelInput}
+                            onChange={(e) => setCustomModelInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && customModelInput.trim()) {
+                                handleSettingChange('modelOverride', customModelInput.trim())
+                                setShowModelSelector(false)
+                                setShowCustomModelInput(false)
+                                setCustomModelInput('')
+                              }
+                            }}
+                            placeholder="e.g., gpt-5.5 or provider/model-name"
+                            className="w-full px-2 py-1.5 text-xs bg-black/40 border border-white/[0.06] rounded text-white placeholder-white/30 focus:outline-none focus:border-teal-500/50"
+                            autoFocus
+                          />
+                          <div className="flex gap-2">
                             <button
-                              onClick={() => setShowCustomModelInput(true)}
-                              className="w-full px-2 py-2 text-left rounded text-xs transition-colors text-white/60 hover:bg-white/[0.04] hover:text-white border border-white/[0.06] border-dashed"
+                              onClick={() => {
+                                if (customModelInput.trim()) {
+                                  handleSettingChange('modelOverride', customModelInput.trim())
+                                  setShowModelSelector(false)
+                                  setShowCustomModelInput(false)
+                                  setCustomModelInput('')
+                                }
+                              }}
+                              className="flex-1 px-2 py-1 text-xs bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded hover:bg-teal-500/30 transition-colors"
+                              disabled={!customModelInput.trim()}
                             >
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                                <span className="font-medium">Use Custom Model</span>
-                              </div>
-                              <div className="text-[10px] text-white/40 mt-0.5">
-                                Type any model ID supported by this provider
-                              </div>
+                              Apply
                             </button>
-                          ) : (
-                            <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-2 space-y-2">
-                              <div className="text-xs text-white/60 font-medium">Custom Model Name</div>
-                              <input
-                                type="text"
-                                value={customModelInput}
-                                onChange={(e) => setCustomModelInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && customModelInput.trim()) {
-                                    handleSettingChange('modelOverride', customModelInput.trim())
-                                    setShowModelSelector(false)
-                                    setShowCustomModelInput(false)
-                                    setCustomModelInput('')
-                                  }
-                                }}
-                                placeholder={agent.model_provider?.toLowerCase() === 'openrouter' ? 'e.g., anthropic/claude-sonnet-4-5' : 'e.g., gemini-2.5-flash'}
-                                className="w-full px-2 py-1.5 text-xs bg-black/40 border border-white/[0.06] rounded text-white placeholder-white/30 focus:outline-none focus:border-teal-500/50"
-                                autoFocus
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => {
-                                    if (customModelInput.trim()) {
-                                      handleSettingChange('modelOverride', customModelInput.trim())
-                                      setShowModelSelector(false)
-                                      setShowCustomModelInput(false)
-                                      setCustomModelInput('')
-                                    }
-                                  }}
-                                  className="flex-1 px-2 py-1 text-xs bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded hover:bg-teal-500/30 transition-colors"
-                                  disabled={!customModelInput.trim()}
-                                >
-                                  Apply
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setShowCustomModelInput(false)
-                                    setCustomModelInput('')
-                                  }}
-                                  className="px-2 py-1 text-xs bg-white/[0.02] text-white/60 border border-white/[0.06] rounded hover:bg-white/[0.04] transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                              <div className="text-[10px] text-white/40">
-                                Saved as a temporary model override for this Playground session
-                              </div>
-                            </div>
-                          )}
-                        </>
+                            <button
+                              onClick={() => {
+                                setShowCustomModelInput(false)
+                                setCustomModelInput('')
+                              }}
+                              className="px-2 py-1 text-xs bg-white/[0.02] text-white/60 border border-white/[0.06] rounded hover:bg-white/[0.04] transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-white/40">
+                            Manual IDs are saved as typed and may use direct or gateway naming.
+                          </div>
+                        </div>
                       )}
 
                       {/* Pricing legend */}
@@ -608,11 +596,11 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
               </div>
             </div>
 
-            {/* System Prompt */}
+            {/* Agent Instructions */}
             <div className="bg-white/[0.02] rounded-xl border border-white/[0.06] p-4">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider flex items-center gap-2">
-                  <DocumentIcon size={14} /> System Prompt
+                  <DocumentIcon size={14} /> Agent Instructions
                 </h4>
                 <button
                   onClick={() => setShowPrompt(!showPrompt)}
@@ -625,17 +613,14 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
               {showPrompt && (
                 <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-3 max-h-[200px] overflow-auto">
                   <pre className="text-xs text-white/70 whitespace-pre-wrap font-mono">
-                    {agent.system_prompt || 'No system prompt configured'}
+                    {agent.system_prompt || 'No system instructions configured'}
                   </pre>
                 </div>
               )}
 
               {!showPrompt && (
                 <div className="text-xs text-white/40">
-                  {agent.system_prompt
-                    ? `${agent.system_prompt.slice(0, 100)}${agent.system_prompt.length > 100 ? '...' : ''}`
-                    : 'No system prompt configured'
-                  }
+                  {redactPromptPreview(agent.system_prompt)}
                 </div>
               )}
             </div>

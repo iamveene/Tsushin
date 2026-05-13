@@ -9,6 +9,7 @@ Handles container lifecycle: create, start, stop, restart, delete.
 import hashlib
 import os
 import re
+import shutil
 import time
 import logging
 import requests
@@ -32,10 +33,14 @@ from services.container_runtime import (
 logger = logging.getLogger(__name__)
 
 
+class MCPContainerProvisioningError(RuntimeError):
+    """Raised when a WhatsApp MCP container cannot be provisioned safely."""
+
+
 class MCPContainerManager:
     """Manages Docker containers for WhatsApp MCP instances"""
 
-    IMAGE_NAME = "tsushin/whatsapp-mcp:latest"
+    IMAGE_NAME = os.getenv("TSN_WHATSAPP_MCP_IMAGE", "tsushin/whatsapp-mcp:latest")
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     HEALTH_CHECK_INTERVAL = 5  # seconds
     DNS_FALLBACK_ENV = "WHATSAPP_MCP_DNS_SERVERS"
@@ -51,6 +56,9 @@ class MCPContainerManager:
         self._resolved_tester_api_url: Optional[str] = None
         self._resolved_tester_source: Optional[str] = None
         logger.info("MCPContainerManager initialized with container runtime")
+
+    def _get_image_name(self) -> str:
+        return os.getenv("TSN_WHATSAPP_MCP_IMAGE", self.IMAGE_NAME)
 
     def _resolve_network_name(self) -> str:
         """Resolve the tsushin network name."""
@@ -86,31 +94,57 @@ class MCPContainerManager:
 
         # 1. Allocate port
         port_allocator = get_port_allocator()
-        port = port_allocator.allocate_port(db)
-        logger.info(f"Allocated port {port}")
 
         # 1.5. Generate API secret (Phase Security-1: SSRF Prevention)
         api_secret = generate_mcp_secret()
         logger.info(f"Generated API secret for MCP authentication")
 
-        # 2. Generate container name (unique with timestamp, includes type)
-        # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation
-        stack_prefix = f"{self._get_stack_name()}-mcp-"
-        container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}"
+        # 2-4. Allocate a host port and start the container. The allocator runs
+        # inside the backend container, so it can miss ports already bound on the
+        # Docker host. If Docker rejects the host bind, retry with the next port.
+        failed_ports: set[int] = set()
+        last_start_error: Optional[Exception] = None
+        for _attempt in range(port_allocator.MAX_PORTS):
+            port = port_allocator.allocate_port(db, excluded_ports=failed_ports)
+            logger.info(f"Allocated port {port}")
 
-        # 3. Create volume directories (unique per instance)
-        session_dir = self._create_session_directory(tenant_id, container_name)
-        logger.info(f"Created session directory: {session_dir}")
+            # BUG-448: Use TSN_STACK_NAME prefix for runtime container isolation.
+            # Include the selected port so retries in the same second do not
+            # collide with a failed-but-created container name.
+            stack_prefix = f"{self._get_stack_name()}-mcp-"
+            container_name = f"{stack_prefix}{instance_type}-{tenant_id}_{int(time.time())}_{port}"
 
-        # 4. Start container
-        try:
-            container = self._start_container(container_name, port, session_dir, phone_number, api_secret)
-            container_id = container.id if hasattr(container, 'id') else str(container)
-            logger.info(f"Container {container_name} started with ID {container_id}")
+            # Create volume directories (unique per instance)
+            session_dir = self._create_session_directory(tenant_id, container_name)
+            logger.info(f"Created session directory: {session_dir}")
 
-        except Exception as e:
-            logger.error(f"Failed to start container: {e}")
-            raise RuntimeError(f"Failed to start Docker container: {e}")
+            try:
+                container = self._start_container(container_name, port, session_dir, phone_number, api_secret)
+                container_id = container.id if hasattr(container, 'id') else str(container)
+                logger.info(f"Container {container_name} started with ID {container_id}")
+                break
+            except MCPContainerProvisioningError:
+                raise
+            except Exception as e:
+                last_start_error = e
+                if self._is_host_port_bind_conflict(e):
+                    logger.warning(
+                        "Docker host rejected MCP port %s; retrying with next port: %s",
+                        port,
+                        e,
+                    )
+                    failed_ports.add(port)
+                    self._cleanup_failed_start(container_name, session_dir)
+                    continue
+
+                logger.error(f"Failed to start container: {e}")
+                self._cleanup_failed_start(container_name, session_dir)
+                raise RuntimeError(f"Failed to start Docker container: {e}")
+        else:
+            raise RuntimeError(
+                "Failed to start Docker container: no available MCP host ports "
+                f"after retrying Docker bind conflicts. Last error: {last_start_error}"
+            )
 
         # 5. Use container name for Docker DNS resolution (more robust than IP)
         # Container name is resolvable within the Docker network
@@ -170,6 +204,27 @@ class MCPContainerManager:
         logger.info(f"Container {container_name} starting, health check in progress")
 
         return instance
+
+    def _is_host_port_bind_conflict(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return (
+            "address already in use" in message
+            or "port is already allocated" in message
+            or ("failed to bind port" in message and "listen tcp" in message)
+        )
+
+    def _cleanup_failed_start(self, container_name: str, session_dir: str) -> None:
+        try:
+            self.runtime.remove_container(container_name, force=True)
+        except ContainerNotFoundError:
+            pass
+        except Exception as cleanup_error:
+            logger.warning("Failed to remove failed MCP container %s: %s", container_name, cleanup_error)
+
+        try:
+            shutil.rmtree(session_dir, ignore_errors=True)
+        except Exception as cleanup_error:
+            logger.warning("Failed to remove failed MCP session dir %s: %s", session_dir, cleanup_error)
 
     def _create_session_directory(self, tenant_id: str, container_name: str) -> str:
         """
@@ -259,12 +314,20 @@ class MCPContainerManager:
         logger.info(f"Starting container {container_name} on port {port}")
         logger.info(f"Volume mount: {session_dir_abs} -> /app/store")
 
+        image_name = self._get_image_name()
+        if not self.runtime.image_exists(image_name):
+            raise MCPContainerProvisioningError(
+                "WhatsApp MCP image is not available to the container runtime: "
+                f"{image_name}. Build or pull the image before creating an instance, "
+                "or set TSN_WHATSAPP_MCP_IMAGE to an existing image."
+            )
+
         # Check if tsushin network exists, create if not
         network_name = self._resolve_network_name()
         self.runtime.get_or_create_network(network_name)
 
         container = self.runtime.create_container(
-            image=self.IMAGE_NAME,
+            image=image_name,
             name=container_name,
             ports={'8080/tcp': ('127.0.0.1', port)},  # Also expose on localhost for debugging
             volumes={
@@ -1122,9 +1185,11 @@ class MCPContainerManager:
                 if tester_instance and tester_instance.container_name:
                     try:
                         container = self.runtime.get_container(tester_instance.container_name)
+                        runtime_alias = self._build_runtime_dns_alias(tester_instance)
+                        self._ensure_container_dns_alias(tester_instance.container_name, runtime_alias)
                         self._set_tester_target(
                             tester_instance.container_name,
-                            f"http://{tester_instance.container_name}:8080/api",
+                            f"http://{runtime_alias}:8080/api",
                             "runtime",
                         )
                         return container
@@ -1224,7 +1289,7 @@ class MCPContainerManager:
                 "session_age_sec": payload.get("session_age_sec", 0),
                 "last_activity_sec": payload.get("last_activity_sec", 0),
             })
-        except requests.RequestException as e:
+        except Exception as e:
             tester_status["status"] = "degraded"
             tester_status["error"] = str(e)
             return tester_status
@@ -1233,7 +1298,7 @@ class MCPContainerManager:
             qr_response = requests.get(f"{tester_api_url}/qr-code", headers=headers, timeout=5)
             if qr_response.status_code == 200:
                 tester_status["qr_available"] = bool(qr_response.json().get("qr_code"))
-        except requests.RequestException:
+        except Exception:
             pass
 
         return tester_status
@@ -1254,7 +1319,7 @@ class MCPContainerManager:
             if response.status_code != 200:
                 return None
             return response.json().get("qr_code")
-        except requests.RequestException:
+        except Exception:
             return None
 
     def restart_tester(self) -> Dict[str, Any]:

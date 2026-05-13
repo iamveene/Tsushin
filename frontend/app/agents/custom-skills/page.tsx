@@ -454,8 +454,8 @@ function CustomSkillsPageContent() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Agent Studio</h1>
-            <p className="text-tsushin-slate">Create and manage tenant-authored custom skills</p>
+            <h1 className="text-3xl font-display font-bold text-white mb-2">Custom Skills</h1>
+            <p className="text-tsushin-slate">Author your own skills (instruction, script, or MCP-server) and assign them to agents.</p>
           </div>
           {canCreate && (
             <button

@@ -13,6 +13,7 @@ Supported actions:
 4. extract(selector) - Extract text content from elements
 5. screenshot(full_page, selector) - Capture screenshots
 6. execute_script(script) - Execute JavaScript in page context
+7. wait_for_url(url_contains, timeout_ms) - Wait for URL substring
 """
 
 import asyncio
@@ -152,6 +153,8 @@ class PlaywrightProvider(BrowserAutomationProvider):
                     "height": self.config.viewport_height
                 }
             }
+            if self.config.storage_state:
+                context_options["storage_state"] = self.config.storage_state
 
             if self.config.user_agent:
                 context_options["user_agent"] = self.config.user_agent
@@ -551,6 +554,22 @@ class PlaywrightProvider(BrowserAutomationProvider):
                 code, suggestions = classify_error(e, "wait_for")
                 return BrowserResult(success=False, action="wait_for", error=str(e), error_code=code, suggestions=suggestions)
 
+    async def wait_for_url(self, url_contains: str, timeout_ms: Optional[int] = None) -> BrowserResult:
+        if not self._initialized or not self._page:
+            raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
+        async with self._lock:
+            try:
+                to = timeout_ms or (self.config.timeout_seconds * 1000)
+                url_contains = str(url_contains or "")
+                logger.info(f"Waiting for URL to contain: {url_contains}")
+                if url_contains and url_contains in self._page.url:
+                    return BrowserResult(success=True, action="wait_for_url", data={"url_contains": url_contains, "url": self._page.url})
+                await self._page.wait_for_url(lambda url: url_contains in str(url), timeout=to)
+                return BrowserResult(success=True, action="wait_for_url", data={"url_contains": url_contains, "url": self._page.url})
+            except Exception as e:
+                code, suggestions = classify_error(e, "wait_for_url")
+                return BrowserResult(success=False, action="wait_for_url", error=str(e), error_code=code, suggestions=suggestions)
+
     async def go_back(self) -> BrowserResult:
         if not self._initialized or not self._page:
             raise BrowserAutomationError("Browser not initialized. Call initialize() first.")
@@ -816,7 +835,7 @@ class PlaywrightProvider(BrowserAutomationProvider):
             "mode": "container",
             "actions": [
                 "navigate", "click", "fill", "extract", "screenshot", "execute_script",
-                "scroll", "select_option", "hover", "wait_for", "go_back", "go_forward",
+                "scroll", "select_option", "hover", "wait_for", "wait_for_url", "go_back", "go_forward",
                 "get_attribute", "get_page_url", "type_text",
                 "open_tab", "switch_tab", "close_tab", "list_tabs",
             ],

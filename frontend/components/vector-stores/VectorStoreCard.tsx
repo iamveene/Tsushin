@@ -1,12 +1,10 @@
 'use client'
 
-import { VectorStoreInstance } from '@/lib/client'
-
-const VENDOR_LABELS: Record<string, string> = {
-  mongodb: 'MongoDB',
-  pinecone: 'Pinecone',
-  qdrant: 'Qdrant',
-}
+import { useEffect, useState } from 'react'
+import { api } from '@/lib/client'
+import type { VectorStoreInstance } from '@/lib/client'
+import type { VectorStoreIndex } from '@/lib/client'
+import { formatVectorStoreIndex, getVectorStoreIndexes } from '@/components/EmbeddingContractControls'
 
 function getVendorBadge(instance: VectorStoreInstance): string {
   if (instance.vendor === 'mongodb') {
@@ -14,6 +12,16 @@ function getVendorBadge(instance: VectorStoreInstance): string {
   }
   const badges: Record<string, string> = { pinecone: 'Pinecone', qdrant: 'Qdrant' }
   return badges[instance.vendor] || instance.vendor
+}
+
+function isInternalVectorUrl(value: string | null | undefined): boolean {
+  return Boolean(value && /^https?:\/\/vs-[a-z0-9-]+:\d+/i.test(value))
+}
+
+function displayCollectionName(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (/^case_memory_tenant_/i.test(value) || /^tsn_[a-z0-9]+_/i.test(value)) return 'Default collection'
+  return value
 }
 
 const STATUS_STYLES: Record<string, { dot: string; dotColor: string; label: string }> = {
@@ -53,8 +61,23 @@ export default function VectorStoreCard({
   containerActionLoading,
 }: VectorStoreCardProps) {
   const status = STATUS_STYLES[instance.health_status] || STATUS_STYLES.unknown
-  const vendorLabel = VENDOR_LABELS[instance.vendor] || instance.vendor
   const badge = getVendorBadge(instance)
+  const [fetchedIndexes, setFetchedIndexes] = useState<VectorStoreIndex[] | null>(null)
+  const indexes = fetchedIndexes ?? getVectorStoreIndexes(instance)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getVectorStoreIndexes(instance.id)
+      .then((items) => {
+        if (!cancelled) setFetchedIndexes(items)
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedIndexes(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [instance.id])
 
   return (
     <div className="bg-[#12121a] border border-white/5 rounded-xl p-4 hover:border-white/15 transition-colors">
@@ -67,14 +90,14 @@ export default function VectorStoreCard({
           </span>
           {instance.is_default && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-400 flex-shrink-0">
-              DEFAULT
+              Default
             </span>
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
           {instance.is_auto_provisioned && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-400/10 text-purple-400">
-              Provisioned
+              <span title="Created and managed by Tsushin on this server.">Provisioned</span>
             </span>
           )}
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-400">
@@ -98,14 +121,14 @@ export default function VectorStoreCard({
 
       {/* Info */}
       <div className="space-y-1.5 mb-3">
-        {instance.base_url && (
+        {instance.base_url && !instance.is_auto_provisioned && !isInternalVectorUrl(instance.base_url) && (
           <div className="text-xs text-gray-400 truncate" title={instance.base_url}>
             {instance.base_url}
           </div>
         )}
         {instance.extra_config?.collection_name && (
           <div className="text-xs text-gray-500">
-            Collection: {instance.extra_config.collection_name}
+            Collection: {displayCollectionName(instance.extra_config.collection_name)}
           </div>
         )}
         {instance.extra_config?.index_name && (
@@ -113,6 +136,24 @@ export default function VectorStoreCard({
             Index: {instance.extra_config.index_name}
           </div>
         )}
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] px-2 py-2">
+          <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Indexes</div>
+          {indexes.length > 0 ? (
+            <div className="space-y-1">
+              {indexes.slice(0, 3).map((index) => (
+                <div key={index.id} className="text-xs text-gray-400 truncate" title={formatVectorStoreIndex(index)}>
+                  {index.is_default && <span className="text-teal-400 mr-1">Default</span>}
+                  {formatVectorStoreIndex(index)}
+                </div>
+              ))}
+              {indexes.length > 3 && (
+                <div className="text-xs text-gray-500">+{indexes.length - 3} more</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-gray-500">No indexes reported yet</div>
+          )}
+        </div>
         {instance.credentials_configured && (
           <div className="text-xs text-gray-500">
             Key: {instance.credentials_preview || 'configured'}

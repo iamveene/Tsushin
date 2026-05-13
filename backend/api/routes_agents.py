@@ -6,7 +6,7 @@ Provides CRUD operations for agents and tone presets.
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
@@ -58,6 +58,12 @@ def _is_agent_contact_conflict(exc: IntegrityError) -> bool:
         and "agent" in error_text
         and any(marker in error_text for marker in ("unique", "duplicate", "constraint"))
     )
+
+
+def _forbid_internal_agent(agent: Agent, *, status_code: int = 403) -> None:
+    if getattr(agent, "is_internal", False):
+        detail = "Agent not found" if status_code == 404 else "Internal coordinator agents cannot be managed through public agent APIs"
+        raise HTTPException(status_code=status_code, detail=detail)
 
 
 # ==================== Tone Preset Schemas ====================
@@ -164,17 +170,23 @@ class AgentResponse(BaseModel):
     vector_store_instance_id: Optional[int] = None
     vector_store_mode: Optional[str] = None  # override | complement | shadow
 
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-716 — surface in UI)
+    max_agentic_rounds: Optional[int] = None
+    max_agentic_loop_bytes: Optional[int] = None
+
     is_active: bool
     is_default: bool
+    is_team_member: bool = False
+    current_team_id: Optional[int] = None
     skills_count: Optional[int] = 0  # Number of enabled skills
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord", "webhook"]
+    enabled_channels: Optional[List[str]] = None  # ["playground", "whatsapp", "telegram", "slack", "discord"]
     whatsapp_integration_id: Optional[int] = None  # Specific MCP instance
     telegram_integration_id: Optional[int] = None  # Telegram bot instance
     slack_integration_id: Optional[int] = None  # Slack workspace integration
     discord_integration_id: Optional[int] = None  # Discord bot integration
-    webhook_integration_id: Optional[int] = None  # v0.6.0: Webhook integration
+    webhook_integration_id: Optional[int] = None  # Legacy v0.6.0 binding; webhook is a Trigger in v0.7.0
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -210,17 +222,29 @@ class AgentCreate(BaseModel):
     memory_decay_archive_threshold: Optional[float] = Field(0.05, ge=0.0, le=1.0, description="Auto-archive below this threshold")
     memory_decay_mmr_lambda: Optional[float] = Field(0.5, ge=0.0, le=1.0, description="MMR diversity weight (0=diverse, 1=relevant)")
 
+    # Provider Instance binding (BUG-582 FIX: previously missing here, causing
+    # wizard-created agents to lose their credential binding and hit the flat-
+    # field path — fatal for Vertex AI where flat fields are never populated).
+    provider_instance_id: Optional[int] = Field(None, description="Provider instance ID for credential/base-URL binding")
+
+    # Memory isolation mode (was silently dropped by the update path too)
+    memory_isolation_mode: Optional[str] = Field(None, description="Memory isolation: 'isolated' (per sender) or 'shared' (per agent)")
+
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field("override", description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(default=["playground", "whatsapp"], description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
@@ -256,17 +280,24 @@ class AgentUpdate(BaseModel):
     # Provider Instance (BUG-351 FIX)
     provider_instance_id: Optional[int] = Field(None, description="Provider instance ID for custom model provider configuration")
 
+    # Memory isolation mode (wizard sends this in the update step)
+    memory_isolation_mode: Optional[str] = Field(None, description="Memory isolation: 'isolated' (per sender) or 'shared' (per agent)")
+
     # v0.6.0: Vector Store Configuration
     vector_store_instance_id: Optional[int] = Field(None, description="External vector store instance ID (null = ChromaDB default)")
     vector_store_mode: Optional[Literal["override", "complement", "shadow"]] = Field(None, description="Vector store mode: override, complement, shadow")
 
     # Phase 10: Channel Configuration
-    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord, webhook")
+    enabled_channels: Optional[List[str]] = Field(None, description="Enabled channels: playground, whatsapp, telegram, slack, discord")
     whatsapp_integration_id: Optional[int] = Field(None, description="Specific WhatsApp MCP instance to use")
     telegram_integration_id: Optional[int] = Field(None, description="Specific Telegram bot instance to use")
     slack_integration_id: Optional[int] = Field(None, description="Specific Slack workspace integration to use")
     discord_integration_id: Optional[int] = Field(None, description="Specific Discord bot integration to use")
-    webhook_integration_id: Optional[int] = Field(None, description="Specific Webhook integration to use")
+    webhook_integration_id: Optional[int] = Field(None, description="Legacy webhook binding; use trigger defaults in v0.7.0")
+
+    # v0.7.0 Track F: bounded outer agentic loop (BUG-710)
+    max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
+    max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
@@ -308,8 +339,10 @@ def get_tone_preset(
     if not tone:
         raise HTTPException(status_code=404, detail="Tone preset not found")
 
-    if not ctx.can_access_resource(tone.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this tone preset")
+    # BUG-673: system tone presets (tenant_id IS NULL) are returned by the list
+    # endpoint and must also be readable by detail. Use allow_shared=True.
+    if not ctx.can_access_resource(tone.tenant_id, allow_shared=True):
+        raise HTTPException(status_code=404, detail="Tone preset not found")
 
     return tone
 
@@ -437,7 +470,7 @@ def list_agents(
     """List all agents with optional filters (requires agents.read permission)"""
 
     # Apply tenant filtering
-    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id)
+    query = ctx.filter_by_tenant(db.query(Agent), Agent.tenant_id).filter(Agent.is_internal == False)
 
     if active_only:
         query = query.filter(Agent.is_active == True)
@@ -536,6 +569,8 @@ def list_agents(
 
             "is_active": agent.is_active,
             "is_default": agent.is_default,
+            "is_team_member": bool(getattr(agent, "is_team_member", False)),
+            "current_team_id": getattr(agent, "current_team_id", None),
             "skills_count": skills_count,
             # Phase 10: Channel Configuration
             "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -549,6 +584,10 @@ def list_agents(
             # v0.6.0: Vector Store Configuration
             "vector_store_instance_id": getattr(agent, 'vector_store_instance_id', None),
             "vector_store_mode": getattr(agent, 'vector_store_mode', None),
+
+            # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in list response
+            "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+            "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
@@ -574,9 +613,11 @@ def get_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Verify tenant access
+    # BUG-674: normalize cross-tenant responses to 404 to match API v1 behavior
+    # and avoid leaking resource existence to other tenants.
     if not ctx.can_access_resource(agent.tenant_id):
-        raise HTTPException(status_code=403, detail="Access denied to this agent")
+        raise HTTPException(status_code=404, detail="Agent not found")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Enrich with contact, tone preset, and persona names
     contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -675,6 +716,8 @@ def get_agent(
 
         "is_active": agent.is_active,
         "is_default": agent.is_default,
+        "is_team_member": bool(getattr(agent, "is_team_member", False)),
+        "current_team_id": getattr(agent, "current_team_id", None),
         "skills_count": skills_count,
         # Phase 10: Channel Configuration
         "enabled_channels": parse_enabled_channels(agent.enabled_channels),
@@ -683,6 +726,10 @@ def get_agent(
         "slack_integration_id": agent.slack_integration_id,
         "discord_integration_id": agent.discord_integration_id,
         "webhook_integration_id": getattr(agent, "webhook_integration_id", None),
+
+        # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in GET response
+        "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
+        "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -760,6 +807,23 @@ def create_agent(
         if not whatsapp_instance:
             raise HTTPException(status_code=404, detail="WhatsApp integration not found")
 
+    # BUG-582 FIX: Validate provider_instance_id belongs to caller's tenant and
+    # matches the requested vendor. Previously this field was missing from
+    # AgentCreate entirely — so wizard-created agents silently lost their
+    # credential binding and hit the flat-field path (fatal for Vertex AI).
+    if agent.provider_instance_id is not None:
+        from services.provider_instance_service import ProviderInstanceService
+        pi = ProviderInstanceService.get_instance(agent.provider_instance_id, ctx.tenant_id, db)
+        if not pi:
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        if not pi.is_active:
+            raise HTTPException(status_code=400, detail="Provider instance is disabled")
+        if pi.vendor != agent.model_provider:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider instance vendor '{pi.vendor}' does not match agent model_provider '{agent.model_provider}'",
+            )
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id).update({"is_default": False})
@@ -833,6 +897,7 @@ def update_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(db_agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(db_agent)
 
     # Validate contact if being changed
     if agent.contact_id is not None and agent.contact_id != db_agent.contact_id:
@@ -888,6 +953,22 @@ def update_agent(
         if not whatsapp_instance:
             raise HTTPException(status_code=404, detail="WhatsApp integration not found")
 
+    # BUG-582: Validate provider_instance_id belongs to caller's tenant and
+    # matches the effective vendor (existing agent's or the update's).
+    if agent.provider_instance_id is not None:
+        from services.provider_instance_service import ProviderInstanceService
+        pi = ProviderInstanceService.get_instance(agent.provider_instance_id, ctx.tenant_id, db)
+        if not pi:
+            raise HTTPException(status_code=404, detail="Provider instance not found")
+        if not pi.is_active:
+            raise HTTPException(status_code=400, detail="Provider instance is disabled")
+        effective_vendor = agent.model_provider or db_agent.model_provider
+        if effective_vendor and pi.vendor != effective_vendor:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provider instance vendor '{pi.vendor}' does not match agent model_provider '{effective_vendor}'",
+            )
+
     # BUG-069 FIX: Scope default-clearing to caller's tenant only
     if agent.is_default:
         db.query(Agent).filter(Agent.tenant_id == ctx.tenant_id, Agent.id != agent_id).update({"is_default": False})
@@ -896,13 +977,16 @@ def update_agent(
     UPDATABLE_AGENT_FIELDS = {
         "contact_id", "system_prompt", "tone_preset_id", "custom_tone",
         "persona_id", "keywords", "model_provider", "model_name",
-        "response_template", "memory_size", "trigger_dm_enabled",
+        "response_template", "memory_size", "memory_isolation_mode",
+        "trigger_dm_enabled",
         "trigger_group_filters", "trigger_number_filters",
         "context_message_count", "context_char_limit", "enabled_channels",
         "whatsapp_integration_id", "telegram_integration_id", "slack_integration_id", "discord_integration_id", "webhook_integration_id",
         "memory_decay_enabled", "memory_decay_lambda", "memory_decay_archive_threshold", "memory_decay_mmr_lambda",
         "provider_instance_id",
         "vector_store_instance_id", "vector_store_mode",
+        # BUG-710: bounded agentic loop knobs (column existed; PUT path was dropping them).
+        "max_agentic_rounds", "max_agentic_loop_bytes",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)
@@ -954,6 +1038,7 @@ def delete_agent(
     # Verify user can access this agent (tenant isolation)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Capture agent name before deletion
     agent_contact = db.query(Contact).filter(Contact.id == agent.contact_id).first()
@@ -970,8 +1055,75 @@ def delete_agent(
         if next_agent:
             next_agent.is_default = True
 
-    db.delete(agent)
-    db.commit()
+    # BUG-701 FIX: Cascade-clean child rows before deleting the agent.
+    #
+    # Eight tables have FK(agent.id) with delete_rule=NO ACTION (agent_skill_integration,
+    # agent_project_access, message_queue, sentinel_agent_config, sentinel_exception,
+    # shell_command, user_agent_session, user_project_session) — any row in any of them
+    # raises ForeignKeyViolation → 500. Seventeen more tables reference agent_id WITHOUT
+    # any FK constraint at all (agent_skill, agent_knowledge, agent_run, memory, etc.),
+    # so they would become silent orphans if we only deleted the agent row. Five CASCADE
+    # FKs (agent_communication_*, agent_custom_skill, sentinel_profile_assignment) are
+    # handled by Postgres automatically and are not in this block.
+    #
+    # Strategy:
+    #   - DELETE rows in tables that are owned-by-agent (config, state, queues, sessions)
+    #   - UPDATE ... SET agent_id = NULL in audit / historical tables so the record of
+    #     past activity is preserved even after the agent is gone
+    #   - The whole thing runs inside the same transaction as db.delete(agent) below,
+    #     so a failure anywhere rolls everything back.
+    try:
+        # Owned-by-agent: delete
+        _owned_tables_agent_id = [
+            "agent_skill",                 # per-agent skill config (no FK — silent orphan risk)
+            "agent_skill_integration",     # FK NO ACTION — blocks delete today
+            "agent_knowledge",             # per-agent KB docs
+            "agent_run",                   # per-agent execution runs
+            "agent_sandboxed_tool",        # per-agent tool whitelist
+            "agent_project_access",        # FK NO ACTION
+            "contact_agent_mapping",       # contact↔agent binding
+            "conversation_thread",         # threads owned by the agent
+            "conversation_logs",           # per-turn log
+            "conversation_search_fts",     # FTS index rows
+            "custom_skill_execution",      # per-agent custom-skill exec records
+            "memory",                      # agent memory store
+            "playground_document",         # playground state per agent
+            "semantic_knowledge",          # embeddings for this agent
+            "user_agent_session",          # FK NO ACTION
+            "user_project_session",        # FK NO ACTION (per-agent project state)
+            "message_queue",               # FK NO ACTION (pending messages targeting agent)
+            "sentinel_agent_config",       # FK NO ACTION (per-agent security profile)
+            "okg_memory_audit_log",        # NOT NULL column — cannot SET NULL
+        ]
+        for tbl in _owned_tables_agent_id:
+            db.execute(text(f"DELETE FROM {tbl} WHERE agent_id = :aid"), {"aid": agent_id})
+
+        # Audit / historical: SET NULL to preserve record (columns are nullable)
+        db.execute(text("UPDATE sentinel_exception SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE sentinel_analysis_log SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE token_usage SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE shell_command SET executed_by_agent_id = NULL WHERE executed_by_agent_id = :aid"), {"aid": agent_id})
+
+        # Unbind from projects and flows without destroying them (the project/flow
+        # structure survives the agent's deletion; the binding is re-assigned later).
+        db.execute(text("UPDATE project SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+        db.execute(text("UPDATE flow_node SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
+
+        db.delete(agent)
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).exception(
+            f"Agent delete failed despite cascade cleanup (agent_id={agent_id})"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent cannot be deleted because another record still references it. "
+                "The cascade cleanup missed a table — please report this with the agent ID."
+            )
+        )
 
     log_tenant_event(db, ctx.tenant_id, current_user.id, TenantAuditActions.AGENT_DELETE, "agent", str(agent_id), {"name": agent_name}, request)
 
@@ -1135,6 +1287,7 @@ def create_contact_agent_mapping(
     # Verify agent belongs to user's tenant (prevent cross-tenant mapping)
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     # Check if mapping already exists
     existing = db.query(ContactAgentMapping).filter(
@@ -1257,6 +1410,7 @@ def get_agent_custom_tools(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent, status_code=404)
 
     # Get all mappings with tool details
     mappings = db.query(AgentSandboxedTool).filter(
@@ -1297,6 +1451,7 @@ def add_agent_custom_tool(
     # Verify agent belongs to user's tenant
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     tool = db.query(SandboxedTool).filter(SandboxedTool.id == data.sandboxed_tool_id).first()
     if not tool:
@@ -1354,6 +1509,7 @@ def update_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,
@@ -1397,6 +1553,7 @@ def delete_agent_custom_tool(
 
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=403, detail="Access denied to this agent")
+    _forbid_internal_agent(agent)
 
     mapping = db.query(AgentSandboxedTool).filter(
         AgentSandboxedTool.id == mapping_id,

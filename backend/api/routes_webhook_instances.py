@@ -1,5 +1,5 @@
 """
-v0.6.0: Webhook Integration Management API.
+v0.7.0: Webhook Trigger Management API.
 
 Tenant-scoped CRUD for WebhookIntegration. Secret is generated server-side,
 returned **once in plaintext** on create/rotate, and thereafter only the
@@ -17,21 +17,37 @@ import logging
 import re
 import secrets
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from channels.trigger_criteria import evaluate_payload_criteria, validate_criteria
 from db import get_db
-from models import Agent, WebhookIntegration
+from models import Agent, Contact, WebhookIntegration
+from services.flow_binding_service import (
+    delete_bindings_for_trigger,
+    delete_system_owned_continuous_artifacts_for_trigger,
+)
 from utils.ssrf_validator import SSRFValidationError, validate_url
+from api.routes_trigger_recap import (
+    TriggerRecapConfigRead,
+    TriggerRecapConfigWrite,
+    TriggerRecapTestRequest,
+    TriggerRecapTestResponse,
+    delete_recap_config_for,
+    delete_recap_config_for_trigger_instance,
+    get_recap_config_for,
+    put_recap_config_for,
+    run_test_recap_for,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
-    prefix="/api/webhook-integrations",
-    tags=["Webhook Integrations"],
+    prefix="/api/triggers/webhook",
+    tags=["Webhook Triggers"],
     redirect_slashes=False,
 )
 
@@ -49,6 +65,10 @@ class WebhookIntegrationCreate(BaseModel):
     ip_allowlist: Optional[List[str]] = None  # list of CIDRs
     rate_limit_rpm: int = Field(default=30, ge=1, le=600)
     max_payload_bytes: int = Field(default=1_048_576, ge=1024, le=10_485_760)
+    default_agent_id: Optional[int] = Field(default=None, ge=1)
+    trigger_criteria: Optional[dict[str, Any]] = None
+    notification_recipient: Optional[str] = Field(default=None, max_length=50)
+    notification_enabled: bool = False
 
     @field_validator("ip_allowlist")
     @classmethod
@@ -62,6 +82,16 @@ class WebhookIntegrationCreate(BaseModel):
                 raise ValueError(f"Invalid CIDR '{cidr}': {e}")
         return v
 
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, v):
+        if v is None:
+            return v
+        try:
+            return validate_criteria(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class WebhookIntegrationUpdate(BaseModel):
     integration_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
@@ -71,6 +101,8 @@ class WebhookIntegrationUpdate(BaseModel):
     ip_allowlist: Optional[List[str]] = None
     rate_limit_rpm: Optional[int] = Field(default=None, ge=1, le=600)
     max_payload_bytes: Optional[int] = Field(default=None, ge=1024, le=10_485_760)
+    default_agent_id: Optional[int] = Field(default=None, ge=1)
+    trigger_criteria: Optional[dict[str, Any]] = None
     is_active: Optional[bool] = None
 
     @field_validator("ip_allowlist")
@@ -85,6 +117,16 @@ class WebhookIntegrationUpdate(BaseModel):
                 raise ValueError(f"Invalid CIDR '{cidr}': {e}")
         return v
 
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, v):
+        if v is None:
+            return v
+        try:
+            return validate_criteria(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
 
 class WebhookIntegrationRead(BaseModel):
     id: int
@@ -97,6 +139,9 @@ class WebhookIntegrationRead(BaseModel):
     ip_allowlist: Optional[List[str]]
     rate_limit_rpm: int
     max_payload_bytes: int
+    default_agent_id: Optional[int] = None
+    default_agent_name: Optional[str] = None
+    trigger_criteria: Optional[dict[str, Any]] = None
     is_active: bool
     status: str
     health_status: str
@@ -106,6 +151,7 @@ class WebhookIntegrationRead(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     inbound_url: str  # derived
+    auto_flow_id: Optional[int] = None
 
 
 class WebhookIntegrationCreateResponse(BaseModel):
@@ -121,6 +167,26 @@ class WebhookSecretRotateResponse(BaseModel):
     api_secret: str
     api_secret_preview: str
     warning: str = "Previous secret is invalidated. Update your external system."
+
+
+class WebhookCriteriaTestRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    trigger_criteria: Optional[dict[str, Any]] = None
+
+    @field_validator("trigger_criteria")
+    @classmethod
+    def _validate_trigger_criteria(cls, v):
+        if v is None:
+            return v
+        try:
+            return validate_criteria(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class WebhookCriteriaTestResponse(BaseModel):
+    matched: bool
+    reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +209,30 @@ def _encrypt_secret(db: Session, tenant_id: str, plaintext: str) -> str:
     if not master_key:
         raise HTTPException(status_code=500, detail="Server configuration error")
     return TokenEncryption(master_key.encode()).encrypt(plaintext, tenant_id)
+
+
+def _load_active_agent(db: Session, tenant_id: str, agent_id: int) -> Agent:
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+        Agent.is_active == True,  # noqa: E712
+    ).first()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+def _agent_name(db: Session, tenant_id: str, agent_id: Optional[int]) -> Optional[str]:
+    if not agent_id:
+        return None
+    row = db.query(Contact.friendly_name).join(
+        Agent,
+        Agent.contact_id == Contact.id,
+    ).filter(
+        Agent.id == agent_id,
+        Agent.tenant_id == tenant_id,
+    ).first()
+    return row.friendly_name if row else None
 
 
 # v0.7.1: Custom webhook slug validation
@@ -202,13 +292,24 @@ def _inbound_url(slug: str) -> str:
     return f"/api/webhooks/{slug}/inbound"
 
 
-def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
+def _to_read(db: Session, integration: WebhookIntegration) -> WebhookIntegrationRead:
+    # TODO(v0.7.0 perf): per-call query for auto_flow lookup is acceptable for
+    # current trigger volumes; optimize via a JOIN on FlowTriggerBinding for
+    # list endpoints when N+1 becomes measurable (architect §6.4).
+    from services.flow_binding_service import find_system_managed_flow_for_trigger
+
     ip_allowlist = None
     if integration.ip_allowlist_json:
         try:
             ip_allowlist = _json.loads(integration.ip_allowlist_json)
         except Exception:
             ip_allowlist = None
+    auto_flow = find_system_managed_flow_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration.id,
+    )
     return WebhookIntegrationRead(
         id=integration.id,
         tenant_id=integration.tenant_id,
@@ -220,6 +321,9 @@ def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
         ip_allowlist=ip_allowlist,
         rate_limit_rpm=integration.rate_limit_rpm or 30,
         max_payload_bytes=integration.max_payload_bytes or 1_048_576,
+        default_agent_id=integration.default_agent_id,
+        default_agent_name=_agent_name(db, integration.tenant_id, integration.default_agent_id),
+        trigger_criteria=integration.trigger_criteria,
         is_active=bool(integration.is_active),
         status=integration.status or "active",
         health_status=integration.health_status or "unknown",
@@ -229,6 +333,7 @@ def _to_read(integration: WebhookIntegration) -> WebhookIntegrationRead:
         created_at=integration.created_at,
         updated_at=integration.updated_at,
         inbound_url=_inbound_url(integration.slug),
+        auto_flow_id=auto_flow.id if auto_flow else None,
     )
 
 
@@ -286,6 +391,8 @@ async def create_webhook_integration(
     if not context.tenant_id:
         raise HTTPException(status_code=403, detail="Tenant context required")
     _validate_callback(body.callback_url)
+    if body.default_agent_id is not None:
+        _load_active_agent(db, context.tenant_id, body.default_agent_id)
 
     # v0.7.1: resolve slug (auto or custom)
     if body.slug:
@@ -309,6 +416,8 @@ async def create_webhook_integration(
         ip_allowlist_json=_json.dumps(body.ip_allowlist) if body.ip_allowlist else None,
         rate_limit_rpm=body.rate_limit_rpm,
         max_payload_bytes=body.max_payload_bytes,
+        default_agent_id=body.default_agent_id,
+        trigger_criteria=body.trigger_criteria,
         is_active=True,
         status="active",
         created_by=context.user.id,
@@ -319,8 +428,31 @@ async def create_webhook_integration(
     logger.info(
         f"Created webhook integration {integration.id} (slug={slug}) for tenant {context.tenant_id}"
     )
+
+    # v0.7.0 Wave 4 — auto-generate the system-managed Flow for this trigger.
+    try:
+        from config.feature_flags import flows_auto_generation_enabled
+        from services.flow_binding_service import ensure_system_managed_flow_for_trigger
+
+        if flows_auto_generation_enabled():
+            ensure_system_managed_flow_for_trigger(
+                db,
+                tenant_id=context.tenant_id,
+                trigger_kind="webhook",
+                trigger_instance_id=integration.id,
+                default_agent_id=integration.default_agent_id,
+                notification_recipient=body.notification_recipient,
+                notification_enabled=body.notification_enabled,
+            )
+            db.commit()
+    except Exception:
+        logger.exception(
+            "Auto-flow generation failed for webhook integration %s; integration persists", integration.id
+        )
+        db.rollback()
+
     return WebhookIntegrationCreateResponse(
-        integration=_to_read(integration),
+        integration=_to_read(db, integration),
         api_secret=plaintext,
     )
 
@@ -333,7 +465,7 @@ async def list_webhook_integrations(
 ):
     q = context.filter_by_tenant(db.query(WebhookIntegration), WebhookIntegration.tenant_id)
     integrations = q.order_by(WebhookIntegration.created_at.desc()).all()
-    return [_to_read(i) for i in integrations]
+    return [_to_read(db, i) for i in integrations]
 
 
 @router.get("/{integration_id}", response_model=WebhookIntegrationRead)
@@ -346,7 +478,50 @@ async def get_webhook_integration(
     integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
     if integration is None or not context.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Webhook integration not found")
-    return _to_read(integration)
+    return _to_read(db, integration)
+
+
+@router.get("/{integration_id}/payload-captures")
+async def list_webhook_payload_captures(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """v0.7.0 Wave 5 — return the last 5 captured inbound payloads.
+
+    Used by the Flow editor's SourceStepConfig component to populate the
+    ``{{source.payload.*}}`` autocomplete with JSON paths inferred from
+    actual recent deliveries. Permission-gated on
+    ``integrations.webhook.read``.
+    """
+    from models import WebhookPayloadCapture
+
+    integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
+    if integration is None or not context.can_access_resource(integration.tenant_id):
+        raise HTTPException(status_code=404, detail="Webhook integration not found")
+
+    captures = (
+        db.query(WebhookPayloadCapture)
+        .filter(
+            WebhookPayloadCapture.tenant_id == integration.tenant_id,
+            WebhookPayloadCapture.webhook_id == integration_id,
+        )
+        .order_by(WebhookPayloadCapture.captured_at.desc())
+        .limit(5)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "webhook_id": c.webhook_id,
+            "captured_at": c.captured_at.isoformat() + "Z" if c.captured_at else None,
+            "payload_json": c.payload_json,
+            "headers_json": c.headers_json,
+            "dedupe_key": c.dedupe_key,
+        }
+        for c in captures
+    ]
 
 
 @router.patch("/{integration_id}", response_model=WebhookIntegrationRead)
@@ -382,6 +557,12 @@ async def update_webhook_integration(
         integration.rate_limit_rpm = body.rate_limit_rpm
     if body.max_payload_bytes is not None:
         integration.max_payload_bytes = body.max_payload_bytes
+    if "default_agent_id" in body.model_fields_set:
+        if body.default_agent_id is not None:
+            _load_active_agent(db, integration.tenant_id, body.default_agent_id)
+        integration.default_agent_id = body.default_agent_id
+    if "trigger_criteria" in body.model_fields_set:
+        integration.trigger_criteria = body.trigger_criteria
     if body.is_active is not None:
         integration.is_active = body.is_active
         integration.status = "active" if body.is_active else "paused"
@@ -389,7 +570,27 @@ async def update_webhook_integration(
     integration.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(integration)
-    return _to_read(integration)
+    return _to_read(db, integration)
+
+
+@router.post("/{integration_id}/criteria/test", response_model=WebhookCriteriaTestResponse)
+async def test_webhook_criteria(
+    integration_id: int,
+    body: WebhookCriteriaTestRequest,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
+    if integration is None or not context.can_access_resource(integration.tenant_id):
+        raise HTTPException(status_code=404, detail="Webhook integration not found")
+
+    criteria = body.trigger_criteria if body.trigger_criteria is not None else integration.trigger_criteria
+    try:
+        matched, reason = evaluate_payload_criteria(body.payload, criteria)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return WebhookCriteriaTestResponse(matched=matched, reason=reason)
 
 
 @router.post("/{integration_id}/rotate-secret", response_model=WebhookSecretRotateResponse)
@@ -423,13 +624,116 @@ async def delete_webhook_integration(
     if integration is None or not context.can_access_resource(integration.tenant_id):
         raise HTTPException(status_code=404, detail="Webhook integration not found")
 
+    delete_bindings_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+    delete_system_owned_continuous_artifacts_for_trigger(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
     # Unbind from any agents (defensive — DB onDelete=SET NULL will also do this)
     db.query(Agent).filter(
         Agent.webhook_integration_id == integration_id,
         Agent.tenant_id == integration.tenant_id,
     ).update({"webhook_integration_id": None})
 
+    delete_recap_config_for_trigger_instance(
+        db,
+        tenant_id=integration.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
     db.delete(integration)
     db.commit()
     logger.info(f"Deleted webhook integration {integration_id}")
     return {"status": "deleted", "id": integration_id}
+
+
+# ---------------------------------------------------------------------------
+# v0.7.x Wave 2-C — per-trigger Memory Recap CRUD + test-recap.
+# ---------------------------------------------------------------------------
+
+
+def _require_webhook_in_tenant(
+    db: Session, *, integration_id: int, context: TenantContext
+) -> WebhookIntegration:
+    integration = db.query(WebhookIntegration).filter_by(id=integration_id).first()
+    if integration is None or not context.can_access_resource(integration.tenant_id):
+        raise HTTPException(status_code=404, detail="Webhook integration not found")
+    return integration
+
+
+@router.get("/{integration_id}/recap-config", response_model=TriggerRecapConfigRead)
+async def get_webhook_recap_config(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return get_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+
+
+@router.put("/{integration_id}/recap-config", response_model=TriggerRecapConfigRead)
+async def put_webhook_recap_config(
+    integration_id: int,
+    payload: TriggerRecapConfigWrite,
+    _: None = Depends(require_permission("integrations.webhook.write")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapConfigRead:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return put_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+        payload=payload,
+    )
+
+
+@router.delete("/{integration_id}/recap-config", status_code=204)
+async def delete_webhook_recap_config(
+    integration_id: int,
+    _: None = Depends(require_permission("integrations.webhook.write")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> None:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    delete_recap_config_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+    )
+    return None
+
+
+@router.post("/{integration_id}/test-recap", response_model=TriggerRecapTestResponse)
+async def post_webhook_test_recap(
+    integration_id: int,
+    payload: TriggerRecapTestRequest,
+    _: None = Depends(require_permission("integrations.webhook.read")),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TriggerRecapTestResponse:
+    _require_webhook_in_tenant(db, integration_id=integration_id, context=context)
+    return run_test_recap_for(
+        db,
+        tenant_id=context.tenant_id,
+        trigger_kind="webhook",
+        trigger_instance_id=integration_id,
+        body=payload,
+    )

@@ -17,6 +17,7 @@ import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import { useAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch } from '@/lib/client'
 import Modal from '@/components/ui/Modal'
+import TabStrip from '@/components/ui/TabStrip'
 import Link from 'next/link'
 
 const SandboxedToolsSetupWizard = dynamic(
@@ -668,8 +669,14 @@ export default function CustomToolsPage() {
               </div>
               <div>
                 <h2 className="text-xl font-display font-semibold text-white">Toolbox Container</h2>
+                {/* Pre-fix the subtitle rendered the raw Docker container
+                    name (e.g. tsushin-toolbox-tenant_<encoded-tenant-id>),
+                    leaking the tenant ID in plain UI text. The exact
+                    container name still ships in API responses for debug
+                    use; the visible UI now says either "Ready" or the
+                    plain "Not created" copy without the internal id. */}
                 <p className="text-sm text-tsushin-slate">
-                  {containerStatus?.container_name || 'Not created'}
+                  {containerStatus?.container_name ? 'Sandboxed runtime ready' : 'Not created'}
                 </p>
               </div>
             </div>
@@ -767,30 +774,31 @@ export default function CustomToolsPage() {
 
         {/* Sub-Tabs */}
         <div className="glass-card rounded-xl overflow-hidden">
-          <div className="border-b border-tsushin-border/50">
-            <nav className="flex">
-              {[
-                { key: 'tools', label: 'Tools', Icon: WrenchIcon },
-                { key: 'packages', label: 'Packages', Icon: PackageIcon },
-                { key: 'executions', label: 'Pre-installed', Icon: LightningIcon },
-              ].map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as SubTabType)}
-                  className={`relative px-6 py-4 font-medium text-sm transition-all duration-200 flex items-center gap-2 ${activeTab === tab.key
-                      ? 'text-white'
-                      : 'text-tsushin-slate hover:text-white'
-                    }`}
-                >
-                  <tab.Icon size={16} />
-                  <span>{tab.label}</span>
-                  {activeTab === tab.key && (
-                    <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-400" />
-                  )}
-                </button>
-              ))}
-            </nav>
-          </div>
+          <TabStrip
+            className="border-b border-tsushin-border/50"
+            ariaLabel="Sandboxed tools sections"
+          >
+            {[
+              { key: 'tools', label: 'Tools', Icon: WrenchIcon },
+              { key: 'packages', label: 'Packages', Icon: PackageIcon },
+              { key: 'executions', label: 'Pre-installed', Icon: LightningIcon },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as SubTabType)}
+                className={`relative px-6 py-4 font-medium text-sm transition-all duration-200 flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${activeTab === tab.key
+                    ? 'text-white'
+                    : 'text-tsushin-slate hover:text-white'
+                  }`}
+              >
+                <tab.Icon size={16} />
+                <span>{tab.label}</span>
+                {activeTab === tab.key && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-400" />
+                )}
+              </button>
+            ))}
+          </TabStrip>
 
           <div className="p-6">
             {/* Tools Tab */}

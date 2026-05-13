@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from db import get_db
 from models_rbac import User
-from auth_dependencies import get_current_user_required
+from auth_dependencies import get_current_user_required, require_permission
 from services.slash_command_service import SlashCommandService
 
 router = APIRouter(tags=["Commands"])
@@ -133,12 +133,13 @@ async def detect_command(
 async def execute_command(
     data: CommandExecuteRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user_required)
+    current_user: User = Depends(require_permission("agents.execute"))
 ):
     """
     Phase 16: Execute a slash command.
 
     Handles built-in commands and routes to appropriate handlers.
+    BUG-672: gated on `agents.execute` so read-only roles cannot execute commands.
     """
     from models import Agent
     import logging
@@ -232,11 +233,23 @@ async def execute_command(
         except Exception as e:
             logger.warning(f"Failed to store slash command in memory: {e}")
 
+    # BUG-714: surface every non-status/action/message field on `data` so the
+    # frontend can read shell `command_id`, `exit_code`, etc. without us having
+    # to wrap each handler's return shape. If the handler already populated a
+    # `data` dict, prefer it; otherwise materialize the rest of the result.
+    extra_data = result.get("data")
+    if extra_data is None:
+        extra_data = {
+            k: v
+            for k, v in result.items()
+            if k not in ("status", "action", "message", "data")
+        } or None
+
     response = CommandExecuteResponse(
         status=result.get("status", "unknown"),
         action=result.get("action"),
         message=result.get("message"),
-        data=result.get("data")
+        data=extra_data,
     )
 
     # Debug logging for project commands

@@ -430,7 +430,7 @@ export default function FilteringSettingsPage() {
               </p>
               <p>
                 <strong className="text-white">Agent-specific filters:</strong> Individual agents can override these defaults with their own <code className="text-teal-400">trigger_group_filters</code> in the{' '}
-                <Link href="/agents" className="text-teal-400 hover:underline">Agent Studio</Link>.
+                <Link href="/agents" className="text-teal-400 hover:underline">Studio → Agents</Link>.
               </p>
             </div>
           </div>

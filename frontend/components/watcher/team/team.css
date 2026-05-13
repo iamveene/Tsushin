@@ -1,0 +1,119 @@
+.team-canvas-shell {
+  min-height: 560px;
+}
+
+.team-canvas {
+  min-height: 520px;
+  background: rgba(13, 17, 23, 0.55);
+}
+
+.team-canvas.drag-over {
+  outline: 2px dashed rgba(60, 90, 254, 0.65);
+  outline-offset: -2px;
+  background: rgba(60, 90, 254, 0.05);
+}
+
+.team-canvas .react-flow__controls {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3) !important;
+}
+
+.team-canvas .react-flow__controls-button {
+  background: rgba(22, 27, 34, 0.92) !important;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5) !important;
+  fill: #8b929e !important;
+}
+
+.team-canvas .react-flow__controls-button:hover {
+  background: rgba(28, 33, 40, 1) !important;
+  fill: white !important;
+}
+
+.team-canvas .react-flow__node {
+  cursor: grab;
+  transition: transform 0.18s ease-out;
+}
+
+.team-canvas .react-flow__node.dragging {
+  cursor: grabbing;
+  transition: none !important;
+  z-index: 1000 !important;
+}
+
+.team-node {
+  width: 260px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+
+.team-member-node {
+  border-left: 3px solid rgba(60, 90, 254, 0.65) !important;
+}
+
+.team-coordinator-node {
+  width: 280px;
+  background: rgba(22, 27, 34, 0.98);
+}
+
+.team-handle {
+  width: 10px !important;
+  height: 10px !important;
+  border: 2px solid #161b22 !important;
+  background: #3c5afe !important;
+}
+
+.team-handle-coordinator {
+  background: #14b8a6 !important;
+}
+
+.team-addable-agent {
+  cursor: grab;
+  user-select: none;
+}
+
+.team-addable-agent:active {
+  cursor: grabbing;
+}
+
+.team-addable-agent.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.team-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(48, 54, 61, 0.75);
+  background: rgba(22, 27, 34, 0.75);
+  color: #8b929e;
+  transition: all 0.15s ease;
+}
+
+.team-icon-btn:hover:not(:disabled) {
+  border-color: #8b929e;
+  color: white;
+}
+
+.team-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.team-toggle-btn {
+  border-radius: 0.375rem;
+  border: 1px solid rgba(48, 54, 61, 0.75);
+  background: rgba(22, 27, 34, 0.75);
+  color: #8b929e;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.5rem 0.625rem;
+  transition: all 0.15s ease;
+}
+
+.team-toggle-btn:hover {
+  border-color: #8b929e;
+  color: white;
+}

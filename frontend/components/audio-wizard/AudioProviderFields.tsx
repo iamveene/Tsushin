@@ -19,12 +19,15 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import ToggleSwitch from '@/components/ui/ToggleSwitch'
 import { api } from '@/lib/client'
-import type { TTSInstance, TTSProviderInfo, TTSVoice } from '@/lib/client'
+import type { ASRInstance, TTSInstance, TTSModelInfo, TTSProviderInfo, TTSVoice } from '@/lib/client'
 import {
   KOKORO_VOICES,
   OPENAI_VOICES,
   GEMINI_VOICES,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_DEFAULT_MODEL,
   LANGUAGES,
   MEM_LIMITS,
   type AudioProvider,
@@ -158,6 +161,9 @@ export interface AudioVoiceFieldsValue {
   format: string
   memLimit: string
   setAsDefaultTTS: boolean
+  /** Provider-specific model id. Today only Gemini exposes a model picker; for
+   *  other providers this is `undefined` and the dropdown stays hidden. */
+  model?: string
 }
 
 export interface AudioVoiceFieldsProps {
@@ -192,6 +198,7 @@ export function AudioVoiceFields({
   hideDefaultTTSOption,
 }: AudioVoiceFieldsProps) {
   const [liveVoices, setLiveVoices] = useState<Record<string, TTSVoice[]>>({})
+  const [liveModels, setLiveModels] = useState<Record<string, TTSModelInfo[]>>({})
   const [keyStatusByProvider, setKeyStatusByProvider] = useState<Record<string, boolean>>({})
 
   // One-shot load of the provider list so we know per-tenant credential status
@@ -222,6 +229,56 @@ export function AudioVoiceFields({
       .catch(() => { /* fall through to static fallback */ })
     return () => { cancelled = true }
   }, [value.provider, wantsTTS, liveVoices])
+
+  // Fetch the provider's model catalog (empty for providers without
+  // SUPPORTED_MODELS). When the call fails for Gemini, fall back to the
+  // static GEMINI_TTS_MODELS list so the picker still works offline.
+  useEffect(() => {
+    if (!wantsTTS) return
+    if (liveModels[value.provider]) return
+    let cancelled = false
+    api.getTTSProviderModels(value.provider)
+      .then(models => {
+        if (cancelled) return
+        setLiveModels(prev => ({ ...prev, [value.provider]: models }))
+      })
+      .catch(() => {
+        if (cancelled) return
+        if (value.provider === 'gemini') {
+          const fallback: TTSModelInfo[] = GEMINI_TTS_MODELS.map(m => ({
+            model_id: m.id,
+            label: m.label,
+            is_default: m.id === GEMINI_TTS_DEFAULT_MODEL,
+          }))
+          setLiveModels(prev => ({ ...prev, [value.provider]: fallback }))
+        } else {
+          setLiveModels(prev => ({ ...prev, [value.provider]: [] }))
+        }
+      })
+    return () => { cancelled = true }
+  }, [value.provider, wantsTTS, liveModels])
+
+  // When the provider exposes models and no model is selected yet, default to
+  // the provider's `is_default` entry (or the first one). Clears `model` when
+  // the provider doesn't expose any.
+  useEffect(() => {
+    if (!wantsTTS) return
+    const models = liveModels[value.provider]
+    if (!models) return
+    if (models.length === 0) {
+      if (value.model !== undefined) onChange({ model: undefined })
+      return
+    }
+    const ids = models.map(m => m.model_id)
+    if (!value.model || !ids.includes(value.model)) {
+      const def = models.find(m => m.is_default)?.model_id || models[0].model_id
+      onChange({ model: def })
+    }
+    // We intentionally leave `value` and `onChange` out of the deps to avoid
+    // re-running on every parent re-render — only when the model catalog or
+    // provider changes do we want to reconcile.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.provider, wantsTTS, liveModels])
 
   const availableVoices = useMemo(() => {
     const live = liveVoices[value.provider]
@@ -256,6 +313,21 @@ export function AudioVoiceFields({
 
       {wantsTTS && (
         <>
+          {(liveModels[value.provider] || []).length > 0 && (
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Model</label>
+              <select
+                value={value.model || ''}
+                onChange={(e) => onChange({ model: e.target.value })}
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+              >
+                {(liveModels[value.provider] || []).map(m => (
+                  <option key={m.model_id} value={m.model_id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs text-gray-400 mb-1">Voice</label>
             <select
@@ -353,12 +425,267 @@ export function AudioVoiceFields({
 
       {!wantsTTS && (
         <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
-          Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in Hub → AI Providers.
+          Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in{' '}
+          <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+            Hub → AI Providers
+          </a>.
           {!hasOpenAIKey && (
             <div className="mt-2 text-amber-200">⚠ No OpenAI API key detected.</div>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+export type ASRUsageMode = 'openai' | 'instance'
+
+export interface AudioTranscriptFieldsValue {
+  responseMode?: 'conversational' | 'transcript_only'
+  language: string
+  model: string
+  asrMode: ASRUsageMode
+  asrInstanceId: number | null
+  vadFilter?: boolean | null
+  rememberTranscript?: boolean
+}
+
+export interface AudioTranscriptFieldsProps {
+  value: AudioTranscriptFieldsValue
+  onChange: (patch: Partial<AudioTranscriptFieldsValue>) => void
+  showResponseMode?: boolean
+}
+
+export function AudioTranscriptFields({
+  value,
+  onChange,
+  showResponseMode = true,
+}: AudioTranscriptFieldsProps) {
+  const [instances, setInstances] = useState<ASRInstance[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    api.getASRInstances().catch(() => [] as ASRInstance[]).then(loadedInstances => {
+      if (cancelled) return
+      setInstances(loadedInstances)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const selectedInstance = useMemo(
+    () => instances.find(inst => inst.id === value.asrInstanceId) || null,
+    [instances, value.asrInstanceId],
+  )
+
+  const chooseMode = (mode: ASRUsageMode) => {
+    if (mode === 'instance') {
+      const nextId = value.asrInstanceId ?? instances[0]?.id ?? null
+      onChange({ asrMode: mode, asrInstanceId: nextId })
+      return
+    }
+    onChange({ asrMode: mode, asrInstanceId: null, vadFilter: null })
+  }
+
+  return (
+    <div className="space-y-4">
+      {showResponseMode && (
+        <div>
+          <label className="block text-sm font-medium mb-3">Response mode</label>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'conversational' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                (value.responseMode || 'conversational') === 'conversational'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Conversational</div>
+              <div className="text-xs text-gray-400 mt-1">Transcribe audio, then let the agent respond normally.</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ responseMode: 'transcript_only' })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                value.responseMode === 'transcript_only'
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+              }`}
+            >
+              <div className="text-white font-medium text-sm">Transcript only</div>
+              <div className="text-xs text-gray-400 mt-1">Return the raw transcript without generating an AI reply.</div>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/5">
+        <div>
+          <div className="text-sm font-medium text-white">Remember audio transcripts</div>
+          <div className="text-xs text-gray-400 mt-1">Store each transcript in the conversation so later replies can use it as context.</div>
+        </div>
+        <ToggleSwitch
+          checked={value.rememberTranscript !== false}
+          onChange={(checked) => onChange({ rememberTranscript: checked })}
+          size="md"
+          title={value.rememberTranscript !== false ? 'Disable transcript memory' : 'Enable transcript memory'}
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-3">ASR backend</label>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => chooseMode('openai')}
+            className={`w-full text-left p-4 rounded-xl border transition-colors ${
+              value.asrMode === 'openai'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">OpenAI Whisper (cloud)</div>
+            <div className="text-xs text-gray-400 mt-1">Cloud transcription path. Requires OpenAI credentials in Hub.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => chooseMode('instance')}
+            disabled={instances.length === 0}
+            className={`w-full text-left p-4 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              value.asrMode === 'instance'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">Pin a local instance</div>
+            <div className="text-xs text-gray-400 mt-1">
+              {instances.length > 0
+                ? 'Pin this agent to one tenant-owned ASR container (Speaches or openai_whisper).'
+                : 'No local ASR instances available yet.'}
+            </div>
+          </button>
+          {instances.length === 0 && (
+            // Separate sibling: the disabled button above blocks click events
+            // on its children (HTML disabled-button semantics), so this CTA
+            // lives outside the button. Dispatching a custom DOM event keeps
+            // the wizard orchestration in hub/page.tsx — no context coupling.
+            <div className="mt-2 px-4 py-3 rounded-xl border border-teal-500/20 bg-teal-500/5 text-xs text-gray-300">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tsushin:open-provider-wizard', {
+                      detail: { modality: 'asr', hosting: 'local' }
+                    }))
+                  }
+                }}
+                className="text-teal-400 hover:text-teal-300 underline font-medium"
+              >
+                + Create an ASR instance now
+              </button>
+              <span className="text-gray-400">
+                {' '}or go to{' '}
+                <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+                  Hub → AI Providers
+                </a>{' '}
+                and add a local Speech-to-Text provider.
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {value.asrMode === 'instance' && instances.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium mb-2">Local instance</label>
+          <select
+            value={value.asrInstanceId ?? ''}
+            onChange={(e) => {
+              const nextId = e.target.value ? Number(e.target.value) : null
+              const nextInstance = instances.find(inst => inst.id === nextId) || null
+              onChange({
+                asrInstanceId: nextId,
+                vadFilter: nextInstance?.vendor === 'speaches' ? value.vadFilter ?? null : null,
+              })
+            }}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            {instances.map(inst => (
+              <option key={inst.id} value={inst.id}>
+                {inst.instance_name} — {inst.vendor || 'unknown'} ({inst.container_status || 'none'})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {value.asrMode === 'instance' && selectedInstance?.vendor === 'speaches' && (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/5">
+          <div>
+            <div className="text-sm font-medium text-white">Speaches voice activity filter</div>
+            <div className="text-xs text-gray-400 mt-1">Disable when Speaches returns empty transcripts for real voice notes with music or heavy background audio.</div>
+          </div>
+          <ToggleSwitch
+            checked={value.vadFilter !== false}
+            onChange={(checked) => onChange({ vadFilter: checked })}
+            size="md"
+            title={value.vadFilter !== false ? 'Disable Speaches VAD' : 'Enable Speaches VAD'}
+          />
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-sm font-medium mb-2">Language detection</label>
+          <select
+            value={value.language || 'auto'}
+            onChange={(e) => onChange({ language: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="pt">Portuguese</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="zh">Chinese</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-2">OpenAI model</label>
+          <select
+            value={value.model || 'whisper-1'}
+            onChange={(e) => onChange({ model: e.target.value })}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="whisper-1">whisper-1</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
+        {value.asrMode === 'openai' && (
+          <div>
+            Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under{' '}
+            <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+              Hub → AI Providers
+            </a>{' '}
+            → OpenAI.
+          </div>
+        )}
+        {value.asrMode === 'instance' && (
+          <div>
+            {selectedInstance
+              ? `Pins this agent to ${selectedInstance.instance_name} (${selectedInstance.vendor}). Voice notes never leave the tenant — they're transcribed locally inside the auto-provisioned container.`
+              : 'Select a local ASR instance to pin this agent.'}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

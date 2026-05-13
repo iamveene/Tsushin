@@ -59,6 +59,9 @@ from api.routes_shared_memory import router as shared_memory_router, set_engine 
 from api.routes_memory import router as memory_router, set_engine as set_memory_engine
 from api.routes_skills import router as skills_router, set_engine as set_skills_engine
 from api.routes_channels import router as channels_router
+from api.routes_triggers import router as triggers_router
+from api.routes_channel_event_rules import router as channel_event_rules_router
+from api.routes_continuous import router as continuous_router
 from api.routes_sandboxed_tools import router as sandboxed_tools_router, set_engine as set_sandboxed_tools_engine
 from api.routes_agents import router as agents_router, set_engine as set_agents_engine
 # Phase 5.1 Persona System - Import added last to avoid conflicts
@@ -70,6 +73,9 @@ from api.routes_scheduler import router as scheduler_router, set_engine as set_s
 from scheduler.worker import start_scheduler_worker, stop_scheduler_worker
 # Phase 6.6 Multi-Step Flows
 from api.routes_flows import router as flows_router, set_engine as set_flows_engine
+from api.routes_flow_trigger_bindings import router as flow_trigger_bindings_router  # v0.7.0 Wave 4
+from api.routes_case_memory import router as case_memory_router  # v0.7.0 Trigger Case Memory MVP
+from api.routes_feature_flags import router as feature_flags_router  # v0.7.x — read-only env-flag introspection
 # Phase 6.11 Scheduled Flow Executor
 # Phase 6.11.2 WebSocket Manager
 from websocket_manager import manager as ws_manager
@@ -102,8 +108,17 @@ from api.routes_agents_protected import router as agents_protected_router
 from api.routes_agent_builder import router as agent_builder_router
 # Phase 8: MCP Instance Management
 from api.routes_mcp_instances import router as mcp_instances_router
-from api.routes_webhook_inbound import router as webhook_inbound_router  # v0.6.0: Webhook-as-Channel
-from api.routes_webhook_instances import router as webhook_instances_router  # v0.6.0: Webhook-as-Channel
+from api.routes_webhook_inbound import router as webhook_inbound_router
+from api.routes_webhook_instances import router as webhook_instances_router
+from api.routes_email_triggers import router as email_triggers_router
+from api.routes_jira_integrations import router as jira_integrations_router
+from api.routes_jira_triggers import router as jira_triggers_router
+from api.routes_github_triggers import router as github_triggers_router
+from api.routes_wizards import router as wizards_router
+from api.routes_github_inbound import router as github_inbound_router
+from api.routes_github_integrations import router as github_integrations_router
+from api.routes_password_vault_integrations import router as password_vault_integrations_router
+from api.routes_browser_session_profiles import router as browser_session_profiles_router
 # Playground Feature
 from api.routes_playground import router as playground_router
 # Phase 14.4: Projects
@@ -114,7 +129,11 @@ from api.routes_user_contact_mapping import router as user_contact_mapping_route
 # Phase 7.9: RBAC & Multi-tenancy
 from api.routes_tenants import router as tenants_router
 from api.routes_tenant_settings import router as tenant_settings_router
+from api.routes_default_agents import router as default_agents_router
 from api.routes_team import router as team_router
+from api.routes_teams import router as agent_teams_router
+from api.routes_team_triggers import router as agent_team_triggers_router
+from api.routes_watcher_team_runs import router as watcher_team_runs_router
 # Plans Management
 from api.routes_plans import router as plans_router
 # SSO Configuration
@@ -152,10 +171,14 @@ from api.routes_audit import router as audit_router
 from api.routes_syslog import router as syslog_config_router
 # Phase 21: Provider Instance Management
 from api.routes_provider_instances import router as provider_instances_router, set_engine as set_provider_instances_engine
+# v0.7.0: Shared embedding provider options/test API
+from api.routes_embedding_providers import router as embedding_providers_router, set_engine as set_embedding_providers_engine
 # v0.6.0: Vector Store Instance Management
 from api.routes_vector_stores import router as vector_stores_router, set_engine as set_vector_stores_engine
 # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
 from api.routes_tts_instances import router as tts_instances_router, set_engine as set_tts_instances_engine
+# v0.7.0 Track D: ASR Instance Management (per-tenant Whisper/Speaches auto-provisioning)
+from api.routes_asr_instances import router as asr_instances_router, set_engine as set_asr_instances_engine
 # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
 from api.routes_searxng_instances import router as searxng_instances_router, set_engine as set_searxng_instances_engine
 # Hub Providers catalog (AddIntegrationWizard — live registry)
@@ -235,10 +258,13 @@ async def lifespan(app: FastAPI):
 
     # Phase 21: Provider Instance Management
     set_provider_instances_engine(engine)
+    set_embedding_providers_engine(engine)
     # v0.6.0: Vector Store Instance Management
     set_vector_stores_engine(engine)
     # v0.6.0-patch.5: TTS Instance Management (per-tenant Kokoro auto-provisioning)
     set_tts_instances_engine(engine)
+    # v0.7.0 Track D: ASR Instance Management (per-tenant Whisper/Speaches auto-provisioning)
+    set_asr_instances_engine(engine)
     # v0.6.0-patch.6: SearXNG Instance Management (per-tenant SearXNG auto-provisioning)
     set_searxng_instances_engine(engine)
 
@@ -262,6 +288,32 @@ async def lifespan(app: FastAPI):
         ollama_startup_reconcile()  # uses its own db session
     except Exception as e:
         logger.warning(f"Ollama startup reconcile failed: {e}")
+
+    # v0.7.0: Bootstrap orphan vendor agents.
+    # Materialise an active provider_instance for every (tenant, vendor) pair
+    # that has agents but zero active instances, and relink agents whose
+    # provider_instance_id was nulled by a stale soft-delete. After this runs,
+    # the Hub catalogue and the runtime AIClient see the same data — closing
+    # the "ghost vendor" inconsistency where an agent worked at runtime via
+    # the legacy hardcoded Ollama URL but the UI showed nothing.
+    try:
+        from services.provider_instance_service import ProviderInstanceService
+        from sqlalchemy.orm import sessionmaker
+        BootSession = sessionmaker(bind=engine)
+        boot_db = BootSession()
+        try:
+            stats = ProviderInstanceService.bootstrap_orphan_vendor_agents(boot_db)
+            if stats["instances_created"] or stats["agents_relinked"]:
+                logger.info(
+                    "bootstrap_orphan_vendor_agents: tenants=%s instances_created=%s agents_relinked=%s",
+                    stats["tenants_processed"],
+                    stats["instances_created"],
+                    stats["agents_relinked"],
+                )
+        finally:
+            boot_db.close()
+    except Exception as e:
+        logger.warning(f"bootstrap_orphan_vendor_agents failed: {e}")
 
     async def _prewarm_embedding_models() -> None:
         """Warm the default embedder off the request path."""
@@ -613,13 +665,23 @@ async def lifespan(app: FastAPI):
                         if "telegram" in enabled_channels:
                             matching_agents.append(agent)
 
-                    # Fallback: if no agents explicitly linked, try default agent for this tenant
+                    # Fallback: resolve the tenant's Telegram default agent.
                     if not matching_agents and bot_instance:
-                        default_agent = request_session.query(Agent).filter(
-                            Agent.tenant_id == bot_instance.tenant_id,
-                            Agent.is_default == True,
-                            Agent.is_active == True
-                        ).first()
+                        from services.default_agent_service import get_default_agent
+
+                        default_agent_id = get_default_agent(
+                            db=request_session,
+                            tenant_id=bot_instance.tenant_id,
+                            channel_type="telegram",
+                            instance_id=telegram_instance_id,
+                        )
+                        default_agent = (
+                            request_session.query(Agent)
+                            .filter(Agent.id == default_agent_id)
+                            .first()
+                            if default_agent_id
+                            else None
+                        )
 
                         if default_agent:
                             default_channels = default_agent.enabled_channels if isinstance(default_agent.enabled_channels, list) else (
@@ -629,12 +691,6 @@ async def lifespan(app: FastAPI):
                                 matching_agents.append(default_agent)
                                 logging.info(
                                     f"Using default agent {default_agent.id} as fallback for Telegram instance {telegram_instance_id}"
-                                )
-                                # Auto-fix: link this instance to the default agent for future messages
-                                default_agent.telegram_integration_id = telegram_instance_id
-                                request_session.commit()
-                                logging.info(
-                                    f"Auto-linked Telegram instance {telegram_instance_id} to default agent {default_agent.id}"
                                 )
 
                     if not matching_agents:
@@ -887,6 +943,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.warning(f"Kokoro TTS reconcile failed at startup: {e}")
 
+    # v0.7.0 Track D: Reconcile ASR instances stuck in 'creating'
+    try:
+        from services.whisper_container_manager import startup_reconcile as whisper_startup_reconcile
+        ReconcileSession = sessionmaker(bind=engine)
+        reconcile_db = ReconcileSession()
+        try:
+            whisper_startup_reconcile(reconcile_db)
+        finally:
+            reconcile_db.close()
+        logging.info("Whisper ASR instances reconciled at startup")
+    except Exception as e_whisper_reconcile:
+        logging.warning(f"Whisper ASR startup reconcile failed (non-fatal): {e_whisper_reconcile}")
+
     # v0.6.0-patch.6: Reconcile SearXNG instances stuck in 'creating'
     try:
         from services.searxng_container_manager import startup_reconcile as searxng_startup_reconcile
@@ -1108,10 +1177,41 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # SEC-005: credentials=True is required for httpOnly cookie auth
 _cors_origins_str = os.getenv("TSN_CORS_ORIGINS", "*")
 _cors_origin_regex = None
+
+
+def _is_production_shaped() -> bool:
+    """Heuristic: are we running in a production-shaped deployment?
+
+    Used to refuse the dangerous wildcard-origin + credentials combo when the
+    operator clearly meant prod (TLS / HSTS / explicit env marker).
+    """
+    if (os.getenv("TSN_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower() in (
+        "production",
+        "prod",
+    ):
+        return True
+    if (os.getenv("TSN_ENABLE_HSTS") or "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if (os.getenv("SSL_MODE") or "").strip().lower() not in ("", "disabled", "off"):
+        return True
+    return False
+
+
 if _cors_origins_str.strip() == "*":
     # SEC-005 / CORS FIX: Use origin reflection instead of literal "*" wildcard.
     # Literal "*" with credentials=True is rejected by browsers.
     # allow_origin_regex=".*" reflects the requesting origin with credentials support.
+    if _is_production_shaped():
+        # Refuse to boot — wildcard + credentials in prod is a CSRF-grade bypass.
+        raise RuntimeError(
+            "TSN_CORS_ORIGINS='*' is not allowed in production-shaped deployments. "
+            "Set TSN_CORS_ORIGINS to an explicit comma-separated list of origins "
+            "(e.g. https://app.example.com)."
+        )
+    logger.warning(
+        "TSN_CORS_ORIGINS='*' is reflecting all origins with credentials=True. "
+        "DO NOT USE IN PRODUCTION — set an explicit allowlist."
+    )
     _cors_origins = []
     _cors_origin_regex = ".*"
     _cors_allow_credentials = True
@@ -1283,6 +1383,9 @@ app.include_router(shared_memory_router, prefix="/api")
 app.include_router(memory_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
 app.include_router(channels_router)  # Wizard channel catalog (/api/channels)
+app.include_router(triggers_router)  # Trigger catalog (/api/triggers)
+app.include_router(channel_event_rules_router)  # Channel routing rules (/api/channels/{type}/{id}/routing-rules)
+app.include_router(continuous_router)  # Continuous-agent read APIs (/api/continuous-*)
 app.include_router(sandboxed_tools_router, prefix="/api", tags=["Sandboxed Tools"])
 app.include_router(agents_router, prefix="/api")
 app.include_router(personas_router)  # Phase 5.1 - Persona API
@@ -1295,6 +1398,16 @@ app.include_router(shell_ws_router)  # Shell Skill WebSocket (Phase 18.4: WebSoc
 app.include_router(watcher_activity_ws_router)  # Watcher Activity WebSocket (Phase 8: Graph View)
 app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, Calendar)
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
+app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
+
+# v0.7.x Trigger Case Memory — case-memory routes are always mounted.
+# Per-tenant opt-in is via Agent.vector_store_instance_id binding +
+# TriggerRecapConfig.enabled flag — there is no global env kill-switch.
+app.include_router(case_memory_router)
+# v0.7.x — Read-only /api/feature-flags surface so the frontend can
+# gate UI affordances (e.g. case-memory wizard) on env-driven flags
+# without baking values into the build.
+app.include_router(feature_flags_router)
 app.include_router(cache_router)  # Phase 6.11.3 - Cache Management API
 app.include_router(analytics_router)  # Phase 7.2 - Token Analytics
 app.include_router(auth_router)  # Phase 7.6.3 - Authentication
@@ -1307,7 +1420,11 @@ app.include_router(commands_router)  # Phase 16: Slash Commands
 app.include_router(user_contact_mapping_router)  # Playground - User Contact Mapping
 app.include_router(tenants_router)  # Phase 7.9 - Tenant Management
 app.include_router(tenant_settings_router)  # v0.6.0 - Tenant self-service settings (public_base_url)
+app.include_router(default_agents_router)
 app.include_router(team_router)  # Phase 7.9 - Team Management
+app.include_router(agent_teams_router)  # v0.7.0 Agent Teams CRUD API
+app.include_router(agent_team_triggers_router)  # Reverse-lookup of team triggers by trigger instance
+app.include_router(watcher_team_runs_router)  # v0.7.0 Agent Teams Watcher read API
 app.include_router(plans_router)  # Plans Management
 app.include_router(sso_config_router)  # SSO Configuration
 app.include_router(global_users_router)  # Global User Management
@@ -1318,7 +1435,16 @@ app.include_router(skill_integrations_router, prefix="/api")  # Skill Integratio
 app.include_router(model_pricing_router)  # Model Pricing (Cost Estimation Settings)
 app.include_router(telegram_instances_router)  # Phase 10.1.1: Telegram Integration
 app.include_router(webhook_inbound_router)  # v0.6.0: Webhook-as-Channel (public, HMAC-gated)
-app.include_router(webhook_instances_router)  # v0.6.0: Webhook-as-Channel (tenant-scoped CRUD)
+app.include_router(webhook_instances_router)  # Webhook trigger CRUD (/api/triggers/webhook/*)
+app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/email/*)
+app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
+app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
+app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
+app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
+app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
+app.include_router(password_vault_integrations_router)  # Password Vault providers (/api/hub/password-vault-integrations/*)
+app.include_router(browser_session_profiles_router)  # Browser session profiles (/api/hub/browser-session-profiles/*)
 # v0.6.0 Item 38: Channel Health Monitor
 try:
     from api.routes_channel_health import router as channel_health_router
@@ -1331,8 +1457,10 @@ app.include_router(sentinel_router, prefix="/api")  # Phase 20: Sentinel Securit
 app.include_router(sentinel_exceptions_router, prefix="/api")  # Phase 20 Enhancement: Sentinel Exceptions
 app.include_router(sentinel_profiles_router, prefix="/api")  # v1.6.0: Sentinel Security Profiles
 app.include_router(provider_instances_router, prefix="/api", tags=["Provider Instances"])  # Phase 21: Provider Instance Management
+app.include_router(embedding_providers_router, prefix="/api", tags=["Embedding Providers"])  # v0.7.0: KB/case memory embedding options
 app.include_router(vector_stores_router, prefix="/api", tags=["Vector Stores"])  # v0.6.0: Vector Store Instance Management
 app.include_router(tts_instances_router, prefix="/api", tags=["TTS Instances"])  # v0.6.0-patch.5: Per-tenant Kokoro TTS auto-provisioning
+app.include_router(asr_instances_router, prefix="/api", tags=["ASR Instances"])  # v0.7.0 Track D: Per-tenant Whisper/Speaches ASR auto-provisioning
 app.include_router(searxng_instances_router, prefix="/api", tags=["SearXNG Instances"])  # v0.6.0-patch.6: Per-tenant SearXNG auto-provisioning
 app.include_router(hub_providers_router)  # AddIntegrationWizard live catalogs (search + travel)
 app.include_router(custom_skills_router, prefix="/api", tags=["Custom Skills"])  # Phase 22: Custom Skills Foundation
@@ -1467,6 +1595,34 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
         user_id = int(user_id) if isinstance(user_id, str) else user_id
+
+        # BUG-671: reject disabled or deleted users before attaching to the
+        # realtime stream. Mirrors the /ws/shell/status check.
+        try:
+            from sqlalchemy.orm import sessionmaker as _sessionmaker
+            from models_rbac import User as _User
+            _SessionLocal = _sessionmaker(bind=engine)
+            _db = _SessionLocal()
+            try:
+                user_row = _db.query(_User).filter(_User.id == user_id).first()
+                if user_row is None:
+                    logger.warning(f"WebSocket /ws rejected: user {user_id} not found")
+                    await websocket.close(code=4003, reason="User not found")
+                    return
+                if (not getattr(user_row, "is_active", False)) or (getattr(user_row, "deleted_at", None) is not None):
+                    logger.warning(
+                        f"WebSocket /ws rejected: user {user_id} is_active={user_row.is_active} "
+                        f"deleted_at={getattr(user_row, 'deleted_at', None)}"
+                    )
+                    await websocket.close(code=4003, reason="Account disabled")
+                    return
+            finally:
+                _db.close()
+        except Exception as user_lookup_err:
+            logger.error(f"WebSocket /ws user lookup failed: {user_lookup_err}", exc_info=True)
+            await websocket.close(code=4003, reason="Authentication failed")
+            return
+
         logger.info(f"WebSocket /ws authenticated: user={user_id}, tenant={tenant_id}")
 
         # Register with manager (already accepted above, so skip accept in connect)
@@ -1573,6 +1729,7 @@ async def playground_websocket_endpoint(websocket: WebSocket):
 
         # Verify JWT token
         try:
+            global engine
             from auth_utils import decode_access_token
             # Decode token directly (doesn't need DB)
             payload = decode_access_token(token)
@@ -1589,6 +1746,29 @@ async def playground_websocket_endpoint(websocket: WebSocket):
                 return
             # Convert to int if string
             user_id = int(user_id) if isinstance(user_id, str) else user_id
+
+            # BUG-671: reject disabled or deleted users before registering
+            # the Playground stream.
+            from sqlalchemy.orm import sessionmaker as _sessionmaker
+            from models_rbac import User as _User
+            _SessionLocal = _sessionmaker(bind=engine)
+            _db = _SessionLocal()
+            try:
+                user_row = _db.query(_User).filter(_User.id == user_id).first()
+                if user_row is None:
+                    logger.warning(f"Playground WebSocket rejected: user {user_id} not found")
+                    await websocket.close(code=4003, reason="User not found")
+                    return
+                if (not getattr(user_row, "is_active", False)) or (getattr(user_row, "deleted_at", None) is not None):
+                    logger.warning(
+                        f"Playground WebSocket rejected: user {user_id} is_active={user_row.is_active} "
+                        f"deleted_at={getattr(user_row, 'deleted_at', None)}"
+                    )
+                    await websocket.close(code=4003, reason="Account disabled")
+                    return
+            finally:
+                _db.close()
+
             logger.info(f"WebSocket auth successful for user {user_id}")
         except Exception as auth_error:
             logger.error(f"WebSocket auth error: {auth_error}", exc_info=True)
@@ -1609,7 +1789,6 @@ async def playground_websocket_endpoint(websocket: WebSocket):
         # Initialize service - use short-lived DB sessions per Playground
         # message instead of holding one open for the full WebSocket lifetime.
         from sqlalchemy.orm import sessionmaker
-        global engine
         SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
         ws_service = PlaygroundWebSocketService(SessionLocal, user_id)
 

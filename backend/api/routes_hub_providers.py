@@ -30,9 +30,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import ApiKey, HubIntegration, SearxngInstance
+from models import ApiKey, GoogleOAuthCredentials, HubIntegration, SearxngInstance
 from models_rbac import User
 from auth_dependencies import require_permission, get_tenant_context, TenantContext
+from hub.productivity_catalog import PRODUCTIVITY_CATALOG
 from hub.providers import SearchProviderRegistry, FlightProviderRegistry
 
 
@@ -176,6 +177,101 @@ _TRAVEL_REQUIRES_API_KEY: Dict[str, bool] = {
     "amadeus": True,
     "google_flights": True,
 }
+
+
+class ProductivityServiceEntry(BaseModel):
+    """One row in the productivity-services catalog."""
+    id: str
+    name: str
+    description: Optional[str] = None
+    category: str               # "calendar" | "email" | "tasks" | …
+    vendor: str                 # "google" | "asana" | …
+    requires_oauth: bool = False
+    oauth_provider: str = ""    # drives credential-step reuse
+    integration_type: str       # HubIntegration.type
+    icon_hint: str
+    status: str = "available"
+    tenant_has_configured: bool = False
+    tenant_has_oauth_credentials: bool = False  # e.g. GoogleOAuthCredentials row
+
+
+def _productivity_tenant_has_configured(
+    integration_type: str, tenant_id: Optional[str], db: Session
+) -> bool:
+    """Has this tenant created at least one active integration row of the
+    given polymorphic type? Used to badge the productivity wizard cards.
+
+    ``integration_type`` matches ``HubIntegration.type`` (e.g. 'gmail',
+    'calendar', 'asana'); everything lives under the shared hub_integration
+    table with a polymorphic identity."""
+    q = db.query(HubIntegration).filter(
+        HubIntegration.type == integration_type,
+        HubIntegration.is_active == True,
+    )
+    if tenant_id is not None:
+        q = q.filter(HubIntegration.tenant_id == tenant_id)
+    return q.first() is not None
+
+
+def _tenant_has_google_oauth(tenant_id: Optional[str], db: Session) -> bool:
+    """True if the tenant has uploaded a Google OAuth client_id/secret pair.
+
+    The guided wizard uses this to skip the 'Upload Google credentials' step
+    when credentials already exist tenant-wide, so successive Google-backed
+    integrations (Gmail + Calendar) don't re-ask for the same secret."""
+    if tenant_id is None:
+        return False
+    return db.query(GoogleOAuthCredentials.id).filter(
+        GoogleOAuthCredentials.tenant_id == tenant_id
+    ).first() is not None
+
+
+@router.get("/productivity-services", response_model=List[ProductivityServiceEntry])
+def list_productivity_services(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("hub.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Catalog endpoint for the Hub > Productivity guided wizard.
+
+    Lists every productivity service (calendar / email / tasks / knowledge-
+    base) known to the backend. Each entry is annotated with per-tenant
+    state so the wizard can (a) render only unconfigured services in its
+    picker step, and (b) skip credential-upload steps when a Google OAuth
+    client is already on file.
+    """
+    try:
+        has_google_oauth = _tenant_has_google_oauth(ctx.tenant_id, db)
+        out: List[ProductivityServiceEntry] = []
+        for svc in PRODUCTIVITY_CATALOG:
+            out.append(
+                ProductivityServiceEntry(
+                    id=svc.id,
+                    name=svc.display_name,
+                    description=svc.description,
+                    category=svc.category,
+                    vendor=svc.vendor,
+                    requires_oauth=svc.requires_oauth,
+                    oauth_provider=svc.oauth_provider,
+                    integration_type=svc.integration_type,
+                    icon_hint=svc.icon_hint,
+                    status=svc.status,
+                    tenant_has_configured=_productivity_tenant_has_configured(
+                        svc.integration_type, ctx.tenant_id, db
+                    ),
+                    tenant_has_oauth_credentials=(
+                        has_google_oauth if svc.oauth_provider == "google" else False
+                    ),
+                )
+            )
+        return out
+    except Exception as e:
+        logger.exception(f"Failed to list productivity services: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list productivity services",
+        )
 
 
 @router.get("/travel-providers", response_model=List[ProviderCatalogEntry])

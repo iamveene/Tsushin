@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useToast } from '@/contexts/ToastContext'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 import {
   api,
   Agent,
@@ -30,12 +31,16 @@ export default function A2APermissionsManager() {
   const [permissionsLoading, setPermissionsLoading] = useState(false)
 
   const [showAddModal, setShowAddModal] = useState(false)
+  const addModalBackdropDismiss = useBackdropDismiss(() => setShowAddModal(false))
   const [newPermission, setNewPermission] = useState({
     source_agent_id: 0,
     target_agent_id: 0,
     max_depth: 3,
     rate_limit_rpm: 30,
-    allow_target_skills: false,
+    // Default ON in the UI: a tenant admin clicking "Add Permission" almost always
+    // wants the target to actually do its job (read mailbox, run a tool) when asked.
+    // The DB-level default stays false (defense in depth — see models.py:4158).
+    allow_target_skills: true,
   })
   const [savingPermission, setSavingPermission] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -68,6 +73,12 @@ export default function A2APermissionsManager() {
     setLoading(false)
   }, [loadAgents, loadPermissions])
 
+  const agentExists = useCallback((id: number) => agents.some(agent => agent.id === id), [agents])
+  const agentRuleLabel = useCallback((name: string | null | undefined, id: number) => {
+    if (name) return name
+    return agentExists(id) ? `Agent #${id}` : '[deleted agent]'
+  }, [agentExists])
+
   useEffect(() => {
     loadAll()
   }, [loadAll])
@@ -88,7 +99,7 @@ export default function A2APermissionsManager() {
       await api.createAgentCommPermission(newPermission)
       toast.success('Permission created successfully')
       setShowAddModal(false)
-      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 30, allow_target_skills: false })
+      setNewPermission({ source_agent_id: 0, target_agent_id: 0, max_depth: 3, rate_limit_rpm: 30, allow_target_skills: true })
       loadPermissions()
     } catch (err: any) {
       toast.error('Create Failed', err.message || 'Failed to create permission')
@@ -97,13 +108,19 @@ export default function A2APermissionsManager() {
     }
   }
 
+  const [togglingId, setTogglingId] = useState<number | null>(null)
+
   const handleTogglePermission = async (perm: AgentCommPermission) => {
+    if (togglingId === perm.id) return
+    setTogglingId(perm.id)
     try {
       await api.updateAgentCommPermission(perm.id, { is_enabled: !perm.is_enabled })
       toast.success(`Permission ${perm.is_enabled ? 'disabled' : 'enabled'}`)
       loadPermissions()
     } catch (err: any) {
       toast.error('Update Failed', err.message || 'Failed to update permission')
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -122,6 +139,10 @@ export default function A2APermissionsManager() {
   }
 
   const handleDeletePermission = async (id: number) => {
+    // Re-entry guard mirrors handleToggleTargetSkills above. Without it a
+    // second click while the request is in flight (or a stray double-click /
+    // automated double-fire) sends duplicate DELETEs to the backend.
+    if (deletingId === id) return
     if (!window.confirm('Are you sure you want to delete this permission? This action cannot be undone.')) return
     setDeletingId(id)
     try {
@@ -185,7 +206,7 @@ export default function A2APermissionsManager() {
               <tr className="border-b border-tsushin-border/30">
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Source Agent</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Target Agent</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Max Depth</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider" title="How many delegation hops are allowed before the chain stops.">Max Depth</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Rate Limit</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider" title="Allow the target agent to use its own skills (gmail, sandboxed_tools, …) when invoked via A2A">Target Skills</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-tsushin-slate uppercase tracking-wider">Status</th>
@@ -196,13 +217,21 @@ export default function A2APermissionsManager() {
               {permissions.map((perm) => (
                 <tr key={perm.id} className="hover:bg-gray-800/30 transition-colors">
                   <td className="px-6 py-4 text-sm text-white">
-                    {perm.source_agent_name || `Agent #${perm.source_agent_id}`}
+                    <span>{agentRuleLabel(perm.source_agent_name, perm.source_agent_id)}</span>
+                    {!agentExists(perm.source_agent_id) && (
+                      <span className="mt-1 block text-xs text-amber-300">This agent was deleted. Remove this rule.</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-white">
-                    {perm.target_agent_name || `Agent #${perm.target_agent_id}`}
+                    <span>{agentRuleLabel(perm.target_agent_name, perm.target_agent_id)}</span>
+                    {!agentExists(perm.target_agent_id) && (
+                      <span className="mt-1 block text-xs text-amber-300">This agent was deleted. Remove this rule.</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-tsushin-slate">{perm.max_depth}</td>
-                  <td className="px-6 py-4 text-sm text-tsushin-slate">{perm.rate_limit_rpm} RPM</td>
+                  <td className="px-6 py-4 text-sm text-tsushin-slate" title={`${perm.rate_limit_rpm} requests per minute`}>
+                    {perm.rate_limit_rpm} / minute
+                  </td>
                   <td className="px-6 py-4">
                     <button
                       onClick={() => handleToggleTargetSkills(perm)}
@@ -224,7 +253,8 @@ export default function A2APermissionsManager() {
                   <td className="px-6 py-4">
                     <button
                       onClick={() => handleTogglePermission(perm)}
-                      className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${
+                      disabled={togglingId === perm.id}
+                      className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors disabled:opacity-50 ${
                         perm.is_enabled ? 'bg-teal-500' : 'bg-gray-600'
                       }`}
                     >
@@ -254,7 +284,7 @@ export default function A2APermissionsManager() {
       {showAddModal && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowAddModal(false)}
+          {...addModalBackdropDismiss}
         >
           <div
             className="bg-tsushin-elevated rounded-xl max-w-md w-full shadow-xl"
@@ -306,11 +336,11 @@ export default function A2APermissionsManager() {
                   onChange={(e) => setNewPermission({ ...newPermission, max_depth: parseInt(e.target.value) || 3 })}
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
                 />
-                <p className="text-xs text-tsushin-muted mt-1">Maximum chain depth for recursive agent calls (1-10)</p>
+                <p className="text-xs text-tsushin-muted mt-1">How many delegation hops are allowed before the chain stops (1-10).</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Rate Limit (RPM)</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Rate limit per minute</label>
                 <input
                   type="number"
                   min={1}
@@ -331,13 +361,21 @@ export default function A2APermissionsManager() {
                     className="mt-1 h-4 w-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-2 focus:ring-amber-500"
                   />
                   <span>
-                    <span className="block text-sm font-medium text-gray-300">Allow target to use its own skills</span>
+                    <span className="block text-sm font-medium text-gray-300">
+                      Allow target to use its own skills <span className="text-tsushin-muted font-normal">(recommended)</span>
+                    </span>
                     <span className="block text-xs text-tsushin-muted mt-0.5">
                       The target agent can use its gmail, sandboxed_tools, shell, etc. when invoked through A2A.
-                      Leave off for pure LLM-knowledge replies. Depth, rate limit, and Sentinel still apply.
+                      Uncheck for pure LLM-knowledge replies. Depth, rate limit, and Sentinel still apply.
                     </span>
                   </span>
                 </label>
+                {newPermission.allow_target_skills && (
+                  <div className="mt-2 ml-7 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                    <strong className="font-medium">Heads up:</strong> the source agent will be able to invoke the target's tools indirectly.
+                    Only enable for source agents you trust to act on your behalf (capability amplification).
+                  </div>
+                )}
               </div>
             </div>
 

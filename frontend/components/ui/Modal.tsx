@@ -2,11 +2,12 @@
 
 import { ReactNode, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 interface ModalProps {
   isOpen: boolean
   onClose: () => void
-  title: string
+  title?: string
   children: ReactNode
   footer?: ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
@@ -50,27 +51,32 @@ export default function Modal({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
 
+  const backdropDismiss = useBackdropDismiss(onClose)
+
   if (!isOpen || !mounted) return null
 
   return createPortal(
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={(e) => {
-        // Close modal when clicking backdrop
-        if (e.target === e.currentTarget) {
-          onClose()
-        }
-      }}
+      {...backdropDismiss}
     >
       <div
         className={`bg-tsushin-elevated border border-tsushin-border rounded-2xl ${sizeClasses[size]} w-full ${autoHeight ? 'max-h-[calc(100vh-2rem)]' : 'max-h-[85vh]'} flex flex-col shadow-elevated animate-scale-in`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header — only render when there is a title to display or a close
+        * button to host. BUG-FIX-AUDIT 2026-04-25: previously this block always
+        * rendered, leaving an empty `<h2>` and dead vertical space when callers
+        * (e.g. OnboardingWizard after BUG-690) intentionally omitted `title`. */}
+        {(title || showCloseButton) && (
         <div className="flex items-center justify-between p-6 border-b border-tsushin-border">
-          <h2 className="text-xl font-bold text-white">
-            {title}
-          </h2>
+          {title ? (
+            <h2 className="text-xl font-bold text-white">
+              {title}
+            </h2>
+          ) : (
+            <span aria-hidden="true" />
+          )}
           {showCloseButton && (
             <button
               onClick={onClose}
@@ -83,15 +89,19 @@ export default function Modal({
             </button>
           )}
         </div>
+        )}
 
         {/* Body - Scrollable */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 min-h-0">
           {children}
         </div>
 
-        {/* Footer */}
+        {/* Footer — relative + z-10 so its hit-test always wins over any
+        * sibling stacking context the body's overflow-y-auto creates.
+        * shrink-0 keeps the footer's natural height under
+        * tall-content + max-h-[85vh] flex layouts. */}
         {footer && (
-          <div className="p-6 border-t border-tsushin-border">
+          <div className="relative z-10 shrink-0 p-6 border-t border-tsushin-border">
             {footer}
           </div>
         )}

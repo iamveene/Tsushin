@@ -9,9 +9,12 @@
 import AnimatedCounter from '@/components/charts/AnimatedCounter'
 import RadialProgressChart from '@/components/charts/RadialProgressChart'
 import { CHART_COLORS } from '@/components/charts/chartTheme'
+import InfoTooltip from '@/components/ui/InfoTooltip'
 
 interface MemoryStats {
   semantic_search_enabled: boolean
+  agents_with_semantic_search: number
+  total_agents: number
   ring_buffer_size: number
   senders_in_memory: number
   total_messages_cached: number
@@ -121,6 +124,13 @@ export default function SystemPerformanceSection({
       )
     : 0
 
+  const labelWithTooltip = (label: string, tooltip: string) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{label}</span>
+      <InfoTooltip text={tooltip} position="top" />
+    </span>
+  )
+
   return (
     <div className="glass-card rounded-xl p-6 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
@@ -147,22 +157,54 @@ export default function SystemPerformanceSection({
           System Performance
         </h2>
 
-        {/* Semantic Search Status Badge */}
-        {memoryStats.semantic_search_enabled ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-success/10 border border-tsushin-success/30">
-            <div className="w-2 h-2 rounded-full bg-tsushin-success animate-pulse" />
-            <span className="text-xs font-medium text-tsushin-success">
-              Semantic Search Active
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
-            <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
-            <span className="text-xs font-medium text-tsushin-muted">
-              Semantic Search Disabled
-            </span>
-          </div>
-        )}
+        {/* Semantic Search Status Badge — aggregated from per-agent flags */}
+        {(() => {
+          const enabled = memoryStats.agents_with_semantic_search ?? 0
+          const total = memoryStats.total_agents ?? 0
+          const countLabel = `${enabled}/${total} agent${total === 1 ? '' : 's'}`
+
+          if (total === 0) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
+                <span className="text-xs font-medium text-tsushin-muted" title="No agents are available to use meaning-based memory search.">
+                  Meaning Search - no agents
+                </span>
+              </div>
+            )
+          }
+
+          if (enabled === 0) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-muted/10 border border-tsushin-border/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-muted" />
+                <span className="text-xs font-medium text-tsushin-muted" title="No agents currently use meaning-based memory search.">
+                  Meaning Search Off ({countLabel})
+                </span>
+              </div>
+            )
+          }
+
+          if (enabled < total) {
+            return (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-warning/10 border border-tsushin-warning/30">
+                <div className="w-2 h-2 rounded-full bg-tsushin-warning animate-pulse" />
+                <span className="text-xs font-medium text-tsushin-warning" title="Some agents can search memory by meaning; others only use recent message context.">
+                  Meaning Search Partial ({countLabel})
+                </span>
+              </div>
+            )
+          }
+
+          return (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-tsushin-success/10 border border-tsushin-success/30">
+              <div className="w-2 h-2 rounded-full bg-tsushin-success animate-pulse" />
+              <span className="text-xs font-medium text-tsushin-success" title="All agents can search memory by meaning.">
+                Meaning Search Active ({countLabel})
+              </span>
+            </div>
+          )
+        })()}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -181,11 +223,13 @@ export default function SystemPerformanceSection({
             />
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">Ring Buffer</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Recent Memory Limit', 'Maximum recent messages kept per sender before older context rolls off.')}
+            </p>
             <p className="text-2xl font-display font-bold text-white mt-1">
               {memoryStats.ring_buffer_size}
             </p>
-            <p className="text-xs text-tsushin-muted">msgs per sender</p>
+            <p className="text-xs text-tsushin-muted">messages per sender</p>
           </div>
         </div>
 
@@ -197,11 +241,13 @@ export default function SystemPerformanceSection({
             </div>
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">Active Senders</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Senders in Memory', 'Distinct senders with recent messages currently retained in short-term memory.')}
+            </p>
             <p className="text-2xl font-display font-bold text-white mt-1">
               <AnimatedCounter value={memoryStats.senders_in_memory} />
             </p>
-            <p className="text-xs text-tsushin-muted">in memory</p>
+            <p className="text-xs text-tsushin-muted">with recent context</p>
           </div>
         </div>
 
@@ -213,11 +259,13 @@ export default function SystemPerformanceSection({
             </div>
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">Messages Cached</p>
+            <p className="text-sm font-medium text-tsushin-slate">
+              {labelWithTooltip('Recent Messages', 'Messages currently retained in short-term memory for fast context lookup.')}
+            </p>
             <p className="text-2xl font-display font-bold text-white mt-1">
               <AnimatedCounter value={memoryStats.total_messages_cached} />
             </p>
-            <p className="text-xs text-tsushin-muted">total processed</p>
+            <p className="text-xs text-tsushin-muted">kept for context</p>
           </div>
         </div>
 
@@ -237,7 +285,7 @@ export default function SystemPerformanceSection({
               {memoryStats.vector_store.external_stores?.length ? (
                 <>
                   <p className="text-sm font-medium text-tsushin-indigo-glow">
-                    Vector Store
+                    {labelWithTooltip('Memory Store', 'External vector stores used for meaning-based memory retrieval.')}
                   </p>
                   <p className="text-2xl font-display font-bold text-white mt-1">
                     {memoryStats.vector_store.total_embeddings > 0 ? (
@@ -246,7 +294,7 @@ export default function SystemPerformanceSection({
                       <span className="text-lg">Connected</span>
                     )}
                   </p>
-                  <p className="text-xs text-tsushin-slate">
+                  <p className="truncate text-xs text-tsushin-slate" title={memoryStats.vector_store.external_stores.map((s: any) => `${s.vendor} (${s.health_status})`).join(', ')}>
                     {memoryStats.vector_store.external_stores.map((s: any) =>
                       `${s.vendor} (${s.health_status})`
                     ).join(', ')}
@@ -255,12 +303,12 @@ export default function SystemPerformanceSection({
               ) : (
                 <>
                   <p className="text-sm font-medium text-tsushin-indigo-glow">
-                    Vector Embeddings
+                    {labelWithTooltip('Memory Vectors', 'Searchable memory entries created from message meaning, not keyword matching.')}
                   </p>
                   <p className="text-2xl font-display font-bold text-white mt-1">
                     <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
                   </p>
-                  <p className="text-xs text-tsushin-slate">AI-indexed messages</p>
+                  <p className="text-xs text-tsushin-slate">searchable memory entries</p>
                 </>
               )}
             </div>
@@ -273,11 +321,11 @@ export default function SystemPerformanceSection({
               </div>
             </div>
             <div>
-              <p className="text-sm font-medium text-tsushin-muted">Vector Store</p>
+              <p className="text-sm font-medium text-tsushin-muted">Memory Store</p>
               <p className="text-lg font-display font-medium text-tsushin-muted mt-2">
                 Not configured
               </p>
-              <p className="text-xs text-tsushin-muted">Enable for AI search</p>
+              <p className="text-xs text-tsushin-muted">Enable for meaning search</p>
             </div>
           </div>
         )}
@@ -299,7 +347,7 @@ export default function SystemPerformanceSection({
               </svg>
             </div>
             <p className="text-tsushin-slate">
-              <span className="font-medium text-white">Semantic search is active:</span>{' '}
+              <span className="font-medium text-white">Meaning search is active:</span>{' '}
               The agent can find relevant past messages based on meaning, not just keywords.
             </p>
           </div>

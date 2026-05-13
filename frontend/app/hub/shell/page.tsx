@@ -5,12 +5,14 @@ import dynamic from 'next/dynamic'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import api, { authenticatedFetch, SecurityPattern, SecurityPatternCreate, SecurityPatternUpdate, PatternTestResult, SentinelConfig, SentinelLog, SentinelStats, SentinelConfigUpdate } from '@/lib/client'
+import { useBackdropDismiss } from '@/hooks/useBackdropDismiss'
 
 const ShellBeaconSetupWizard = dynamic(
   () => import('@/components/shell/ShellBeaconSetupWizard'),
   { ssr: false },
 )
 import { copyToClipboard } from '@/lib/clipboard'
+import TabStrip from '@/components/ui/TabStrip'
 import {
   TerminalIcon,
   RadioIcon,
@@ -124,11 +126,13 @@ export default function ShellDashboardPage() {
   const [patterns, setPatterns] = useState<SecurityPattern[]>([])
   const [patternsLoading, setPatternsLoading] = useState(false)
   const [showPatternModal, setShowPatternModal] = useState(false)
+  const patternModalBackdropDismiss = useBackdropDismiss(() => setShowPatternModal(false))
   const [editingPattern, setEditingPattern] = useState<SecurityPattern | null>(null)
   const [patternForm, setPatternForm] = useState<PatternFormData>(DEFAULT_PATTERN_FORM)
   const [patternError, setPatternError] = useState<string | null>(null)
   const [savingPattern, setSavingPattern] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{id: number, description: string} | null>(null)
+  const deleteConfirmBackdropDismiss = useBackdropDismiss(() => setDeleteConfirm(null))
   const [patternSearchQuery, setPatternSearchQuery] = useState('')
   const [patternTypeFilter, setPatternTypeFilter] = useState<string>('')
   const [patternCategoryFilter, setPatternCategoryFilter] = useState<string>('')
@@ -138,6 +142,7 @@ export default function ShellDashboardPage() {
   const [testPattern, setTestPattern] = useState('')
   const [testCommands, setTestCommands] = useState<string[]>([''])
   const [testResults, setTestResults] = useState<PatternTestResult | null>(null)
+  const patternTesterBackdropDismiss = useBackdropDismiss(() => { setShowPatternTester(false); setTestResults(null) })
   const [testingPattern, setTestingPattern] = useState(false)
 
   // Phase 20: Sentinel Security State
@@ -146,6 +151,10 @@ export default function ShellDashboardPage() {
   const [shellSecurityStats, setShellSecurityStats] = useState<SentinelStats | null>(null)
   const [sentinelLoading, setSentinelLoading] = useState(false)
   const [savingSentinel, setSavingSentinel] = useState(false)
+
+  // BUG-720: SSL mode drives whether the inline beacon registration `curl`
+  // command needs `-k` (or `--insecure`) for self-signed installs.
+  const [sslMode, setSslMode] = useState<string | null>(null)
 
   const apiUrl = ''
 
@@ -220,6 +229,28 @@ export default function ShellDashboardPage() {
     }, 10000)
     return () => clearInterval(interval)
   }, [loadIntegrations, loadCommands, loadApprovals, loadPatterns, loadSentinelData])
+
+  // BUG-720: detect SSL_MODE once so the inline registration curl command
+  // can append `-k` for self-signed installs.
+  useEffect(() => {
+    let cancelled = false
+    const detect = async () => {
+      try {
+        const resp = await authenticatedFetch(`${apiUrl}/api/system/public-info`)
+        if (!resp.ok) return
+        const data = await resp.json()
+        if (!cancelled && typeof data?.ssl_mode === 'string') {
+          setSslMode(data.ssl_mode.toLowerCase())
+        }
+      } catch {
+        // Non-fatal: assume non-self-signed if detection fails.
+      }
+    }
+    detect()
+    return () => {
+      cancelled = true
+    }
+  }, [apiUrl])
 
   // Reload patterns when inactive filter changes
   useEffect(() => {
@@ -620,38 +651,39 @@ export default function ShellDashboardPage() {
         )}
 
         <div className="bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="border-b border-gray-800">
-            <nav className="flex">
-              {[
-                { key: 'beacons', label: 'Beacons', Icon: RadioIcon, count: integrations.length },
-                { key: 'commands', label: 'Command History', Icon: ClipboardIcon, count: commands.length },
-                { key: 'approvals', label: 'Approvals', Icon: LockIcon, count: approvalStats?.pending_count || 0 },
-                { key: 'patterns', label: 'Patterns', Icon: ShieldIcon, count: patterns.filter(p => !p.is_active).length },
-                { key: 'security', label: 'Sentinel', Icon: LockIcon, count: shellSecurityStats?.threats_blocked || 0 }
-              ].map(tab => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as typeof activeTab)}
-                  className={`relative px-6 py-4 font-medium text-sm transition-all flex items-center gap-2 ${
-                    activeTab === tab.key ? 'text-white bg-gray-800/50' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <tab.Icon size={16} />
-                  <span>{tab.label}</span>
-                  {tab.count > 0 && (
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${
-                      tab.key === 'approvals' && tab.count > 0 ? 'bg-orange-500 text-white' : 'bg-gray-700 text-gray-300'
-                    }`}>
-                      {tab.count}
-                    </span>
-                  )}
-                  {activeTab === tab.key && (
-                    <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-teal-500" />
-                  )}
-                </button>
-              ))}
-            </nav>
-          </div>
+          <TabStrip
+            className="border-b border-gray-800"
+            ariaLabel="Shell sections"
+          >
+            {[
+              { key: 'beacons', label: 'Beacons', Icon: RadioIcon, count: integrations.length },
+              { key: 'commands', label: 'Command History', Icon: ClipboardIcon, count: commands.length },
+              { key: 'approvals', label: 'Approvals', Icon: LockIcon, count: approvalStats?.pending_count || 0 },
+              { key: 'patterns', label: 'Patterns', Icon: ShieldIcon, count: patterns.filter(p => !p.is_active).length },
+              { key: 'security', label: 'Sentinel', Icon: LockIcon, count: shellSecurityStats?.threats_blocked || 0 }
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={`relative px-6 py-4 font-medium text-sm transition-all flex items-center gap-2 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === tab.key ? 'text-white bg-gray-800/50' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <tab.Icon size={16} />
+                <span>{tab.label}</span>
+                {tab.count > 0 && (
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${
+                    tab.key === 'approvals' && tab.count > 0 ? 'bg-orange-500 text-white' : 'bg-gray-700 text-gray-300'
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+                {activeTab === tab.key && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-teal-500" />
+                )}
+              </button>
+            ))}
+          </TabStrip>
 
           <div className="p-6">
             {activeTab === 'beacons' && (
@@ -1251,7 +1283,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Create/Edit Modal */}
       {showPatternModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowPatternModal(false)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...patternModalBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4">
               {editingPattern ? 'Edit Pattern' : 'Create New Pattern'}
@@ -1365,7 +1397,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Delete Confirmation */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setDeleteConfirm(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...deleteConfirmBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4">Delete Pattern?</h2>
             <p className="text-gray-400 mb-4">Are you sure you want to delete this pattern?</p>
@@ -1390,7 +1422,7 @@ export default function ShellDashboardPage() {
 
       {/* Pattern Tester Modal */}
       {showPatternTester && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setShowPatternTester(false); setTestResults(null) }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" {...patternTesterBackdropDismiss}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-white mb-4 inline-flex items-center gap-2"><BeakerIcon size={20} /> Pattern Tester</h2>
 
@@ -1496,13 +1528,15 @@ export default function ShellDashboardPage() {
                     </a>
                   </div>
 
-                  {/* Option 2: One-liner install */}
-                  <div className="mb-4">
-                    <p className="text-sm text-gray-400 mb-2">Option 2: Quick install (copy & paste in target terminal):</p>
-                    <div className="relative">
-                      <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
-{`# Download and install beacon
-curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
+                  {/* Option 2: One-liner install
+                      BUG-720: emit `curl -k` for SSL_MODE=selfsigned so the
+                      first registration attempt does not fail the self-signed
+                      cert check. Auto / letsencrypt installs do not need it. */}
+                  {(() => {
+                    const isSelfSigned = sslMode === 'selfsigned'
+                    const curlInsecure = isSelfSigned ? ' -k' : ''
+                    const installScript = `# Download and install beacon
+curl -L${curlInsecure} -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
 unzip beacon.zip && \\
 cd shell_beacon && \\
 pip install -r requirements.txt
@@ -1511,31 +1545,35 @@ pip install -r requirements.txt
 python run.py \\
   --server "${apiUrl}/api/shell" \\
   --api-key "${newApiKey}" \\
-  --persistence install`}
-                      </pre>
-                      <button
-                        onClick={() => {
-                          const cmd = `# Download and install beacon
-curl -L -H "X-API-Key: ${newApiKey}" "${apiUrl}/api/shell/beacon/download" -o beacon.zip && \\
-unzip beacon.zip && \\
-cd shell_beacon && \\
-pip install -r requirements.txt
-
-# Run beacon with auto-start persistence (survives reboots)
-python run.py \\
-  --server "${apiUrl}/api/shell" \\
-  --api-key "${newApiKey}" \\
-  --persistence install`;
-                          copyToClipboard(cmd);
-                          setSuccess('Install script copied!');
-                          setTimeout(() => setSuccess(null), 2000);
-                        }}
-                        className="absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
-                      >
-                        📋 Copy
-                      </button>
-                    </div>
-                  </div>
+  --persistence install`
+                    return (
+                      <div className="mb-4">
+                        <p className="text-sm text-gray-400 mb-2">Option 2: Quick install (copy & paste in target terminal):</p>
+                        <div className="relative">
+                          <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap">
+{installScript}
+                          </pre>
+                          <button
+                            onClick={() => {
+                              copyToClipboard(installScript);
+                              setSuccess('Install script copied!');
+                              setTimeout(() => setSuccess(null), 2000);
+                            }}
+                            className="absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+                          >
+                            📋 Copy
+                          </button>
+                        </div>
+                        {isSelfSigned && (
+                          <p className="text-xs text-amber-400 mt-2">
+                            <code>-k</code> is required because this install uses a self-signed
+                            certificate. Production installs (<code>auto</code> /{' '}
+                            <code>letsencrypt</code>) do not need this flag.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {/* Option 3: Run command only */}
                   <div className="mb-4">
