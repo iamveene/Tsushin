@@ -309,7 +309,19 @@ async def reset_to_defaults(
 # === Helper Functions ===
 
 def _get_provider_from_model(model_name: str) -> str:
-    """Determine provider from model name."""
+    """Determine pricing-owner provider from model name.
+
+    Runtime provider inference treats slash-prefixed ids like ``openai/gpt-5.5``
+    as the upstream model family. The pricing UI, however, needs to show those
+    gateway ids under OpenRouter so operators can manage direct and gateway
+    rates separately. Groq's hosted ``openai/gpt-oss-*`` models are the one
+    slash-prefixed exception we expose under Groq.
+    """
+    model_lower = (model_name or "").lower()
+    if "/" in model_lower:
+        if model_lower.startswith("openai/gpt-oss-"):
+            return "groq"
+        return "openrouter"
     return infer_provider_from_model(model_name)
 
 
