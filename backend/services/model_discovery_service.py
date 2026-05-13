@@ -35,15 +35,15 @@ class ModelDiscoveryService:
         """
         vendor = instance.vendor
 
-        # Predefined lists
-        if vendor in PREDEFINED_MODELS:
+        # Providers without an OpenAI-compatible /models endpoint use curated lists.
+        if vendor in ("anthropic", "gemini", "vertex_ai"):
             return PREDEFINED_MODELS[vendor]
 
         # Resolve base URL and API key
         from services.provider_instance_service import ProviderInstanceService, get_vendor_default_base_url
         base_url = instance.base_url or get_vendor_default_base_url(vendor)
         if not base_url:
-            return []
+            return list(PREDEFINED_MODELS.get(vendor, []))
 
         api_key = ProviderInstanceService.resolve_api_key(instance, db)
 
@@ -66,7 +66,7 @@ class ModelDiscoveryService:
                 return await ModelDiscoveryService._discover_openai_compat(base_url, api_key)
         except Exception as e:
             logger.error(f"Model discovery failed for {instance.instance_name}: {e}")
-            return []
+            return list(PREDEFINED_MODELS.get(vendor, []))
 
     @staticmethod
     async def _discover_openai_compat(base_url: str, api_key: str = None) -> List[str]:

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### DeepSeek V4 model catalog support (2026-05-13)
+
+- Added `deepseek-v4-flash` and `deepseek-v4-pro` as first-class direct DeepSeek models across provider catalog, setup defaults, provider-instance defaults, System AI, Sentinel model selection, Playground model overrides, pricing display, and agent creation/edit surfaces. Deprecated `deepseek-chat` / `deepseek-reasoner` remain selectable compatibility aliases.
+- Changed the default direct DeepSeek base URL to `https://api.deepseek.com` while preserving existing saved instance URLs, including older `/v1` rows.
+- Added a conservative startup backfill for active DeepSeek provider instances: new V4 models are prepended to `available_models`, custom entries are preserved, and existing agent/System AI/Sentinel assignments are not rewritten.
+- Updated direct DeepSeek pricing defaults from the current DeepSeek pricing page while intentionally ignoring the temporary V4 Pro promotional discount: V4 Flash is `$0.14` input / `$0.0028` cached input / `$0.28` output per 1M tokens; V4 Pro is `$1.74` input / `$0.0145` cached input / `$3.48` output per 1M tokens. OpenRouter DeepSeek rows remain separate.
+- Added cached-input cost visibility to the Model Pricing settings table and wired DeepSeek cache-hit token accounting into LLM usage cost tracking when providers return cache-hit/miss usage metadata.
+- Encoded official GPT-5.5 pricing at `$5.00` input / `$0.50` cached input / `$30.00` output per 1M tokens and GPT-5.5 Pro at `$30.00` input / `$180.00` output per 1M tokens; GPT-5.5 Pro is marked as non-streaming.
+- Corrected the xAI pricing documentation from the current official Chat API pricing page: Grok 4.3 and Grok 4.20 variants are `$1.25` input / `$0.20` cached input / `$2.50` output per 1M tokens; Grok 4.1 Fast reasoning and non-reasoning variants are `$0.20` input / `$0.05` cached input / `$0.50` output per 1M tokens.
+- Documented latest-model support expectations: provider-instance `available_models` is the live model catalog for setup, agent, Sentinel, System AI, and Playground surfaces; manually entered dynamic model IDs are allowed before a provider discovery endpoint publishes them; default pricing rows should use stable non-promotional rates while staying tenant-editable.
+
+### Production deploy helper (2026-05-13)
+
+- Added `scripts/deploy-prod.sh` as the guarded production deployment path. It refuses non-`main` and dirty local trees, reads target settings from env or `.private/deploy-prod.env`, SSHes to the production checkout, verifies the remote checkout is clean and on `main`, fast-forwards with `git pull --ff-only`, rebuilds backend/frontend without cache via compose, avoids `docker-compose down`, waits for service health, and checks the public `/api/health` URL.
+- Updated README and deployment documentation with the main-only release/deploy flow, Cloudflare allowlist preflight reminder, and public-origin QA expectation.
+
 ### UI-first exact-tag v0.6.0 fresh-install audit (2026-04-20)
 
 Audit-only pass from a disposable clone at `.private/installations/fresh-install-v060-20260420-232626/tsushin`, with evidence under `.private/qa/fresh-install-v060-20260420-232626/`. The original local runtime was backed up, stopped without deleting persistent state, and restored after the disposable runtime was removed. Local restore verification passed for the original backend, readiness endpoint, Caddy proxy, and captured dynamic containers; the public `tsushin.archsec.io` hostname remained Cloudflare 1033 before and after the audit.

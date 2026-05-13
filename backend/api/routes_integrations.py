@@ -13,22 +13,10 @@ import logging
 from db import get_db
 from models_rbac import User
 from auth_dependencies import require_permission, get_tenant_context, TenantContext
+from constants.llm_models import PROVIDER_TEST_MODELS
 
 router = APIRouter(prefix="/api/integrations", tags=["Integration Tests"])
 logger = logging.getLogger(__name__)
-
-# Default models for testing each provider (cheap/fast models).
-# IMPORTANT: Keep these up-to-date when vendors deprecate model IDs.
-# Use each vendor's cheapest currently-available model to minimise cost.
-PROVIDER_TEST_MODELS = {
-    "groq": "llama-3.3-70b-versatile",
-    "grok": "grok-3-mini",
-    "openai": "gpt-4o-mini",
-    "anthropic": "claude-haiku-4-5",
-    "gemini": "gemini-2.5-flash",
-    "openrouter": "meta-llama/llama-3.1-8b-instruct:free",
-    "deepseek": "deepseek-chat",
-}
 
 SUPPORTED_PROVIDERS = list(PROVIDER_TEST_MODELS.keys()) + ["elevenlabs", "vertex_ai"]
 

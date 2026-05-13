@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { api } from '@/lib/client'
+import { DEEPSEEK_MODEL_IDS, DEEPSEEK_V4_FLASH_MODEL, getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import { validateEmailAddress } from '@/lib/validation'
 
 const MIN_PASSWORD_LENGTH = 8
@@ -33,7 +35,7 @@ export default function SetupPage() {
     anthropic:  { label: 'Anthropic Claude', field: 'anthropic_api_key',  placeholder: 'sk-ant-...', fallbackModels: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-6'], defaultModel: 'claude-haiku-4-5' },
     groq:       { label: 'Groq',             field: 'groq_api_key',       placeholder: 'gsk_...',    fallbackModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], defaultModel: 'llama-3.3-70b-versatile' },
     grok:       { label: 'Grok (xAI)',       field: 'grok_api_key',       placeholder: 'xai-...',    fallbackModels: ['grok-3-mini', 'grok-3'], defaultModel: 'grok-3-mini' },
-    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     fallbackModels: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
+    deepseek:   { label: 'DeepSeek',         field: 'deepseek_api_key',   placeholder: 'sk-...',     fallbackModels: DEEPSEEK_MODEL_IDS, defaultModel: DEEPSEEK_V4_FLASH_MODEL },
     openrouter: { label: 'OpenRouter',       field: 'openrouter_api_key', placeholder: 'sk-or-...',  fallbackModels: ['google/gemini-2.5-flash', 'anthropic/claude-sonnet-4', 'openai/gpt-4o-mini'], defaultModel: 'google/gemini-2.5-flash' },
   }
 
@@ -47,10 +49,12 @@ export default function SetupPage() {
     Object.entries(PROVIDERS_META).map(([key, meta]) => {
       const live = liveModels[key]
       const predefined = predefinedModels[key]
-      const models = (live && live.length > 0)
+      const sourceModels = (live && live.length > 0)
         ? live
         : (predefined && predefined.length > 0 ? predefined : meta.fallbackModels)
-      return [key, { label: meta.label, field: meta.field, placeholder: meta.placeholder, models, defaultModel: meta.defaultModel }]
+      const models = getProviderModelOptions(key, sourceModels)
+      const defaultModel = getPreferredProviderModel(key, models, meta.defaultModel)
+      return [key, { label: meta.label, field: meta.field, placeholder: meta.placeholder, models, defaultModel }]
     })
   ) as Record<string, { label: string; field: string; placeholder: string; models: string[]; defaultModel: string }>
 
@@ -62,7 +66,7 @@ export default function SetupPage() {
   const handleAddProvider = () => {
     if (!currentKey.trim()) return
     if (providerKeys.some(p => p.provider === selectedProvider)) return
-    const model = currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''
+    const model = currentModel || getPreferredProviderModel(selectedProvider, PROVIDERS[selectedProvider]?.models) || ''
     setProviderKeys([...providerKeys, { provider: selectedProvider, key: currentKey.trim(), model }])
     setCurrentKey('')
     setCurrentModel('')
@@ -456,15 +460,14 @@ export default function SetupPage() {
                               <option key={key} value={key}>{label}</option>
                             ))}
                         </select>
-                        <select
+                        <ProviderModelInput
+                          vendor={selectedProvider}
+                          models={PROVIDERS[selectedProvider]?.models || []}
                           value={currentModel || PROVIDERS[selectedProvider]?.defaultModel || ''}
-                          onChange={(e) => setCurrentModel(e.target.value)}
+                          onChange={setCurrentModel}
+                          placeholder="Select or type a model ID"
                           className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent min-w-[180px]"
-                        >
-                          {PROVIDERS[selectedProvider]?.models.map((m) => (
-                            <option key={m} value={m}>{m}</option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       <div className="flex gap-2">
                         <input

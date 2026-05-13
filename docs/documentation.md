@@ -313,6 +313,39 @@ docker logs mcp-agent-tenant_<id> --tail=10   # Look for QR-code re-auth loop
 docker restart mcp-agent-tenant_<id>          # Restart, then re-scan QR from phone
 ```
 
+### 4.2.1 Production deploy helper
+
+Production deployment is main-only and should start from a clean local checkout after the release PR has landed on `main`. Use `scripts/deploy-prod.sh` instead of ad-hoc SSH commands:
+
+```bash
+cd /Users/vinicios/code/tsushin
+git checkout main
+git pull --ff-only
+TSUSHIN_PROD_SSH_TARGET=deploy@prod-host.example.com bash scripts/deploy-prod.sh
+```
+
+The helper also reads an optional local config file at `.private/deploy-prod.env` (or `TSUSHIN_DEPLOY_CONFIG=/path/to/file`) for host-specific values:
+
+```bash
+TSUSHIN_PROD_SSH_TARGET=deploy@prod-host.example.com
+TSUSHIN_PROD_PATH=/opt/code/tsushin
+TSUSHIN_PUBLIC_URL=https://tsushin.archsec.io
+# Optional: TSUSHIN_PROD_SSH_OPTS="-i ~/.ssh/hunter_deploy"
+```
+
+Deploy behavior:
+
+- refuses to run unless the local branch is `main`
+- refuses local dirty, staged, or untracked files so production receives an auditable commit
+- SSHes to the configured production checkout and verifies the remote branch/tree are clean
+- runs `git fetch --prune origin main` and `git pull --ff-only origin main`
+- rebuilds only the app services with `docker-compose up -d --build --no-cache backend frontend` semantics, falling back to `docker compose` when the legacy command is unavailable
+- never runs `docker-compose down`
+- waits for backend/frontend containers to report `healthy` or `running`
+- checks `${TSUSHIN_PUBLIC_URL}/api/health` from the remote host
+
+Before using the helper against Cloudflare-protected production, refresh the allowlist from `/Users/vinicios/code/cloudflare/cf-allowlist.sh` (`status`, `current-ip`, then `add-host` or `add-ip` as needed). The final source of truth remains public browser QA on `https://tsushin.archsec.io` after the script succeeds.
+
 ### 4.3 Kubernetes / GKE (Helm chart)
 
 Tsushin ships a Helm chart at `k8s/tsushin/`:
@@ -2212,11 +2245,13 @@ From `backend/services/provider_instance_service.py:20-32`:
 | `gemini` | None (SDK default) | Google Generative AI |
 | `groq` | `https://api.groq.com/openai/v1` | OpenAI-compatible |
 | `grok` | `https://api.x.ai/v1` | xAI, OpenAI-compatible |
-| `deepseek` | `https://api.deepseek.com/v1` | OpenAI-compatible |
+| `deepseek` | `https://api.deepseek.com` | OpenAI-compatible |
 | `openrouter` | `https://openrouter.ai/api/v1` | Router / multi-vendor |
 | `ollama` | `http://host.docker.internal:11434` | Local LLM server; `validate_ollama_url` SSRF guard |
 | `vertex_ai` | None | Region-resolved from credentials |
 | `custom` | Free-form (SSRF-validated) | Any OpenAI-compatible endpoint |
+
+Direct DeepSeek defaults to `https://api.deepseek.com` and `deepseek-v4-flash`. New direct DeepSeek instances expose `deepseek-v4-flash`, `deepseek-v4-pro`, and the legacy compatibility aliases `deepseek-chat` / `deepseek-reasoner`. The aliases remain selectable for saved configurations, but new defaults prefer V4 Flash.
 
 An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_instance()` (`provider_instance_service.py:37-65`), seeded from `Config.ollama_base_url` or the default. In Docker-on-Linux VM setups, `host.docker.internal` is the preferred endpoint; if that hostname is unavailable on the target host, point the provider instance at the Docker bridge gateway IP instead and retest from the Hub UI.
 
@@ -2228,6 +2263,8 @@ This means: adding a new provider in Hub automatically makes it available everyw
 
 **Vendor catalog endpoint (`GET /api/providers/vendors`)** — returns every vendor from backend `VALID_VENDORS` + `VENDOR_DISPLAY_NAMES` with `{id, display_name, default_base_url, supports_discovery, tenant_has_configured}`. The **Add Provider Instance** modal (`ProviderInstanceModal.tsx`) fetches this list on open and falls back to a reduced static array only when the call fails, so a vendor added to `VALID_VENDORS` backend-side surfaces in the dropdown without any frontend edit. `tenant_has_configured` is resolved in one DB round-trip (distinct `ProviderInstance.vendor` rows for the tenant). `backend/tests/test_wizard_drift.py` Guard 6 keeps the fallback consistent with the backend set.
 
+**Latest model catalog support (2026-05-13).** Model pickers now treat the backend provider-instance catalog as the source of truth for current models. A tenant can expose newly released provider models by saving them in the instance's `available_models` list, either through live discovery or manual entry for providers whose `/models` endpoint lags the public release. Setup, System AI, Sentinel, Playground overrides, Agent Builder, and agent create/edit surfaces should all render those catalog entries without requiring a frontend constant update. Compatibility aliases such as DeepSeek's `deepseek-chat` / `deepseek-reasoner` remain valid saved values, but new defaults should prefer the latest canonical IDs such as `deepseek-v4-flash`.
+
 ### 19.4 Model Discovery
 
 `backend/services/model_discovery_service.py` auto-fetches the vendor's `/models` endpoint (for OpenAI-compatible providers) and populates `available_models`. Used by the frontend Provider form to let the user pick which models to expose.
@@ -2238,16 +2275,48 @@ This means: adding a new provider in Hub automatically makes it available everyw
 
 **Source:** `frontend/app/settings/model-pricing/page.tsx`, `backend/api/routes_model_pricing.py`
 
-Pricing rates per 1M tokens used for cost estimation in the Playground debug panel. Defaults are based on official provider pricing; tenant-set custom rates override defaults.
+Pricing rates per 1M tokens used for cost estimation in the Playground debug panel, Watcher Billing, and token usage analytics. Defaults are based on official provider pricing; tenant-set custom rates override defaults.
 
 UI table columns (`model-pricing/page.tsx:326-347`):
 - Model (with provider badge, display name, raw model name)
 - Input cost per 1M tokens (numeric input, step=0.001)
+- Cached input cost per 1M tokens when the provider reports cache-hit tokens (numeric input, step=0.0001)
 - Output cost per 1M tokens (numeric input, step=0.001)
 - Status
 - Actions (Edit / Save)
 
 Filters: "All" or a provider badge filter (`page.tsx:292-323`). Tenants without `org.settings.write` see read-only mode (gate at top of file).
+
+Direct DeepSeek default rows are seeded from DeepSeek's published standard pricing, ignoring the temporary V4 Pro promotional discount so long-running usage analytics do not change when the promo expires:
+
+| Model | Input / cache miss | Cached input / cache hit | Output |
+|---|---:|---:|---:|
+| `deepseek-v4-flash` | `$0.14` | `$0.0028` | `$0.28` |
+| `deepseek-v4-pro` | `$1.74` | `$0.0145` | `$3.48` |
+| `deepseek-chat` / `deepseek-reasoner` | `$0.14` | `$0.0028` | `$0.28` |
+
+DeepSeek reports context-cache usage as `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`. Tsushin preserves total prompt token counts for analytics and uses the cached-input rate for the hit portion when calculating `TokenUsage.estimated_cost`.
+
+Official OpenAI and Anthropic frontier prices checked on 2026-05-13:
+
+| Provider / model | Input / cache miss | Cached input / cache hit | Output |
+|---|---:|---:|---:|
+| OpenAI `gpt-5.5` | `$5.00` | `$0.50` | `$30.00` |
+| OpenAI `gpt-5.5-pro` | `$30.00` | n/a | `$180.00` |
+| Anthropic `claude-opus-4-7` | `$5.00` | `$0.50` | `$25.00` |
+
+Official xAI Chat API prices from `https://docs.x.ai/developers/pricing` (checked 2026-05-13) are:
+
+| Model | Input / cache miss | Cached input / cache hit | Output |
+|---|---:|---:|---:|
+| `grok-4.3` | `$1.25` | `$0.20` | `$2.50` |
+| `grok-4.20-multi-agent-0309` | `$1.25` | `$0.20` | `$2.50` |
+| `grok-4.20-0309-reasoning` | `$1.25` | `$0.20` | `$2.50` |
+| `grok-4.20-0309-non-reasoning` | `$1.25` | `$0.20` | `$2.50` |
+| `grok-4-1-fast-reasoning` | `$0.20` | `$0.05` | `$0.50` |
+| `grok-4-1-fast-non-reasoning` | `$0.20` | `$0.05` | `$0.50` |
+
+For latest-model rollouts, pricing rows should be seeded with stable non-promotional provider rates where available and left tenant-editable in Model Pricing. Dynamically entered custom model IDs can still be used before a baked-in default exists; their cost estimates remain operator-owned until a default pricing row is added.
 
 ### 19.6 Anthropic Prompt Caching — v0.6.0
 
@@ -3069,6 +3138,7 @@ In Kubernetes, wire these to `livenessProbe` and `readinessProbe` respectively.
 
 * Watcher's **Billing** tab surfaces token usage and estimated cost per agent + per model.
 * Cost estimation is driven by the **Model Pricing** settings (`backend/api/routes_model_pricing.py`, paths `/api/settings/model-pricing`, `/api/settings/model-pricing/{model_provider}/{model_name}`).
+* Providers that return cache-hit token metadata, including DeepSeek's `prompt_cache_hit_tokens`, are billed with the configured cached-input rate for that portion and the normal input rate for cache misses.
 * Token counts are recorded as `AuditEvent` rows (`models_rbac.py:233-253`) and aggregated in the Analytics service (`backend/api/routes_analytics.py`).
 
 ---

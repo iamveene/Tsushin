@@ -26,6 +26,7 @@ from models import (
 )
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission, get_current_user_required
+from constants.llm_models import SENTINEL_PROVIDER_MODELS, get_sentinel_models
 from services.sentinel_service import SentinelService
 from services.sentinel_detections import DETECTION_REGISTRY, get_detection_types
 
@@ -848,46 +849,9 @@ async def update_sentinel_prompt(
 # LLM Configuration Endpoints
 # =============================================================================
 
-# LLM model lists - kept in sync with Agent configuration (frontend/app/agents/page.tsx)
-# Sentinel uses these same models for security analysis
-LLM_MODELS = {
-    "gemini": [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-    ],
-    "anthropic": [
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-        "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
-    ],
-    "openai": [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-4-turbo",
-        "gpt-3.5-turbo",
-    ],
-    "openrouter": [
-        "google/gemini-2.5-flash",
-        "google/gemini-2.5-pro",
-        "google/gemini-2.0-flash-thinking-exp",
-        "anthropic/claude-sonnet-4-5",
-        "anthropic/claude-3.5-sonnet",
-        "anthropic/claude-3-opus",
-        "openai/gpt-4o",
-        "openai/gpt-4-turbo",
-        "meta-llama/llama-3.1-8b-instruct",
-        "mistralai/mistral-7b-instruct",
-    ],
-    "ollama": [],  # Populated dynamically from running Ollama instance
-}
+# LLM model lists for Sentinel analysis. Dynamic Ollama is filled at request
+# time; the rest come from the shared backend catalog to avoid drift.
+LLM_MODELS = {provider: get_sentinel_models(provider) for provider in SENTINEL_PROVIDER_MODELS}
 
 
 async def _get_ollama_models() -> List[str]:
@@ -948,9 +912,24 @@ async def get_llm_providers(
             models=LLM_MODELS["openai"],
         ),
         LLMProviderResponse(
+            name="groq",
+            display_name="Groq",
+            models=LLM_MODELS["groq"],
+        ),
+        LLMProviderResponse(
+            name="grok",
+            display_name="Grok (xAI)",
+            models=LLM_MODELS["grok"],
+        ),
+        LLMProviderResponse(
             name="openrouter",
             display_name="OpenRouter",
             models=LLM_MODELS["openrouter"],
+        ),
+        LLMProviderResponse(
+            name="deepseek",
+            display_name="DeepSeek",
+            models=LLM_MODELS["deepseek"],
         ),
         LLMProviderResponse(
             name="ollama",

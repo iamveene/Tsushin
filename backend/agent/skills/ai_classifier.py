@@ -327,7 +327,9 @@ Extract the {entity_type}:"""
             return ("openai", model)
         elif model.startswith("claude"):
             return ("anthropic", model)
-        elif ":" in model or model.lower().startswith(("llama", "gemma", "mistral", "deepseek")):
+        elif model.startswith("deepseek-"):
+            return ("deepseek", model)
+        elif ":" in model or model.lower().startswith(("llama", "gemma", "mistral")):
             # Phase 7.5: Ollama models typically have format "model:tag" (e.g., "gemma2:4b")
             # Or are common Ollama model names (case-insensitive check)
             return ("ollama", model)

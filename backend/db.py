@@ -1604,6 +1604,15 @@ def init_database(engine):
         print(f"[Remote Access Backfill] Warning: {e}")
 
     try:
+        from services.provider_instance_service import backfill_deepseek_v4_models
+        updated_deepseek = backfill_deepseek_v4_models(session)
+        if updated_deepseek:
+            print(f"[Provider Instance Backfill] Added DeepSeek V4 models to {updated_deepseek} instance(s)")
+    except Exception as e:
+        session.rollback()
+        print(f"[Provider Instance Backfill] DeepSeek V4 model backfill skipped: {e}")
+
+    try:
         config = session.query(Config).first()
         if not config:
             default_config = Config(

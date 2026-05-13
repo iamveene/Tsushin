@@ -5,6 +5,7 @@ import Modal from '@/components/ui/Modal'
 import { api } from '@/lib/client'
 import type { Agent, TTSInstance, TTSProviderInfo, ProviderInstance } from '@/lib/client'
 import type { AudioWizardOpenOptions, AudioAgentType } from '@/contexts/AudioWizardContext'
+import { getPreferredProviderModel } from '@/lib/provider-models'
 import {
   VOICE_AGENT_DEFAULTS,
   TRANSCRIPT_AGENT_DEFAULTS,
@@ -212,7 +213,10 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       system_prompt: defaults.system_prompt,
       keywords: defaults.keywords,
       model_provider: defaultVendorInstance.vendor,
-      model_name: defaultVendorInstance.available_models[0] || 'gemini-2.5-flash',
+      model_name: getPreferredProviderModel(
+        defaultVendorInstance.vendor,
+        defaultVendorInstance.available_models
+      ) || 'gemini-2.5-flash',
       is_active: true,
     })
 

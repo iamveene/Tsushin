@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAgentWizard } from '@/contexts/AgentWizardContext'
 import { api } from '@/lib/client'
 import type { ProviderInstance } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import { isBasicsValid } from '@/lib/agent-wizard/reducer'
 import { DEFAULT_AGENT_NAME } from '../defaults'
 
@@ -25,7 +27,8 @@ export default function StepBasics() {
         if (defaultInst) {
           patchBasics({
             model_provider: defaultInst.vendor,
-            model_name: defaultInst.available_models[0] || '',
+            model_name: getPreferredProviderModel(defaultInst.vendor, defaultInst.available_models),
+            provider_instance_id: defaultInst.id,
           })
         }
       }
@@ -52,10 +55,14 @@ export default function StepBasics() {
     return Array.from(set.values())
   }, [providerInstances])
 
-  const selectedVendor = vendors.find(v => v.vendor === state.draft.basics.model_provider)
+  const selectedInstance = providerInstances.find(v => v.id === state.draft.basics.provider_instance_id)
+    || vendors.find(v => v.vendor === state.draft.basics.model_provider)
+  const vendorInstances = providerInstances.filter(v => v.vendor === state.draft.basics.model_provider)
   const modelOptions = state.draft.basics.model_provider === 'ollama'
     ? ollamaModels
-    : (selectedVendor?.available_models || [])
+    : getProviderModelOptions(selectedInstance?.vendor, selectedInstance?.available_models || [], {
+        currentModel: state.draft.basics.model_name,
+      })
 
   const phoneError = useMemo(() => {
     const p = state.draft.basics.agent_phone
@@ -120,7 +127,13 @@ export default function StepBasics() {
             onChange={e => {
               const v = e.target.value
               const inst = vendors.find(x => x.vendor === v)
-              patchBasics({ model_provider: v, model_name: inst?.available_models[0] || (v === 'ollama' ? ollamaModels[0] || '' : '') })
+              patchBasics({
+                model_provider: v,
+                provider_instance_id: inst?.id || null,
+                model_name: v === 'ollama'
+                  ? ollamaModels[0] || ''
+                  : getPreferredProviderModel(v, inst?.available_models || []),
+              })
             }}
             className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
           >
@@ -131,17 +144,44 @@ export default function StepBasics() {
         </div>
         <div>
           <label className="block text-xs text-gray-400 mb-1">Model *</label>
-          <select
+          <ProviderModelInput
+            vendor={state.draft.basics.model_provider}
+            models={modelOptions}
             value={state.draft.basics.model_name}
-            onChange={e => patchBasics({ model_name: e.target.value })}
+            onChange={model_name => patchBasics({ model_name })}
             disabled={!state.draft.basics.model_provider}
+            placeholder="Select or type a model ID"
             className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400 disabled:opacity-40"
-          >
-            <option value="">Select model</option>
-            {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
+          />
         </div>
       </div>
+
+      {state.draft.basics.model_provider && vendorInstances.length > 0 && (
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">Provider instance</label>
+          <select
+            value={state.draft.basics.provider_instance_id ?? ''}
+            onChange={e => {
+              const instanceId = e.target.value ? Number(e.target.value) : null
+              const inst = providerInstances.find(x => x.id === instanceId)
+              patchBasics({
+                provider_instance_id: instanceId,
+                model_name: inst
+                  ? getPreferredProviderModel(inst.vendor, inst.available_models, state.draft.basics.model_name)
+                  : state.draft.basics.model_name,
+              })
+            }}
+            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+          >
+            <option value="">Use provider default</option>
+            {vendorInstances.map(inst => (
+              <option key={inst.id} value={inst.id}>
+                {inst.instance_name}{inst.is_default ? ' (default)' : ''}{inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {state.draft.basics.model_provider === 'ollama' && !ollamaAvailable && (
         <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">

@@ -16,6 +16,11 @@ import logging
 import time
 
 from models import ProviderInstance, ProviderConnectionAudit, Agent
+from constants.llm_models import (
+    DEEPSEEK_DEFAULT_BASE_URL,
+    expand_deepseek_model_catalog,
+    get_provider_models,
+)
 from models_rbac import User
 from auth_dependencies import (
     TenantContext,
@@ -339,51 +344,14 @@ async def _background_test_instance(instance_id: int, user_id: int) -> None:
 # *before* saving. Kept free of `ollama`, `vertex_ai`, `custom` — those are
 # fully user-supplied (ollama via Auto-detect against the local daemon).
 PREDEFINED_MODELS = {
-    "openai": [
-        "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini",
-        "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
-        "o1", "o1-mini", "o3-mini", "o4-mini",
-    ],
-    "anthropic": [
-        "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
-        "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
-    ],
-    "gemini": [
-        # Static fallback only — used when the live /v1beta/models call fails
-        # or no API key is available yet. The modal and setup page call
-        # /provider-instances/discover-models-raw with the user's key to
-        # refresh this list live from Google.
-        # Gemini 3.x (preview):
-        "gemini-3.1-pro-preview", "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite-preview",
-        # Gemini 2.5 (stable):
-        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-        # Gemini 2.0 / 1.5 (legacy):
-        "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
-    ],
-    "groq": [
-        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768", "gemma2-9b-it",
-    ],
-    "grok": [
-        "grok-3", "grok-3-mini", "grok-2",
-    ],
-    "deepseek": [
-        "deepseek-chat", "deepseek-reasoner",
-    ],
-    "openrouter": [
-        "google/gemini-2.5-flash", "anthropic/claude-sonnet-4",
-        "openai/gpt-4o-mini", "meta-llama/llama-3.1-8b-instruct:free",
-    ],
-    "vertex_ai": [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.0-flash",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-latest",
-    ],
+    "openai": get_provider_models("openai"),
+    "anthropic": get_provider_models("anthropic"),
+    "gemini": get_provider_models("gemini"),
+    "groq": get_provider_models("groq"),
+    "grok": get_provider_models("grok"),
+    "deepseek": get_provider_models("deepseek"),
+    "openrouter": get_provider_models("openrouter"),
+    "vertex_ai": get_provider_models("vertex_ai"),
 }
 
 
@@ -578,7 +546,7 @@ async def discover_models_raw(
         "openai": "https://api.openai.com/v1",
         "groq": "https://api.groq.com/openai/v1",
         "grok": "https://api.x.ai/v1",
-        "deepseek": "https://api.deepseek.com/v1",
+        "deepseek": DEEPSEEK_DEFAULT_BASE_URL,
         "openrouter": "https://openrouter.ai/api/v1",
     }
     base_url = (data.base_url or VENDOR_BASE_URLS.get(vendor) or "").rstrip("/")
@@ -630,6 +598,8 @@ async def discover_models_raw(
                 models = sorted(
                     {m.get("id") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
                 )
+                if vendor == "deepseek":
+                    models = expand_deepseek_model_catalog(models)
     except (httpx.ConnectError, httpx.TimeoutException):
         return {"models": []}
     except Exception as e:
@@ -1375,45 +1345,58 @@ async def discover_models(
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="Timeout connecting to Gemini API")
 
-    elif instance.vendor == "openrouter" and instance.base_url:
-        # OpenRouter-compatible: query /v1/models
+    elif instance.vendor in ("openai", "groq", "grok", "deepseek", "openrouter"):
+        # OpenAI-compatible providers: query /models from their configured base URL.
         import httpx
-        base_url = instance.base_url.rstrip("/") if instance.base_url else "https://openrouter.ai/api/v1"
+        from services.provider_instance_service import get_vendor_default_base_url
 
-        # Validate URL to prevent SSRF
-        from utils.ssrf_validator import validate_url, SSRFValidationError
-        try:
-            validate_url(base_url)
-        except SSRFValidationError as e:
-            raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
+        base_url = (instance.base_url or get_vendor_default_base_url(instance.vendor) or "").rstrip("/")
+        if not base_url:
+            models = list(PREDEFINED_MODELS.get(instance.vendor, []))
+        else:
+            # Validate URL to prevent SSRF
+            from utils.ssrf_validator import validate_url, SSRFValidationError
+            try:
+                validate_url(base_url)
+            except SSRFValidationError as e:
+                raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
 
-        headers = {}
-        api_key = _decrypt_provider_key(instance, db)
-        if not api_key:
-            from services.api_key_service import get_api_key
-            api_key = get_api_key("openrouter", db, tenant_id=instance.tenant_id)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            headers = {}
+            api_key = _decrypt_provider_key(instance, db)
+            if not api_key:
+                from services.api_key_service import get_api_key
+                api_key = get_api_key(instance.vendor, db, tenant_id=instance.tenant_id)
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{base_url}/models", headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    models = [m.get("id") for m in data.get("data", []) if m.get("id")]
-                else:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"OpenRouter returned HTTP {response.status_code}"
-                    )
-        except httpx.ConnectError:
-            raise HTTPException(status_code=502, detail="Cannot connect to OpenRouter")
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Timeout connecting to OpenRouter")
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{base_url}/models", headers=headers)
+                    if response.status_code == 200:
+                        data = response.json()
+                        models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    else:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"{VENDOR_DISPLAY_NAMES.get(instance.vendor, instance.vendor)} returned HTTP {response.status_code}"
+                        )
+            except httpx.ConnectError:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Cannot connect to {VENDOR_DISPLAY_NAMES.get(instance.vendor, instance.vendor)}"
+                )
+            except httpx.TimeoutException:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Timeout connecting to {VENDOR_DISPLAY_NAMES.get(instance.vendor, instance.vendor)}"
+                )
 
     else:
         # Cloud providers without live discovery: return curated list
         models = list(PREDEFINED_MODELS.get(instance.vendor, []))
+
+    if instance.vendor == "deepseek":
+        models = expand_deepseek_model_catalog(models)
 
     # Update instance with discovered models
     instance.available_models = models

@@ -16,6 +16,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, Agent, PlaygroundSettings, ProviderInstance } from '@/lib/client'
+import { PROVIDER_MODEL_CATALOG, getProviderModelLabels } from '@/lib/provider-models'
 import {
   SettingsIcon,
   BotIcon,
@@ -24,10 +25,16 @@ import {
   LinkIcon
 } from '@/components/ui/icons'
 
-// Model pricing per 1M tokens (USD) - synced with backend TokenTracker
+// Model pricing per 1M tokens (USD) for the inline cost badge.
 // Format: { prompt: input cost, completion: output cost }
 const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   // OpenAI
+  'gpt-5.5': { prompt: 5.0, completion: 30.0 },
+  'gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
+  'gpt-5.4': { prompt: 2.5, completion: 15.0 },
+  'gpt-5.4-pro': { prompt: 30.0, completion: 180.0 },
+  'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
+  'gpt-5.4-nano': { prompt: 0.20, completion: 1.25 },
   'gpt-4o': { prompt: 2.5, completion: 10.0 },
   'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
   'gpt-4-turbo': { prompt: 10.0, completion: 30.0 },
@@ -35,6 +42,8 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'o1': { prompt: 15.0, completion: 60.0 },
   'o1-mini': { prompt: 3.0, completion: 12.0 },
   // Anthropic
+  'claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
+  'claude-opus-4-7-latest': { prompt: 5.0, completion: 25.0 },
   'claude-opus-4-6': { prompt: 15.0, completion: 75.0 },
   'claude-sonnet-4-6': { prompt: 3.0, completion: 15.0 },
   'claude-haiku-4-5': { prompt: 0.80, completion: 4.0 },
@@ -56,6 +65,10 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'google/gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
   'google/gemini-2.0-flash-thinking-exp': { prompt: 0.10, completion: 0.40 },
   'anthropic/claude-sonnet-4-5': { prompt: 3.0, completion: 15.0 },
+  'anthropic/claude-opus-4.7': { prompt: 5.0, completion: 25.0 },
+  'anthropic/claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
+  'openai/gpt-5.5': { prompt: 5.0, completion: 30.0 },
+  'openai/gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
   'anthropic/claude-3.5-sonnet': { prompt: 3.0, completion: 15.0 },
   'anthropic/claude-3-opus': { prompt: 15.0, completion: 75.0 },
   'openai/gpt-4o': { prompt: 2.5, completion: 10.0 },
@@ -67,6 +80,25 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'deepseek/deepseek-r1': { prompt: 0.55, completion: 2.19 },
   'deepseek/deepseek-r1:free': { prompt: 0.0, completion: 0.0 },
   'deepseek/deepseek-chat': { prompt: 0.14, completion: 0.28 },
+  'x-ai/grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'x-ai/grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
+  // DeepSeek direct API
+  'deepseek-v4-flash': { prompt: 0.14, completion: 0.28 },
+  'deepseek-v4-pro': { prompt: 1.74, completion: 3.48 },
+  'deepseek-chat': { prompt: 0.14, completion: 0.28 },
+  'deepseek-reasoner': { prompt: 0.14, completion: 0.28 },
+  'grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
+  'openai/gpt-oss-120b': { prompt: 0.15, completion: 0.60 },
+  'openai/gpt-oss-20b': { prompt: 0.075, completion: 0.30 },
   'qwen/qwen-2.5-72b-instruct': { prompt: 0.35, completion: 0.4 },
   'cohere/command-r-plus': { prompt: 2.5, completion: 10.0 },
   'perplexity/llama-3.1-sonar-huge-128k-online': { prompt: 5.0, completion: 5.0 },
@@ -102,68 +134,8 @@ const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`
 }
 
-// Common models by provider
-const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  gemini: [
-    { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
-    { value: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite (Preview)' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-  ],
-  openai: [
-    { value: 'gpt-4o', label: 'GPT-4o' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-    { value: 'o1', label: 'o1' },
-    { value: 'o1-mini', label: 'o1-mini' },
-  ],
-  anthropic: [
-    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-    { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-  ],
-  ollama: [],  // Populated dynamically from running Ollama instance
-  openrouter: [
-    { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'google/gemini-2.0-flash-thinking-exp', label: 'Gemini 2.0 Flash Thinking' },
-    { value: 'anthropic/claude-sonnet-4-5', label: 'Claude 4.5 Sonnet' },
-    { value: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet' },
-    { value: 'anthropic/claude-3-opus', label: 'Claude 3 Opus' },
-    { value: 'openai/gpt-4o', label: 'GPT-4o' },
-    { value: 'openai/gpt-4-turbo', label: 'GPT-4 Turbo' },
-    { value: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
-    { value: 'meta-llama/llama-3.1-405b-instruct', label: 'Llama 3.1 405B' },
-    { value: 'mistralai/mistral-large', label: 'Mistral Large' },
-    { value: 'mistralai/mixtral-8x22b-instruct', label: 'Mixtral 8x22B' },
-    { value: 'deepseek/deepseek-r1', label: 'DeepSeek R1' },
-    { value: 'deepseek/deepseek-r1:free', label: 'DeepSeek R1 (Free)' },
-    { value: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' },
-    { value: 'qwen/qwen-2.5-72b-instruct', label: 'Qwen 2.5 72B' },
-    { value: 'cohere/command-r-plus', label: 'Command R+' },
-    { value: 'perplexity/llama-3.1-sonar-huge-128k-online', label: 'Perplexity Sonar' },
-    { value: 'x-ai/grok-2', label: 'Grok 2' },
-    { value: 'nvidia/llama-3.1-nemotron-70b-instruct', label: 'Llama 3.1 Nemotron 70B' },
-    { value: 'microsoft/wizardlm-2-8x22b', label: 'WizardLM 2 8x22B' },
-    { value: 'databricks/dbrx-instruct', label: 'DBRX Instruct' },
-    { value: 'nousresearch/hermes-3-llama-3.1-405b', label: 'Hermes 3 Llama 3.1 405B' },
-  ],
-  vertex_ai: [
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Vertex)' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Vertex)' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (Vertex)' },
-    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Vertex)' },
-    { value: 'claude-haiku-4-5-latest', label: 'Claude Haiku 4.5 (Vertex)' },
-  ],
-}
+// Common models by provider, shared with the rest of the provider/model UI.
+const MODEL_OPTIONS = PROVIDER_MODEL_CATALOG
 
 interface ConfigPanelProps {
   agentId: number | null
@@ -266,7 +238,10 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
     }
   }, [agentId, settings, onSettingsChange])
 
-  const handleSettingChange = (key: string, value: any) => {
+  const handleSettingChange = <K extends keyof typeof localSettings>(
+    key: K,
+    value: (typeof localSettings)[K]
+  ) => {
     const newSettings = { ...localSettings, [key]: value }
     setLocalSettings(newSettings)
 
@@ -403,13 +378,13 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         const staticOptions = MODEL_OPTIONS[vendorKey] || []
                         const labelFor = (m: string) =>
                           staticOptions.find(o => o.value === m)?.label || m
-                        const instanceModels = [
-                          ...new Set(providerInstances.flatMap(i => i.available_models))
-                        ].filter(m => !isTTSOnlyModel(m))
+                        const instanceModels = Array.from(
+                          new Set(providerInstances.flatMap(i => i.available_models))
+                        ).filter(m => !isTTSOnlyModel(m))
                         const dynamicModels: { value: string; label: string }[] = isOllama
                           ? ollamaModels
                           : instanceModels.length > 0
-                            ? instanceModels.map(m => ({ value: m, label: labelFor(m) }))
+                            ? getProviderModelLabels(vendorKey, instanceModels).map(m => ({ ...m, label: labelFor(m.value) === m.value ? m.label : labelFor(m.value) }))
                             : staticOptions.filter(o => !isTTSOnlyModel(o.value))
                         return dynamicModels
                       })().map(model => {
@@ -453,8 +428,8 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         )
                       })}
 
-                      {/* Custom Model Input (for OpenRouter or other providers) */}
-                      {agent.model_provider?.toLowerCase() === 'openrouter' && (
+                      {/* Custom model override for any provider */}
+                      {agent.model_provider?.toLowerCase() !== 'ollama' && (
                         <>
                           {!showCustomModelInput ? (
                             <button
@@ -468,7 +443,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                                 <span className="font-medium">Use Custom Model</span>
                               </div>
                               <div className="text-[10px] text-white/40 mt-0.5">
-                                Type any OpenRouter model name
+                                Type any model ID supported by this provider
                               </div>
                             </button>
                           ) : (
@@ -486,7 +461,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                                     setCustomModelInput('')
                                   }
                                 }}
-                                placeholder="e.g., anthropic/claude-sonnet-4-5"
+                                placeholder={agent.model_provider?.toLowerCase() === 'openrouter' ? 'e.g., anthropic/claude-sonnet-4-5' : 'e.g., gemini-2.5-flash'}
                                 className="w-full px-2 py-1.5 text-xs bg-black/40 border border-white/[0.06] rounded text-white placeholder-white/30 focus:outline-none focus:border-teal-500/50"
                                 autoFocus
                               />
@@ -516,7 +491,7 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                                 </button>
                               </div>
                               <div className="text-[10px] text-white/40">
-                                Enter model ID in format: provider/model-name
+                                Saved as a temporary model override for this Playground session
                               </div>
                             </div>
                           )}
