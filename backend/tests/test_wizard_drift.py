@@ -665,6 +665,17 @@ def test_latest_model_provider_inference():
     assert infer_provider_from_model("llama3.2:latest") == "ollama"
 
 
+def test_model_pricing_classifies_gateway_ids_as_gateway_providers():
+    _install_lightweight_backend_import_stubs()
+
+    from api.routes_model_pricing import _get_provider_from_model
+
+    assert _get_provider_from_model("openai/gpt-5.5") == "openrouter"
+    assert _get_provider_from_model("anthropic/claude-opus-4.7") == "openrouter"
+    assert _get_provider_from_model("x-ai/grok-4.3") == "openrouter"
+    assert _get_provider_from_model("openai/gpt-oss-120b") == "groq"
+
+
 def test_latest_pricing_lookup_and_cached_input_costs():
     _install_lightweight_backend_import_stubs()
 
