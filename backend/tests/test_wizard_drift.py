@@ -22,6 +22,7 @@ Or directly on the host (requires the Python deps available to pytest):
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Iterable, Set
 
@@ -43,6 +44,33 @@ EXPECTED_TTS_PROVIDERS: Set[str] = {"openai", "kokoro", "elevenlabs", "gemini"}
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _install_lightweight_backend_import_stubs() -> None:
+    """Install local-only stubs for optional packages absent on host pytest."""
+    import sys
+    import types
+
+    docker_stub = types.ModuleType("docker")
+    docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=Exception)
+    docker_stub.DockerClient = object
+    sys.modules.setdefault("docker", docker_stub)
+
+    argon2_stub = types.ModuleType("argon2")
+
+    class _PasswordHasher:
+        def hash(self, value):
+            return value
+
+        def verify(self, hashed, plain):
+            return hashed == plain
+
+    argon2_stub.PasswordHasher = _PasswordHasher
+    argon2_exceptions_stub = types.ModuleType("argon2.exceptions")
+    argon2_exceptions_stub.VerifyMismatchError = ValueError
+    argon2_exceptions_stub.InvalidHashError = ValueError
+    sys.modules.setdefault("argon2", argon2_stub)
+    sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +213,226 @@ def test_predefined_models_single_source():
         "same object as api.routes_provider_instances.PREDEFINED_MODELS. "
         "Someone reintroduced a parallel copy — remove it and re-import."
     )
+
+
+# ---------------------------------------------------------------------------
+# Guard 3b — DeepSeek V4 direct-provider catalog
+# ---------------------------------------------------------------------------
+
+def test_deepseek_v4_catalog_defaults_and_aliases():
+    """
+    DeepSeek direct-provider support must expose the V4 models first while
+    retaining the legacy compatibility aliases for existing saved configs.
+    """
+    _install_lightweight_backend_import_stubs()
+
+    from constants.llm_models import (
+        DEEPSEEK_DEFAULT_BASE_URL,
+        DEEPSEEK_DEFAULT_MODEL,
+        DEEPSEEK_MODELS,
+        DEFAULT_PROVIDER_MODELS,
+        SENTINEL_DEFAULT_MODELS,
+        merge_deepseek_v4_models,
+    )
+    from api.routes_integrations import PROVIDER_TEST_MODELS
+    from api.routes_provider_instances import PREDEFINED_MODELS
+    from api.routes_sentinel import LLM_MODELS
+
+    assert DEEPSEEK_MODELS == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ]
+    assert DEEPSEEK_DEFAULT_MODEL == "deepseek-v4-flash"
+    assert DEEPSEEK_DEFAULT_BASE_URL == "https://api.deepseek.com"
+    assert PREDEFINED_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert LLM_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert DEFAULT_PROVIDER_MODELS["deepseek"] == "deepseek-v4-flash"
+    assert SENTINEL_DEFAULT_MODELS["deepseek"] == "deepseek-v4-flash"
+    assert PROVIDER_TEST_MODELS["deepseek"] == "deepseek-v4-flash"
+
+    legacy_models = ["deepseek-chat", "tenant-custom-model"]
+    merged = merge_deepseek_v4_models(legacy_models)
+    assert merged == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "tenant-custom-model",
+    ]
+    assert merge_deepseek_v4_models(merged) == merged
+
+
+def test_deepseek_v4_pricing_and_display_metadata():
+    _install_lightweight_backend_import_stubs()
+
+    from analytics.token_tracker import MODEL_PRICING, TokenTracker
+    from api.routes_model_pricing import _format_display_name
+
+    assert MODEL_PRICING["deepseek-v4-flash"] == {
+        "prompt": 0.14,
+        "cached_input": 0.0028,
+        "completion": 0.28,
+    }
+    assert MODEL_PRICING["deepseek-v4-pro"] == {
+        "prompt": 1.74,
+        "cached_input": 0.0145,
+        "completion": 3.48,
+    }
+    assert MODEL_PRICING["deepseek-chat"] == MODEL_PRICING["deepseek-v4-flash"]
+    assert MODEL_PRICING["deepseek-reasoner"] == MODEL_PRICING["deepseek-v4-flash"]
+    assert _format_display_name("deepseek-v4-flash") == "DeepSeek V4 Flash"
+    assert _format_display_name("deepseek-reasoner") == "DeepSeek Reasoner (legacy alias)"
+
+    tracker = TokenTracker(db=None)
+    # 600 cache-miss input tokens, 400 cache-hit input tokens, 100 output tokens.
+    # V4 Pro should use standard non-promotional pricing:
+    # input $1.74/M, cached input $0.0145/M, output $3.48/M.
+    assert tracker._calculate_cost(
+        "deepseek-v4-pro",
+        prompt_tokens=1000,
+        completion_tokens=100,
+        model_provider="deepseek",
+        cached_input_tokens=400,
+        uncached_input_tokens=600,
+    ) == pytest.approx(0.0013978)
+
+
+# ---------------------------------------------------------------------------
+# Guard 3c — shared latest LLM provider catalog
+# ---------------------------------------------------------------------------
+
+def test_latest_llm_catalogs_shared_by_provider_and_sentinel_routes():
+    _install_lightweight_backend_import_stubs()
+
+    from api.routes_provider_instances import PREDEFINED_MODELS
+    from api.routes_sentinel import LLM_MODELS
+    from constants.llm_models import (
+        DEEPSEEK_MODELS,
+        GROQ_HOSTED_OPEN_MODELS,
+        OPENROUTER_GATEWAY_MODELS,
+        PROVIDER_TEST_MODELS,
+        get_provider_models,
+        get_sentinel_models,
+    )
+
+    assert PREDEFINED_MODELS["openai"] == get_provider_models("openai")
+    assert PREDEFINED_MODELS["grok"] == get_provider_models("grok")
+    assert PREDEFINED_MODELS["groq"] == GROQ_HOSTED_OPEN_MODELS
+    assert PREDEFINED_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert LLM_MODELS["grok"] == get_sentinel_models("grok")
+    assert LLM_MODELS["openrouter"] == OPENROUTER_GATEWAY_MODELS
+
+    assert "gpt-5.5" in PREDEFINED_MODELS["openai"]
+    assert "gpt-5.5-pro" in PREDEFINED_MODELS["openai"]
+    assert "claude-opus-4-7" in PREDEFINED_MODELS["anthropic"]
+    assert "grok-4.3" in PREDEFINED_MODELS["grok"]
+    assert "grok-4-1-fast-non-reasoning" in LLM_MODELS["grok"]
+    assert "openai/gpt-oss-120b" in PREDEFINED_MODELS["groq"]
+    assert "mixtral-8x7b-32768" not in PREDEFINED_MODELS["groq"]
+    assert PROVIDER_TEST_MODELS["openai"] == "gpt-5.5"
+    assert PROVIDER_TEST_MODELS["anthropic"] == "claude-opus-4-7"
+    assert PROVIDER_TEST_MODELS["groq"] == "openai/gpt-oss-20b"
+    assert PROVIDER_TEST_MODELS["grok"] == "grok-4.3"
+    assert "openai/gpt-5.5" == PREDEFINED_MODELS["openrouter"][0]
+
+
+def test_latest_model_provider_inference():
+    from constants.llm_models import infer_provider_from_model
+
+    assert infer_provider_from_model("gpt-5.5") == "openai"
+    assert infer_provider_from_model("claude-opus-4-7") == "anthropic"
+    assert infer_provider_from_model("grok-4.20-0309-reasoning") == "grok"
+    assert infer_provider_from_model("x-ai/grok-4.3") == "grok"
+    assert infer_provider_from_model("openai/gpt-5.5") == "openai"
+    assert infer_provider_from_model("openai/gpt-oss-120b") == "groq"
+    assert infer_provider_from_model("deepseek-v4-pro") == "deepseek"
+    assert infer_provider_from_model("llama3.2:latest") == "ollama"
+
+
+def test_latest_pricing_lookup_and_cached_input_costs():
+    _install_lightweight_backend_import_stubs()
+
+    from analytics.token_tracker import MODEL_PRICING, TokenTracker
+
+    assert MODEL_PRICING["gpt-5.5"] == {
+        "prompt": 5.0,
+        "cached_input": 0.5,
+        "completion": 30.0,
+    }
+    assert MODEL_PRICING["gpt-5.5-pro"] == {
+        "prompt": 30.0,
+        "completion": 180.0,
+    }
+    assert MODEL_PRICING["grok-4.3"] == {
+        "prompt": 1.25,
+        "cached_input": 0.20,
+        "completion": 2.50,
+    }
+    assert MODEL_PRICING["grok-4-1-fast-reasoning"] == {
+        "prompt": 0.20,
+        "cached_input": 0.05,
+        "completion": 0.50,
+    }
+    assert MODEL_PRICING["x-ai/grok-4.20-0309-non-reasoning"] == {
+        "prompt": 1.25,
+        "cached_input": 0.20,
+        "completion": 2.50,
+    }
+
+    tracker = TokenTracker(db=None)
+    assert tracker._calculate_cost(
+        "grok-4.3",
+        prompt_tokens=1000,
+        completion_tokens=100,
+        model_provider="grok",
+        cached_input_tokens=400,
+        uncached_input_tokens=600,
+    ) == pytest.approx(0.00108)
+
+    first_lookup = tracker._get_pricing("grok-4.3", "grok")
+    assert tracker._pricing_cache["grok:grok-4.3"] == first_lookup
+    assert tracker._get_pricing("grok-4.3", "grok") is first_lookup
+
+
+def test_provider_instance_runtime_preserves_manual_model(monkeypatch):
+    _install_lightweight_backend_import_stubs()
+
+    from agent.ai_client import AIClient
+    from services.provider_instance_service import ProviderInstanceService
+
+    instance = SimpleNamespace(
+        id=42,
+        tenant_id="tenant-a",
+        vendor="openrouter",
+        base_url=None,
+        is_active=True,
+        api_key_encrypted="encrypted",
+        available_models=["google/gemini-2.5-flash"],
+    )
+
+    monkeypatch.setattr(
+        ProviderInstanceService,
+        "get_instance",
+        staticmethod(lambda instance_id, tenant_id, db: instance),
+    )
+    monkeypatch.setattr(
+        ProviderInstanceService,
+        "resolve_api_key",
+        staticmethod(lambda provider_instance, db: "sk-test"),
+    )
+
+    client = AIClient(
+        provider="openrouter",
+        model_name="manual/vendor-model-2026",
+        db=object(),
+        tenant_id="tenant-a",
+        provider_instance_id=42,
+    )
+
+    assert client.provider == "openrouter"
+    assert client.model_name == "manual/vendor-model-2026"
 
 
 # ---------------------------------------------------------------------------

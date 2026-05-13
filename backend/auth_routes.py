@@ -702,16 +702,12 @@ async def setup_wizard(
         from services.api_key_service import store_api_key
 
         # Default model per provider (shared by Steps 3b and 4)
-        provider_defaults = {
-            "gemini": "gemini-2.5-flash",
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-haiku-4-5",
-            "groq": "llama-3.3-70b-versatile",
-            "grok": "grok-3-mini",
-            "deepseek": "deepseek-chat",
-            "openrouter": "google/gemini-2.5-flash",
-            "ollama": "llama3.2:latest",
-        }
+        from constants.llm_models import (
+            DEFAULT_PROVIDER_MODELS,
+            SENTINEL_DEFAULT_MODELS,
+            merge_deepseek_v4_models,
+        )
+        provider_defaults = DEFAULT_PROVIDER_MODELS
         vendor_labels = {
             "gemini": "Google Gemini",
             "openai": "OpenAI",
@@ -766,6 +762,9 @@ async def setup_wizard(
         if configured_providers:
             for vendor in configured_providers:
                 model_name = _selected_model_for_vendor(vendor)
+                available_models = [model_name] if model_name else None
+                if vendor == "deepseek":
+                    available_models = merge_deepseek_v4_models(available_models)
                 instance_name = (
                     f"{vendor_labels.get(vendor, vendor)} (Default)"
                     if vendor == primary_vendor
@@ -777,7 +776,7 @@ async def setup_wizard(
                     instance_name=instance_name,
                     db=db,
                     api_key=provider_key_map[vendor],
-                    available_models=[model_name] if model_name else None,
+                    available_models=available_models,
                     is_default=(vendor == primary_vendor),
                 )
                 provider_instances_created[vendor] = instance.id
@@ -883,13 +882,7 @@ async def setup_wizard(
             from models import SentinelConfig
             # Sentinel lite models per provider for security analysis
             sentinel_models = {
-                "gemini": "gemini-2.5-flash-lite",
-                "openai": "gpt-4o-mini",
-                "anthropic": "claude-haiku-4-5",
-                "groq": "llama-3.1-8b-instant",
-                "grok": "grok-3-mini",
-                "deepseek": "deepseek-chat",
-                "openrouter": "google/gemini-2.5-flash",
+                **SENTINEL_DEFAULT_MODELS,
                 "ollama": ollama_model_name or _selected_model_for_vendor("ollama"),
             }
             sentinel_config = SentinelConfig(

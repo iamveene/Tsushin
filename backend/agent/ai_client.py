@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 import google.generativeai as genai
 import httpx  # Phase 5.2: Ollama support
 from services.api_key_service import get_api_key
+from constants.llm_models import DEEPSEEK_DEFAULT_BASE_URL
 
 if TYPE_CHECKING:
     from analytics.token_tracker import TokenTracker
@@ -274,7 +275,7 @@ class AIClient:
             # Uses OpenAI-compatible API with custom base URL
             self.client = AsyncOpenAI(
                 api_key=api_key,
-                base_url="https://api.deepseek.com/v1"
+                base_url=DEEPSEEK_DEFAULT_BASE_URL
             )
             self.logger.info(f"Initialized DeepSeek client with model: {model_name}")
         elif self.provider == "vertex_ai":
@@ -421,6 +422,8 @@ class AIClient:
                             model_name=self.model_name,
                             prompt_tokens=usage.get("prompt", 0),
                             completion_tokens=usage.get("completion", 0),
+                            cached_input_tokens=usage.get("cached_input", 0),
+                            uncached_input_tokens=usage.get("uncached_input"),
                             agent_id=agent_id,
                             agent_run_id=agent_run_id,
                             skill_type=skill_type,
@@ -446,13 +449,7 @@ class AIClient:
 
         # AsyncAnthropic client — await directly
         response = await self.client.messages.create(
-            model=self.model_name,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
+            **self._anthropic_request_kwargs(system_prompt, user_message)
         )
 
         answer = response.content[0].text if response.content else ""
@@ -481,26 +478,24 @@ class AIClient:
             provider_name = "OpenAI"
         print(f"  📡 Calling {provider_name} API: model={self.model_name}")
 
-        response = await self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        request_kwargs = {
+            "model": self.model_name,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            max_tokens=self.max_tokens,
-            temperature=self.temperature
-        )
+        }
+        if self.provider == "openai" and self._uses_max_completion_tokens(self.model_name):
+            request_kwargs["max_completion_tokens"] = self.max_tokens
+        else:
+            request_kwargs["max_tokens"] = self.max_tokens
+            request_kwargs["temperature"] = self.temperature
+
+        response = await self.client.chat.completions.create(**request_kwargs)
 
         answer = self._extract_openai_response_text(response)
 
-        token_usage = {
-            "prompt": getattr(response.usage, "prompt_tokens", 0) or 0,
-            "completion": getattr(response.usage, "completion_tokens", 0) or 0,
-            "total": getattr(response.usage, "total_tokens", 0) or (
-                (getattr(response.usage, "prompt_tokens", 0) or 0) +
-                (getattr(response.usage, "completion_tokens", 0) or 0)
-            )
-        } if response.usage else None
+        token_usage = self._extract_openai_token_usage(response.usage) if response.usage else None
 
         return {
             "answer": answer,
@@ -797,6 +792,25 @@ class AIClient:
             Dict with type "token" or "done"
         """
         try:
+            if self._is_non_streaming_model(self.model_name):
+                result = await self.generate(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    operation_type=operation_type,
+                    agent_id=agent_id,
+                    agent_run_id=agent_run_id,
+                    skill_type=skill_type,
+                    sender_key=sender_key,
+                    message_id=message_id,
+                )
+                if result.get("error"):
+                    yield {"type": "error", "error": result["error"]}
+                    return
+                if result.get("answer"):
+                    yield {"type": "token", "content": result["answer"]}
+                yield {"type": "done", "token_usage": None, "error": None}
+                return
+
             # Select provider-specific stream generator
             if self.provider == "anthropic":
                 stream_gen = self._stream_anthropic(system_prompt, user_message)
@@ -840,6 +854,8 @@ class AIClient:
                                 model_name=self.model_name,
                                 prompt_tokens=usage.get("prompt", 0),
                                 completion_tokens=usage.get("completion", 0),
+                                cached_input_tokens=usage.get("cached_input", 0),
+                                uncached_input_tokens=usage.get("uncached_input"),
                                 agent_id=agent_id,
                                 agent_run_id=agent_run_id,
                                 skill_type=skill_type,
@@ -870,11 +886,7 @@ class AIClient:
             output_tokens = 0
 
             async with self.client.messages.stream(
-                model=self.model_name,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}]
+                **self._anthropic_request_kwargs(system_prompt, user_message)
             ) as stream:
                 async for text in stream.text_stream:
                     accumulated_text += text
@@ -908,17 +920,22 @@ class AIClient:
         try:
             accumulated_text = ""
 
-            stream = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
+            request_kwargs = {
+                "model": self.model_name,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                stream=True,
-                stream_options={"include_usage": True}
-            )
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if self.provider == "openai" and self._uses_max_completion_tokens(self.model_name):
+                request_kwargs["max_completion_tokens"] = self.max_tokens
+            else:
+                request_kwargs["max_tokens"] = self.max_tokens
+                request_kwargs["temperature"] = self.temperature
+
+            stream = await self.client.chat.completions.create(**request_kwargs)
 
             usage_data = None
             async for chunk in stream:
@@ -932,20 +949,20 @@ class AIClient:
                     usage_data = chunk.usage
 
             if usage_data:
-                prompt_tokens = usage_data.prompt_tokens
-                completion_tokens = usage_data.completion_tokens
+                token_usage = self._extract_openai_token_usage(usage_data)
             else:
                 # Fallback estimation if provider doesn't support stream_options
                 prompt_tokens = len(system_prompt + user_message) // 4
                 completion_tokens = len(accumulated_text) // 4
-
-            yield {
-                "type": "done",
-                "token_usage": {
+                token_usage = {
                     "prompt": prompt_tokens,
                     "completion": completion_tokens,
                     "total": prompt_tokens + completion_tokens
-                },
+                }
+
+            yield {
+                "type": "done",
+                "token_usage": token_usage,
                 "error": None
             }
         except Exception as e:
@@ -1182,6 +1199,81 @@ class AIClient:
             return refusal
         return ""
 
+    def _extract_openai_token_usage(self, usage) -> Dict:
+        """Normalize OpenAI-compatible usage, including DeepSeek cache hits."""
+        usage_dict = usage if isinstance(usage, dict) else {}
+        if not usage_dict and hasattr(usage, "model_dump"):
+            try:
+                usage_dict = usage.model_dump()
+            except Exception:
+                usage_dict = {}
+        if not usage_dict:
+            usage_dict = getattr(usage, "model_extra", None) or {}
+
+        def value(key: str, default: int = 0) -> int:
+            raw = usage_dict.get(key, getattr(usage, key, default))
+            return int(raw or default)
+
+        prompt_tokens = value("prompt_tokens")
+        completion_tokens = value("completion_tokens")
+        total_tokens = value("total_tokens", prompt_tokens + completion_tokens)
+
+        cached_input_tokens = value("prompt_cache_hit_tokens")
+        uncached_input_tokens = value("prompt_cache_miss_tokens")
+
+        prompt_details = usage_dict.get("prompt_tokens_details")
+        if prompt_details is None:
+            prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None and not cached_input_tokens:
+            if isinstance(prompt_details, dict):
+                cached_input_tokens = int(prompt_details.get("cached_tokens") or 0)
+            else:
+                cached_input_tokens = int(getattr(prompt_details, "cached_tokens", 0) or 0)
+
+        if not prompt_tokens and (cached_input_tokens or uncached_input_tokens):
+            prompt_tokens = cached_input_tokens + uncached_input_tokens
+        if not uncached_input_tokens and cached_input_tokens:
+            uncached_input_tokens = max(prompt_tokens - cached_input_tokens, 0)
+        if not total_tokens:
+            total_tokens = prompt_tokens + completion_tokens
+
+        token_usage = {
+            "prompt": prompt_tokens,
+            "completion": completion_tokens,
+            "total": total_tokens,
+        }
+        if cached_input_tokens:
+            token_usage["cached_input"] = cached_input_tokens
+            token_usage["uncached_input"] = uncached_input_tokens
+        return token_usage
+
+    def _uses_max_completion_tokens(self, model_name: str) -> bool:
+        """OpenAI reasoning/frontier chat models reject legacy max_tokens."""
+        model_lower = (model_name or "").lower()
+        return model_lower.startswith(("gpt-5", "o1", "o3", "o4"))
+
+    def _is_non_streaming_model(self, model_name: str) -> bool:
+        """Models that are available only through non-streaming requests."""
+        model_id = (model_name or "").lower().split("/")[-1]
+        return model_id == "gpt-5.5-pro"
+
+    def _anthropic_request_kwargs(self, system_prompt: str, user_message: str) -> Dict:
+        """Build Anthropic request args with model-specific parameter hygiene."""
+        kwargs = {
+            "model": self.model_name,
+            "max_tokens": self.max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_message}],
+        }
+        if not self._anthropic_disallows_sampling_params(self.model_name):
+            kwargs["temperature"] = self.temperature
+        return kwargs
+
+    def _anthropic_disallows_sampling_params(self, model_name: str) -> bool:
+        """Claude Opus 4.7 rejects temperature/top_p/top_k sampling knobs."""
+        model_id = (model_name or "").lower().split("/")[-1]
+        return model_id in {"claude-opus-4-7", "claude-opus-4.7"}
+
     def _coerce_openai_content_to_text(self, content) -> str:
         if content is None:
             return ""
@@ -1248,9 +1340,10 @@ class AIClient:
                 {"role": "user", "content": user_message}
             ],
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
             "system": system_prompt,
         }
+        if not self._anthropic_disallows_sampling_params(self.model_name):
+            payload["temperature"] = self.temperature
 
         headers = {
             "Authorization": f"Bearer {self._vertex_credentials.token}",
@@ -1310,10 +1403,11 @@ class AIClient:
                 {"role": "user", "content": user_message}
             ],
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
             "system": system_prompt,
             "stream": True,
         }
+        if not self._anthropic_disallows_sampling_params(self.model_name):
+            payload["temperature"] = self.temperature
 
         headers = {
             "Authorization": f"Bearer {self._vertex_credentials.token}",

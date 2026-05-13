@@ -10,6 +10,7 @@ from sqlalchemy import func, desc
 import logging
 
 from models import TokenUsage, Agent, Contact
+from constants.llm_models import DEEPSEEK_MODEL_PRICING, LATEST_MODEL_PRICING
 
 logger = logging.getLogger(__name__)
 
@@ -234,8 +235,8 @@ MODEL_PRICING = {
     # ============================================================
     # DeepSeek API (direct, not via OpenRouter)
     # ============================================================
-    "deepseek-chat": {"prompt": 0.14, "completion": 0.28},
-    "deepseek-reasoner": {"prompt": 0.55, "completion": 2.19},
+    **DEEPSEEK_MODEL_PRICING,
+    **LATEST_MODEL_PRICING,
 
     # Ollama (local, free) — no hardcoded models needed.
     # Any model with provider="ollama" is automatically treated as free ($0)
@@ -264,6 +265,8 @@ class TokenTracker:
         model_name: str,
         prompt_tokens: int,
         completion_tokens: int,
+        cached_input_tokens: int = 0,
+        uncached_input_tokens: Optional[int] = None,
         agent_id: Optional[int] = None,
         agent_run_id: Optional[int] = None,
         skill_type: Optional[str] = None,
@@ -279,6 +282,8 @@ class TokenTracker:
             model_name: Specific model name
             prompt_tokens: Input tokens consumed
             completion_tokens: Output tokens generated
+            cached_input_tokens: Input tokens billed at the provider cache-hit rate
+            uncached_input_tokens: Input tokens billed at the cache-miss/input rate
             agent_id: Agent that performed the operation
             agent_run_id: Associated agent run ID
             skill_type: Skill that used the tokens
@@ -289,7 +294,14 @@ class TokenTracker:
             TokenUsage: Created usage record
         """
         total_tokens = prompt_tokens + completion_tokens
-        estimated_cost = self._calculate_cost(model_name, prompt_tokens, completion_tokens, model_provider)
+        estimated_cost = self._calculate_cost(
+            model_name,
+            prompt_tokens,
+            completion_tokens,
+            model_provider,
+            cached_input_tokens=cached_input_tokens,
+            uncached_input_tokens=uncached_input_tokens,
+        )
 
         usage = TokenUsage(
             agent_id=agent_id,
@@ -317,7 +329,15 @@ class TokenTracker:
 
         return usage
 
-    def _calculate_cost(self, model_name: str, prompt_tokens: int, completion_tokens: int, model_provider: Optional[str] = None) -> float:
+    def _calculate_cost(
+        self,
+        model_name: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model_provider: Optional[str] = None,
+        cached_input_tokens: int = 0,
+        uncached_input_tokens: Optional[int] = None,
+    ) -> float:
         """
         Calculate estimated cost in USD based on model pricing.
 
@@ -329,7 +349,17 @@ class TokenTracker:
             logger.debug(f"No pricing data for model: {model_name}, defaulting to $0")
             return 0.0
 
-        prompt_cost = (prompt_tokens / 1_000_000) * pricing.get("prompt", 0)
+        cached_input_tokens = max(cached_input_tokens or 0, 0)
+        if cached_input_tokens and pricing.get("cached_input") is not None:
+            billable_uncached = (
+                uncached_input_tokens
+                if uncached_input_tokens is not None
+                else max(prompt_tokens - cached_input_tokens, 0)
+            )
+            prompt_cost = (max(billable_uncached, 0) / 1_000_000) * pricing.get("prompt", 0)
+            prompt_cost += (cached_input_tokens / 1_000_000) * pricing.get("cached_input", 0)
+        else:
+            prompt_cost = (prompt_tokens / 1_000_000) * pricing.get("prompt", 0)
         completion_cost = (completion_tokens / 1_000_000) * pricing.get("completion", 0)
 
         return prompt_cost + completion_cost
@@ -415,6 +445,7 @@ class TokenTracker:
                 if db_pricing:
                     return {
                         "prompt": db_pricing.input_cost_per_million,
+                        "cached_input": db_pricing.cached_input_cost_per_million,
                         "completion": db_pricing.output_cost_per_million
                     }
             except Exception as e:

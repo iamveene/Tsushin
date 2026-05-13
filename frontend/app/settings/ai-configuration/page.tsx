@@ -10,6 +10,8 @@ import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
 import { authenticatedFetch, ProviderInstance } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import {
   GeminiIcon,
   OpenAIIcon,
@@ -144,15 +146,21 @@ export default function AIConfigurationPage() {
   }, [authLoading, user, fetchData])
 
   const selectedInstance = instances.find(i => i.id === selectedInstanceId) || null
+  const selectedModelOptions = getProviderModelOptions(selectedInstance?.vendor, selectedInstance?.available_models || [], {
+    currentModel: selectedModel,
+  })
 
   const handleInstanceSelect = (instance: ProviderInstance) => {
     setSelectedInstanceId(instance.id)
-    // Auto-select first model from instance, or keep current if it belongs to this instance
-    if (instance.available_models.length > 0) {
-      if (instance.available_models.includes(selectedModel)) {
+    const modelOptions = getProviderModelOptions(instance.vendor, instance.available_models, {
+      currentModel: selectedModel,
+    })
+    if (modelOptions.length > 0) {
+      const preferredModel = getPreferredProviderModel(instance.vendor, modelOptions, selectedModel)
+      if (modelOptions.includes(selectedModel) && preferredModel === selectedModel) {
         // Keep current selection
       } else {
-        setSelectedModel(instance.available_models[0])
+        setSelectedModel(preferredModel)
       }
     } else {
       setSelectedModel('')
@@ -391,9 +399,12 @@ export default function AIConfigurationPage() {
                           </div>
                           <p className="text-xs text-tsushin-slate">
                             {VENDOR_LABELS[instance.vendor] || instance.vendor}
-                            {instance.available_models.length > 0 && (
-                              <> &middot; {instance.available_models.length} model{instance.available_models.length !== 1 ? 's' : ''}</>
-                            )}
+                            {(() => {
+                              const modelCount = getProviderModelOptions(instance.vendor, instance.available_models).length
+                              return modelCount > 0 ? (
+                                <> &middot; {modelCount} model{modelCount !== 1 ? 's' : ''}</>
+                              ) : null
+                            })()}
                           </p>
                         </div>
                         {instance.is_default && (
@@ -413,11 +424,11 @@ export default function AIConfigurationPage() {
             </div>
 
             {/* Model Selection */}
-            {selectedInstance && selectedInstance.available_models.length > 0 && (
+            {selectedInstance && selectedModelOptions.length > 0 && (
               <div className="glass-card rounded-xl p-6 mb-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
                 <div className="space-y-2">
-                  {selectedInstance.available_models.map((model) => {
+                  {selectedModelOptions.map((model) => {
                     const isSelected = selectedModel === model
                     const colors = VENDOR_COLORS[selectedInstance.vendor] || VENDOR_COLORS.custom
 
@@ -442,11 +453,23 @@ export default function AIConfigurationPage() {
                     )
                   })}
                 </div>
+                <div className="mt-4">
+                  <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
+                  <ProviderModelInput
+                    vendor={selectedInstance.vendor}
+                    models={selectedInstance.available_models}
+                    value={selectedModel}
+                    onChange={handleModelChange}
+                    placeholder="Select or type a model ID"
+                    disabled={!canEdit}
+                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
+                  />
+                </div>
               </div>
             )}
 
             {/* No models warning */}
-            {selectedInstance && selectedInstance.available_models.length === 0 && (
+            {selectedInstance && selectedModelOptions.length === 0 && (
               <div className="glass-card rounded-xl p-6 mb-6">
                 <div className="flex items-start gap-3">
                   <svg className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -462,10 +485,11 @@ export default function AIConfigurationPage() {
                     {/* Allow manual model entry */}
                     <div className="mt-3">
                       <label className="text-xs text-tsushin-slate mb-1 block">Or enter a model name manually:</label>
-                      <input
-                        type="text"
+                      <ProviderModelInput
+                        vendor={selectedInstance.vendor}
+                        models={selectedInstance.available_models}
                         value={selectedModel}
-                        onChange={(e) => handleModelChange(e.target.value)}
+                        onChange={handleModelChange}
                         placeholder="e.g. gemini-2.5-flash"
                         disabled={!canEdit}
                         className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"

@@ -58,6 +58,8 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 **AI Provider Efficiency**
 - **Anthropic prompt caching** — 3 breakpoint `cache_control` with a relocation trick for the dynamic tail; 40–65% token-cost reduction for chat-heavy workloads.
 - **Default Anthropic model** bumped to `claude-haiku-4-5`.
+- **Latest model catalog support** — provider/model pickers now source the tenant's live provider-instance catalog at runtime, including dynamic model discovery and custom model entries, so newly exposed OpenAI-compatible models appear in setup, agent, Sentinel, Playground, and System AI flows without frontend list drift.
+- **DeepSeek V4 direct API** — direct DeepSeek defaults now use `deepseek-v4-flash`, expose `deepseek-v4-pro`, keep `deepseek-chat` / `deepseek-reasoner` as compatibility aliases, and seed usage pricing from DeepSeek's standard non-promotional rates including cached-input costs.
 
 **Security & Sentinel**
 - **Sentinel parser** now derives valid threat types dynamically from `DETECTION_REGISTRY` instead of a hard-coded 5-entry allowlist. Regression tests (`test_sentinel_unified_parse.py`, 10 cases) guard against future re-introduction.
@@ -70,6 +72,7 @@ v0.6.0 promotes a substantial upgrade from the 0.5.0 line. Headline changes sinc
 - **Manual-cert pre-flight validation** — key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves deployments behind Sectigo/GoDaddy).
 - **SSL config persistence** across installer re-runs (`SSL_LE_STAGING`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `SSL_CERT_CHAIN_PATH`).
 - **Frontend rebuild on `NEXT_PUBLIC_API_URL` change** — the installer diffs the previous `.env` and rebuilds the image no-cache instead of silently shipping a stale cached bundle.
+- **Production deploy helper** — `scripts/deploy-prod.sh` is the guarded main-only deploy path: it refuses dirty or non-`main` local trees, SSHes to the configured production checkout, fast-forwards with `git pull --ff-only`, rebuilds backend/frontend with `docker-compose up -d --build --no-cache backend frontend` semantics, avoids `docker-compose down`, verifies service health, and checks the public `/api/health` URL.
 
 **Platform & Tooling**
 - **Next.js 16** upgrade — `outputFileTracingRoot`, `turbopack.root`, typed-routes reference in `next-env.d.ts`.
@@ -128,6 +131,8 @@ For the Parallels Ubuntu VM workflow used in fresh-install audits, you can sync 
 For SSL installs, the generated Caddy config now targets stack-scoped upstreams such as `${TSN_STACK_NAME}-frontend` and `${TSN_STACK_NAME}-backend`. That keeps `https://localhost` pinned to the intended stack even when multiple Tsushin instances share `tsushin-network`.
 
 → Full deployment options, GKE/Helm, GCP Secret Manager, and rebuild-safety rules: see [docs/documentation.md §4 Deployment & Operations](docs/documentation.md#4-deployment--operations).
+
+Production deploys are main-only. Configure `TSUSHIN_PROD_SSH_TARGET` (or `.private/deploy-prod.env`) and run `bash scripts/deploy-prod.sh` from a clean `main` checkout after release PR merge; the helper rebuilds only backend/frontend and verifies `https://tsushin.archsec.io/api/health` by default.
 
 ### Verify
 

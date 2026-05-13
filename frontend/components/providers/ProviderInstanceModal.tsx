@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api, ProviderInstance, ProviderInstanceCreate, VendorInfo } from '@/lib/client'
+import {
+  DEEPSEEK_DEFAULT_BASE_URL,
+  getProviderModelLabels,
+  getProviderModelOptions,
+} from '@/lib/provider-models'
 import Modal from '@/components/ui/Modal'
 import {
   CheckCircleIcon,
@@ -33,7 +38,7 @@ const VENDORS: VendorInfo[] = [
   { id: 'groq',       display_name: 'Groq',                       default_base_url: 'https://api.groq.com/openai/v1',       supports_discovery: true,  tenant_has_configured: false },
   { id: 'grok',       display_name: 'Grok (xAI)',                 default_base_url: 'https://api.x.ai/v1',                  supports_discovery: true,  tenant_has_configured: false },
   { id: 'openrouter', display_name: 'OpenRouter',                 default_base_url: 'https://openrouter.ai/api/v1',         supports_discovery: true,  tenant_has_configured: false },
-  { id: 'deepseek',   display_name: 'DeepSeek',                   default_base_url: 'https://api.deepseek.com/v1',          supports_discovery: true,  tenant_has_configured: false },
+  { id: 'deepseek',   display_name: 'DeepSeek',                   default_base_url: DEEPSEEK_DEFAULT_BASE_URL,             supports_discovery: true,  tenant_has_configured: false },
   { id: 'vertex_ai',  display_name: 'Vertex AI (Google Cloud)',   default_base_url: null,                                   supports_discovery: false, tenant_has_configured: false },
   { id: 'ollama',     display_name: 'Ollama',                     default_base_url: 'http://localhost:11434',               supports_discovery: false, tenant_has_configured: false },
   { id: 'custom',     display_name: 'Custom',                     default_base_url: null,                                   supports_discovery: false, tenant_has_configured: false },
@@ -46,7 +51,7 @@ const VENDOR_DEFAULT_URLS: Record<string, string> = {
   groq: 'https://api.groq.com/openai/v1',
   grok: 'https://api.x.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
-  deepseek: 'https://api.deepseek.com/v1',
+  deepseek: DEEPSEEK_DEFAULT_BASE_URL,
   vertex_ai: '',  // Region-specific — configured via Hub > Vertex AI settings
   ollama: 'http://localhost:11434',
   custom: '',
@@ -151,9 +156,9 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
   useEffect(() => { setLiveModels([]) }, [vendor])
 
   // Resolved suggestion list for the current vendor: live > predefined fallback
-  const suggestionModels = liveModels.length > 0
+  const suggestionModels = getProviderModelLabels(vendor, liveModels.length > 0
     ? liveModels
-    : (predefinedModels[vendor] || [])
+    : (predefinedModels[vendor] || []))
 
   // Initialize form when instance changes or modal opens
   useEffect(() => {
@@ -165,7 +170,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       setBaseUrl(instance.base_url || '')
       setApiKey('')
       setShowApiKey(false)
-      setModels(instance.available_models || [])
+      setModels(getProviderModelOptions(instance.vendor, instance.available_models || []))
       setIsDefault(instance.is_default)
 
       // Load Vertex AI fields from extra_config
@@ -181,12 +186,13 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
       setVertexPrivateKey('')
       setVertexJsonPaste('')
     } else {
-      setVendor(defaultVendor || 'openai')
+      const initialVendor = defaultVendor || 'openai'
+      setVendor(initialVendor)
       setInstanceName('')
       setBaseUrl('')
       setApiKey('')
       setShowApiKey(false)
-      setModels([])
+      setModels(getProviderModelOptions(initialVendor, []))
       setModelInput('')
       setIsDefault(false)
       setVertexProjectId('')
@@ -199,7 +205,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
     setUrlValidation(null)
     setTestResult(null)
     setError(null)
-  }, [isOpen, instance])
+  }, [isOpen, instance, defaultVendor])
 
   // Debounced URL validation
   const validateUrl = useCallback((url: string) => {
@@ -451,9 +457,12 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
           <select
             value={vendor}
             onChange={(e) => {
-              setVendor(e.target.value)
+              const nextVendor = e.target.value
+              setVendor(nextVendor)
               setBaseUrl('')
               setUrlValidation(null)
+              setModels(getProviderModelOptions(nextVendor, []))
+              setModelInput('')
             }}
             disabled={isEditing}
             className="w-full px-3 py-2 border border-tsushin-border rounded-lg text-white bg-tsushin-surface disabled:opacity-50 disabled:cursor-not-allowed"
@@ -672,7 +681,7 @@ export default function ProviderInstanceModal({ isOpen, onClose, onSave, instanc
             />
             <datalist id={`predefined-models-${vendor}`}>
               {suggestionModels.map(m => (
-                <option key={m} value={m} />
+                <option key={m.value} value={m.value} label={m.label} />
               ))}
             </datalist>
             <button

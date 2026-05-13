@@ -1460,6 +1460,8 @@ async def get_debug_info(
     # Parse token_usage_json field which contains {"prompt": X, "completion": Y, "total": Z}
     total_input = 0
     total_output = 0
+    total_cached_input = 0
+    total_uncached_input = 0
     total_tokens = 0
 
     try:
@@ -1479,8 +1481,18 @@ async def get_debug_info(
                     else:
                         usage = run.token_usage_json
 
-                    total_input += usage.get("prompt", 0) or usage.get("input", 0) or 0
+                    prompt_tokens = usage.get("prompt", 0) or usage.get("input", 0) or 0
+                    cached_input = usage.get("cached_input", 0) or usage.get("prompt_cache_hit_tokens", 0) or 0
+                    uncached_input = usage.get("uncached_input")
+                    if uncached_input is None:
+                        uncached_input = usage.get("prompt_cache_miss_tokens")
+                    if uncached_input is None and cached_input:
+                        uncached_input = max(prompt_tokens - cached_input, 0)
+
+                    total_input += prompt_tokens
                     total_output += usage.get("completion", 0) or usage.get("output", 0) or 0
+                    total_cached_input += cached_input
+                    total_uncached_input += uncached_input or 0
                     total_tokens += usage.get("total", 0) or 0
                 except (json.JSONDecodeError, TypeError):
                     pass
@@ -1496,7 +1508,11 @@ async def get_debug_info(
     pricing = MODEL_PRICING.get(model_name)
     if pricing:
         # Pricing is per 1M tokens
-        prompt_cost = (total_input / 1_000_000) * pricing.get("prompt", 0)
+        if total_cached_input and pricing.get("cached_input") is not None:
+            prompt_cost = (total_uncached_input / 1_000_000) * pricing.get("prompt", 0)
+            prompt_cost += (total_cached_input / 1_000_000) * pricing.get("cached_input", 0)
+        else:
+            prompt_cost = (total_input / 1_000_000) * pricing.get("prompt", 0)
         completion_cost = (total_output / 1_000_000) * pricing.get("completion", 0)
         estimated_cost = prompt_cost + completion_cost
     else:

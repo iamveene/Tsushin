@@ -15,6 +15,7 @@ import threading
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from models import ProviderInstance, ProviderConnectionAudit
+from constants.llm_models import DEEPSEEK_DEFAULT_BASE_URL, merge_deepseek_v4_models
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ VENDOR_DEFAULT_BASE_URLS = {
     "gemini": None,
     "groq": "https://api.groq.com/openai/v1",
     "grok": "https://api.x.ai/v1",
-    "deepseek": "https://api.deepseek.com/v1",
+    "deepseek": DEEPSEEK_DEFAULT_BASE_URL,
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama": None,  # Lazy: get_vendor_default_base_url("ollama")
     "vertex_ai": None,  # Region-specific — resolved dynamically from credentials
@@ -99,6 +100,33 @@ def get_vendor_default_base_url(vendor: str) -> Optional[str]:
     return VENDOR_DEFAULT_BASE_URLS.get(vendor)
 
 SUPPORTED_VENDORS = list(VENDOR_DEFAULT_BASE_URLS.keys()) + ["custom"]
+
+
+def backfill_deepseek_v4_models(db: Session, tenant_id: str = None) -> int:
+    """Conservatively add DeepSeek V4 models to active instance catalogs.
+
+    This is intentionally catalog-only: existing agent, System AI, and
+    Sentinel model assignments are left untouched.
+    """
+    updated = 0
+    query = db.query(ProviderInstance).filter(
+        ProviderInstance.vendor == "deepseek",
+        ProviderInstance.is_active == True,  # noqa: E712
+    )
+    if tenant_id:
+        query = query.filter(ProviderInstance.tenant_id == tenant_id)
+
+    instances = query.all()
+    for instance in instances:
+        current = instance.available_models or []
+        merged = merge_deepseek_v4_models(current)
+        if merged != current:
+            instance.available_models = merged
+            updated += 1
+    if updated:
+        db.commit()
+        logger.info("Backfilled DeepSeek V4 model availability on %s provider instances", updated)
+    return updated
 
 
 class ProviderInstanceService:
@@ -332,7 +360,11 @@ class ProviderInstanceService:
             instance_name=instance_name,
             base_url=base_url,
             api_key_encrypted=api_key_encrypted,
-            available_models=available_models or [],
+            available_models=(
+                merge_deepseek_v4_models(available_models)
+                if vendor == "deepseek"
+                else available_models or []
+            ),
             is_default=is_default,
         )
         db.add(instance)

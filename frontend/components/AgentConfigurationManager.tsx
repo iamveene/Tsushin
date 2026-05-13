@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api, Agent, TonePreset, Persona, ProviderInstance, VectorStoreInstance, VENDOR_LABELS } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import {
   InfoIcon, TargetIcon, TheaterIcon, BotIcon, KeyIcon, LightbulbIcon,
   SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, LinkIcon, DatabaseIcon
@@ -210,7 +212,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
   // Vendors that have at least one configured instance, plus always include the current agent's vendor
   const availableVendors = useMemo(() => {
-    const configured = [...new Set(allInstances.map(i => i.vendor))]
+    const configured = Array.from(new Set(allInstances.map(i => i.vendor)))
     // Always include the agent's current vendor (even if it has no instances, to avoid breaking existing agents)
     if (modelProvider && !configured.includes(modelProvider)) {
       configured.push(modelProvider)
@@ -223,7 +225,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
     if (providerInstanceId) {
       const instance = providerInstances.find(i => i.id === providerInstanceId)
       if (instance && instance.available_models.length > 0) {
-        return instance.available_models
+        return getProviderModelOptions(instance.vendor, instance.available_models, { currentModel: modelName })
       }
     }
     // For Ollama, use dynamically fetched models
@@ -231,10 +233,12 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       return ollamaModels
     }
     // Use all models from all configured instances for this vendor (deduplicated)
-    const vendorModels = [...new Set(providerInstances.flatMap(i => i.available_models))]
-    if (vendorModels.length > 0) return vendorModels
+    const vendorModels = Array.from(new Set(providerInstances.flatMap(i => i.available_models)))
+    if (vendorModels.length > 0) {
+      return getProviderModelOptions(modelProvider, vendorModels, { currentModel: modelName })
+    }
     // Last resort: keep current model so the dropdown is never empty
-    return modelName ? [modelName] : []
+    return getProviderModelOptions(modelProvider, modelName ? [modelName] : [], { currentModel: modelName })
   }
 
   if (loading) {
@@ -362,8 +366,8 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                     setModelName(ollamaModels[0] || '')
                   } else {
                     const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
-                    if (defaultInst && defaultInst.available_models.length > 0) {
-                      setModelName(defaultInst.available_models[0])
+                    if (defaultInst) {
+                      setModelName(getPreferredProviderModel(newVendor, defaultInst.available_models))
                       setProviderInstanceId(defaultInst.id)
                     }
                   }
@@ -380,17 +384,14 @@ export default function AgentConfigurationManager({ agentId }: Props) {
 
             <div>
               <label className="block text-sm font-medium mb-2">Model</label>
-              <select
+              <ProviderModelInput
+                vendor={modelProvider}
+                models={getAvailableModels()}
                 value={modelName}
-                onChange={(e) => setModelName(e.target.value)}
+                onChange={setModelName}
+                placeholder="Select or type a model ID"
                 className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
-              >
-                {getAvailableModels().map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           </div>
 
@@ -411,7 +412,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
                   if (id) {
                     const inst = providerInstances.find(i => i.id === id)
                     if (inst && inst.available_models.length > 0) {
-                      setModelName(inst.available_models[0])
+                      setModelName(getPreferredProviderModel(inst.vendor, inst.available_models))
                     }
                   }
                 }}

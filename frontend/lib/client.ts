@@ -3397,6 +3397,7 @@ export const api = {
     // enabled_tools removed - use AgentSkill table for web_search, etc.
     model_provider?: string
     model_name?: string
+    provider_instance_id?: number | null
     is_active?: boolean
     is_default?: boolean
   }): Promise<Agent> {

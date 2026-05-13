@@ -29,6 +29,7 @@ export interface BasicsConfig {
   agent_phone: string
   model_provider: string
   model_name: string
+  provider_instance_id: number | null
 }
 
 export interface PersonalityConfig {
@@ -108,6 +109,7 @@ export const EMPTY_DRAFT: WizardDraft = {
     agent_phone: '',
     model_provider: '',
     model_name: '',
+    provider_instance_id: null,
   },
   personality: {
     persona_id: null,

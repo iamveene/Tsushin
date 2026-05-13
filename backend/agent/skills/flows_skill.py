@@ -255,19 +255,9 @@ class FlowsSkill(BaseSkill):
             if not ai_model:
                 ai_model = "gemini-2.5-flash"  # Safe fallback
 
-            # Phase 7.5: Parse model and determine provider
-            if ai_model.startswith("gemini"):
-                provider = "gemini"
-            elif ai_model.startswith("gpt"):
-                provider = "openai"
-            elif ai_model.startswith("claude"):
-                provider = "anthropic"
-            elif ":" in ai_model or ai_model.lower() in ["llama", "gemma", "mistral", "deepseek"]:
-                # Ollama models typically have format "model:tag" (e.g., "gemma2:4b")
-                # Or are common Ollama model names
-                provider = "ollama"
-            else:
-                # Default to gemini for backward compatibility
+            from constants.llm_models import infer_provider_from_model
+            provider = infer_provider_from_model(ai_model)
+            if provider == "unknown":
                 provider = "gemini"
 
             logger.info(f"FlowsSkill: Using provider={provider}, model={ai_model} for intent detection")
@@ -779,16 +769,9 @@ Answer:"""
                     'description': event.description or ''
                 })
 
-            # Use AI to identify which event matches the user's message
-            if ai_model.startswith("gemini"):
-                ai_provider = "gemini"
-            elif ai_model.startswith("gpt"):
-                ai_provider = "openai"
-            elif ai_model.startswith("claude"):
-                ai_provider = "anthropic"
-            elif ":" in ai_model:
-                ai_provider = "ollama"
-            else:
+            from constants.llm_models import infer_provider_from_model
+            ai_provider = infer_provider_from_model(ai_model)
+            if ai_provider == "unknown":
                 ai_provider = "gemini"
 
             ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
@@ -858,16 +841,9 @@ Answer:"""
             if not event_id:
                 return None
 
-            # Now parse what changes to make
-            if ai_model.startswith("gemini"):
-                ai_provider = "gemini"
-            elif ai_model.startswith("gpt"):
-                ai_provider = "openai"
-            elif ai_model.startswith("claude"):
-                ai_provider = "anthropic"
-            elif ":" in ai_model:
-                ai_provider = "ollama"
-            else:
+            from constants.llm_models import infer_provider_from_model
+            ai_provider = infer_provider_from_model(ai_model)
+            if ai_provider == "unknown":
                 ai_provider = "gemini"
 
             ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
@@ -956,16 +932,9 @@ Answer (JSON only):"""
             import json
             import pytz
 
-            # Determine provider for AI
-            if ai_model.startswith("gemini"):
-                ai_provider = "gemini"
-            elif ai_model.startswith("gpt"):
-                ai_provider = "openai"
-            elif ai_model.startswith("claude"):
-                ai_provider = "anthropic"
-            elif ":" in ai_model:
-                ai_provider = "ollama"
-            else:
+            from constants.llm_models import infer_provider_from_model
+            ai_provider = infer_provider_from_model(ai_model)
+            if ai_provider == "unknown":
                 ai_provider = "gemini"
 
             ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
