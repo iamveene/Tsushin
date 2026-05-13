@@ -54,7 +54,11 @@ export default function ModelPricingPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [pricing, setPricing] = useState<ModelPricing[]>([])
   const [editingModel, setEditingModel] = useState<string | null>(null)
-  const [editValues, setEditValues] = useState<{ input: string; output: string }>({ input: '', output: '' })
+  const [editValues, setEditValues] = useState<{ input: string; cachedInput: string; output: string }>({
+    input: '',
+    cachedInput: '',
+    output: ''
+  })
   const [filterProvider, setFilterProvider] = useState<string>('all')
 
   const apiUrl = ''
@@ -89,6 +93,7 @@ export default function ModelPricingPage() {
     setEditingModel(key)
     setEditValues({
       input: model.input_cost_per_million.toString(),
+      cachedInput: model.cached_input_cost_per_million?.toString() || '',
       output: model.output_cost_per_million.toString()
     })
   }
@@ -109,6 +114,9 @@ export default function ModelPricingPage() {
             model_name: model.model_name,
             display_name: model.display_name,
             input_cost_per_million: parseFloat(editValues.input) || 0,
+            cached_input_cost_per_million: editValues.cachedInput.trim()
+              ? parseFloat(editValues.cachedInput)
+              : null,
             output_cost_per_million: parseFloat(editValues.output) || 0,
             is_active: true
           })
@@ -123,7 +131,7 @@ export default function ModelPricingPage() {
         const errorData = await response.json()
         setError(errorData.detail || 'Failed to update pricing')
       }
-    } catch (err) {
+    } catch {
       setError('Failed to update pricing')
     } finally {
       setSaving(null)
@@ -151,7 +159,7 @@ export default function ModelPricingPage() {
         const errorData = await response.json()
         setError(errorData.detail || 'Failed to reset pricing')
       }
-    } catch (err) {
+    } catch {
       setError('Failed to reset pricing')
     } finally {
       setSaving(null)
@@ -179,7 +187,7 @@ export default function ModelPricingPage() {
         const errorData = await response.json()
         setError(errorData.detail || 'Failed to reset pricing')
       }
-    } catch (err) {
+    } catch {
       setError('Failed to reset pricing')
     } finally {
       setSaving(null)
@@ -188,7 +196,7 @@ export default function ModelPricingPage() {
 
   const cancelEdit = () => {
     setEditingModel(null)
-    setEditValues({ input: '', output: '' })
+    setEditValues({ input: '', cachedInput: '', output: '' })
   }
 
   // Group pricing by provider
@@ -199,7 +207,7 @@ export default function ModelPricingPage() {
 
   const formatCost = (cost: number) => {
     if (cost === 0) return '$0.00'
-    if (cost < 0.01) return `$${cost.toFixed(4)}`
+    if (cost < 0.1) return `$${cost.toFixed(4)}`
     return `$${cost.toFixed(2)}`
   }
 
@@ -282,7 +290,8 @@ export default function ModelPricingPage() {
               <h3 className="text-white font-medium mb-1">How Pricing Works</h3>
               <p className="text-sm text-tsushin-slate">
                 Pricing rates are used to estimate API costs in the playground debug panel.
-                Rates are per 1 million tokens. Default rates are based on official provider pricing.
+                Rates are per 1 million tokens. Default rates are based on official provider pricing,
+                including cached input rates when a provider reports cache-hit tokens.
                 Custom rates you set will override defaults for your organization.
               </p>
             </div>
@@ -334,6 +343,9 @@ export default function ModelPricingPage() {
                   Input (per 1M)
                 </th>
                 <th className="text-right px-6 py-4 text-xs font-semibold text-white/50 uppercase tracking-wider">
+                  Cached Input (per 1M)
+                </th>
+                <th className="text-right px-6 py-4 text-xs font-semibold text-white/50 uppercase tracking-wider">
                   Output (per 1M)
                 </th>
                 <th className="text-center px-6 py-4 text-xs font-semibold text-white/50 uppercase tracking-wider">
@@ -378,6 +390,23 @@ export default function ModelPricingPage() {
                         />
                       ) : (
                         <span className="text-white font-mono">{formatCost(model.input_cost_per_million)}</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.0001"
+                          min="0"
+                          value={editValues.cachedInput}
+                          onChange={(e) => setEditValues({ ...editValues, cachedInput: e.target.value })}
+                          placeholder="N/A"
+                          className="w-24 px-2 py-1 text-right bg-white/5 border border-white/20 rounded text-white text-sm focus:border-teal-500 focus:outline-none"
+                        />
+                      ) : model.cached_input_cost_per_million !== undefined && model.cached_input_cost_per_million !== null ? (
+                        <span className="text-white font-mono">{formatCost(model.cached_input_cost_per_million)}</span>
+                      ) : (
+                        <span className="text-white/30">N/A</span>
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">

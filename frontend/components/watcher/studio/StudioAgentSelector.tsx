@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Modal from '@/components/ui/Modal'
 import { api, VENDOR_LABELS } from '@/lib/client'
 import type { Agent, ProviderInstance } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import { AgentAvatarIcon } from './avatars/AgentAvatars'
 import { useAudioWizard } from '@/contexts/AudioWizardContext'
 
@@ -46,14 +48,14 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
       if (instances.length > 0) {
         const first = instances.find(i => i.is_default) || instances[0]
         setNewAgentVendor(first.vendor)
-        setNewAgentModel(first.available_models[0] || '')
+        setNewAgentModel(getPreferredProviderModel(first.vendor, first.available_models))
         setNewAgentInstanceId(first.id)
       }
     }).catch(() => {})
   }, [])
 
   // Vendors that have at least one configured instance
-  const configuredVendors = [...new Set(allInstances.map(i => i.vendor))]
+  const configuredVendors = Array.from(new Set(allInstances.map(i => i.vendor)))
     .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
 
   // Instances for the currently selected vendor
@@ -64,7 +66,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
     const instances = allInstances.filter(i => i.vendor === vendor)
     const defaultInst = instances.find(i => i.is_default) || instances[0]
     if (defaultInst) {
-      setNewAgentModel(defaultInst.available_models[0] || '')
+      setNewAgentModel(getPreferredProviderModel(vendor, defaultInst.available_models))
       setNewAgentInstanceId(defaultInst.id)
     } else {
       setNewAgentModel('')
@@ -273,7 +275,9 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
                 setNewAgentInstanceId(id)
                 if (id) {
                   const inst = vendorInstances.find(i => i.id === id)
-                  if (inst && inst.available_models.length > 0) setNewAgentModel(inst.available_models[0])
+                  if (inst) {
+                    setNewAgentModel(getPreferredProviderModel(inst.vendor, inst.available_models))
+                  }
                 }
               }} className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
                 {vendorInstances.map(inst => (
@@ -287,15 +291,18 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
               <label className="block text-sm font-medium text-tsushin-slate mb-1">Model</label>
               {(() => {
                 const inst = vendorInstances.find(i => i.id === newAgentInstanceId) || vendorInstances[0]
-                const models = inst?.available_models || []
-                return models.length > 0 ? (
-                  <select value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
-                    className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo">
-                    {models.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                ) : (
-                  <input type="text" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)}
-                    placeholder="e.g., gemini-2.5-flash" className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo" />
+                const models = getProviderModelOptions(newAgentVendor, inst?.available_models || [], {
+                  currentModel: newAgentModel,
+                })
+                return (
+                  <ProviderModelInput
+                    vendor={newAgentVendor}
+                    models={models}
+                    value={newAgentModel}
+                    onChange={setNewAgentModel}
+                    placeholder="Select or type a model ID"
+                    className="w-full px-3 py-2 bg-tsushin-deep border border-tsushin-border rounded-lg text-white text-sm focus:outline-none focus:border-tsushin-indigo"
+                  />
                 )
               })()}
             </div>

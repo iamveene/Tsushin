@@ -23,6 +23,8 @@ import {
   ProviderInstance,
 } from '@/lib/client'
 import ProviderInstanceModal from '@/components/providers/ProviderInstanceModal'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
 
 export interface ProviderPickerValue {
   vendor: string
@@ -43,15 +45,6 @@ interface Props {
   onInstanceCreated?: (instance: ProviderInstance) => void
   /** Optional className for the outer wrapper. */
   className?: string
-}
-
-const FALLBACK_DEFAULT_MODELS: Record<string, string[]> = {
-  // Used only when the catalog has zero instances for a vendor — we still
-  // want the user to pick a model so the create flow can validate it later.
-  ollama: ['llama3.2:3b', 'gemma4:latest', 'phi4:latest'],
-  openai: ['gpt-4.1-mini', 'gpt-4.1', 'o4-mini'],
-  anthropic: ['claude-sonnet-4.6', 'claude-opus-4.7'],
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
 }
 
 export default function ProviderInstancePicker({
@@ -97,13 +90,13 @@ export default function ProviderInstancePicker({
     [currentVendor, value.instance_id],
   )
 
-  // Effective model list: instance.available_models OR vendor fallback
+  // Effective model list: curated fallbacks first, discovered instance models
+  // second, and the current typed model preserved even when it is manual.
   const modelOptions: string[] = useMemo(() => {
-    if (currentInstance && currentInstance.available_models.length > 0) {
-      return currentInstance.available_models
-    }
-    return FALLBACK_DEFAULT_MODELS[value.vendor] || []
-  }, [currentInstance, value.vendor])
+    return getProviderModelOptions(value.vendor, currentInstance?.available_models || [], {
+      currentModel: value.model_name,
+    })
+  }, [currentInstance, value.model_name, value.vendor])
 
   // Whenever vendor changes, snap to that vendor's default-or-first instance
   // and the first model of that instance.
@@ -115,12 +108,12 @@ export default function ProviderInstancePicker({
     }
     const def = v.instances.find((i) => i.is_default) || v.instances[0]
     if (def) {
-      const firstModel = def.available_models[0] || FALLBACK_DEFAULT_MODELS[vendor]?.[0] || ''
+      const firstModel = getPreferredProviderModel(vendor, def.available_models)
       onChange({ vendor, instance_id: def.id, model_name: firstModel })
     } else {
       // Vendor has no active instances — leave instance_id null. The UI
       // will surface the inline-create CTA below.
-      const fallbackModel = FALLBACK_DEFAULT_MODELS[vendor]?.[0] || ''
+      const fallbackModel = getPreferredProviderModel(vendor)
       onChange({ vendor, instance_id: null, model_name: fallbackModel })
     }
   }
@@ -133,10 +126,7 @@ export default function ProviderInstancePicker({
     }
     const inst = currentVendor?.instances.find((i) => i.id === id)
     if (inst) {
-      const firstModel =
-        inst.available_models[0] ||
-        FALLBACK_DEFAULT_MODELS[value.vendor]?.[0] ||
-        value.model_name
+      const firstModel = getPreferredProviderModel(value.vendor, inst.available_models, value.model_name)
       onChange({ ...value, instance_id: id, model_name: firstModel })
     } else {
       onChange({ ...value, instance_id: id })
@@ -171,10 +161,7 @@ export default function ProviderInstancePicker({
     if (newest && v) {
       const inst = v.instances.find((i) => i.id === newest)
       if (inst) {
-        const firstModel =
-          inst.available_models[0] ||
-          FALLBACK_DEFAULT_MODELS[value.vendor]?.[0] ||
-          value.model_name
+        const firstModel = getPreferredProviderModel(value.vendor, inst.available_models, value.model_name)
         onChange({ vendor: value.vendor, instance_id: inst.id, model_name: firstModel })
         if (onInstanceCreated) {
           // Best-effort: convert catalog instance back to ProviderInstance shape
@@ -308,29 +295,17 @@ export default function ProviderInstancePicker({
               {layout !== 'compact' && (
                 <label className="block text-xs text-tsushin-slate mb-1">Model</label>
               )}
-              {modelOptions.length > 0 ? (
-                <select
-                  value={value.model_name || ''}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
-                  data-testid="provider-model-select"
-                >
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={value.model_name || ''}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  placeholder="Enter model name"
-                  className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
-                  data-testid="provider-model-input"
-                />
-              )}
+              <ProviderModelInput
+                vendor={value.vendor}
+                models={modelOptions}
+                value={value.model_name || ''}
+                onChange={handleModelChange}
+                currentModel={value.model_name}
+                placeholder="Select or type a model ID"
+                className="w-full px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
+                dataTestId="provider-model-input"
+                required
+              />
             </div>
           )}
         </>

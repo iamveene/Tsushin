@@ -3031,6 +3031,7 @@ Service layer: `backend/services/message_queue_service.py`, `backend/services/qu
 ## 19. LLM Providers
 
 **Sources:**
+- `backend/constants/llm_models.py` — shared curated LLM catalog, defaults, pricing, provider inference
 - `backend/services/provider_instance_service.py` — CRUD/encryption/SSRF
 - `backend/api/routes_provider_instances.py` — REST endpoints
 - `backend/services/model_discovery_service.py` — model auto-fetch
@@ -3078,9 +3079,11 @@ An Ollama default is auto-provisioned per tenant on demand via `ensure_ollama_in
 
 ### 19.3 Dynamic Provider & Model Dropdowns
 
-All agent creation and configuration UIs — the `/agents` Create Agent modal, the Studio `+` button (`StudioAgentSelector`), `AgentConfigurationManager`, and the Playground config panel — fetch the provider list **at runtime** from `GET /api/provider-instances`. The dropdown shows only vendors that have at least one active instance configured in Hub > AI Providers. Models shown for each vendor come from that instance's `available_models` list (set during hub configuration or model discovery).
+All agent creation and configuration UIs — the `/setup` wizard, Hub AI Providers, System AI, `/agents` Create Agent modal, Agent Wizard, Studio `+` button (`StudioAgentSelector`), `AgentConfigurationManager`, Sentinel, and the Playground config panel — follow the same **dynamic-first, manual-friendly** model picker contract. Live discovered models from provider instances are shown first where available, curated fallbacks from `backend/constants/llm_models.py` / `frontend/lib/provider-models.ts` fill gaps, and typed manual model IDs are always accepted and saved as-is.
 
-This means: adding a new provider in Hub automatically makes it available everywhere without any code change. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
+Current curated frontier defaults: OpenAI `gpt-5.5` plus non-streaming `gpt-5.5-pro`; Anthropic `claude-opus-4-7`; xAI `grok-4.3`, `grok-4.3-latest`, Grok 4.20, and Grok 4.1 Fast; DeepSeek V4; OpenRouter gateway IDs for GPT-5.5, Claude Opus 4.7, and Grok 4.3; and Groq-hosted/open models only (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`, Llama on Groq). Groq is intentionally not treated as a proprietary-model gateway for GPT, Claude, or Grok.
+
+This means: adding a new provider in Hub automatically makes it available everywhere without any code change, and newly released model IDs can be typed immediately while the curated catalog catches up. The shared `VENDOR_LABELS` map (`frontend/lib/client.ts`) provides human-readable vendor names.
 
 The Hub AI Providers tab follows the same runtime shape: vendor sections render only when at least one active instance exists. Empty static provider panels, unused local-service panels, and unconfigured fallback-key cards are hidden until the user adds the corresponding provider through the guided setup flow.
 
@@ -3098,9 +3101,23 @@ The Hub AI Providers tab follows the same runtime shape: vendor sections render 
 
 Pricing rates per 1M tokens used for cost estimation in the Playground debug panel. Defaults are based on official provider pricing; tenant-set custom rates override defaults.
 
+The default pricing catalog now stores input, nullable cached-input, and output rates. `TokenTracker` bills cached input separately when provider usage payloads expose cache-hit/read tokens; providers without cache counters continue to use the existing prompt/completion calculation. Baseline official rows include:
+
+| Provider | Model IDs | Default rates |
+|---|---|---|
+| OpenAI | `gpt-5.5` | `$5.00` input / `$0.50` cached input / `$30.00` output |
+| OpenAI | `gpt-5.5-pro` | `$30.00` input / no cached-input row / `$180.00` output |
+| Anthropic | `claude-opus-4-7` | `$5.00` input / `$0.50` cache-hit input / `$25.00` output |
+| xAI | `grok-4.3`, Grok 4.20 variants | `$1.25` input / `$0.20` cached input / `$2.50` output |
+| xAI | Grok 4.1 Fast variants | `$0.20` input / `$0.05` cached input / `$0.50` output |
+| Groq | `openai/gpt-oss-120b` | `$0.15` input / `$0.075` cached input / `$0.60` output |
+| Groq | `openai/gpt-oss-20b` | `$0.075` input / `$0.037` cached input / `$0.30` output |
+| OpenRouter | Gateway GPT-5.5, Claude Opus 4.7, Grok 4.3 IDs | Provider-equivalent defaults unless tenant overrides them |
+
 UI table columns (`model-pricing/page.tsx:326-347`):
 - Model (with provider badge, display name, raw model name)
 - Input cost per 1M tokens (numeric input, step=0.001)
+- Cached input cost per 1M tokens (nullable numeric input, used when provider cache-read counts are present)
 - Output cost per 1M tokens (numeric input, step=0.001)
 - Status
 - Actions (Edit / Save)
@@ -3121,11 +3138,11 @@ Anthropic supports up to four `cache_control` breakpoints per request. Tsushin u
 | 2 | End of tool definitions block | MCP schemas, sandboxed tool defs, custom skill descriptors | Changes only when skills are added/removed |
 | 3 | Just before the current user turn | Conversation history + any retrieved-knowledge context | The "relocation trick" — cache point moves forward as the conversation grows, so each prior turn gets cached on its way past breakpoint 3 |
 
-**Default Anthropic model:** `claude-haiku-4-5` (v0.6.0 bump). The default is set in `backend/services/provider_instance_service.py` and surfaces in the agent Create modal under Hub → AI Providers → Anthropic → Default Model. Override per-agent in the agent config UI.
+**Default Anthropic model:** `claude-opus-4-7` for new shared-catalog selectors. The default surfaces in Setup, Hub AI Providers, Agent Wizard, System AI, Sentinel, Studio edit settings, and Playground fallbacks. Override per-agent or per-provider instance in the UI.
 
 **Sources:**
 - `backend/providers/anthropic_provider.py` — breakpoint placement and `cache_control` injection
-- `backend/services/token_tracker.py` — cache-hit accounting in the Watcher billing dashboard
+- `backend/analytics/token_tracker.py` — cache-hit accounting in the Watcher billing dashboard
 
 **Requirements & caveats:**
 - Requires Anthropic API access with prompt caching enabled (on by default for all Anthropic accounts in 2025+).
@@ -3154,7 +3171,7 @@ Google's Gemini 3.x preview line is first-class across every picker and pricing 
 
 **Backend auto-lift of output tokens.** `backend/agent/ai_client.py` `_call_gemini` raises the default `generation_config.max_output_tokens` to **65,536** when the model name starts with `gemini-3-` or `gemini-3.1-` (the 2.x default of 8,192 truncates long 3.x outputs). The lift applies only when the caller hasn't explicitly set a lower value.
 
-**Pricing placeholders.** Google has not yet published official pricing for the 3.x preview line. `backend/analytics/token_tracker.py` seeds rows based on the 2.5 Flash / 2.5 Flash-Lite analogues (`0.30/2.50` and `0.10/0.40` per 1M tokens respectively) and marks each with a `TODO confirm` comment. TTS pricing is stubbed `$0.00` until Google publishes. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing?hl=en) lists Imagen 4 image prices as Fast `$0.02`, Standard `$0.04`, and Ultra `$0.06` per generated image, which Tsushin records using the existing per-image operation convention. [OpenAI API pricing](https://openai.com/api/pricing/) lists GPT-image-2 at text input `$5/1M` tokens, image input `$8/1M` tokens, and image output `$30/1M` tokens; Tsushin records the two-field approximation as prompt `$5/1M` and completion `$30/1M`.
+**Pricing.** Gemini 3.x text rows now use the published Gemini API rates in `backend/analytics/token_tracker.py`; TTS entries remain `$0.00` until Google publishes text-to-audio prices. [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing?hl=en) lists Imagen 4 image prices as Fast `$0.02`, Standard `$0.04`, and Ultra `$0.06` per generated image, which Tsushin records using the existing per-image operation convention. [OpenAI API pricing](https://openai.com/api/pricing/) lists GPT-image-2 at text input `$5/1M` tokens, image input `$8/1M` tokens, and image output `$30/1M` tokens; Tsushin records the two-field approximation as prompt `$5/1M` and completion `$30/1M`.
 
 **Gemini API Imagen 4 behavior.** Imagen 4 support is direct Gemini API support only, documented in the [Gemini API Imagen guide](https://ai.google.dev/gemini-api/docs/imagen). The backend dispatches Imagen model IDs to `google.genai.Client(api_key=...).models.generate_images(...)`; it does not use Vertex AI credentials or project/region configuration. Imagen 4 is generation-only in the Gemini API path, so Image Skill edit requests with an Imagen model return a clear unsupported-edit error instead of falling back to another model.
 

@@ -161,6 +161,7 @@ export function useCreateAgentChain() {
         keywords: [],
         model_provider: draft.basics.model_provider,
         model_name: draft.basics.model_name,
+        provider_instance_id: draft.basics.provider_instance_id || undefined,
         is_active: true,
         is_default: false,
       }

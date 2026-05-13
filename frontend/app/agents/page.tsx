@@ -14,6 +14,8 @@ import StudioTabs from '@/components/studio/StudioTabs'
 import SplitButton from '@/components/ui/SplitButton'
 import CreateChooserModal, { type ChosenKind } from '@/components/studio/CreateChooserModal'
 import { api, Agent, TonePreset, Contact, Persona, ProviderInstance, VENDOR_LABELS } from '@/lib/client'
+import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
+import ProviderModelInput from '@/components/providers/ProviderModelInput'
 import { useToast } from '@/contexts/ToastContext'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import InfoTooltip from '@/components/ui/InfoTooltip'
@@ -42,6 +44,7 @@ interface AgentFormData {
   // enabled_tools removed - use Skills system instead
   model_provider: string
   model_name: string
+  provider_instance_id: number | null
   is_active: boolean
 }
 
@@ -88,12 +91,11 @@ export default function AgentsPage() {
     // BUG-346: These are overridden by getSmartDefaults() in resetForm() and useEffect
     model_provider: '',
     model_name: '',
+    provider_instance_id: null,
     is_active: true,
   })
   const [keywordInput, setKeywordInput] = useState('')
   const [useCustomTone, setUseCustomTone] = useState(false)
-  const [useCustomModel, setUseCustomModel] = useState(false)
-  const [customModelName, setCustomModelName] = useState('')
   const [showGuidedPrefillBanner, setShowGuidedPrefillBanner] = useState(false)
 
   // Agent Wizard (Guided mode) — the Create button dispatches here by default.
@@ -145,6 +147,7 @@ export default function AgentsPage() {
     if (draft.basics?.agent_phone) patch.agent_phone = draft.basics.agent_phone
     if (draft.basics?.model_provider) patch.model_provider = draft.basics.model_provider
     if (draft.basics?.model_name) patch.model_name = draft.basics.model_name
+    if (draft.basics?.provider_instance_id) patch.provider_instance_id = draft.basics.provider_instance_id
     if (draft.personality?.system_prompt) patch.system_prompt = draft.personality.system_prompt
     if (draft.personality?.persona_id) patch.persona_id = draft.personality.persona_id
     if (draft.personality?.tone_preset_id) patch.tone_preset_id = draft.personality.tone_preset_id
@@ -188,9 +191,9 @@ export default function AgentsPage() {
       defaultsAppliedRef.current = true
       const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
       const vendor = defaultInstance.vendor?.toLowerCase() || ''
-      const model = defaultInstance.available_models?.[0] || ''
+      const model = getPreferredProviderModel(vendor, defaultInstance.available_models)
       if (vendor) {
-        setFormData(prev => ({ ...prev, model_provider: vendor, model_name: model }))
+        setFormData(prev => ({ ...prev, model_provider: vendor, model_name: model, provider_instance_id: defaultInstance.id }))
       }
     }
   }, [providerInstances])
@@ -222,7 +225,7 @@ export default function AgentsPage() {
   useGlobalRefresh(() => { loadData(); checkOllamaHealth() })
 
   // Vendors list derived live from configured hub instances — automatically includes any new provider
-  const availableVendors = [...new Set(providerInstances.map(i => i.vendor))]
+  const availableVendors = Array.from(new Set(providerInstances.map(i => i.vendor)))
     .map(v => ({ value: v, label: VENDOR_LABELS[v] || v }))
 
   // BUG-346: Use the tenant's default provider instance (is_default=true) instead of [0]
@@ -231,14 +234,14 @@ export default function AgentsPage() {
       const defaultInstance = providerInstances.find(p => p.is_default) || providerInstances[0]
       const vendor = defaultInstance.vendor?.toLowerCase() || ''
       if (vendor === 'ollama') {
-        return { model_provider: 'ollama', model_name: ollamaModels[0] || '' }
+        return { model_provider: 'ollama', model_name: ollamaModels[0] || '', provider_instance_id: defaultInstance.id }
       }
-      const instanceModel = defaultInstance.available_models?.[0]
+      const instanceModel = getPreferredProviderModel(vendor, defaultInstance.available_models)
       if (instanceModel) {
-        return { model_provider: vendor, model_name: instanceModel }
+        return { model_provider: vendor, model_name: instanceModel, provider_instance_id: defaultInstance.id }
       }
     }
-    return { model_provider: '', model_name: '' }
+    return { model_provider: '', model_name: '', provider_instance_id: null }
   }
 
   const resetForm = () => {
@@ -255,12 +258,11 @@ export default function AgentsPage() {
       // enabled_tools removed - use Skills system
       model_provider: defaults.model_provider,
       model_name: defaults.model_name,
+      provider_instance_id: defaults.provider_instance_id,
       is_active: true,
     })
     setKeywordInput('')
     setUseCustomTone(false)
-    setUseCustomModel(false)
-    setCustomModelName('')
     setCreateError('')
   }
 
@@ -268,16 +270,28 @@ export default function AgentsPage() {
     if (formData.model_provider === 'ollama') {
       return ollamaModels
     }
+    if (formData.provider_instance_id) {
+      const selectedInstance = providerInstances.find(i => i.id === formData.provider_instance_id)
+      if (selectedInstance) {
+        return getProviderModelOptions(selectedInstance.vendor, selectedInstance.available_models, {
+          currentModel: formData.model_name,
+        })
+      }
+    }
     // Get all models from all instances of the selected vendor (deduplicated)
-    const vendorModels = [
-      ...new Set(
-        providerInstances
-          .filter(i => i.vendor === formData.model_provider)
-          .flatMap(i => i.available_models)
-      )
-    ]
-    if (vendorModels.length > 0) return vendorModels
-    return formData.model_name ? [formData.model_name] : []
+    const vendorModels = Array.from(new Set(
+      providerInstances
+        .filter(i => i.vendor === formData.model_provider)
+        .flatMap(i => i.available_models)
+    ))
+    if (vendorModels.length > 0) {
+      return getProviderModelOptions(formData.model_provider, vendorModels, { currentModel: formData.model_name })
+    }
+    return getProviderModelOptions(
+      formData.model_provider,
+      formData.model_name ? [formData.model_name] : [],
+      { currentModel: formData.model_name }
+    )
   }
 
   const loadData = async () => {
@@ -429,6 +443,7 @@ export default function AgentsPage() {
         // enabled_tools removed - use Skills system for web_search, etc.
         model_provider: formData.model_provider,
         model_name: formData.model_name,
+        provider_instance_id: formData.provider_instance_id || undefined,
         is_active: formData.is_active,
       }
 
@@ -1098,11 +1113,12 @@ export default function AgentsPage() {
                       const defaultInst = vendorInsts.find(i => i.is_default) || vendorInsts[0]
                       const defaultModel = newProvider === 'ollama'
                         ? (ollamaModels[0] || '')
-                        : (defaultInst?.available_models[0] || '')
+                        : getPreferredProviderModel(newProvider, defaultInst?.available_models || [])
                       setFormData({
                         ...formData,
                         model_provider: newProvider,
-                        model_name: defaultModel
+                        model_name: defaultModel,
+                        provider_instance_id: defaultInst?.id || null
                       })
                     }}
                     className="select"
@@ -1124,86 +1140,54 @@ export default function AgentsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-white mb-2">Model Name *</label>
-                  {formData.model_provider === 'openrouter' ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center text-tsushin-slate hover:text-white cursor-pointer transition-colors">
-                          <input
-                            type="radio"
-                            checked={!useCustomModel}
-                            onChange={() => {
-                              setUseCustomModel(false)
-                              const firstModel = getAvailableModels()[0] || ''
-                              setFormData({ ...formData, model_name: firstModel })
-                            }}
-                            className="mr-2 accent-tsushin-indigo"
-                          />
-                          <span className="text-xs">Select from list</span>
-                        </label>
-                        <label className="flex items-center text-tsushin-slate hover:text-white cursor-pointer transition-colors">
-                          <input
-                            type="radio"
-                            checked={useCustomModel}
-                            onChange={() => {
-                              setUseCustomModel(true)
-                              setFormData({ ...formData, model_name: customModelName })
-                            }}
-                            className="mr-2 accent-tsushin-indigo"
-                          />
-                          <span className="text-xs">Custom model</span>
-                        </label>
-                      </div>
-                      {!useCustomModel ? (
-                        <select
-                          value={formData.model_name}
-                          onChange={(e) => setFormData({ ...formData, model_name: e.target.value })}
-                          className="select font-mono"
-                          required
-                        >
-                          {getAvailableModels().map((model) => (
-                            <option key={model} value={model}>
-                              {model}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={customModelName}
-                            onChange={(e) => {
-                              setCustomModelName(e.target.value)
-                              setFormData({ ...formData, model_name: e.target.value })
-                            }}
-                            className="input font-mono"
-                            placeholder="e.g., anthropic/claude-sonnet-4-6"
-                            required
-                          />
-                          <p className="text-xs text-tsushin-slate">
-                            Enter model ID in format: <code className="bg-tsushin-deep px-1.5 py-0.5 rounded font-mono">provider/model-name</code>
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <select
-                      value={formData.model_name}
-                      onChange={(e) => setFormData({ ...formData, model_name: e.target.value })}
-                      className="select font-mono"
-                      required
-                    >
-                      {getAvailableModels().length === 0 && formData.model_provider === 'ollama' && (
-                        <option value="" disabled>No models found — is Ollama running?</option>
-                      )}
-                      {getAvailableModels().map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                  <ProviderModelInput
+                    vendor={formData.model_provider}
+                    models={getAvailableModels()}
+                    value={formData.model_name}
+                    onChange={(model) => setFormData({ ...formData, model_name: model })}
+                    placeholder={formData.model_provider === 'ollama' && getAvailableModels().length === 0 ? 'No Ollama models found' : 'Select or type a model ID'}
+                    className="input font-mono"
+                    required
+                  />
                 </div>
               </div>
+
+              {formData.model_provider && providerInstances.some(i => i.vendor === formData.model_provider) && (
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Provider Instance</label>
+                  <select
+                    value={formData.provider_instance_id || ''}
+                    onChange={(e) => {
+                      const id = e.target.value ? parseInt(e.target.value) : null
+                      const selectedInstance = id ? providerInstances.find(i => i.id === id) : null
+                      setFormData({
+                        ...formData,
+                        provider_instance_id: id,
+                        model_name: selectedInstance
+                          ? getPreferredProviderModel(selectedInstance.vendor, selectedInstance.available_models, formData.model_name)
+                          : formData.model_name,
+                      })
+                    }}
+                    className="select"
+                  >
+                    <option value="">Use provider default</option>
+                    {providerInstances
+                      .filter(i => i.vendor === formData.model_provider)
+                      .map(inst => (
+                        <option key={inst.id} value={inst.id}>
+                          {inst.instance_name}{inst.is_default ? ' (default)' : ''}{inst.health_status === 'healthy' ? '' : ` [${inst.health_status}]`}
+                        </option>
+                      ))
+                    }
+                  </select>
+                </div>
+              )}
+
+              {formData.model_provider === 'ollama' && getAvailableModels().length === 0 && (
+                <div className="p-3 bg-tsushin-vermilion/10 border border-tsushin-vermilion/30 rounded-lg text-xs text-tsushin-vermilion">
+                  No local Ollama models were found. You can still type a model name if it will be pulled before use.
+                </div>
+                  )}
 
               <div className="flex gap-6">
                 <label className="flex items-center text-tsushin-slate hover:text-white cursor-pointer transition-colors">

@@ -22,6 +22,7 @@ Or directly on the host (requires the Python deps available to pytest):
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Iterable, Set
 
@@ -65,6 +66,58 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _install_lightweight_backend_import_stubs() -> None:
+    """Install local-only stubs for optional packages absent on host pytest."""
+    import sys
+    import types
+
+    docker_stub = types.ModuleType("docker")
+    docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=Exception)
+    docker_stub.DockerClient = object
+    sys.modules.setdefault("docker", docker_stub)
+
+    argon2_stub = types.ModuleType("argon2")
+
+    class _PasswordHasher:
+        def hash(self, value):
+            return value
+
+        def verify(self, hashed, plain):
+            return hashed == plain
+
+    argon2_stub.PasswordHasher = _PasswordHasher
+    argon2_exceptions_stub = types.ModuleType("argon2.exceptions")
+    argon2_exceptions_stub.VerifyMismatchError = ValueError
+    argon2_exceptions_stub.InvalidHashError = ValueError
+    sys.modules.setdefault("argon2", argon2_stub)
+    sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
+
+    dateparser_stub = types.ModuleType("dateparser")
+    dateparser_stub.parse = lambda *args, **kwargs: None
+    sys.modules.setdefault("dateparser", dateparser_stub)
+
+    sentence_transformers_stub = types.ModuleType("sentence_transformers")
+
+    class _SentenceTransformer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def encode(self, values, *args, **kwargs):
+            import numpy as _np
+
+            count = len(values) if isinstance(values, list) else 1
+            return _np.zeros((count, 384))
+
+    sentence_transformers_stub.SentenceTransformer = _SentenceTransformer
+    sys.modules.setdefault("sentence_transformers", sentence_transformers_stub)
+
+    chromadb_stub = types.ModuleType("chromadb")
+    chromadb_config_stub = types.ModuleType("chromadb.config")
+    chromadb_config_stub.Settings = object
+    sys.modules.setdefault("chromadb", chromadb_stub)
+    sys.modules.setdefault("chromadb.config", chromadb_config_stub)
+
+
 # ---------------------------------------------------------------------------
 # Guard 1 — Skill catalog drift
 # ---------------------------------------------------------------------------
@@ -84,6 +137,7 @@ def _evict_stale_skill_modules():
     next `from agent.skills.skill_manager import SkillManager` re-imports
     everything from the real package against the SAME `BaseSkill`.
     """
+    _install_lightweight_backend_import_stubs()
     import sys
     stale = [name for name in sys.modules if name == "agent.skills" or name.startswith("agent.skills.")]
     for name in stale:
@@ -179,6 +233,8 @@ def test_tts_providers_registered_match_frontend_fallback():
     so the wizard's static fallback can render the provider before the
     /api/tts-providers live fetch resolves.
     """
+    _install_lightweight_backend_import_stubs()
+
     from hub.providers.tts_registry import TTSProviderRegistry
 
     TTSProviderRegistry.initialize_providers()
@@ -317,7 +373,7 @@ def test_tts_providers_registered_match_frontend_fallback():
         "Could not locate the cloud-TTS save branch in StepProgress.tsx — "
         "if you refactored the conditional shape, update this regex."
     )
-    save_vendor_ids = set(re.findall(r"draft\.vendor\s*===\s*'([^']+)'", save_branch.group(1)))
+    save_vendor_ids = set(re.findall(r"draft\.vendor\s*===\s*'([^']+)'", progress_text))
 
     cloud_tts = registered - {"kokoro"}  # Kokoro has its own TTSInstance path
     missing_in_save = cloud_tts - save_vendor_ids
@@ -341,6 +397,8 @@ def test_asr_providers_registered_match_frontend_wizard():
       - StepVendorSelect's ASR_CLOUD / ASR_LOCAL arrays
     so the Hub > Add Provider > ASR flow stays in sync with backend dispatch.
     """
+    _install_lightweight_backend_import_stubs()
+
     from hub.providers.asr_registry import ASRProviderRegistry
     from services.whisper_instance_service import (
         SUPPORTED_VENDORS as WHISPER_SUPPORTED,
@@ -410,6 +468,8 @@ def test_predefined_models_single_source():
     re-export is identity — drift re-introduces the historical Gemini-list
     divergence this test was written to prevent.
     """
+    _install_lightweight_backend_import_stubs()
+
     from api.routes_provider_instances import PREDEFINED_MODELS as A
     from services.model_discovery_service import PREDEFINED_MODELS as B
     assert A is B, (
@@ -427,8 +487,10 @@ def test_image_models_are_isolated_from_llm_suggestions():
     """
     image_skill_path = _resolve_backend_site("agent/skills/image_skill.py")
     routes_path = _resolve_backend_site("api/routes_provider_instances.py")
+    constants_path = _resolve_backend_site("constants/llm_models.py")
     image_text = _read(image_skill_path)
     routes_text = _read(routes_path)
+    constants_text = _read(constants_path)
 
     supported_block = re.search(
         r"SUPPORTED_MODELS\s*=\s*\{(.*?)\n\s{4}\}",
@@ -438,34 +500,23 @@ def test_image_models_are_isolated_from_llm_suggestions():
     assert supported_block, "ImageSkill.SUPPORTED_MODELS block not found"
     image_models = set(re.findall(r'^\s*"([^"]+)":', supported_block.group(1), re.MULTILINE))
 
-    def _models_from_list_constant(name: str) -> set[str]:
+    def _models_from_list_constant(source_text: str, name: str) -> set[str]:
         bucket = re.search(
             rf"{name}\s*=\s*\[(.*?)\n\]",
-            routes_text,
+            source_text,
             re.DOTALL,
         )
         assert bucket, f"{name} block not found"
         return set(re.findall(r'"([^"]+)"', bucket.group(1)))
 
-    gemini_image_models = _models_from_list_constant("GEMINI_IMAGE_MODELS")
-    openai_image_models = _models_from_list_constant("OPENAI_IMAGE_MODELS")
+    gemini_image_models = _models_from_list_constant(routes_text, "GEMINI_IMAGE_MODELS")
+    openai_image_models = _models_from_list_constant(routes_text, "OPENAI_IMAGE_MODELS")
     predefined_image_models = gemini_image_models | openai_image_models
 
-    generic_gemini = re.search(
-        r'"gemini":\s*\[(.*?)\n\s{4}\]',
-        routes_text,
-        re.DOTALL,
-    )
-    assert generic_gemini, "PREDEFINED_MODELS['gemini'] block not found"
-    generic_gemini_models = set(re.findall(r'"([^"]+)"', generic_gemini.group(1)))
-
-    generic_openai = re.search(
-        r'"openai":\s*\[(.*?)\n\s{4}\]',
-        routes_text,
-        re.DOTALL,
-    )
-    assert generic_openai, "PREDEFINED_MODELS['openai'] block not found"
-    generic_openai_models = set(re.findall(r'"([^"]+)"', generic_openai.group(1)))
+    assert '"gemini": get_provider_models("gemini")' in routes_text
+    assert '"openai": get_provider_models("openai")' in routes_text
+    generic_gemini_models = _models_from_list_constant(constants_text, "GEMINI_LATEST_MODELS")
+    generic_openai_models = _models_from_list_constant(constants_text, "OPENAI_LATEST_MODELS")
 
     assert predefined_image_models == image_models
     assert gemini_image_models.isdisjoint(generic_gemini_models)
@@ -474,6 +525,250 @@ def test_image_models_are_isolated_from_llm_suggestions():
     assert '"openai_image": OPENAI_IMAGE_MODELS' in routes_text
     assert "if _is_gemini_image_model(model_id):" in routes_text
     assert 'vendor == "openai" and _is_openai_image_model(model_id)' in routes_text
+
+
+# ---------------------------------------------------------------------------
+# Guard 3b — DeepSeek V4 direct-provider catalog
+# ---------------------------------------------------------------------------
+
+def test_deepseek_v4_catalog_defaults_and_aliases():
+    """
+    DeepSeek direct-provider support must expose the V4 models first while
+    retaining the legacy compatibility aliases for existing saved configs.
+    """
+    _install_lightweight_backend_import_stubs()
+
+    from constants.llm_models import (
+        DEEPSEEK_DEFAULT_BASE_URL,
+        DEEPSEEK_DEFAULT_MODEL,
+        DEEPSEEK_MODELS,
+        DEFAULT_PROVIDER_MODELS,
+        SENTINEL_DEFAULT_MODELS,
+        merge_deepseek_v4_models,
+    )
+    from api.routes_integrations import PROVIDER_TEST_MODELS
+    from api.routes_provider_instances import PREDEFINED_MODELS
+    from api.routes_sentinel import LLM_MODELS
+
+    assert DEEPSEEK_MODELS == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ]
+    assert DEEPSEEK_DEFAULT_MODEL == "deepseek-v4-flash"
+    assert DEEPSEEK_DEFAULT_BASE_URL == "https://api.deepseek.com"
+    assert PREDEFINED_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert LLM_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert DEFAULT_PROVIDER_MODELS["deepseek"] == "deepseek-v4-flash"
+    assert SENTINEL_DEFAULT_MODELS["deepseek"] == "deepseek-v4-flash"
+    assert PROVIDER_TEST_MODELS["deepseek"] == "deepseek-v4-flash"
+
+    legacy_models = ["deepseek-chat", "tenant-custom-model"]
+    merged = merge_deepseek_v4_models(legacy_models)
+    assert merged == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "tenant-custom-model",
+    ]
+    assert merge_deepseek_v4_models(merged) == merged
+
+
+def test_deepseek_v4_pricing_and_display_metadata():
+    _install_lightweight_backend_import_stubs()
+
+    from analytics.token_tracker import MODEL_PRICING, TokenTracker
+    from api.routes_model_pricing import _format_display_name
+
+    assert MODEL_PRICING["deepseek-v4-flash"] == {
+        "prompt": 0.14,
+        "cached_input": 0.0028,
+        "completion": 0.28,
+    }
+    assert MODEL_PRICING["deepseek-v4-pro"] == {
+        "prompt": 1.74,
+        "cached_input": 0.0145,
+        "completion": 3.48,
+    }
+    assert MODEL_PRICING["deepseek-chat"] == MODEL_PRICING["deepseek-v4-flash"]
+    assert MODEL_PRICING["deepseek-reasoner"] == MODEL_PRICING["deepseek-v4-flash"]
+    assert _format_display_name("deepseek-v4-flash") == "DeepSeek V4 Flash"
+    assert _format_display_name("deepseek-reasoner") == "DeepSeek Reasoner (legacy alias)"
+
+    tracker = TokenTracker(db=None)
+    # 600 cache-miss input tokens, 400 cache-hit input tokens, 100 output tokens.
+    # V4 Pro should use standard non-promotional pricing:
+    # input $1.74/M, cached input $0.0145/M, output $3.48/M.
+    assert tracker._calculate_cost(
+        "deepseek-v4-pro",
+        prompt_tokens=1000,
+        completion_tokens=100,
+        model_provider="deepseek",
+        cached_input_tokens=400,
+        uncached_input_tokens=600,
+    ) == pytest.approx(0.0013978)
+
+
+# ---------------------------------------------------------------------------
+# Guard 3c — shared latest LLM provider catalog
+# ---------------------------------------------------------------------------
+
+def test_latest_llm_catalogs_shared_by_provider_and_sentinel_routes():
+    _install_lightweight_backend_import_stubs()
+
+    from api.routes_provider_instances import PREDEFINED_MODELS
+    from api.routes_sentinel import LLM_MODELS
+    from constants.llm_models import (
+        DEEPSEEK_MODELS,
+        GROQ_HOSTED_OPEN_MODELS,
+        OPENROUTER_GATEWAY_MODELS,
+        PROVIDER_TEST_MODELS,
+        get_provider_models,
+        get_sentinel_models,
+    )
+
+    assert PREDEFINED_MODELS["openai"] == get_provider_models("openai")
+    assert PREDEFINED_MODELS["grok"] == get_provider_models("grok")
+    assert PREDEFINED_MODELS["groq"] == GROQ_HOSTED_OPEN_MODELS
+    assert PREDEFINED_MODELS["deepseek"] == DEEPSEEK_MODELS
+    assert LLM_MODELS["grok"] == get_sentinel_models("grok")
+    assert LLM_MODELS["openrouter"] == OPENROUTER_GATEWAY_MODELS
+
+    assert "gpt-5.5" in PREDEFINED_MODELS["openai"]
+    assert "gpt-5.5-pro" in PREDEFINED_MODELS["openai"]
+    assert "claude-opus-4-7" in PREDEFINED_MODELS["anthropic"]
+    assert "grok-4.3" in PREDEFINED_MODELS["grok"]
+    assert "grok-4.3-latest" in PREDEFINED_MODELS["grok"]
+    assert "grok-4-1-fast-non-reasoning" in LLM_MODELS["grok"]
+    assert "openai/gpt-oss-120b" in PREDEFINED_MODELS["groq"]
+    assert "mixtral-8x7b-32768" not in PREDEFINED_MODELS["groq"]
+    assert PROVIDER_TEST_MODELS["openai"] == "gpt-5.5"
+    assert PROVIDER_TEST_MODELS["anthropic"] == "claude-opus-4-7"
+    assert PROVIDER_TEST_MODELS["groq"] == "openai/gpt-oss-20b"
+    assert PROVIDER_TEST_MODELS["grok"] == "grok-4.3"
+    assert "openai/gpt-5.5" == PREDEFINED_MODELS["openrouter"][0]
+
+
+def test_latest_model_provider_inference():
+    from constants.llm_models import infer_provider_from_model
+
+    assert infer_provider_from_model("gpt-5.5") == "openai"
+    assert infer_provider_from_model("claude-opus-4-7") == "anthropic"
+    assert infer_provider_from_model("grok-4.20-0309-reasoning") == "grok"
+    assert infer_provider_from_model("grok-4.3-latest") == "grok"
+    assert infer_provider_from_model("x-ai/grok-4.3") == "grok"
+    assert infer_provider_from_model("openai/gpt-5.5") == "openai"
+    assert infer_provider_from_model("openai/gpt-oss-120b") == "groq"
+    assert infer_provider_from_model("deepseek-v4-pro") == "deepseek"
+    assert infer_provider_from_model("llama3.2:latest") == "ollama"
+
+
+def test_model_pricing_classifies_gateway_ids_as_gateway_providers():
+    _install_lightweight_backend_import_stubs()
+
+    from api.routes_model_pricing import _get_provider_from_model
+
+    assert _get_provider_from_model("openai/gpt-5.5") == "openrouter"
+    assert _get_provider_from_model("anthropic/claude-opus-4.7") == "openrouter"
+    assert _get_provider_from_model("x-ai/grok-4.3") == "openrouter"
+    assert _get_provider_from_model("openai/gpt-oss-120b") == "groq"
+
+
+def test_latest_pricing_lookup_and_cached_input_costs():
+    _install_lightweight_backend_import_stubs()
+
+    from analytics.token_tracker import MODEL_PRICING, TokenTracker
+
+    assert MODEL_PRICING["gpt-5.5"] == {
+        "prompt": 5.0,
+        "cached_input": 0.5,
+        "completion": 30.0,
+    }
+    assert MODEL_PRICING["gpt-5.5-pro"] == {
+        "prompt": 30.0,
+        "completion": 180.0,
+    }
+    assert MODEL_PRICING["grok-4.3"] == {
+        "prompt": 1.25,
+        "cached_input": 0.20,
+        "completion": 2.50,
+    }
+    assert MODEL_PRICING["grok-4.3-latest"] == MODEL_PRICING["grok-4.3"]
+    assert MODEL_PRICING["grok-4-1-fast-reasoning"] == {
+        "prompt": 0.20,
+        "cached_input": 0.05,
+        "completion": 0.50,
+    }
+    assert MODEL_PRICING["openai/gpt-oss-120b"] == {
+        "prompt": 0.15,
+        "cached_input": 0.075,
+        "completion": 0.60,
+    }
+    assert MODEL_PRICING["openai/gpt-oss-20b"] == {
+        "prompt": 0.075,
+        "cached_input": 0.037,
+        "completion": 0.30,
+    }
+    assert MODEL_PRICING["x-ai/grok-4.20-0309-non-reasoning"] == {
+        "prompt": 1.25,
+        "cached_input": 0.20,
+        "completion": 2.50,
+    }
+
+    tracker = TokenTracker(db=None)
+    assert tracker._calculate_cost(
+        "grok-4.3",
+        prompt_tokens=1000,
+        completion_tokens=100,
+        model_provider="grok",
+        cached_input_tokens=400,
+        uncached_input_tokens=600,
+    ) == pytest.approx(0.00108)
+
+    first_lookup = tracker._get_pricing("grok-4.3", "grok")
+    assert tracker._pricing_cache["grok:grok-4.3"] == first_lookup
+    assert tracker._get_pricing("grok-4.3", "grok") is first_lookup
+
+
+def test_provider_instance_runtime_preserves_manual_model(monkeypatch):
+    _install_lightweight_backend_import_stubs()
+
+    from agent.ai_client import AIClient
+    from services.provider_instance_service import ProviderInstanceService
+
+    instance = SimpleNamespace(
+        id=42,
+        tenant_id="tenant-a",
+        vendor="openrouter",
+        base_url=None,
+        is_active=True,
+        api_key_encrypted="encrypted",
+        available_models=["google/gemini-2.5-flash"],
+    )
+
+    monkeypatch.setattr(
+        ProviderInstanceService,
+        "get_instance",
+        staticmethod(lambda instance_id, tenant_id, db: instance),
+    )
+    monkeypatch.setattr(
+        ProviderInstanceService,
+        "resolve_api_key",
+        staticmethod(lambda provider_instance, db: "sk-test"),
+    )
+
+    client = AIClient(
+        provider="openrouter",
+        model_name="manual/vendor-model-2026",
+        db=object(),
+        tenant_id="tenant-a",
+        provider_instance_id=42,
+    )
+
+    assert client.provider == "openrouter"
+    assert client.model_name == "manual/vendor-model-2026"
 
 
 # ---------------------------------------------------------------------------

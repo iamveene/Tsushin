@@ -23,6 +23,7 @@ import {
   DocumentIcon,
   LinkIcon
 } from '@/components/ui/icons'
+import { PROVIDER_MODEL_CATALOG, getProviderModelLabels } from '@/lib/provider-models'
 
 function redactPromptPreview(prompt?: string | null): string {
   if (!prompt?.trim()) return 'No system instructions configured'
@@ -33,6 +34,12 @@ function redactPromptPreview(prompt?: string | null): string {
 // Format: { prompt: input cost, completion: output cost }
 const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   // OpenAI
+  'gpt-5.5': { prompt: 5.0, completion: 30.0 },
+  'gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
+  'gpt-5.4': { prompt: 2.5, completion: 15.0 },
+  'gpt-5.4-pro': { prompt: 30.0, completion: 180.0 },
+  'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
+  'gpt-5.4-nano': { prompt: 0.20, completion: 1.0 },
   'gpt-4o': { prompt: 2.5, completion: 10.0 },
   'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
   'gpt-4-turbo': { prompt: 10.0, completion: 30.0 },
@@ -40,6 +47,8 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'o1': { prompt: 15.0, completion: 60.0 },
   'o1-mini': { prompt: 3.0, completion: 12.0 },
   // Anthropic
+  'claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
+  'claude-opus-4-7-latest': { prompt: 5.0, completion: 25.0 },
   'claude-opus-4-6': { prompt: 15.0, completion: 75.0 },
   'claude-sonnet-4-6': { prompt: 3.0, completion: 15.0 },
   'claude-haiku-4-5': { prompt: 0.80, completion: 4.0 },
@@ -55,8 +64,35 @@ const MODEL_PRICING: Record<string, { prompt: number; completion: number }> = {
   'gemini-2.0-flash': { prompt: 0.10, completion: 0.40 },
   'gemini-1.5-pro': { prompt: 1.25, completion: 5.0 },
   'gemini-1.5-flash': { prompt: 0.075, completion: 0.3 },
+  // Groq-hosted/open models
+  'openai/gpt-oss-120b': { prompt: 0.15, completion: 0.60 },
+  'openai/gpt-oss-20b': { prompt: 0.075, completion: 0.30 },
+  'llama-3.3-70b-versatile': { prompt: 0.59, completion: 0.79 },
+  'llama-3.1-8b-instant': { prompt: 0.05, completion: 0.08 },
+  // xAI Grok
+  'grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
+  // DeepSeek
+  'deepseek-v4-flash': { prompt: 0.14, completion: 0.28 },
+  'deepseek-v4-pro': { prompt: 0.55, completion: 2.19 },
   // Ollama models are always free — handled dynamically via getModelCostInfo fallback
   // OpenRouter (unified API gateway - prices vary by model)
+  'openai/gpt-5.5': { prompt: 5.0, completion: 30.0 },
+  'openai/gpt-5.5-pro': { prompt: 30.0, completion: 180.0 },
+  'anthropic/claude-opus-4.7': { prompt: 5.0, completion: 25.0 },
+  'anthropic/claude-opus-4-7': { prompt: 5.0, completion: 25.0 },
+  'x-ai/grok-4.3': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.3-latest': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-multi-agent-0309': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4.20-0309-non-reasoning': { prompt: 1.25, completion: 2.50 },
+  'x-ai/grok-4-1-fast-reasoning': { prompt: 0.20, completion: 0.50 },
+  'x-ai/grok-4-1-fast-non-reasoning': { prompt: 0.20, completion: 0.50 },
   'google/gemini-2.5-flash': { prompt: 0.075, completion: 0.3 },
   'google/gemini-2.5-pro': { prompt: 1.25, completion: 5.0 },
   'google/gemini-2.0-flash-thinking-exp': { prompt: 0.10, completion: 0.40 },
@@ -107,68 +143,8 @@ const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`
 }
 
-// Common models by provider
-const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  gemini: [
-    { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
-    { value: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite (Preview)' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-  ],
-  openai: [
-    { value: 'gpt-4o', label: 'GPT-4o' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-    { value: 'o1', label: 'o1' },
-    { value: 'o1-mini', label: 'o1-mini' },
-  ],
-  anthropic: [
-    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
-    { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-  ],
-  ollama: [],  // Populated dynamically from running Ollama instance
-  openrouter: [
-    { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'google/gemini-2.0-flash-thinking-exp', label: 'Gemini 2.0 Flash Thinking' },
-    { value: 'anthropic/claude-sonnet-4-5', label: 'Claude 4.5 Sonnet' },
-    { value: 'anthropic/claude-3.5-sonnet', label: 'Claude 3.5 Sonnet' },
-    { value: 'anthropic/claude-3-opus', label: 'Claude 3 Opus' },
-    { value: 'openai/gpt-4o', label: 'GPT-4o' },
-    { value: 'openai/gpt-4-turbo', label: 'GPT-4 Turbo' },
-    { value: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
-    { value: 'meta-llama/llama-3.1-405b-instruct', label: 'Llama 3.1 405B' },
-    { value: 'mistralai/mistral-large', label: 'Mistral Large' },
-    { value: 'mistralai/mixtral-8x22b-instruct', label: 'Mixtral 8x22B' },
-    { value: 'deepseek/deepseek-r1', label: 'DeepSeek R1' },
-    { value: 'deepseek/deepseek-r1:free', label: 'DeepSeek R1 (Free)' },
-    { value: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' },
-    { value: 'qwen/qwen-2.5-72b-instruct', label: 'Qwen 2.5 72B' },
-    { value: 'cohere/command-r-plus', label: 'Command R+' },
-    { value: 'perplexity/llama-3.1-sonar-huge-128k-online', label: 'Perplexity Sonar' },
-    { value: 'x-ai/grok-2', label: 'Grok 2' },
-    { value: 'nvidia/llama-3.1-nemotron-70b-instruct', label: 'Llama 3.1 Nemotron 70B' },
-    { value: 'microsoft/wizardlm-2-8x22b', label: 'WizardLM 2 8x22B' },
-    { value: 'databricks/dbrx-instruct', label: 'DBRX Instruct' },
-    { value: 'nousresearch/hermes-3-llama-3.1-405b', label: 'Hermes 3 Llama 3.1 405B' },
-  ],
-  vertex_ai: [
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Vertex)' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Vertex)' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (Vertex)' },
-    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Vertex)' },
-    { value: 'claude-haiku-4-5-latest', label: 'Claude Haiku 4.5 (Vertex)' },
-  ],
-}
+// Common models by provider, shared with setup, provider instances, Studio, and Sentinel.
+const MODEL_OPTIONS = PROVIDER_MODEL_CATALOG
 
 interface ConfigPanelProps {
   agentId: number | null
@@ -388,20 +364,20 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                           TTS_ONLY_SUFFIXES.some(s => m.endsWith(s))
                         // Build model list from configured instances; fall back to static MODEL_OPTIONS if none.
                         // Enrich raw model IDs with friendly labels from MODEL_OPTIONS when available.
-                        const vendorKey = agent.model_provider?.toLowerCase()
+                        const vendorKey = agent.model_provider?.toLowerCase() || ''
                         const staticOptions = MODEL_OPTIONS[vendorKey] || []
-                        const labelFor = (m: string) =>
-                          staticOptions.find(o => o.value === m)?.label || m
                         const instanceModels = [
                           ...new Set(providerInstances.flatMap(i => i.available_models))
                         ].filter(m => !isTTSOnlyModel(m))
                         // v0.7.0: Ollama models now flow through providerInstances like every
                         // other vendor — single source of truth via the provider_instance catalog.
-                        const dynamicModels: { value: string; label: string }[] =
-                          instanceModels.length > 0
-                            ? instanceModels.map(m => ({ value: m, label: labelFor(m) }))
-                            : staticOptions.filter(o => !isTTSOnlyModel(o.value))
+                        const dynamicModels = instanceModels.length > 0
+                          ? getProviderModelLabels(vendorKey, instanceModels, {
+                              currentModel: localSettings.modelOverride || agent.model_name,
+                            })
+                          : staticOptions
                         return dynamicModels
+                          .filter(o => !isTTSOnlyModel(o.value))
                       })().map(model => {
                         const costInfo = getModelCostInfo(model.value, agent.model_provider)
                         const pricing = agent.model_provider?.toLowerCase() === 'ollama'
@@ -443,74 +419,70 @@ export default function ConfigPanel({ agentId, settings, onSettingsChange }: Con
                         )
                       })}
 
-                      {/* Custom Model Input (for OpenRouter or other providers) */}
-                      {agent.model_provider?.toLowerCase() === 'openrouter' && (
-                        <>
-                          {!showCustomModelInput ? (
+                      {/* Custom Model Input */}
+                      {!showCustomModelInput ? (
+                        <button
+                          onClick={() => setShowCustomModelInput(true)}
+                          className="w-full px-2 py-2 text-left rounded text-xs transition-colors text-white/60 hover:bg-white/[0.04] hover:text-white border border-white/[0.06] border-dashed"
+                        >
+                          <div className="flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span className="font-medium">Use Custom Model</span>
+                          </div>
+                          <div className="text-[10px] text-white/40 mt-0.5">
+                            Type any model ID for this provider
+                          </div>
+                        </button>
+                      ) : (
+                        <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-2 space-y-2">
+                          <div className="text-xs text-white/60 font-medium">Custom Model Name</div>
+                          <input
+                            type="text"
+                            value={customModelInput}
+                            onChange={(e) => setCustomModelInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && customModelInput.trim()) {
+                                handleSettingChange('modelOverride', customModelInput.trim())
+                                setShowModelSelector(false)
+                                setShowCustomModelInput(false)
+                                setCustomModelInput('')
+                              }
+                            }}
+                            placeholder="e.g., gpt-5.5 or provider/model-name"
+                            className="w-full px-2 py-1.5 text-xs bg-black/40 border border-white/[0.06] rounded text-white placeholder-white/30 focus:outline-none focus:border-teal-500/50"
+                            autoFocus
+                          />
+                          <div className="flex gap-2">
                             <button
-                              onClick={() => setShowCustomModelInput(true)}
-                              className="w-full px-2 py-2 text-left rounded text-xs transition-colors text-white/60 hover:bg-white/[0.04] hover:text-white border border-white/[0.06] border-dashed"
+                              onClick={() => {
+                                if (customModelInput.trim()) {
+                                  handleSettingChange('modelOverride', customModelInput.trim())
+                                  setShowModelSelector(false)
+                                  setShowCustomModelInput(false)
+                                  setCustomModelInput('')
+                                }
+                              }}
+                              className="flex-1 px-2 py-1 text-xs bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded hover:bg-teal-500/30 transition-colors"
+                              disabled={!customModelInput.trim()}
                             >
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                                <span className="font-medium">Use Custom Model</span>
-                              </div>
-                              <div className="text-[10px] text-white/40 mt-0.5">
-                                Type any OpenRouter model name
-                              </div>
+                              Apply
                             </button>
-                          ) : (
-                            <div className="bg-white/[0.02] rounded-lg border border-white/[0.06] p-2 space-y-2">
-                              <div className="text-xs text-white/60 font-medium">Custom Model Name</div>
-                              <input
-                                type="text"
-                                value={customModelInput}
-                                onChange={(e) => setCustomModelInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && customModelInput.trim()) {
-                                    handleSettingChange('modelOverride', customModelInput.trim())
-                                    setShowModelSelector(false)
-                                    setShowCustomModelInput(false)
-                                    setCustomModelInput('')
-                                  }
-                                }}
-                                placeholder="e.g., anthropic/claude-sonnet-4-5"
-                                className="w-full px-2 py-1.5 text-xs bg-black/40 border border-white/[0.06] rounded text-white placeholder-white/30 focus:outline-none focus:border-teal-500/50"
-                                autoFocus
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => {
-                                    if (customModelInput.trim()) {
-                                      handleSettingChange('modelOverride', customModelInput.trim())
-                                      setShowModelSelector(false)
-                                      setShowCustomModelInput(false)
-                                      setCustomModelInput('')
-                                    }
-                                  }}
-                                  className="flex-1 px-2 py-1 text-xs bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded hover:bg-teal-500/30 transition-colors"
-                                  disabled={!customModelInput.trim()}
-                                >
-                                  Apply
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setShowCustomModelInput(false)
-                                    setCustomModelInput('')
-                                  }}
-                                  className="px-2 py-1 text-xs bg-white/[0.02] text-white/60 border border-white/[0.06] rounded hover:bg-white/[0.04] transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                              <div className="text-[10px] text-white/40">
-                                Enter model ID in format: provider/model-name
-                              </div>
-                            </div>
-                          )}
-                        </>
+                            <button
+                              onClick={() => {
+                                setShowCustomModelInput(false)
+                                setCustomModelInput('')
+                              }}
+                              className="px-2 py-1 text-xs bg-white/[0.02] text-white/60 border border-white/[0.06] rounded hover:bg-white/[0.04] transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-white/40">
+                            Manual IDs are saved as typed and may use direct or gateway naming.
+                          </div>
+                        </div>
                       )}
 
                       {/* Pricing legend */}
