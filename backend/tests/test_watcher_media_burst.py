@@ -171,8 +171,18 @@ def test_normal_dm_audio_burst_preserves_order_per_chat():
     assert seen == expected, (
         f"expected per-chat FIFO order, got {seen}"
     )
-    # Cursor should have advanced to the last (highest) timestamp.
-    assert watcher.last_timestamp == msgs[-1]["timestamp"]
+    # Cursor lands one second before seen_max_ts so any same-second siblings
+    # written to the DB after this poll still get fetched on the next poll.
+    # Already-processed messages are filtered by ``processed_message_ids``.
+    from datetime import datetime, timedelta
+
+    last_ts = msgs[-1]["timestamp"]
+    expected_cursor = (
+        datetime.fromisoformat(last_ts) - timedelta(seconds=1)
+    ).strftime("%Y-%m-%d %H:%M:%S") + "+00:00"
+    assert watcher.last_timestamp == expected_cursor, (
+        f"cursor {watcher.last_timestamp!r} != expected {expected_cursor!r}"
+    )
 
 
 def test_normal_dm_audio_burst_parallel_across_chats_preserves_per_chat_order():
@@ -244,3 +254,82 @@ def test_last_timestamp_not_advanced_past_failed_triggered_message():
     # Per-chat FIFO: msg index 3 must NOT have been processed because we
     # stopped draining the chat at the failure.
     assert msgs[3]["id"] not in watcher.processed_message_ids
+
+
+def test_cursor_rolls_back_to_capture_same_second_ties():
+    """Cursor must not silently skip same-second-ties that arrive in a later poll.
+
+    Regression (prod 2026-05-15): a 6-audio burst landed with timestamps
+    17:40:21..24 — three of the six shared timestamp 17:40:22. The watcher
+    processed audios with ts 17:40:21 and one of the 17:40:22 ties in poll 1,
+    then advanced ``last_timestamp`` to 17:40:22. The next poll's reader
+    filter ``ts > '17:40:22'`` excluded the remaining two ties, so audios #3
+    and #4 were silently dropped. Fix: when nothing is unprocessed in this
+    batch, land at ``seen_max_ts - 1 second`` so a future poll picks up any
+    same-second siblings that hadn't been written yet. Already-handled
+    messages are filtered by ``processed_message_ids``.
+    """
+    seen_ids: list[str] = []
+
+    async def cb(msg, trigger_type):
+        seen_ids.append(msg["id"])
+
+    # Poll 1: only the first two messages are visible in the DB
+    # (msg_a and msg_b, both at second=22)
+    msg_a = _normal_audio_msg(0, second=22)
+    msg_b = _normal_audio_msg(1, second=22)
+    msg_b["id"] = "audio_5527999616279@s.whatsapp.net_1"
+    poll1_msgs = [msg_a, msg_b]
+
+    # Poll 2: a third message c also has second=22 (a tie that didn't land
+    # in poll 1) plus a later message d at second=23.
+    msg_c = _normal_audio_msg(2, second=22)
+    msg_c["id"] = "audio_5527999616279@s.whatsapp.net_2"
+    msg_d = _normal_audio_msg(3, second=23)
+
+    state = {"call": 0}
+
+    def reader_get(_since):
+        state["call"] += 1
+        if state["call"] == 1:
+            return list(poll1_msgs)
+        # On the second poll we return whatever has timestamp > last_timestamp
+        # — emulating the SQLite reader's behavior with second granularity.
+        from datetime import datetime
+        try:
+            cutoff = datetime.fromisoformat(_since.replace("+00:00", ""))
+        except Exception:
+            return [msg_a, msg_b, msg_c, msg_d]
+        out = []
+        for m in [msg_a, msg_b, msg_c, msg_d]:
+            try:
+                mt = datetime.fromisoformat(m["timestamp"])
+            except Exception:
+                continue
+            if mt > cutoff:
+                out.append(m)
+        return out
+
+    reader = SimpleNamespace(get_new_messages=reader_get)
+    msg_filter = SimpleNamespace(should_trigger=lambda msg: "auto")
+    watcher = MCPWatcher(
+        reader=reader,
+        message_filter=msg_filter,
+        on_message_callback=cb,
+        whatsapp_conversation_delay_seconds=1.0,
+    )
+    watcher.last_timestamp = "2026-05-06 21:43:00"
+
+    async def go():
+        await watcher._poll_messages()
+        # After poll 1, the cursor should have rolled back from second=22 to
+        # second=21 — so poll 2's reader will still return msg_c.
+        await watcher._poll_messages()
+
+    asyncio.run(go())
+
+    delivered = sorted(seen_ids)
+    expected = sorted([msg_a["id"], msg_b["id"], msg_c["id"], msg_d["id"]])
+    assert delivered == expected, (
+        f"tied messages dropped — delivered={delivered}, expected={expected}"
+    )
