@@ -262,13 +262,33 @@ class MCPWatcher:
             )
 
         # Cursor advancement: land just before the earliest still-unprocessed
-        # triggered message; if everything succeeded, advance to seen_max_ts.
+        # triggered message; if everything succeeded, advance to a second
+        # before ``seen_max_ts``.
+        #
+        # Why the 1-second rollback: WhatsApp delivers ``timestamp`` at
+        # second granularity, and the reader filters with ``timestamp >
+        # last_timestamp``. If a burst lands 3-6 audios in the same second
+        # and the watcher only sees the first one in a poll (the rest are
+        # still being written by the MCP), advancing to that second would
+        # silently skip the same-second siblings on the next poll. Rolling
+        # back by 1s makes the next poll re-fetch any same-second tail;
+        # ``processed_message_ids`` (in-memory) and the DB ``message_cache``
+        # check filter the already-handled rows so no work is repeated.
+        from datetime import datetime, timedelta
+
+        def _rollback_one_second(ts: str) -> str:
+            try:
+                dt = datetime.fromisoformat(ts.replace("+00:00", ""))
+                dt -= timedelta(seconds=1)
+                return dt.strftime("%Y-%m-%d %H:%M:%S") + "+00:00"
+            except Exception:
+                return self.last_timestamp
+
         unprocessed_ts = [
             ts for (mid, ts) in triggered if mid not in self.processed_message_ids
         ]
         if unprocessed_ts:
             earliest = min(unprocessed_ts)
-            from datetime import datetime, timedelta
             try:
                 dt = datetime.fromisoformat(earliest.replace("+00:00", ""))
                 dt -= timedelta(microseconds=1)
@@ -276,7 +296,7 @@ class MCPWatcher:
             except Exception:
                 target = self.last_timestamp
         else:
-            target = seen_max_ts
+            target = _rollback_one_second(seen_max_ts)
 
         if target > self.last_timestamp:
             self.last_timestamp = target
