@@ -864,26 +864,34 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 }
 
 // Extract media info from a message
+//
+// Filenames embed nanosecond precision so two media messages that arrive within
+// the same second never collide. Earlier versions used "20060102_150405"
+// (second granularity), which let multi-audio bursts share a filename — the
+// "file already exists" short-circuit in downloadMedia then served the first
+// audio's bytes for every later message, producing duplicate transcripts.
 func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, url string, mediaKey []byte, fileSHA256 []byte, fileEncSHA256 []byte, fileLength uint64) {
 	if msg == nil {
 		return "", "", "", nil, nil, nil, 0
 	}
 
+	const mediaTimestampFormat = "20060102_150405.000000000"
+
 	// Check for image message
 	if img := msg.GetImageMessage(); img != nil {
-		return "image", "image_" + time.Now().Format("20060102_150405") + ".jpg",
+		return "image", "image_" + time.Now().Format(mediaTimestampFormat) + ".jpg",
 			img.GetURL(), img.GetMediaKey(), img.GetFileSHA256(), img.GetFileEncSHA256(), img.GetFileLength()
 	}
 
 	// Check for video message
 	if vid := msg.GetVideoMessage(); vid != nil {
-		return "video", "video_" + time.Now().Format("20060102_150405") + ".mp4",
+		return "video", "video_" + time.Now().Format(mediaTimestampFormat) + ".mp4",
 			vid.GetURL(), vid.GetMediaKey(), vid.GetFileSHA256(), vid.GetFileEncSHA256(), vid.GetFileLength()
 	}
 
 	// Check for audio message
 	if aud := msg.GetAudioMessage(); aud != nil {
-		return "audio", "audio_" + time.Now().Format("20060102_150405") + ".ogg",
+		return "audio", "audio_" + time.Now().Format(mediaTimestampFormat) + ".ogg",
 			aud.GetURL(), aud.GetMediaKey(), aud.GetFileSHA256(), aud.GetFileEncSHA256(), aud.GetFileLength()
 	}
 
@@ -891,7 +899,7 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 	if doc := msg.GetDocumentMessage(); doc != nil {
 		filename := doc.GetFileName()
 		if filename == "" {
-			filename = "document_" + time.Now().Format("20060102_150405")
+			filename = "document_" + time.Now().Format(mediaTimestampFormat)
 		}
 		return "document", filename,
 			doc.GetURL(), doc.GetMediaKey(), doc.GetFileSHA256(), doc.GetFileEncSHA256(), doc.GetFileLength()
@@ -1114,10 +1122,17 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	// Check if file already exists
-	if _, err := os.Stat(localPath); err == nil {
-		// File exists, return it
-		return true, mediaType, filename, absPath, nil
+	// Check if file already exists. Only trust the cached file when its size
+	// matches WhatsApp's reported fileLength — without that guard, two
+	// messages that ended up with the same filename (legacy rows from before
+	// the nanosecond-precision fix, or a future race) would silently serve
+	// the same bytes and produce duplicate transcripts.
+	if stat, err := os.Stat(localPath); err == nil {
+		if fileLength == 0 || uint64(stat.Size()) == fileLength {
+			return true, mediaType, filename, absPath, nil
+		}
+		fmt.Printf("⚠️  Cached media size mismatch for %s (have=%d want=%d) — re-downloading\n",
+			localPath, stat.Size(), fileLength)
 	}
 
 	// If we don't have all the media info we need, we can't download
