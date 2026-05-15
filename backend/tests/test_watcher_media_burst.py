@@ -7,6 +7,11 @@ combined_body: return`, silently dropping every message in the burst.
 The transcripts produced by ASR were never delivered.
 
 Fix: media-only messages must bypass the debounce window.
+
+Additional cases (2026-05-15): normal-DM audio bursts must preserve per-chat
+send order (regression: `asyncio.gather` resolved transcripts in completion
+order), and the watcher cursor must not advance past an unprocessed/failed
+triggered message — otherwise the next poll silently skips it.
 """
 from __future__ import annotations
 
@@ -43,6 +48,36 @@ def _media_msg(idx: int) -> dict:
         "body": "",  # media-only — empty body
         "media_type": "audio/ogg",
         "timestamp": f"2026-05-06 21:43:{26 + idx}",
+    }
+
+
+def _make_poll_watcher(
+    callback,
+    messages_to_return: list[dict],
+    trigger_value: str = "auto",
+) -> MCPWatcher:
+    reader = SimpleNamespace(get_new_messages=lambda since: list(messages_to_return))
+    msg_filter = SimpleNamespace(should_trigger=lambda msg: trigger_value)
+    watcher = MCPWatcher(
+        reader=reader,
+        message_filter=msg_filter,
+        on_message_callback=callback,
+        whatsapp_conversation_delay_seconds=1.0,
+    )
+    watcher.last_timestamp = "2026-05-06 21:43:00"
+    return watcher
+
+
+def _normal_audio_msg(idx: int, chat_id: str = "5527999616279@s.whatsapp.net", second: int | None = None) -> dict:
+    return {
+        "id": f"audio_{chat_id}_{idx}",
+        "sender": chat_id.split("@")[0],
+        "chat_id": chat_id,
+        "is_group": False,
+        "channel": "whatsapp",
+        "body": "",
+        "media_type": "audio/ogg",
+        "timestamp": f"2026-05-06 21:43:{(second if second is not None else 26 + idx):02d}",
     }
 
 
@@ -110,3 +145,102 @@ def test_mixed_conversation_burst_dispatches_media_immediately_and_buffers_text(
         for c in callback.await_args_list
     ]
     assert delivered_kinds == ["media", "media", "text"]
+
+
+def test_normal_dm_audio_burst_preserves_order_per_chat():
+    """6 audios from the same DM sender must be dispatched in send order.
+
+    Regression: ``asyncio.gather(*normal_tasks)`` resolved tasks in completion
+    order, so transcripts arrived shuffled when ASR latency varied.
+    """
+    seen: list[str] = []
+
+    async def slow_then_fast_callback(msg, trigger_type):
+        # Simulate variable transcription latency: earlier audios take longer.
+        # Without per-chat FIFO, the gather path would deliver audio_5 first.
+        idx = int(msg["id"].rsplit("_", 1)[-1])
+        await asyncio.sleep(0.05 * (6 - idx))
+        seen.append(msg["id"])
+
+    msgs = [_normal_audio_msg(i, second=20 + i) for i in range(6)]
+    watcher = _make_poll_watcher(slow_then_fast_callback, msgs, trigger_value="auto")
+
+    asyncio.run(watcher._poll_messages())
+
+    expected = [f"audio_5527999616279@s.whatsapp.net_{i}" for i in range(6)]
+    assert seen == expected, (
+        f"expected per-chat FIFO order, got {seen}"
+    )
+    # Cursor should have advanced to the last (highest) timestamp.
+    assert watcher.last_timestamp == msgs[-1]["timestamp"]
+
+
+def test_normal_dm_audio_burst_parallel_across_chats_preserves_per_chat_order():
+    """Two senders sending audios in parallel: each chat's order preserved,
+    different chats may interleave."""
+    seen: list[str] = []
+
+    async def cb(msg, trigger_type):
+        # Make the "older chat" slower so we'd see ordering breakage if drains
+        # weren't per-chat FIFO.
+        if msg["chat_id"].startswith("111"):
+            await asyncio.sleep(0.06)
+        else:
+            await asyncio.sleep(0.01)
+        seen.append(msg["id"])
+
+    chat_a = "1111111111@s.whatsapp.net"
+    chat_b = "2222222222@s.whatsapp.net"
+    msgs = [
+        _normal_audio_msg(0, chat_id=chat_a, second=20),
+        _normal_audio_msg(0, chat_id=chat_b, second=21),
+        _normal_audio_msg(1, chat_id=chat_a, second=22),
+        _normal_audio_msg(1, chat_id=chat_b, second=23),
+        _normal_audio_msg(2, chat_id=chat_a, second=24),
+        _normal_audio_msg(2, chat_id=chat_b, second=25),
+    ]
+    watcher = _make_poll_watcher(cb, msgs, trigger_value="auto")
+
+    asyncio.run(watcher._poll_messages())
+
+    chat_a_seen = [m for m in seen if chat_a in m]
+    chat_b_seen = [m for m in seen if chat_b in m]
+    assert chat_a_seen == [
+        f"audio_{chat_a}_0",
+        f"audio_{chat_a}_1",
+        f"audio_{chat_a}_2",
+    ]
+    assert chat_b_seen == [
+        f"audio_{chat_b}_0",
+        f"audio_{chat_b}_1",
+        f"audio_{chat_b}_2",
+    ]
+    assert len(seen) == 6
+
+
+def test_last_timestamp_not_advanced_past_failed_triggered_message():
+    """A failing audio in the burst must leave the cursor before it, so the
+    next poll re-fetches the message instead of silently skipping it."""
+    fail_id = "audio_5527999616279@s.whatsapp.net_2"
+
+    async def cb(msg, trigger_type):
+        if msg["id"] == fail_id:
+            raise RuntimeError("simulated ASR failure")
+
+    msgs = [_normal_audio_msg(i, second=20 + i) for i in range(4)]
+    watcher = _make_poll_watcher(cb, msgs, trigger_value="auto")
+
+    asyncio.run(watcher._poll_messages())
+
+    # Cursor must land BEFORE the failed message so get_new_messages re-fetches it.
+    assert watcher.last_timestamp < msgs[2]["timestamp"], (
+        f"cursor {watcher.last_timestamp} advanced past failed message ts {msgs[2]['timestamp']}"
+    )
+    # Failed message must NOT be in processed_message_ids — it's retriable.
+    assert fail_id not in watcher.processed_message_ids
+    # Earlier successful messages should be remembered so they don't re-dispatch.
+    assert msgs[0]["id"] in watcher.processed_message_ids
+    assert msgs[1]["id"] in watcher.processed_message_ids
+    # Per-chat FIFO: msg index 3 must NOT have been processed because we
+    # stopped draining the chat at the failure.
+    assert msgs[3]["id"] not in watcher.processed_message_ids

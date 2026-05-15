@@ -119,101 +119,167 @@ class MCPWatcher:
                 await asyncio.sleep(self.poll_interval)
 
     async def _poll_messages(self):
-        """Poll for new messages and process them concurrently (Phase 6.11.1)"""
+        """Poll for new messages and dispatch them with per-chat ordering.
+
+        Cursor advancement is deferred until after dispatch so a crash or
+        retry in the middle of an audio burst cannot silently lose messages:
+        on the next poll, anything not yet successfully handled is still
+        ``> last_timestamp`` and gets re-fetched. Within a single burst from
+        one chat (the common case for back-to-back voice notes) messages are
+        processed strictly in send order so transcripts come back in order.
+        """
         # Bug Fix 2026-01-06: Skip processing if paused
         if self.paused:
             self.logger.debug("Watcher is paused - skipping message processing")
             return
 
         messages = self.reader.get_new_messages(self.last_timestamp)
+        if not messages:
+            return
 
-        if messages:
-            self.logger.info(f"Found {len(messages)} new messages since {self.last_timestamp}")
+        self.logger.info(f"Found {len(messages)} new messages since {self.last_timestamp}")
 
-            # Collect messages to process
-            # CRITICAL FIX 2026-01-18: Separate conversation and normal messages
-            # Conversation messages must be processed SEQUENTIALLY to prevent race conditions
-            conversation_messages = []
-            normal_tasks = []
+        conversation_messages: list[tuple[dict, str]] = []
+        normal_messages: list[tuple[dict, str]] = []
+        # All triggered (msg_id, ts) pairs — used post-dispatch to find the
+        # earliest unprocessed message, so the cursor stops just before it.
+        triggered: list[tuple[str, str]] = []
+        # Highest timestamp encountered in this batch — the natural ceiling
+        # for cursor advancement when nothing is left pending.
+        seen_max_ts = self.last_timestamp
 
-            for msg in messages:
-                # Skip if already processed (in-memory check)
-                if msg['id'] in self.processed_message_ids:
+        for msg in messages:
+            msg_id = msg.get("id")
+            msg_ts = msg.get("timestamp", "")
+
+            # Skip if already processed (in-memory check) — safe to advance.
+            if msg_id in self.processed_message_ids:
+                if msg_ts > seen_max_ts:
+                    seen_max_ts = msg_ts
+                continue
+
+            # Skip if already in database message_cache (persistent check) —
+            # this is what prevents replay after MCP container restarts wipe
+            # the in-memory set.
+            if self.db_session:
+                try:
+                    from models import MessageCache
+                    # Force a fresh query by expunging all cached objects
+                    self.db_session.expire_all()
+
+                    existing = self.db_session.query(MessageCache).filter_by(source_id=msg_id).first()
+                    if existing:
+                        self.processed_message_ids.add(msg_id)
+                        if msg_ts > seen_max_ts:
+                            seen_max_ts = msg_ts
+                        continue
+                except Exception as e:
+                    self.logger.error(f"Error checking message_cache for {msg_id}: {e}", exc_info=True)
+                    # Recover session only from PendingRollbackError (poisoned by earlier failed flush)
+                    from sqlalchemy.exc import InvalidRequestError
+                    if isinstance(e, InvalidRequestError):
+                        try:
+                            self.db_session.rollback()
+                            self.logger.info(f"[SESSION RECOVERY] Rolled back poisoned session after {msg_id}")
+                        except Exception:
+                            pass
+                    # Don't advance the cursor past a message whose state we
+                    # couldn't determine — leave it for the next poll.
+                    self.logger.warning(f"[SAFETY SKIP] Skipping message {msg_id} due to cache check error")
                     continue
 
-                # Skip if already in database message_cache (persistent check)
-                # CRITICAL: This prevents message replay after MCP container restarts
-                if self.db_session:
+            trigger_type = self.filter.should_trigger(msg)
+            if trigger_type:
+                self.logger.info(
+                    f"Message {msg_id} from {msg.get('sender','?')} matched filter: {trigger_type}"
+                )
+                if trigger_type == "conversation":
+                    conversation_messages.append((msg, trigger_type))
+                else:
+                    normal_messages.append((msg, trigger_type))
+                triggered.append((msg_id, msg_ts))
+                if msg_ts > seen_max_ts:
+                    seen_max_ts = msg_ts
+            else:
+                # Filter miss: no work to do — remember we've seen it so we
+                # don't refetch on the next poll.
+                self.processed_message_ids.add(msg_id)
+                if msg_ts > seen_max_ts:
+                    seen_max_ts = msg_ts
+
+        # CRITICAL FIX 2026-01-18: Conversation messages are processed
+        # SEQUENTIALLY to prevent race conditions where rapid messages
+        # overwrite each other's history.
+        if conversation_messages:
+            self.logger.info(f"Processing {len(conversation_messages)} conversation messages SEQUENTIALLY")
+            for msg, trigger_type in conversation_messages:
+                msg_id = msg.get("id")
+                try:
+                    await self._handle_conversation_message(msg, trigger_type)
+                    self.processed_message_ids.add(msg_id)
+                    # Settling delay (mirrors prior behavior)
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    self.logger.error(f"Error processing conversation message {msg_id}: {e}", exc_info=True)
+                    # Cursor advancement is deferred — failure stays retriable.
+
+        # Normal messages: per-chat FIFO. Audios from the same chat must be
+        # transcribed in send order, otherwise transcripts come back out of
+        # order or ASR rate-limits when N concurrent calls land on the same
+        # Whisper instance. Different chats still process in parallel.
+        if normal_messages:
+            by_chat: dict[str, list[tuple[dict, str]]] = {}
+            for msg, trigger_type in normal_messages:
+                key = f"{msg.get('channel', 'unknown')}:{msg.get('chat_id') or msg.get('sender')}"
+                by_chat.setdefault(key, []).append((msg, trigger_type))
+            for items in by_chat.values():
+                items.sort(key=lambda mt: mt[0].get("timestamp", ""))
+
+            self.logger.info(
+                f"Processing {len(normal_messages)} normal messages across "
+                f"{len(by_chat)} chat(s): sequential per chat, parallel across chats"
+            )
+
+            async def _drain_chat(items: list[tuple[dict, str]]) -> None:
+                for msg, trigger_type in items:
+                    msg_id = msg.get("id")
                     try:
-                        from models import MessageCache
-                        # Force a fresh query by expunging all cached objects
-                        self.db_session.expire_all()
-
-                        existing = self.db_session.query(MessageCache).filter_by(source_id=msg['id']).first()
-                        if existing:
-                            self.processed_message_ids.add(msg['id'])
-                            if msg["timestamp"] >= self.last_timestamp:
-                                from datetime import datetime, timedelta
-                                try:
-                                    ts = datetime.fromisoformat(msg["timestamp"].replace("+00:00", ""))
-                                    ts += timedelta(microseconds=1)
-                                    self.last_timestamp = ts.strftime("%Y-%m-%d %H:%M:%S") + "+00:00"
-                                except:
-                                    pass
-                            continue
-                    except Exception as e:
-                        self.logger.error(f"Error checking message_cache for {msg['id']}: {e}", exc_info=True)
-                        # Recover session only from PendingRollbackError (poisoned by earlier failed flush)
-                        from sqlalchemy.exc import InvalidRequestError
-                        if isinstance(e, InvalidRequestError):
-                            try:
-                                self.db_session.rollback()
-                                self.logger.info(f"[SESSION RECOVERY] Rolled back poisoned session after {msg['id']}")
-                            except Exception:
-                                pass
-                        self.logger.warning(f"[SAFETY SKIP] Skipping message {msg['id']} due to cache check error")
-                        continue
-
-                # Check if message should trigger
-                trigger_type = self.filter.should_trigger(msg)
-                if trigger_type:
-                    self.logger.info(f"Message {msg['id']} from {msg.get('sender','?')} matched filter: {trigger_type}")
-                    # Separate conversation messages from normal messages
-                    if trigger_type == "conversation":
-                        conversation_messages.append((msg, trigger_type))
-                    else:
-                        # Add to task list for concurrent processing
-                        normal_tasks.append(self._process_message_task(msg, trigger_type))
-
-                # Mark message as processed
-                self.processed_message_ids.add(msg['id'])
-
-                # Update last timestamp
-                if msg["timestamp"] > self.last_timestamp:
-                    self.last_timestamp = msg["timestamp"]
-
-            # CRITICAL FIX 2026-01-18: Process conversation messages SEQUENTIALLY first
-            # This prevents race conditions where rapid messages overwrite each other's history
-            if conversation_messages:
-                self.logger.info(f"Processing {len(conversation_messages)} conversation messages SEQUENTIALLY")
-                for msg, trigger_type in conversation_messages:
-                    try:
-                        await self._handle_conversation_message(msg, trigger_type)
-                        # Small settling delay to ensure DB state is consistent before next message
-                        # This prevents history overwrites when messages arrive rapidly
+                        await self._process_message_task(msg, trigger_type)
+                        self.processed_message_ids.add(msg_id)
                         await asyncio.sleep(0.05)  # 50ms settling time
                     except Exception as e:
-                        self.logger.error(f"Error processing conversation message {msg['id']}: {e}", exc_info=True)
+                        self.logger.error(
+                            f"Error processing normal message {msg_id}: {e}",
+                            exc_info=True,
+                        )
+                        # Stop draining this chat so later messages don't
+                        # jump the queue while the earlier one is unresolved.
+                        return
 
-            # Process normal messages concurrently (no race condition risk)
-            if normal_tasks:
-                self.logger.info(f"Processing {len(normal_tasks)} normal messages concurrently")
-                results = await asyncio.gather(*normal_tasks, return_exceptions=True)
+            await asyncio.gather(
+                *[_drain_chat(items) for items in by_chat.values()],
+                return_exceptions=True,
+            )
 
-                # Log any errors
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        self.logger.error(f"Error processing message: {result}", exc_info=result)
+        # Cursor advancement: land just before the earliest still-unprocessed
+        # triggered message; if everything succeeded, advance to seen_max_ts.
+        unprocessed_ts = [
+            ts for (mid, ts) in triggered if mid not in self.processed_message_ids
+        ]
+        if unprocessed_ts:
+            earliest = min(unprocessed_ts)
+            from datetime import datetime, timedelta
+            try:
+                dt = datetime.fromisoformat(earliest.replace("+00:00", ""))
+                dt -= timedelta(microseconds=1)
+                target = dt.strftime("%Y-%m-%d %H:%M:%S") + "+00:00"
+            except Exception:
+                target = self.last_timestamp
+        else:
+            target = seen_max_ts
+
+        if target > self.last_timestamp:
+            self.last_timestamp = target
 
     async def _process_message_task(self, msg: dict, trigger_type: str):
         """Process a single message (for concurrent execution)"""
