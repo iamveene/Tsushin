@@ -147,6 +147,13 @@ export default function StepProgress() {
         setProgress({ message: 'Creating ASR instance and starting container...' })
         const result = await api.createASRInstance(body)
         createdInstanceId = result.id
+        // Notify any open agent-config panels so their instance pickers
+        // refresh without the user having to close/reopen the modal.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('tsushin:asr-instance-changed', {
+            detail: { id: createdInstanceId, action: 'created' },
+          }))
+        }
       }
       // Branch 4: LLM/Image cloud or Ollama local — /api/provider-instances
       else {
