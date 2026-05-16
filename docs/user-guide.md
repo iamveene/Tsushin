@@ -221,6 +221,13 @@ Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voic
 
 Both Audio Agents Wizard and the agent's Skills tab show a list of every active tenant ASR instance so you can pick which one this agent uses. There is **no global Settings → ASR page** and **no tenant-default ASR** in v0.7.0 — assignment is always explicit at the agent level.
 
+**Mode-aware model field (2026-05-16).** The Audio Transcript config panel renders the model field differently per mode so the picker matches what actually drives transcription:
+
+- In **cloud mode**, the panel shows an editable "OpenAI model" dropdown (e.g. `whisper-1`).
+- In **local instance mode**, the panel shows a read-only "Local model" label of the form `vendor · default_model` (e.g. `speaches · whisper-large-v3`). The local container dictates which model it serves, so the skill config has no per-agent override.
+
+The instance list also auto-refreshes when you switch to instance mode or create a new ASR instance in another tab — you no longer need to close and reopen the modal to pick up a freshly-provisioned instance.
+
 **Cascade-aware delete.** Deleting an ASR instance shows a banner enumerating every agent currently pinned to it. The delete reconciles those agents in the same transaction: pinned skills are repointed to another active ASR instance if one exists; otherwise they are disabled (so the agent stops trying to transcribe via a now-deleted endpoint). The cascade summary appears in the response so the UI surfaces "3 agents reassigned to OpenAI Whisper QA" instead of failing silently.
 
 **Failure-mode honesty (2026-05-06).** If you pin an agent to a local instance, the runtime does **not** silently fall back to the OpenAI cloud Whisper API on failure. The local provider's error surfaces directly so you find out about a stalled or unhealthy local container instead of leaking voice data to a third-party cloud. To use the cloud path explicitly, set `asr_mode='openai'` on the agent.
