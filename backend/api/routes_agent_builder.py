@@ -35,33 +35,13 @@ from auth_dependencies import (
 )
 from services.whatsapp_binding_service import apply_whatsapp_binding_policy, parse_enabled_channels
 from constants.agent_config import MEMORY_ISOLATION_MODES
+from constants.skill_metadata import (
+    EXCLUDED_SKILL_TYPES,
+    SKILL_METADATA,
+    get_valid_skill_types,
+)
 
 router = APIRouter(prefix="/api/v2/agents", tags=["agent-builder"])
-
-# Reuse the same skill metadata from routes_agents_protected
-SKILL_METADATA = {
-    "web_search": {"category": "search", "name": "Web Search", "description": "Search the web for information"},
-    "audio_transcript": {"category": "audio", "name": "Audio Transcript", "description": "Transcribe audio to text"},
-    "audio_tts": {"category": "audio", "name": "Text to Speech", "description": "Convert text to speech"},
-    "gmail": {"category": "email", "name": "Email", "description": "Read and send emails"},
-    "email": {"category": "email", "name": "Email", "description": "Read and send emails"},
-    "calendar": {"category": "integration", "name": "Calendar", "description": "Manage calendar events"},
-    "asana": {"category": "integration", "name": "Asana", "description": "Manage Asana tasks"},
-    "flows": {"category": "automation", "name": "Flows", "description": "Execute automation flows"},
-    "scheduler": {"category": "scheduler", "name": "Scheduler", "description": "Schedule events and reminders"},
-    "browser_automation": {"category": "automation", "name": "Browser Automation", "description": "Control web browsers"},
-    "shell": {"category": "automation", "name": "Shell", "description": "Execute shell commands"},
-    "sandboxed_tools": {"category": "automation", "name": "Sandboxed Tools", "description": "Execute tools in sandboxed environment"},
-    "image_analysis": {"category": "media", "name": "Image Analysis", "description": "Interpret and extract information from attached images"},
-    "image": {"category": "media", "name": "Image Generation", "description": "Generate and edit images"},
-    "flight_search": {"category": "flight_search", "name": "Flight Search", "description": "Search for flights"},
-    "adaptive_personality": {"category": "special", "name": "Adaptive Personality", "description": "Dynamic tone adaptation"},
-    "knowledge_sharing": {"category": "special", "name": "Knowledge Sharing", "description": "Share knowledge across agents"},
-    "agent_switcher": {"category": "special", "name": "Agent Switcher", "description": "Switch between agents in DM"},
-    "agent_communication": {"category": "special", "name": "Agent Communication", "description": "Ask other agents questions or delegate tasks"},
-}
-
-EXCLUDED_SKILL_TYPES = {"automation"}
 
 VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack", "discord"}
 SENSITIVE_CONFIG_PATTERNS = {"api_key", "secret", "access_token", "auth_token", "password", "credential"}
@@ -640,7 +620,7 @@ async def save_builder_data(
 
         # --- Step 2: Skills ---
         if data.skills is not None:
-            valid_skill_types = set(SKILL_METADATA.keys())
+            valid_skill_types = get_valid_skill_types()
             for sd in data.skills:
                 if sd.skill_type not in valid_skill_types:
                     raise HTTPException(status_code=400, detail=f"Invalid skill_type: {sd.skill_type}")

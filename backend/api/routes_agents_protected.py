@@ -88,31 +88,11 @@ async def list_agents_protected(
 # IMPORTANT: These must be defined BEFORE /{agent_id} routes to avoid path conflicts
 # =============================================================================
 
-# Skill metadata for enriched skill display in Graph View
-SKILL_METADATA = {
-    "web_search": {"category": "search", "name": "Web Search", "description": "Search the web for information"},
-    "audio_transcript": {"category": "audio", "name": "Audio Transcript", "description": "Transcribe audio to text"},
-    "audio_tts": {"category": "audio", "name": "Text to Speech", "description": "Convert text to speech"},
-    # Gmail/Email - standalone skill category so it shows at Agent level, not under Integrations
-    "gmail": {"category": "email", "name": "Email", "description": "Read and send emails"},
-    "email": {"category": "email", "name": "Email", "description": "Read and send emails"},
-    "calendar": {"category": "integration", "name": "Calendar", "description": "Manage calendar events"},
-    "asana": {"category": "integration", "name": "Asana", "description": "Manage Asana tasks"},
-    # Flows - will be dynamically renamed to "Scheduler" if it has a calendar/asana provider
-    "flows": {"category": "automation", "name": "Flows", "description": "Execute automation flows"},
-    "scheduler": {"category": "scheduler", "name": "Scheduler", "description": "Schedule events and reminders"},
-    "browser_automation": {"category": "automation", "name": "Browser Automation", "description": "Control web browsers"},
-    "shell": {"category": "automation", "name": "Shell", "description": "Execute shell commands"},
-    "sandboxed_tools": {"category": "automation", "name": "Sandboxed Tools", "description": "Execute tools in sandboxed environment"},
-    "image_analysis": {"category": "media", "name": "Image Analysis", "description": "Interpret and extract information from attached images"},
-    "image": {"category": "media", "name": "Image Generation", "description": "Generate and edit images"},
-    # Flight Search - standalone skill category so it shows at Agent level
-    "flight_search": {"category": "flight_search", "name": "Flight Search", "description": "Search for flights"},
-    "adaptive_personality": {"category": "special", "name": "Adaptive Personality", "description": "Dynamic tone adaptation"},
-    "knowledge_sharing": {"category": "special", "name": "Knowledge Sharing", "description": "Share knowledge across agents"},
-    "agent_switcher": {"category": "special", "name": "Agent Switcher", "description": "Switch between agents in DM"},
-    # Note: "automation" skill type is intentionally EXCLUDED - it's an internal skill that shouldn't show in Graph View
-}
+# Skill metadata for enriched skill display in Graph View — centralized in
+# ``constants.skill_metadata`` so route validators and Graph View enrichment
+# can never drift from SkillManager's registry. Unknown skill_types fall back
+# to a synthetic display label via ``get_skill_metadata``.
+from constants.skill_metadata import SKILL_METADATA, EXCLUDED_SKILL_TYPES  # noqa: E402
 
 
 class AgentGraphPreviewItem(BaseModel):
@@ -901,14 +881,12 @@ async def get_agent_expand_data(
     if not ctx.can_access_resource(agent.tenant_id):
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Skills to exclude from Graph View (internal/system skills)
-    EXCLUDED_SKILL_TYPES = {"automation"}  # Multi-Step Automation is internal
-
-    # Fetch skills with metadata enrichment
+    # Fetch skills with metadata enrichment. EXCLUDED_SKILL_TYPES (e.g. the
+    # internal ``automation`` skill) is imported from constants.skill_metadata.
     skills_db = ctx.db.query(AgentSkill).filter(
         AgentSkill.agent_id == agent_id,
         AgentSkill.is_enabled == True,
-        AgentSkill.skill_type.notin_(EXCLUDED_SKILL_TYPES)  # Exclude internal skills
+        AgentSkill.skill_type.notin_(EXCLUDED_SKILL_TYPES)
     ).all()
 
     # Fetch all skill integrations for this agent in one query
