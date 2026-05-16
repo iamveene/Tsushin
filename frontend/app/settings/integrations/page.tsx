@@ -140,7 +140,7 @@ export default function IntegrationsSettingsPage() {
 
   if (!hasPermission('org.settings.read')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
           <p className="text-sm text-red-200">You do not have permission to view integrations.</p>
@@ -150,7 +150,7 @@ export default function IntegrationsSettingsPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="w-full p-6 space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-display font-bold text-gray-900 dark:text-white">Integrations</h1>

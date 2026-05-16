@@ -176,7 +176,7 @@ export default function SecurityPage() {
 
   if (authLoading || loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <div className="relative w-12 h-12 mx-auto mb-4">
@@ -195,7 +195,7 @@ export default function SecurityPage() {
       {/* Hero Section */}
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-red-900/20 via-orange-900/10 to-transparent"></div>
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-6 relative">
+        <div className="w-full px-4 sm:px-6 lg:px-8 pt-8 pb-6 relative">
           <div className="flex items-center gap-4 mb-2">
             <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center">
               <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -210,7 +210,7 @@ export default function SecurityPage() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         {/* Sub Navigation */}
         <StudioTabs />
 

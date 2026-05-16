@@ -83,7 +83,7 @@ export default function WatcherPage() {
   })
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
       {/* Page Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-display font-bold text-white mb-2">Watcher</h1>

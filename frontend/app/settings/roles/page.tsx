@@ -90,7 +90,7 @@ export default function RolesPage() {
 
   if (!hasPermission('users.read')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-900 dark:text-red-100 mb-2">
             Access Denied
@@ -104,8 +104,8 @@ export default function RolesPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>

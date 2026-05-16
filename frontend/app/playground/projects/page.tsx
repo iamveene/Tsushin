@@ -62,7 +62,7 @@ export default function ProjectsPage() {
     <div className="min-h-screen bg-gradient-to-br from-tsushin-bg via-gray-900 to-gray-950">
       {/* Header */}
       <header className="sticky top-0 z-20 glass-card border-t-0 border-l-0 border-r-0 rounded-none">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Link href="/playground" className="text-tsushin-slate hover:text-tsushin-pearl transition-colors">
@@ -90,7 +90,7 @@ export default function ProjectsPage() {
       </header>
 
       {/* Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="w-full px-4 sm:px-6 lg:px-8 py-8">
         {/* Error */}
         {error && (
           <div className="mb-6 p-4 bg-tsushin-vermilion/10 border border-tsushin-vermilion/20 rounded-xl flex items-center gap-3">

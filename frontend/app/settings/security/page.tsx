@@ -199,7 +199,7 @@ export default function SecuritySettingsPage() {
 
   if (!hasPermission('org.settings.read')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
           <p className="text-sm text-red-200">You do not have permission to view security settings.</p>
@@ -213,8 +213,8 @@ export default function SecuritySettingsPage() {
   const canUseSSO = hasGoogleCredentials || platformStatus?.platform_sso_available
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-3xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">

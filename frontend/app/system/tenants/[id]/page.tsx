@@ -66,7 +66,7 @@ export default function TenantDetailPage() {
   if (!tenant) return null
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="w-full p-6">
       <button onClick={() => router.push('/system/tenants')} className="text-sm text-teal-400 hover:underline mb-6 block">
         ← Back to Tenants
       </button>

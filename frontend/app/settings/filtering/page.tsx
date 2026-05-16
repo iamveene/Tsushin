@@ -119,7 +119,7 @@ export default function FilteringSettingsPage() {
 
   if (!hasPermission('org.settings.write')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-900 dark:text-red-100 mb-2">
             Access Denied
@@ -134,7 +134,7 @@ export default function FilteringSettingsPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex items-center justify-center h-64">
           <div className="text-lg text-gray-600 dark:text-gray-400">Loading configuration...</div>
         </div>
@@ -143,8 +143,8 @@ export default function FilteringSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-4xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-2 text-sm text-tsushin-slate mb-2">

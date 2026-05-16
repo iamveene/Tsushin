@@ -209,7 +209,7 @@ export default function HubTriggersIndexPage() {
 
   if (!canRead) {
     return (
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
         <div className="mb-6 flex items-center gap-3 text-sm text-tsushin-slate">
           <Link href="/hub" className="hover:text-white">Hub</Link>
           <span>/</span>
@@ -227,7 +227,7 @@ export default function HubTriggersIndexPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">

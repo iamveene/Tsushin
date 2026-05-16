@@ -373,7 +373,7 @@ export default function StudioProjectDetailPage() {
     <div className="min-h-screen bg-gradient-to-br from-tsushin-bg via-gray-900 to-gray-950">
       {/* Header */}
       <header className="sticky top-0 z-20 glass-card border-t-0 border-l-0 border-r-0 rounded-none">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Link href="/agents/projects" className="text-white/50 hover:text-white transition-colors">
@@ -413,7 +413,7 @@ export default function StudioProjectDetailPage() {
       </header>
 
       {/* Alerts */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+      <div className="w-full px-4 sm:px-6 lg:px-8 mt-4">
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center justify-between">
             <span className="text-sm text-red-400">{error}</span>
@@ -437,7 +437,7 @@ export default function StudioProjectDetailPage() {
       </div>
 
       {/* Content */}
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="w-full px-4 sm:px-6 lg:px-8 py-6">
         <div className="flex gap-6">
           {/* Tabs Sidebar */}
           <div className="w-48 flex-shrink-0">

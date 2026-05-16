@@ -378,8 +378,8 @@ export default function RemoteAccessPage() {
     (config?.tunnel_token_configured ?? false) && !!config?.tunnel_hostname
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-5xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="flex items-start justify-between mb-8">
           <div>
