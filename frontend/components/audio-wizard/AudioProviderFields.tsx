@@ -456,6 +456,13 @@ export interface AudioTranscriptFieldsProps {
   showResponseMode?: boolean
 }
 
+// Cloud Whisper model catalog. Today only ``whisper-1`` is supported by the
+// backend enum, but the dropdown is data-driven so adding a new cloud model
+// (e.g. ``gpt-4o-transcribe``) is a one-line change here.
+const CLOUD_WHISPER_MODELS: Array<{ value: string; label: string }> = [
+  { value: 'whisper-1', label: 'whisper-1' },
+]
+
 export function AudioTranscriptFields({
   value,
   onChange,
@@ -463,14 +470,32 @@ export function AudioTranscriptFields({
 }: AudioTranscriptFieldsProps) {
   const [instances, setInstances] = useState<ASRInstance[]>([])
 
+  // Refetch the instance list whenever the agent switches to/from
+  // instance mode and whenever the provider wizard reports a new instance.
+  // The empty-deps version of this effect (one-shot at mount) leaked stale
+  // state when users created a local ASR instance in another tab or wizard.
   useEffect(() => {
     let cancelled = false
-    api.getASRInstances().catch(() => [] as ASRInstance[]).then(loadedInstances => {
-      if (cancelled) return
-      setInstances(loadedInstances)
-    })
-    return () => { cancelled = true }
-  }, [])
+    const load = () => {
+      api.getASRInstances()
+        .catch(() => [] as ASRInstance[])
+        .then(loadedInstances => {
+          if (cancelled) return
+          setInstances(loadedInstances)
+        })
+    }
+    load()
+    const onInstanceChange = () => load()
+    if (typeof window !== 'undefined') {
+      window.addEventListener('tsushin:asr-instance-changed', onInstanceChange)
+    }
+    return () => {
+      cancelled = true
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('tsushin:asr-instance-changed', onInstanceChange)
+      }
+    }
+  }, [value.asrMode])
 
   const selectedInstance = useMemo(
     () => instances.find(inst => inst.id === value.asrInstanceId) || null,
@@ -657,14 +682,39 @@ export function AudioTranscriptFields({
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-2">OpenAI model</label>
-          <select
-            value={value.model || 'whisper-1'}
-            onChange={(e) => onChange({ model: e.target.value })}
-            className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
-          >
-            <option value="whisper-1">whisper-1</option>
-          </select>
+          {/* The model field switches shape with asr_mode:
+              - Cloud mode → editable dropdown of cloud Whisper models.
+              - Instance mode → read-only label showing the selected local
+                instance's default_model. The local container dictates which
+                model it serves; the skill-config "model" enum does not apply.
+          */}
+          {value.asrMode === 'instance' ? (
+            <>
+              <label className="block text-sm font-medium mb-2">Local model</label>
+              <div
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-gray-300"
+                aria-readonly="true"
+                title="Dictated by the selected local ASR instance"
+              >
+                {selectedInstance
+                  ? `${selectedInstance.vendor || 'instance'} · ${selectedInstance.default_model || 'default model'}`
+                  : 'Select a local instance above'}
+              </div>
+            </>
+          ) : (
+            <>
+              <label className="block text-sm font-medium mb-2">OpenAI model</label>
+              <select
+                value={value.model || 'whisper-1'}
+                onChange={(e) => onChange({ model: e.target.value })}
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+              >
+                {CLOUD_WHISPER_MODELS.map(m => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       </div>
 
