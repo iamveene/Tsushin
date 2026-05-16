@@ -185,7 +185,7 @@ export default function WakeEventsPage() {
   }
 
   return (
-    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
       <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-8'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
         <div>
           {!isEmbeddedInWatcher && (
