@@ -287,7 +287,7 @@ export default function AuditLogsPage() {
 
   if (!hasPermission('audit.read')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
           <p className="text-sm text-red-200">You don&apos;t have permission to view audit logs.</p>
@@ -297,8 +297,8 @@ export default function AuditLogsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
           <div>

@@ -133,7 +133,7 @@ export default function AnalyticsPage() {
 
   if (!canRead) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-200">
           You do not have permission to view analytics.
         </div>
@@ -142,7 +142,7 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
       <div className="mb-6 flex items-center gap-3 text-sm text-tsushin-slate">
         <Link href="/settings" className="hover:text-white">
           Settings

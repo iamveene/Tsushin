@@ -190,7 +190,7 @@ export default function ContinuousAgentsPage() {
   if (isLegacyStandalone) return null
 
   return (
-    <div className={isEmbedded ? 'animate-fade-in' : 'container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+    <div className={isEmbedded ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
       {!isEmbedded && (
         <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>

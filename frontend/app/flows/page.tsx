@@ -2153,7 +2153,7 @@ export default function FlowsPage() {
   if (loading && allFlows.length === 0) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6">
-        <div className="max-w-7xl mx-auto">
+        <div className="w-full">
           <h1 className="text-3xl font-bold text-white mb-4">Flows</h1>
           <div className="flex items-center gap-3 text-slate-400">
             <div className="animate-spin h-5 w-5 border-2 border-teal-500 border-t-transparent rounded-full"></div>
@@ -2166,7 +2166,7 @@ export default function FlowsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="max-w-[1600px] mx-auto p-6 space-y-6">
+      <div className="w-full p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

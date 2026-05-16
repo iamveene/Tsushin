@@ -109,7 +109,7 @@ export default function StudioTeamsPage() {
 
   return (
     <div className="min-h-screen animate-fade-in" data-new-team-requested={newTeamRequested ? 'true' : undefined}>
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-display font-bold text-white mb-2">Teams</h1>

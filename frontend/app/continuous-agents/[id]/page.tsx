@@ -233,7 +233,7 @@ export default function ContinuousAgentDetailPage() {
   if (!hasValidId) return null
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
       <DetailShellHeader
         breadcrumb={[
           { label: 'Studio', href: '/studio' },

@@ -125,8 +125,8 @@ export default function SystemSSOPage() {
   if (!user) return null
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="flex items-center space-x-3 mb-2">
           <h1 className="text-3xl font-display font-bold text-white">

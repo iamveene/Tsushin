@@ -513,7 +513,7 @@ export default function StudioTeamDetailPage() {
 
   return (
     <div className="min-h-screen animate-fade-in">
-      <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full px-4 py-8 sm:px-6 lg:px-8">
         <DetailShellHeader
           breadcrumb={[
             { label: 'Studio', href: '/agents' },

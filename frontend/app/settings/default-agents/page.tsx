@@ -338,7 +338,7 @@ export default function DefaultAgentsSettingsPage() {
 
   if (!canRead) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="glass-card rounded-xl p-8 text-center">
           <h2 className="text-xl font-semibold text-white mb-2">Access Denied</h2>
           <p className="text-tsushin-slate">
@@ -353,7 +353,7 @@ export default function DefaultAgentsSettingsPage() {
 
   return (
     <div className="min-h-screen bg-[#07070d] text-white">
-      <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full px-4 py-8 sm:px-6 lg:px-8">
         <Link href="/settings" className="text-sm text-tsushin-slate hover:text-teal-400 transition-colors">
           &larr; Back to Settings
         </Link>

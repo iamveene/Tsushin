@@ -158,7 +158,7 @@ export default function VectorStoresSettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#07070d] text-white p-6 max-w-4xl mx-auto">
+    <div className="min-h-screen bg-[#07070d] text-white w-full p-6">
       <Link href="/settings" className="text-sm text-gray-400 hover:text-teal-400 transition-colors">
         &larr; Back to Settings
       </Link>

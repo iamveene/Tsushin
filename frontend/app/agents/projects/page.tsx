@@ -283,7 +283,7 @@ export default function StudioProjectsPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-display font-bold text-white mb-2">Projects</h1>
@@ -302,7 +302,7 @@ export default function StudioProjectsPage() {
       </div>
 
       {/* Sub Navigation */}
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         <StudioTabs />
 
         {/* Error */}

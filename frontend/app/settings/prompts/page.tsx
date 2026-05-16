@@ -40,7 +40,7 @@ export default function PromptsSettingsPage() {
   // Check permissions
   if (!canRead) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="glass-card rounded-xl p-8 text-center">
           <h2 className="text-xl font-semibold text-white mb-2">Access Denied</h2>
           <p className="text-tsushin-slate">
@@ -52,8 +52,8 @@ export default function PromptsSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-display font-bold text-white">Prompts & Patterns</h1>

@@ -285,8 +285,8 @@ export default function SettingsHubPage() {
   const advancedSections = availableSections.filter((s) => !ESSENTIAL_TITLES.includes(s.title))
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-display font-bold text-white">Organization Settings</h1>

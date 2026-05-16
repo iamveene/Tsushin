@@ -609,7 +609,7 @@ export default function CustomToolsPage() {
 
   if (!hasPermission('tools.read')) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-6">
           <h3 className="text-lg font-semibold text-red-100 mb-2">Access Denied</h3>
           <p className="text-sm text-red-200">You do not have permission to view this page.</p>
@@ -621,7 +621,7 @@ export default function CustomToolsPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6 flex items-center gap-4">
           <Link href="/hub?tab=developer" className="text-tsushin-slate hover:text-white transition-colors">
             ← Back to Developer Tools
@@ -635,7 +635,7 @@ export default function CustomToolsPage() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 space-y-6">
         {/* Alerts */}
         {success && (
           <div className="p-4 bg-tsushin-success/10 border border-tsushin-success/30 rounded-xl text-tsushin-success flex justify-between items-center animate-fade-in-down">

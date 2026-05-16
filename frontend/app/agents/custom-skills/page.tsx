@@ -434,8 +434,8 @@ function CustomSkillsPageContent() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-6xl mx-auto">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+        <div className="w-full">
           <div className="animate-pulse space-y-4">
             <div className="h-8 bg-white/5 rounded w-48" />
             <div className="grid grid-cols-4 gap-4">
@@ -451,7 +451,7 @@ function CustomSkillsPageContent() {
   return (
     <div className="min-h-screen" onClick={() => scanDetailSkillId && setScanDetailSkillId(null)}>
       {/* Header */}
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8 flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-display font-bold text-white mb-2">Custom Skills</h1>
@@ -471,7 +471,7 @@ function CustomSkillsPageContent() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-0 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-0 space-y-6">
         {/* Sub Navigation */}
         <StudioTabs />
 
@@ -1209,8 +1209,8 @@ function CustomSkillsPageContent() {
 export default function CustomSkillsPage() {
   return (
     <Suspense fallback={
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-6xl mx-auto">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+        <div className="w-full">
           <div className="animate-pulse space-y-4">
             <div className="h-8 bg-white/5 rounded w-48" />
             <div className="grid grid-cols-5 gap-4">
