@@ -496,7 +496,7 @@ class AudioTranscriptSkill(BaseSkill):
                 },
                 "model": {
                     "type": "string",
-                    "description": "Whisper model to use",
+                    "description": "Cloud Whisper model identifier — only used when asr_mode='openai'. When asr_mode='instance' the model is dictated by the local container (ASRInstance.default_model) and this field is ignored.",
                     "default": "whisper-1",
                     "enum": ["whisper-1"]
                 },

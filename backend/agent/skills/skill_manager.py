@@ -217,6 +217,17 @@ class SkillManager:
             del self.registry[skill_type]
             logger.info(f"Unregistered skill: {skill_type}")
 
+    def get_registered_skill_types(self) -> set:
+        """Return the set of currently-registered canonical skill_type keys.
+
+        Includes registration aliases (e.g. "scheduler" -> FlowsSkill). Route
+        validators read from this rather than maintaining their own dict, so
+        adding a skill in ``_register_builtin_skills`` automatically opens it
+        for save endpoints — preventing historical
+        ``invalid skill_type: <name>`` drift.
+        """
+        return set(self.registry.keys())
+
     def list_available_skills(self) -> List[Dict[str, str]]:
         """
         Get list of all registered skill types.
