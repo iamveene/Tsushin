@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Watcher KPI and Flows palette follow-up (2026-05-18)
+
+- Tightened the Watcher dashboard hero KPI cards into a horizontal compact layout, reducing desktop card height from roughly 120px to 72px and the desktop KPI cluster from roughly 146px to 94px.
+- Aligned the Flows page background and main filter/table surfaces with the shared Tsushin glass/surface palette instead of the slightly different slate gradient shell.
+
 ### Changed — UI density consistency pass (2026-05-18)
 
 - Compacted shared KPI/stat cards and matching custom metric clusters across Watcher, Security, Channels, Agent Messages, Agents, Studio Teams, Settings, Hub, and global-admin system pages.
