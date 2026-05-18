@@ -256,9 +256,9 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
     <div className={`flex flex-col h-screen w-full max-w-full overflow-x-hidden ${isPlaygroundPage ? 'overflow-hidden' : ''}`}>
       {/* Header with glass effect */}
       <header className="flex-shrink-0 z-50 glass-card border-t-0 border-x-0 rounded-none">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center gap-3">
               {/* Hamburger menu button - mobile only */}
               {!isPlaygroundPage && (
                 <button
@@ -728,7 +728,7 @@ export default function LayoutContent({ children }: { children: React.ReactNode 
       {/* Footer - Hide on Playground */}
       {!isPlaygroundPage && (
         <footer className="flex-shrink-0 border-t border-tsushin-border/50 bg-tsushin-deep/80 backdrop-blur-sm">
-          <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex items-center justify-between text-xs text-tsushin-slate">
               <span className="flex items-center gap-2">
                 <span className="text-tsushin-indigo">©</span> 2026 Tsushin. Think, Secure, Build.
