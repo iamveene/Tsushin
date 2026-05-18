@@ -1926,22 +1926,22 @@ If you believe this is an error, please contact support."
         {activeTab === 'stats' && stats && (
           <div className="space-y-6">
             {/* Summary Cards */}
-            <div className="grid grid-cols-4 gap-3">
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total Analyses</p>
-                <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{stats.total_analyses}</p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="stat-card stat-card-indigo">
+                <p className="text-xs uppercase tracking-wide text-tsushin-slate">Total Analyses</p>
+                <p className="mt-1 text-2xl font-semibold text-white">{stats.total_analyses}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Threats Detected</p>
-                <p className="mt-1 text-2xl font-semibold text-orange-600">{stats.threats_detected}</p>
+              <div className="stat-card stat-card-warning">
+                <p className="text-xs uppercase tracking-wide text-tsushin-slate">Threats Detected</p>
+                <p className="mt-1 text-2xl font-semibold text-orange-400">{stats.threats_detected}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Threats Blocked</p>
-                <p className="mt-1 text-2xl font-semibold text-red-600">{stats.threats_blocked}</p>
+              <div className="stat-card stat-card-error">
+                <p className="text-xs uppercase tracking-wide text-tsushin-slate">Threats Blocked</p>
+                <p className="mt-1 text-2xl font-semibold text-red-400">{stats.threats_blocked}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Detection Rate</p>
-                <p className="mt-1 text-2xl font-semibold text-teal-600">{stats.detection_rate}%</p>
+              <div className="stat-card stat-card-success">
+                <p className="text-xs uppercase tracking-wide text-tsushin-slate">Detection Rate</p>
+                <p className="mt-1 text-2xl font-semibold text-teal-400">{stats.detection_rate}%</p>
               </div>
             </div>
 

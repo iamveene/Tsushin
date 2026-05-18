@@ -379,20 +379,20 @@ export default function ContactsPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-tsushin-indigo">
+          <div className="stat-card stat-card-indigo">
             <p className="text-sm font-medium text-tsushin-slate">Total Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{contacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-blue-500">
+          <div className="stat-card stat-card-accent">
             <p className="text-sm font-medium text-tsushin-slate">Users</p>
             <p className="text-2xl font-bold text-white mt-1">{userContacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-purple-500">
+          <div className="stat-card stat-card-accent">
             <p className="text-sm font-medium text-tsushin-slate">Agent Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{agentContacts.length}</p>
           </div>
           <div
-            className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-green-500"
+            className="stat-card stat-card-success"
             title="Contacts that trigger an agent when they send a direct message."
           >
             <p className="text-sm font-medium text-tsushin-slate">DM Triggers</p>

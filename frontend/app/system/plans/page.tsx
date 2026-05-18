@@ -245,19 +245,19 @@ export default function PlansPage() {
         {/* Stats */}
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
-            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="stat-card stat-card-indigo">
               <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Plans</div>
               <div className="mt-1 text-2xl font-semibold text-white">{stats.total_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="stat-card stat-card-success">
               <div className="text-xs uppercase tracking-wide text-tsushin-slate">Active Plans</div>
               <div className="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">{stats.active_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="stat-card stat-card-accent">
               <div className="text-xs uppercase tracking-wide text-tsushin-slate">Public Plans</div>
               <div className="mt-1 text-2xl font-semibold text-blue-600 dark:text-blue-400">{stats.public_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="stat-card stat-card-accent">
               <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Tenants</div>
               <div className="mt-1 text-2xl font-semibold text-purple-600 dark:text-purple-400">
                 {Object.values(stats.tenants_per_plan).reduce((a, b) => a + b, 0)}

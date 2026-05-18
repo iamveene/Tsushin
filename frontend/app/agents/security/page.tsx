@@ -261,9 +261,8 @@ export default function SecurityPage() {
           <div className="stat-card stat-card-warning group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Threats Blocked</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Threats blocked over the last 7 days.">Threats Blocked (7d)</p>
                 <p className="text-3xl font-display font-bold text-orange-400 mt-1">{stats?.threats_blocked || 0}</p>
-                <p className="text-xs text-tsushin-muted mt-1">Last 7 days</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></svg>

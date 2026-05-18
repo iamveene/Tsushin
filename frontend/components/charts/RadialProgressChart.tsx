@@ -73,6 +73,7 @@ export default function RadialProgressChart({
   }
 
   const displayColor = color === CHART_COLORS.success ? getColor() : color
+  const compact = size <= 56
 
   return (
     <div className={`relative inline-flex flex-col items-center ${className}`}>
@@ -130,12 +131,12 @@ export default function RadialProgressChart({
           className="absolute inset-0 flex flex-col items-center justify-center"
           style={{ transform: 'none' }}
         >
-          <span className="text-2xl font-display font-bold text-white">
+          <span className={`${compact ? 'text-base leading-none' : 'text-2xl'} font-display font-bold tabular-nums text-white`}>
             {Math.round(animatedValue)}
-            <span className="text-lg">{suffix}</span>
+            <span className={compact ? 'text-[10px]' : 'text-lg'}>{suffix}</span>
           </span>
           {label && (
-            <span className="text-xs text-tsushin-slate mt-0.5">{label}</span>
+            <span className={`${compact ? 'mt-0 text-[9px] leading-none' : 'mt-0.5 text-xs'} text-tsushin-slate`}>{label}</span>
           )}
         </div>
       )}

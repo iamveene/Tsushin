@@ -232,40 +232,38 @@ export default function PersonasPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-4 border-l-2 border-l-green-500">
+          <div className="stat-card stat-card-success">
             <p className="text-sm font-medium text-tsushin-slate">Total Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{personas.length}</p>
           </div>
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-4 border-l-2 border-l-purple-500">
+          <div className="stat-card stat-card-accent">
             <p className="text-sm font-medium text-tsushin-slate">System Templates</p>
             <p className="text-2xl font-bold text-white mt-1">{systemPersonas.length}</p>
           </div>
           <button
             type="button"
             onClick={handleOpenCreateModal}
-            className="rounded-lg border border-gray-800 border-l-2 border-l-green-500 bg-gray-900/50 p-4 text-left shadow transition-colors hover:border-green-500/60"
+            className="stat-card stat-card-success text-left hover:border-green-500/60"
+            title="Create your own persona from a template below."
           >
             <p className="text-sm font-medium text-tsushin-slate">Custom Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{customPersonas.length}</p>
-            {customPersonas.length === 0 && (
-              <p className="mt-1 text-xs text-green-300">Create your own from a template below.</p>
-            )}
           </button>
         </div>
 
         {/* System Persona Templates */}
         <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-800">
+          <div className="px-4 py-3 border-b border-gray-800">
             <h3 className="text-lg font-semibold text-white">Persona Template Library</h3>
             <p className="text-sm text-tsushin-slate mt-1">Pre-built persona templates from Tsushin. Clone to customize.</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
             {systemPersonas.map((persona) => (
               <div
                 key={persona.id}
-                className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-tsushin-indigo/50 transition-colors"
+                className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 hover:border-tsushin-indigo/50 transition-colors"
               >
-                <div className="mb-3">
+                <div className="mb-2.5">
                   <h4 className="font-semibold text-white">{persona.name}</h4>
                   <p className="text-xs text-tsushin-slate mt-1">{persona.description}</p>
                 </div>
@@ -291,7 +289,7 @@ export default function PersonasPage() {
                   )}
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-gray-700">
+                <div className="mt-3 pt-3 border-t border-gray-700">
                   <button
                     onClick={() => handleClonePersona(persona)}
                     className="w-full px-3 py-1.5 text-sm bg-tsushin-indigo/10 text-tsushin-indigo border border-tsushin-indigo/20 rounded-md hover:bg-tsushin-indigo/20"
@@ -311,12 +309,12 @@ export default function PersonasPage() {
 
         {/* Custom Personas */}
         <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-800">
+          <div className="px-4 py-3 border-b border-gray-800">
             <h3 className="text-lg font-semibold text-white">Custom Personas</h3>
             <p className="text-sm text-tsushin-slate mt-1">Your custom personas that can be assigned to agents</p>
           </div>
           {customPersonas.length === 0 ? (
-            <div className="px-6 py-12 text-center">
+            <div className="px-4 py-8 text-center">
               <p className="text-tsushin-slate mb-4">No custom personas created yet</p>
               <button
                 onClick={handleOpenCreateModal}
@@ -326,13 +324,13 @@ export default function PersonasPage() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
               {customPersonas.map((persona) => (
                 <div
                   key={persona.id}
-                  className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-tsushin-indigo/50 transition-colors"
+                  className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 hover:border-tsushin-indigo/50 transition-colors"
                 >
-                  <div className="mb-3">
+                  <div className="mb-2.5">
                     <div className="flex items-center gap-2">
                       <h4 className="font-semibold text-white">{persona.name}</h4>
                       {!persona.is_active && (
@@ -382,7 +380,7 @@ export default function PersonasPage() {
                     )}
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-gray-700 flex gap-2">
+                  <div className="mt-3 pt-3 border-t border-gray-700 flex gap-2">
                     <button
                       onClick={() => handleOpenEditModal(persona)}
                       className="px-3 py-1.5 text-sm bg-tsushin-indigo/10 text-tsushin-indigo border border-tsushin-indigo/20 rounded-md hover:bg-tsushin-indigo/20 flex-1"
