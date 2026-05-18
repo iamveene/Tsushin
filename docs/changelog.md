@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Speaches ASR OOM resilience and resize path (2026-05-18)
+
+- Raised the guided provider wizard and backend Speaches ASR memory default/fallback to **4 GB**, matching the recommended local runtime headroom.
+- Added Speaches retries for transient transport failures, timeouts, HTTP 429, and 5xx while preserving pinned-local fail-closed behavior with no OpenAI fallback.
+- Updating an auto-provisioned ASR instance's runtime limits now reprovisions the container while preserving its model-cache volume, and ASR status/logs include restart/OOM-style runtime context for faster incident diagnosis.
+
 ### Fixed — Skill_type validator drift + Audio Transcript panel mode-switch (2026-05-16)
 
 User reported on production (`https://tsushin.archsec.io`) that editing the Audio Transcript skill on an agent that also carried a `password_vault` skill returned `invalid skill_type: password_vault` on save, and that the Audio Transcript panel did not switch between cloud-Whisper and local-instance fields cleanly. Both bugs were rooted in duplicated sources of truth drifting apart.

@@ -210,17 +210,46 @@ async def update_asr_instance(
     from services.whisper_instance_service import WhisperInstanceService
 
     try:
+        payload = data.model_dump(exclude_unset=True)
+        runtime_limit_updates = {
+            key: payload.pop(key)
+            for key in ("mem_limit", "cpu_quota")
+            if key in payload and payload[key] is not None
+        }
         instance = WhisperInstanceService.update_instance(
             instance_id,
             ctx.tenant_id,
             db,
-            **data.model_dump(exclude_unset=True),
+            **payload,
         )
         if not instance:
             raise HTTPException(status_code=404, detail="ASR instance not found")
+        limits_changed = any(
+            getattr(instance, key, None) != value
+            for key, value in runtime_limit_updates.items()
+        )
+        if limits_changed:
+            if instance.is_active and instance.is_auto_provisioned:
+                from services.whisper_container_manager import WhisperContainerManager
+
+                instance = WhisperContainerManager().reprovision(
+                    instance_id,
+                    ctx.tenant_id,
+                    db,
+                    **runtime_limit_updates,
+                )
+            else:
+                instance = WhisperInstanceService.update_instance(
+                    instance_id,
+                    ctx.tenant_id,
+                    db,
+                    **runtime_limit_updates,
+                )
         return _to_response(instance)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/asr-instances/{instance_id}", tags=["ASR Instances"])

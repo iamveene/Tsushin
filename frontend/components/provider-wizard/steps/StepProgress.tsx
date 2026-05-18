@@ -141,7 +141,7 @@ export default function StepProgress() {
           vendor: draft.vendor || 'openai_whisper',
           instance_name: draft.instance_name,
           auto_provision: draft.auto_provision !== false,
-          mem_limit: draft.mem_limit || (draft.vendor === 'openai_whisper' ? '3g' : '1.5g'),
+          mem_limit: draft.mem_limit || (draft.vendor === 'openai_whisper' ? '3g' : '4g'),
           default_model: defaultModel,
         }
         setProgress({ message: 'Creating ASR instance and starting container...' })
@@ -193,7 +193,7 @@ export default function StepProgress() {
                 gpu_enabled: !!draft.gpu_enabled,
               }),
             })
-          } catch (_e) {
+          } catch {
             // Non-fatal — the user can still hit Provision from the Hub panel.
           }
 
