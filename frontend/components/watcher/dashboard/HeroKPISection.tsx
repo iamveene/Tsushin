@@ -72,77 +72,79 @@ export default function HeroKPISection({
   )
 
   return (
-    <div className="glass-card rounded-xl p-4 border-t border-t-tsushin-indigo/40 animate-fade-in">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="glass-card rounded-xl p-2.5 border-t border-t-tsushin-indigo/40 animate-fade-in">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5">
         {/* Total Messages */}
-        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-accent/30 transition-all">
-          <div className="flex items-start justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-tsushin-accent/10 flex items-center justify-center text-tsushin-accent group-hover:scale-105 transition-transform">
+        <div className="group relative overflow-hidden rounded-lg p-2.5 bg-tsushin-surface/60 border border-tsushin-border/30 hover:border-tsushin-accent/30 transition-all">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 shrink-0 rounded-lg bg-tsushin-accent/10 flex items-center justify-center text-tsushin-accent group-hover:scale-105 transition-transform">
               <MessageIcon />
             </div>
-            <SparklineChart
-              data={messagesSparkline}
-              color="accent"
-              width={58}
-              height={22}
-            />
-          </div>
-          <div className="space-y-1">
-            <p className="text-xs font-medium text-tsushin-slate">
-              {labelWithTooltip('Messages', 'All messages recorded for the current tenant, including channel and Playground traffic.')}
-            </p>
-            <p className="text-2xl font-display font-bold text-white">
-              <AnimatedCounter value={totalMessages} />
-            </p>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="text-xs font-medium text-tsushin-slate">
+                {labelWithTooltip('Messages', 'All messages recorded for the current tenant, including channel and Playground traffic.')}
+              </p>
+              <p className="text-xl font-display font-bold leading-tight text-white">
+                <AnimatedCounter value={totalMessages} />
+              </p>
+            </div>
+            <div className="hidden xl:block shrink-0">
+              <SparklineChart
+                data={messagesSparkline}
+                color="accent"
+                width={38}
+                height={14}
+              />
+            </div>
           </div>
           {/* Subtle glow effect on hover */}
           <div className="absolute inset-0 bg-gradient-to-r from-tsushin-accent/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         </div>
 
         {/* Total Agent Runs */}
-        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-indigo/30 transition-all">
-          <div className="flex items-start justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-tsushin-indigo/10 flex items-center justify-center text-tsushin-indigo group-hover:scale-105 transition-transform">
+        <div className="group relative overflow-hidden rounded-lg p-2.5 bg-tsushin-surface/60 border border-tsushin-border/30 hover:border-tsushin-indigo/30 transition-all">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 shrink-0 rounded-lg bg-tsushin-indigo/10 flex items-center justify-center text-tsushin-indigo group-hover:scale-105 transition-transform">
               <AgentIcon />
             </div>
-            <SparklineChart
-              data={agentRunsSparkline}
-              color="primary"
-              width={58}
-              height={22}
-            />
-          </div>
-          <div className="space-y-1">
-            <p className="text-xs font-medium text-tsushin-slate">
-              {labelWithTooltip('Agent Runs', 'Agent execution records counted across recent and historical activity.')}
-            </p>
-            <p className="text-2xl font-display font-bold text-white">
-              <AnimatedCounter value={totalAgentRuns} />
-            </p>
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="text-xs font-medium text-tsushin-slate">
+                {labelWithTooltip('Agent Runs', 'Agent execution records counted across recent and historical activity.')}
+              </p>
+              <p className="text-xl font-display font-bold leading-tight text-white">
+                <AnimatedCounter value={totalAgentRuns} />
+              </p>
+            </div>
+            <div className="hidden xl:block shrink-0">
+              <SparklineChart
+                data={agentRunsSparkline}
+                color="primary"
+                width={38}
+                height={14}
+              />
+            </div>
           </div>
           <div className="absolute inset-0 bg-gradient-to-r from-tsushin-indigo/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         </div>
 
         {/* Success Rate - Radial Gauge */}
-        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-success/30 transition-all">
-          <div className="flex items-center justify-between h-full">
-            <div className="space-y-1">
+        <div className="group relative overflow-hidden rounded-lg p-2.5 bg-tsushin-surface/60 border border-tsushin-border/30 hover:border-tsushin-success/30 transition-all">
+          <div className="flex items-center justify-between gap-2.5">
+            <div className="w-7 h-7 shrink-0 rounded-lg bg-tsushin-success/10 flex items-center justify-center text-tsushin-success">
+              <FilterIcon />
+            </div>
+            <div className="min-w-0 flex-1 space-y-0.5">
               <p className="text-xs font-medium text-tsushin-slate">
                 {labelWithTooltip('Success Rate', 'Share of the loaded recent agent runs that completed successfully.')}
               </p>
-              <div className="flex items-center gap-2 mt-2">
-                <div className="w-7 h-7 rounded-lg bg-tsushin-success/10 flex items-center justify-center text-tsushin-success">
-                  <FilterIcon />
-                </div>
-                <span className="text-xs text-tsushin-muted">
-                  {matchedFilters} filter match{matchedFilters !== 1 ? 'es' : ''}
-                </span>
-              </div>
+              <p className="truncate text-xs text-tsushin-muted">
+                {matchedFilters} filter match{matchedFilters !== 1 ? 'es' : ''}
+              </p>
             </div>
             <RadialProgressChart
               value={successRate}
-              size={74}
-              strokeWidth={6}
+              size={50}
+              strokeWidth={5}
               label="runs"
             />
           </div>
@@ -150,33 +152,35 @@ export default function HeroKPISection({
         </div>
 
         {/* Average Execution Time */}
-        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-warning/30 transition-all">
-          <div className="flex items-start justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-tsushin-warning/10 flex items-center justify-center text-tsushin-warning group-hover:scale-105 transition-transform">
+        <div className="group relative overflow-hidden rounded-lg p-2.5 bg-tsushin-surface/60 border border-tsushin-border/30 hover:border-tsushin-warning/30 transition-all">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 shrink-0 rounded-lg bg-tsushin-warning/10 flex items-center justify-center text-tsushin-warning group-hover:scale-105 transition-transform">
               <ClockIcon />
             </div>
-          </div>
-          <div className="space-y-1">
-            <p className="text-xs font-medium text-tsushin-slate">
-              {labelWithTooltip('Avg Response', 'Average execution time for loaded recent runs that reported a duration.')}
-            </p>
-            <p className="text-2xl font-display font-bold text-white">
-              {avgExecutionTime > 0 ? (
-                <AnimatedCounter
-                  value={avgExecutionTime / 1000}
-                  format="raw"
-                  decimals={1}
-                  suffix="s"
-                />
-              ) : (
-                <span className="text-tsushin-muted">--</span>
-              )}
-            </p>
-            {avgExecutionTime > 0 && (
-              <p className="text-xs text-tsushin-muted">
-                {avgExecutionTime < 1000 ? 'Excellent' : avgExecutionTime < 3000 ? 'Good' : 'Slow'}
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <p className="text-xs font-medium text-tsushin-slate">
+                {labelWithTooltip('Avg Response', 'Average execution time for loaded recent runs that reported a duration.')}
               </p>
-            )}
+              <div className="flex min-w-0 items-baseline gap-2">
+                <p className="text-xl font-display font-bold leading-tight text-white">
+                  {avgExecutionTime > 0 ? (
+                    <AnimatedCounter
+                      value={avgExecutionTime / 1000}
+                      format="raw"
+                      decimals={1}
+                      suffix="s"
+                    />
+                  ) : (
+                    <span className="text-tsushin-muted">--</span>
+                  )}
+                </p>
+                {avgExecutionTime > 0 && (
+                  <p className="truncate text-xs leading-tight text-tsushin-muted">
+                    {avgExecutionTime < 1000 ? 'Excellent' : avgExecutionTime < 3000 ? 'Good' : 'Slow'}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
           <div className="absolute inset-0 bg-gradient-to-r from-tsushin-warning/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         </div>
