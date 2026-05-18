@@ -621,16 +621,16 @@ export default function CustomToolsPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6 flex items-center gap-4">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex items-center gap-4">
           <Link href="/hub?tab=developer" className="text-tsushin-slate hover:text-white transition-colors">
             ← Back to Developer Tools
           </Link>
         </div>
         <div className="flex justify-between items-start">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Sandboxed Tools</h1>
-            <p className="text-tsushin-slate">Manage command-based tools and toolbox container</p>
+            <h1 className="text-2xl font-display font-semibold text-white mb-1">Sandboxed Tools</h1>
+            <p className="text-sm text-tsushin-slate">Manage command-based tools and toolbox container</p>
           </div>
         </div>
       </div>

@@ -216,20 +216,20 @@ export default function PlansPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-white">
+            <div className="flex items-center space-x-3 mb-1">
+              <h1 className="text-2xl font-semibold text-white">
                 Subscription Plans
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full">
                 Global Admin
               </span>
             </div>
-            <p className="text-tsushin-slate">
+            <p className="text-sm text-tsushin-slate">
               Manage subscription plans and pricing
             </p>
           </div>
@@ -244,22 +244,22 @@ export default function PlansPage() {
 
         {/* Stats */}
         {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-              <div className="text-sm text-tsushin-slate mb-1">Total Plans</div>
-              <div className="text-3xl font-bold text-white">{stats.total_plans}</div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+              <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Plans</div>
+              <div className="mt-1 text-2xl font-semibold text-white">{stats.total_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-              <div className="text-sm text-tsushin-slate mb-1">Active Plans</div>
-              <div className="text-3xl font-bold text-green-600 dark:text-green-400">{stats.active_plans}</div>
+            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+              <div className="text-xs uppercase tracking-wide text-tsushin-slate">Active Plans</div>
+              <div className="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">{stats.active_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-              <div className="text-sm text-tsushin-slate mb-1">Public Plans</div>
-              <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{stats.public_plans}</div>
+            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+              <div className="text-xs uppercase tracking-wide text-tsushin-slate">Public Plans</div>
+              <div className="mt-1 text-2xl font-semibold text-blue-600 dark:text-blue-400">{stats.public_plans}</div>
             </div>
-            <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-              <div className="text-sm text-tsushin-slate mb-1">Total Tenants</div>
-              <div className="text-3xl font-bold text-purple-600 dark:text-purple-400">
+            <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+              <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Tenants</div>
+              <div className="mt-1 text-2xl font-semibold text-purple-600 dark:text-purple-400">
                 {Object.values(stats.tenants_per_plan).reduce((a, b) => a + b, 0)}
               </div>
             </div>

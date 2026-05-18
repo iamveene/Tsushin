@@ -211,11 +211,11 @@ export default function PersonasPage() {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-between items-center">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Personas</h1>
-            <p className="text-tsushin-slate">Reusable personality + tone templates that any agent can adopt.</p>
+            <h1 className="text-2xl font-semibold text-white mb-1">Personas</h1>
+            <p className="text-sm text-tsushin-slate">Reusable personality + tone templates that any agent can adopt.</p>
           </div>
           <button
             onClick={handleOpenCreateModal}
@@ -232,18 +232,18 @@ export default function PersonasPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-5 border-l-4 border-l-green-500">
+          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-4 border-l-2 border-l-green-500">
             <p className="text-sm font-medium text-tsushin-slate">Total Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{personas.length}</p>
           </div>
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-5 border-l-4 border-l-purple-500">
+          <div className="bg-gray-900/50 border border-gray-800 rounded-lg shadow p-4 border-l-2 border-l-purple-500">
             <p className="text-sm font-medium text-tsushin-slate">System Templates</p>
             <p className="text-2xl font-bold text-white mt-1">{systemPersonas.length}</p>
           </div>
           <button
             type="button"
             onClick={handleOpenCreateModal}
-            className="rounded-lg border border-gray-800 border-l-4 border-l-green-500 bg-gray-900/50 p-5 text-left shadow transition-colors hover:border-green-500/60"
+            className="rounded-lg border border-gray-800 border-l-2 border-l-green-500 bg-gray-900/50 p-4 text-left shadow transition-colors hover:border-green-500/60"
           >
             <p className="text-sm font-medium text-tsushin-slate">Custom Personas</p>
             <p className="text-2xl font-bold text-white mt-1">{customPersonas.length}</p>

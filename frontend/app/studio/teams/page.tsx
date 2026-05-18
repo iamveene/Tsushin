@@ -109,11 +109,11 @@ export default function StudioTeamsPage() {
 
   return (
     <div className="min-h-screen animate-fade-in" data-new-team-requested={newTeamRequested ? 'true' : undefined}>
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Teams</h1>
-            <p className="text-tsushin-slate">Coordinate multiple agents on one task — sequential (LINE) or collaborative (MESH).</p>
+            <h1 className="text-2xl font-display font-semibold text-white mb-1">Teams</h1>
+            <p className="text-sm text-tsushin-slate">Coordinate multiple agents on one task — sequential (LINE) or collaborative (MESH).</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface px-3 py-2 text-sm font-medium text-tsushin-slate transition-colors hover:border-tsushin-muted hover:text-white">

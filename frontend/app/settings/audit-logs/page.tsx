@@ -297,13 +297,13 @@ export default function AuditLogsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
+        <div className="mb-5 flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-white">Audit Logs</h1>
-            <p className="text-tsushin-slate mt-1">Track all activities in your organization</p>
+            <h1 className="text-2xl font-semibold text-white">Audit Logs</h1>
+            <p className="text-sm text-tsushin-slate mt-1">Track all activities in your organization</p>
           </div>
           {hasPermission('audit.export') && (
             <button

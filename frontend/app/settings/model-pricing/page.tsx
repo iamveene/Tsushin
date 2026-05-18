@@ -247,10 +247,10 @@ export default function ModelPricingPage() {
         </Link>
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white">Model Pricing</h1>
-            <p className="text-tsushin-slate mt-2">
+            <h1 className="text-2xl font-display font-semibold text-white">Model Pricing</h1>
+            <p className="text-sm text-tsushin-slate mt-1">
               Configure LLM pricing rates for cost estimation in the debug panel
             </p>
           </div>

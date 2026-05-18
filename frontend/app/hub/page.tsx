@@ -4125,14 +4125,14 @@ export default function HubPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-display font-bold text-white mb-2">Integration Hub</h1>
-          <p className="text-tsushin-slate">Connect AI providers, communication channels, productivity apps, and developer tools</p>
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5">
+          <h1 className="text-2xl font-display font-semibold text-white mb-1">Integration Hub</h1>
+          <p className="text-sm text-tsushin-slate">Connect AI providers, communication channels, productivity apps, and developer tools</p>
         </div>
       </div>
 
-      <div className="w-full px-4 sm:px-6 lg:px-8 pb-8 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pb-6 space-y-6">
         {/* BUG-610 read-only banner: surfaces why Connect/Add/Disconnect
             buttons are missing for non-admins. Without this the page
             looks broken ("why are there no actions?") — with it the

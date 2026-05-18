@@ -105,12 +105,12 @@ export default function DashboardTab() {
     return (
       <div className="space-y-6 animate-fade-in">
         {/* Hero skeleton */}
-        <div className="glass-card rounded-xl p-6 border-t-2 border-t-tsushin-indigo/20">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="glass-card rounded-xl p-4 border-t border-t-tsushin-indigo/20">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {[...Array(4)].map((_, i) => (
               <div
                 key={i}
-                className="rounded-xl p-5 bg-tsushin-surface border border-tsushin-border/30"
+                className="rounded-lg p-4 bg-tsushin-surface border border-tsushin-border/30"
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="w-10 h-10 rounded-lg skeleton" />
@@ -126,7 +126,7 @@ export default function DashboardTab() {
         </div>
 
         {/* Timeline skeleton */}
-        <div className="glass-card rounded-xl p-6">
+        <div className="glass-card rounded-xl p-5">
           <div className="flex items-center justify-between mb-6">
             <div className="w-40 h-6 rounded skeleton" />
             <div className="w-32 h-8 rounded skeleton" />
@@ -136,16 +136,16 @@ export default function DashboardTab() {
 
         {/* Distribution skeleton */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="glass-card rounded-xl p-6">
+          <div className="glass-card rounded-xl p-5">
             <div className="w-40 h-5 rounded skeleton mb-4" />
             <div className="h-[240px] rounded skeleton" />
           </div>
           <div className="space-y-6">
-            <div className="glass-card rounded-xl p-6">
+            <div className="glass-card rounded-xl p-5">
               <div className="w-36 h-5 rounded skeleton mb-4" />
               <div className="h-24 rounded skeleton" />
             </div>
-            <div className="glass-card rounded-xl p-6">
+            <div className="glass-card rounded-xl p-5">
               <div className="w-28 h-5 rounded skeleton mb-4" />
               <div className="h-32 rounded skeleton" />
             </div>
@@ -153,7 +153,7 @@ export default function DashboardTab() {
         </div>
 
         {/* Performance skeleton */}
-        <div className="glass-card rounded-xl p-6">
+        <div className="glass-card rounded-xl p-5">
           <div className="flex items-center justify-between mb-6">
             <div className="w-44 h-6 rounded skeleton" />
             <div className="w-36 h-7 rounded-full skeleton" />
@@ -162,7 +162,7 @@ export default function DashboardTab() {
             {[...Array(4)].map((_, i) => (
               <div
                 key={i}
-                className="rounded-xl p-5 bg-tsushin-surface border border-tsushin-border/30"
+                className="rounded-lg p-4 bg-tsushin-surface border border-tsushin-border/30"
               >
                 <div className="w-10 h-10 rounded-lg skeleton mb-4" />
                 <div className="space-y-2">

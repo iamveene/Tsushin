@@ -144,22 +144,22 @@ export default function BillingTab() {
       ) : stats ? (
         <div className="space-y-6">
           {/* Summary Cards */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border dark:border-gray-700">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Tokens</div>
-              <div className="text-3xl font-bold text-gray-900 dark:text-white">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700">
+              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total Tokens</div>
+              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
                 {formatTokens(stats.total_tokens)}
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border dark:border-gray-700">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Cost</div>
-              <div className="text-3xl font-bold text-gray-900 dark:text-white">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700">
+              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total Cost</div>
+              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
                 {formatCost(stats.total_cost)}
               </div>
             </div>
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border dark:border-gray-700">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Requests</div>
-              <div className="text-3xl font-bold text-gray-900 dark:text-white">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700">
+              <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Requests</div>
+              <div className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white">
                 {(stats.total_requests ?? 0).toLocaleString()}
               </div>
             </div>

@@ -185,8 +185,8 @@ export default function WakeEventsPage() {
   }
 
   return (
-    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
-      <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-8'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
+    <div className={isEmbeddedInWatcher ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in'}>
+      <div className={`${isEmbeddedInWatcher ? 'mb-6' : 'mb-5'} flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between`}>
         <div>
           {!isEmbeddedInWatcher && (
             <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
@@ -195,8 +195,8 @@ export default function WakeEventsPage() {
               <span>Wake Events</span>
             </div>
           )}
-          <h1 className="text-3xl font-display font-bold text-white">Wake Events</h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
+          <h1 className="text-2xl font-display font-semibold text-white">Wake Events</h1>
+          <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">
             Trigger-origin event browser for continuous agents, with tenant-scoped payload inspection for selected events.
           </p>
         </div>
@@ -211,20 +211,20 @@ export default function WakeEventsPage() {
         </button>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+      <div className="mb-5 grid gap-4 md:grid-cols-3">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <BellIcon size={14} /> Matching events
           </div>
           <div className="mt-2 text-2xl font-semibold text-white">{total}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <ZapIcon size={14} /> Visible page
           </div>
           <div className="mt-2 text-2xl font-semibold text-white">{events.length}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <EyeIcon size={14} /> Payload refs
           </div>

@@ -191,20 +191,20 @@ export default function TenantsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-white">
+            <div className="flex items-center space-x-3 mb-1">
+              <h1 className="text-2xl font-semibold text-white">
                 Tenant Management
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full inline-flex items-center gap-1">
                 <GlobeIcon size={14} /> Global Admin
               </span>
             </div>
-            <p className="text-tsushin-slate">
+            <p className="text-sm text-tsushin-slate">
               Manage all organizations on the platform
             </p>
           </div>
@@ -218,26 +218,26 @@ export default function TenantsPage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-            <div className="text-sm text-tsushin-slate mb-1">Total Tenants</div>
-            <div className="text-3xl font-bold text-white">{stats.total}</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Tenants</div>
+            <div className="mt-1 text-2xl font-semibold text-white">{stats.total}</div>
           </div>
-          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-            <div className="text-sm text-tsushin-slate mb-1">Active</div>
-            <div className="text-3xl font-bold text-green-600 dark:text-green-400">
+          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="text-xs uppercase tracking-wide text-tsushin-slate">Active</div>
+            <div className="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">
               {stats.active}
             </div>
           </div>
-          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-            <div className="text-sm text-tsushin-slate mb-1">Trial</div>
-            <div className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">
+          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="text-xs uppercase tracking-wide text-tsushin-slate">Trial</div>
+            <div className="mt-1 text-2xl font-semibold text-yellow-600 dark:text-yellow-400">
               {stats.trial}
             </div>
           </div>
-          <div className="bg-tsushin-surface rounded-xl border border-tsushin-border p-6">
-            <div className="text-sm text-tsushin-slate mb-1">Suspended</div>
-            <div className="text-3xl font-bold text-red-600 dark:text-red-400">
+          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+            <div className="text-xs uppercase tracking-wide text-tsushin-slate">Suspended</div>
+            <div className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
               {stats.suspended}
             </div>
           </div>

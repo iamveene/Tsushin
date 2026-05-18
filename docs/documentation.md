@@ -2307,7 +2307,7 @@ The **Tester instance** guided path keeps the same container/QR creation code pa
 
 **Hub Integration Summary:** A compact status strip above the Hub tab bar shows connection counts for AI Providers, WhatsApp, Telegram, Slack, Discord, and Webhooks at a glance.
 
-**Settings Progressive Disclosure:** The Settings page groups cards into "Essential" (Organization, Team Members, System AI, Integrations) always visible, and "Advanced" collapsed by default.
+**Settings Information Architecture:** The Settings page groups cards into "Essential" (Organization, Team Members, System AI, Integrations) followed by "Advanced" cards that remain visible below a separator.
 
 #### 15.1.1 Migration: LID support (v0.6.0)
 

@@ -353,20 +353,20 @@ export default function DefaultAgentsSettingsPage() {
 
   return (
     <div className="min-h-screen bg-[#07070d] text-white">
-      <div className="w-full px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full px-4 py-6 sm:px-6 lg:px-8">
         <Link href="/settings" className="text-sm text-tsushin-slate hover:text-teal-400 transition-colors">
           &larr; Back to Settings
         </Link>
 
-        <div className="mt-6 mb-8 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="mt-5 mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="flex items-center gap-2 text-sm text-tsushin-slate mb-2">
               <span>Organization Settings</span>
               <span>/</span>
               <span className="text-white">Default Agents</span>
             </div>
-            <h1 className="text-3xl font-display font-bold text-white">Default Agents</h1>
-            <p className="mt-2 max-w-3xl text-tsushin-slate">
+            <h1 className="text-2xl font-display font-semibold text-white">Default Agents</h1>
+            <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">
               Define the fallback agent at the tenant, channel, trigger, and per-user levels.
               Contact-specific assignments still live in Studio.
             </p>

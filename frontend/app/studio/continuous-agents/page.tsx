@@ -59,11 +59,11 @@ export default function StudioContinuousAgentsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-8 flex justify-between items-center">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in">
+      <div className="mb-5 flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-display font-bold text-white mb-2">Continuous Agents</h1>
-          <p className="text-tsushin-slate">Always-on wrappers around Studio agents that wake on trigger events with daily budget caps.</p>
+          <h1 className="text-2xl font-display font-semibold text-white mb-1">Continuous Agents</h1>
+          <p className="text-sm text-tsushin-slate">Always-on wrappers around Studio agents that wake on trigger events with daily budget caps.</p>
         </div>
         {canWriteAgents && (
           <SplitButton

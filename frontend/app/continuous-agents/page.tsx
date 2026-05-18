@@ -190,23 +190,23 @@ export default function ContinuousAgentsPage() {
   if (isLegacyStandalone) return null
 
   return (
-    <div className={isEmbedded ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in'}>
+    <div className={isEmbedded ? 'animate-fade-in' : 'w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in'}>
       {!isEmbedded && (
-        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
               <Link href="/studio" className="hover:text-white">Studio</Link>
               <span>/</span>
               <span>Continuous Agents</span>
             </div>
-            <h1 className="text-3xl font-display font-bold text-white">Continuous Agents</h1>
-            <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
+            <h1 className="text-2xl font-display font-semibold text-white">Continuous Agents</h1>
+            <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">
               Always-on wrappers around Studio agents — wake on trigger events, run with daily budget caps, and persist run history.
             </p>
           </div>
         </div>
       )}
-      <div className={`${isEmbedded ? 'mb-6' : 'mb-8'} flex flex-wrap items-center justify-end gap-2`}>
+      <div className={`${isEmbedded ? 'mb-6' : 'mb-5'} flex flex-wrap items-center justify-end gap-2`}>
           <button
             type="button"
             onClick={loadData}
@@ -234,20 +234,20 @@ export default function ContinuousAgentsPage() {
           )}
         </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+      <div className="mb-5 grid gap-4 md:grid-cols-3">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <BotIcon size={14} /> Listed agents
           </div>
           <div className="mt-2 text-2xl font-semibold text-white">{total}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <ActivityIcon size={14} /> Active on page
           </div>
           <div className="mt-2 text-2xl font-semibold text-white">{activeCount}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-tsushin-slate">
             <LightningIcon size={14} /> <span title="Auto-created by triggers. Promote to user-owned before editing freely.">System-owned</span>
           </div>

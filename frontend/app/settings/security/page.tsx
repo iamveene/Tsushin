@@ -213,14 +213,14 @@ export default function SecuritySettingsPage() {
   const canUseSSO = hasGoogleCredentials || platformStatus?.platform_sso_available
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+        <div className="mb-5">
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-1">
             Security Settings
           </h1>
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
             Configure authentication and single sign-on policies for your organization
           </p>
         </div>

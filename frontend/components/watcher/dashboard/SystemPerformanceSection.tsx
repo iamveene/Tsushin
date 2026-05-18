@@ -132,8 +132,8 @@ export default function SystemPerformanceSection({
   )
 
   return (
-    <div className="glass-card rounded-xl p-6 animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
+    <div className="glass-card rounded-xl p-5 animate-fade-in">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-display font-semibold text-white flex items-center gap-2">
           <svg
             width="20"
@@ -209,24 +209,24 @@ export default function SystemPerformanceSection({
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Ring Buffer */}
-        <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-purple/30 transition-all">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-10 h-10 rounded-lg bg-tsushin-purple/10 flex items-center justify-center text-tsushin-purple">
+        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-purple/30 transition-all">
+          <div className="flex items-center justify-between mb-3">
+            <div className="w-9 h-9 rounded-lg bg-tsushin-purple/10 flex items-center justify-center text-tsushin-purple">
               <DatabaseIcon />
             </div>
             <RadialProgressChart
               value={bufferUsagePercent}
-              size={48}
-              strokeWidth={5}
+              size={42}
+              strokeWidth={4}
               color={CHART_COLORS.purple}
               showValue={false}
             />
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">
+            <p className="text-xs font-medium text-tsushin-slate">
               {labelWithTooltip('Recent Memory Limit', 'Maximum recent messages kept per sender before older context rolls off.')}
             </p>
-            <p className="text-2xl font-display font-bold text-white mt-1">
+            <p className="text-xl font-display font-bold text-white mt-1">
               {memoryStats.ring_buffer_size}
             </p>
             <p className="text-xs text-tsushin-muted">messages per sender</p>
@@ -234,17 +234,17 @@ export default function SystemPerformanceSection({
         </div>
 
         {/* Active Senders */}
-        <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-accent/30 transition-all">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-10 h-10 rounded-lg bg-tsushin-accent/10 flex items-center justify-center text-tsushin-accent">
+        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-accent/30 transition-all">
+          <div className="flex items-center justify-between mb-3">
+            <div className="w-9 h-9 rounded-lg bg-tsushin-accent/10 flex items-center justify-center text-tsushin-accent">
               <UsersIcon />
             </div>
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">
+            <p className="text-xs font-medium text-tsushin-slate">
               {labelWithTooltip('Senders in Memory', 'Distinct senders with recent messages currently retained in short-term memory.')}
             </p>
-            <p className="text-2xl font-display font-bold text-white mt-1">
+            <p className="text-xl font-display font-bold text-white mt-1">
               <AnimatedCounter value={memoryStats.senders_in_memory} />
             </p>
             <p className="text-xs text-tsushin-muted">with recent context</p>
@@ -252,17 +252,17 @@ export default function SystemPerformanceSection({
         </div>
 
         {/* Messages Cached */}
-        <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-indigo/30 transition-all">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-10 h-10 rounded-lg bg-tsushin-indigo/10 flex items-center justify-center text-tsushin-indigo">
+        <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30 hover:border-tsushin-indigo/30 transition-all">
+          <div className="flex items-center justify-between mb-3">
+            <div className="w-9 h-9 rounded-lg bg-tsushin-indigo/10 flex items-center justify-center text-tsushin-indigo">
               <MemoryIcon />
             </div>
           </div>
           <div>
-            <p className="text-sm font-medium text-tsushin-slate">
+            <p className="text-xs font-medium text-tsushin-slate">
               {labelWithTooltip('Recent Messages', 'Messages currently retained in short-term memory for fast context lookup.')}
             </p>
-            <p className="text-2xl font-display font-bold text-white mt-1">
+            <p className="text-xl font-display font-bold text-white mt-1">
               <AnimatedCounter value={memoryStats.total_messages_cached} />
             </p>
             <p className="text-xs text-tsushin-muted">kept for context</p>
@@ -271,9 +271,9 @@ export default function SystemPerformanceSection({
 
         {/* Vector Embeddings */}
         {memoryStats.vector_store ? (
-          <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-indigo/5 to-tsushin-purple/5 border border-tsushin-indigo/30 hover:border-tsushin-indigo/50 transition-all">
-            <div className="flex items-center justify-between mb-4">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-tsushin-indigo/20 to-tsushin-purple/20 flex items-center justify-center text-tsushin-indigo">
+          <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-indigo/5 to-tsushin-purple/5 border border-tsushin-indigo/30 hover:border-tsushin-indigo/50 transition-all">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-tsushin-indigo/20 to-tsushin-purple/20 flex items-center justify-center text-tsushin-indigo">
                 <BrainIcon />
               </div>
               <div className="flex items-center gap-1">
@@ -284,10 +284,10 @@ export default function SystemPerformanceSection({
             <div>
               {memoryStats.vector_store.external_stores?.length ? (
                 <>
-                  <p className="text-sm font-medium text-tsushin-indigo-glow">
+                  <p className="text-xs font-medium text-tsushin-indigo-glow">
                     {labelWithTooltip('Memory Store', 'External vector stores used for meaning-based memory retrieval.')}
                   </p>
-                  <p className="text-2xl font-display font-bold text-white mt-1">
+                  <p className="text-xl font-display font-bold text-white mt-1">
                     {memoryStats.vector_store.total_embeddings > 0 ? (
                       <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
                     ) : (
@@ -302,10 +302,10 @@ export default function SystemPerformanceSection({
                 </>
               ) : (
                 <>
-                  <p className="text-sm font-medium text-tsushin-indigo-glow">
+                  <p className="text-xs font-medium text-tsushin-indigo-glow">
                     {labelWithTooltip('Memory Vectors', 'Searchable memory entries created from message meaning, not keyword matching.')}
                   </p>
-                  <p className="text-2xl font-display font-bold text-white mt-1">
+                  <p className="text-xl font-display font-bold text-white mt-1">
                     <AnimatedCounter value={memoryStats.vector_store.total_embeddings} />
                   </p>
                   <p className="text-xs text-tsushin-slate">searchable memory entries</p>
@@ -314,9 +314,9 @@ export default function SystemPerformanceSection({
             </div>
           </div>
         ) : (
-          <div className="group relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30">
-            <div className="flex items-center justify-between mb-4">
-              <div className="w-10 h-10 rounded-lg bg-tsushin-muted/10 flex items-center justify-center text-tsushin-muted">
+          <div className="group relative overflow-hidden rounded-lg p-4 bg-gradient-to-br from-tsushin-surface to-transparent border border-tsushin-border/30">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-9 h-9 rounded-lg bg-tsushin-muted/10 flex items-center justify-center text-tsushin-muted">
                 <BrainIcon />
               </div>
             </div>

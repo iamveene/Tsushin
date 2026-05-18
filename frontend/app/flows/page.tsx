@@ -2154,7 +2154,7 @@ export default function FlowsPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6">
         <div className="w-full">
-          <h1 className="text-3xl font-bold text-white mb-4">Flows</h1>
+          <h1 className="text-2xl font-display font-semibold text-white mb-3">Flows</h1>
           <div className="flex items-center gap-3 text-slate-400">
             <div className="animate-spin h-5 w-5 border-2 border-teal-500 border-t-transparent rounded-full"></div>
             Loading flows...
@@ -2170,10 +2170,10 @@ export default function FlowsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-teal-400 to-cyan-300 bg-clip-text text-transparent tracking-tight">
+            <h1 className="text-2xl font-display font-semibold text-white tracking-normal">
               Flows
             </h1>
-            <p className="text-slate-500 mt-1 text-sm">Manage automated workflows, conversations, and notifications</p>
+            <p className="text-slate-400 mt-1 text-sm">Manage automated workflows, conversations, and notifications</p>
           </div>
           {canWriteFlows && (
             <div className="flex items-center gap-3">
