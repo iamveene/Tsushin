@@ -183,7 +183,7 @@
 
   /* Stat card with accent border */
   .stat-card {
-    @apply relative bg-tsushin-surface border border-tsushin-border rounded-lg p-4;
+    @apply relative bg-tsushin-surface border border-tsushin-border rounded-lg p-3;
     @apply transition-all duration-300 overflow-hidden;
   }
 
@@ -199,8 +199,13 @@
   }
 
   .stat-card .text-3xl {
-    font-size: 1.5rem;
-    line-height: 2rem;
+    font-size: 1.375rem;
+    line-height: 1.75rem;
+  }
+
+  .stat-card .text-2xl {
+    font-size: 1.375rem;
+    line-height: 1.75rem;
   }
 
   .stat-card .text-sm.font-medium,
@@ -210,19 +215,19 @@
   }
 
   .stat-card .w-12.h-12 {
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 0.65rem;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
   }
 
   .stat-card svg:not(.h-full):not(.w-full) {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1rem;
+    height: 1rem;
   }
 
   .stat-card svg.w-6.h-6 {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1rem;
+    height: 1rem;
   }
 
   .stat-card p.mt-1,

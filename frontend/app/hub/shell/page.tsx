@@ -1149,35 +1149,35 @@ export default function ShellDashboardPage() {
 
                 {/* Shell Security Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                    <p className="text-sm text-gray-400">Commands Analyzed</p>
+                  <div className="stat-card stat-card-indigo">
+                    <p className="text-sm font-medium text-tsushin-slate">Commands Analyzed</p>
                     <p className="text-2xl font-bold text-white mt-1">
                       {shellSecurityStats?.total_analyses || 0}
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">Last 7 days</p>
+                    <p className="text-xs text-tsushin-muted mt-1">Last 7 days</p>
                   </div>
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                    <p className="text-sm text-gray-400">Threats Detected</p>
+                  <div className="stat-card stat-card-warning">
+                    <p className="text-sm font-medium text-tsushin-slate">Threats Detected</p>
                     <p className="text-2xl font-bold text-orange-400 mt-1">
                       {shellSecurityStats?.threats_detected || 0}
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">{shellSecurityStats?.detection_rate || 0}% detection rate</p>
+                    <p className="text-xs text-tsushin-muted mt-1">{shellSecurityStats?.detection_rate || 0}% detection rate</p>
                   </div>
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                    <p className="text-sm text-gray-400">Blocked</p>
+                  <div className="stat-card stat-card-error">
+                    <p className="text-sm font-medium text-tsushin-slate">Blocked</p>
                     <p className="text-2xl font-bold text-red-400 mt-1">
                       {shellSecurityStats?.threats_blocked || 0}
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">Malicious commands stopped</p>
+                    <p className="text-xs text-tsushin-muted mt-1">Malicious commands stopped</p>
                   </div>
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                    <p className="text-sm text-gray-400">Protection Rate</p>
+                  <div className="stat-card stat-card-success">
+                    <p className="text-sm font-medium text-tsushin-slate">Protection Rate</p>
                     <p className="text-2xl font-bold text-green-400 mt-1">
                       {shellSecurityStats && shellSecurityStats.threats_detected > 0
                         ? Math.round((shellSecurityStats.threats_blocked / shellSecurityStats.threats_detected) * 100)
                         : 100}%
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">Threats mitigated</p>
+                    <p className="text-xs text-tsushin-muted mt-1">Threats mitigated</p>
                   </div>
                 </div>
 
