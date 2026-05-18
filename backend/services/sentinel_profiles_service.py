@@ -20,6 +20,7 @@ from models import (
     Agent,
     AgentSkill,
     Contact,
+    ProviderInstance,
 )
 from .sentinel_effective_config import SentinelEffectiveConfig
 from .sentinel_detections import DETECTION_REGISTRY
@@ -83,10 +84,12 @@ class SentinelProfilesService:
 
     def create_profile(self, data: dict, created_by: Optional[int] = None) -> SentinelProfile:
         """Create a new tenant-scoped profile."""
+        data = dict(data)
         # Validate detection_overrides if provided
         detection_overrides = data.get("detection_overrides", "{}")
         if detection_overrides:
             self._validate_detection_overrides(detection_overrides)
+        self._apply_provider_instance_binding(data)
 
         profile = SentinelProfile(
             tenant_id=self.tenant_id,
@@ -108,6 +111,7 @@ class SentinelProfilesService:
 
     def update_profile(self, profile_id: int, data: dict, updated_by: Optional[int] = None) -> Optional[SentinelProfile]:
         """Update a profile. Cannot modify system profiles."""
+        data = dict(data)
         profile = self.get_profile(profile_id)
         if not profile:
             return None
@@ -118,6 +122,7 @@ class SentinelProfilesService:
         # Validate detection_overrides if provided
         if "detection_overrides" in data:
             self._validate_detection_overrides(data["detection_overrides"])
+        self._apply_provider_instance_binding(data)
 
         # Handle is_default uniqueness
         if data.get("is_default") and not profile.is_default:
@@ -205,6 +210,7 @@ class SentinelProfilesService:
             enable_tool_analysis=source.enable_tool_analysis,
             enable_shell_analysis=source.enable_shell_analysis,
             enable_slash_command_analysis=source.enable_slash_command_analysis,
+            provider_instance_id=source.provider_instance_id if source.tenant_id == self.tenant_id else None,
             llm_provider=source.llm_provider,
             llm_model=source.llm_model,
             llm_max_tokens=source.llm_max_tokens,
@@ -476,6 +482,7 @@ class SentinelProfilesService:
             enable_shell_analysis=profile.enable_shell_analysis,
             enable_slash_command_analysis=profile.enable_slash_command_analysis,
             # LLM
+            provider_instance_id=profile.provider_instance_id,
             llm_provider=profile.llm_provider,
             llm_model=profile.llm_model,
             llm_max_tokens=profile.llm_max_tokens,
@@ -672,6 +679,27 @@ class SentinelProfilesService:
     def _invalidate_cache(cls):
         """Clear entire profile resolution cache."""
         cls._profile_cache.clear()
+
+    # =========================================================================
+    # Provider-instance binding
+    # =========================================================================
+
+    def _apply_provider_instance_binding(self, data: dict) -> None:
+        """Validate and normalize provider-instance Sentinel profile updates."""
+        if "provider_instance_id" not in data:
+            return
+        provider_instance_id = data.get("provider_instance_id")
+        if provider_instance_id is None:
+            return
+
+        instance = self.db.query(ProviderInstance).filter(
+            ProviderInstance.id == provider_instance_id,
+            ProviderInstance.tenant_id == self.tenant_id,
+            ProviderInstance.is_active == True,  # noqa: E712
+        ).first()
+        if not instance:
+            raise ValueError("Provider instance not found or inactive")
+        data["llm_provider"] = instance.vendor
 
     # =========================================================================
     # Validation

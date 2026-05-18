@@ -226,6 +226,7 @@ class SentinelService:
             detect_vector_store_poisoning=True,
             detect_continuous_agent_action_approval=True,
             aggressiveness_level=1,
+            provider_instance_id=None,
             llm_provider="gemini",
             llm_model="gemini-2.5-flash-lite",
             llm_max_tokens=256,
@@ -265,6 +266,7 @@ class SentinelService:
             detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
             detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
+            provider_instance_id=getattr(system_config, "provider_instance_id", None),
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
             llm_max_tokens=system_config.llm_max_tokens,
@@ -298,6 +300,7 @@ class SentinelService:
             merged.detect_vector_store_poisoning = getattr(tenant_config, 'detect_vector_store_poisoning', True)
             merged.detect_continuous_agent_action_approval = getattr(tenant_config, 'detect_continuous_agent_action_approval', True)
             merged.aggressiveness_level = tenant_config.aggressiveness_level
+            merged.provider_instance_id = getattr(tenant_config, "provider_instance_id", None)
             merged.llm_provider = tenant_config.llm_provider
             merged.llm_model = tenant_config.llm_model
             merged.llm_max_tokens = tenant_config.llm_max_tokens
@@ -1312,6 +1315,7 @@ class SentinelService:
             max_tokens=config.llm_max_tokens,
             tenant_id=self.tenant_id,
             token_tracker=self.token_tracker,
+            provider_instance_id=config.provider_instance_id,
         )
         # Release the session reference before the external HTTP round-trip.
         # AIClient.generate() does not re-read self.db (token tracking writes

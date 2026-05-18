@@ -222,11 +222,30 @@ class InstanceUsageAgent(BaseModel):
     is_active: bool
 
 
+class InstanceUsageSentinelConfig(BaseModel):
+    id: int
+    name: str
+    llm_provider: str
+    llm_model: str
+
+
+class InstanceUsageSentinelProfile(BaseModel):
+    id: int
+    name: str
+    slug: str
+    llm_provider: str
+    llm_model: str
+    is_default: bool
+    is_enabled: bool
+
+
 class InstanceUsageResponse(BaseModel):
     instance_id: int
     vendor: str
     instance_name: str
     agents: List[InstanceUsageAgent] = []
+    sentinel_configs: List[InstanceUsageSentinelConfig] = []
+    sentinel_profiles: List[InstanceUsageSentinelProfile] = []
     dependent_count: int = 0
 
 
@@ -1087,11 +1106,11 @@ def get_provider_instance_usage(
     current_user: User = Depends(require_permission("org.settings.read")),
     ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """v0.7.0: dependent-agent dry-run for the cascade-aware delete UI.
+    """v0.7.0: dependent-setting dry-run for the cascade-aware delete UI.
 
-    Returns the list of agents currently bound to this instance so the
-    operator can pick a reassignment target (or accept unassigning) before
-    confirming the delete. Tenant-scoped.
+    Returns the agents and Sentinel settings currently bound to this instance
+    so the operator can pick a reassignment target (or accept unassigning)
+    before confirming the delete. Tenant-scoped.
     """
     instance = db.query(ProviderInstance).filter(ProviderInstance.id == instance_id).first()
     if not instance:
@@ -1116,7 +1135,7 @@ def delete_provider_instance(
     """Soft-delete a provider instance.
 
     v0.7.0 cascade-aware behavior:
-      - If the instance has no dependent agents, deletes immediately (no body).
+      - If the instance has no dependents, deletes immediately (no body).
       - If it has dependents, the body MUST set either ``reassign_to_instance_id``
         or ``unassign=true``. Without one of these the request fails with 409
         and the UI is expected to show the pre-delete reassign modal.
@@ -1167,7 +1186,7 @@ def delete_provider_instance(
                 detail={
                     "error": "dependents_require_decision",
                     "message": (
-                        f"This instance is used by {usage['dependent_count']} agent(s). "
+                        f"This instance is used by {usage['dependent_count']} dependent setting(s). "
                         "Pass reassign_to_instance_id or unassign=true to confirm."
                     ),
                     "usage": usage,

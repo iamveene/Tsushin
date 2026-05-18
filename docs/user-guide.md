@@ -1065,6 +1065,10 @@ Sentinel is Tsushin's AI-powered security system that monitors all agent interac
 
 Assign profiles to agents on the agent's security settings. Create custom profiles by cloning an existing one.
 
+### Sentinel LLM Provider
+
+Go to **Settings > Sentinel Security > LLM Configuration** to choose the Provider Instance and model Sentinel uses for analysis. The selector uses the same compact provider/instance/model picker as **Settings > System AI**: pick an existing instance from Hub, select a discovered model, or type a manual model ID. Custom Sentinel profiles can also bind their own Provider Instance in the profile editor.
+
 ### Viewing Security Events
 
 Go to **Watcher > Security** tab to see blocked threats, warnings, and detections. Filter by severity, type, or date range.
