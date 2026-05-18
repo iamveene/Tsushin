@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sentinel tenant config and Sentinel profiles now support a nullable `provider_instance_id` link to a tenant-scoped active Provider Instance. The legacy `llm_provider` / `llm_model` fields remain as synced fallback fields for old rows and manual model IDs.
 - Sentinel runtime LLM calls now forward the linked `provider_instance_id` into `AIClient`, so analysis uses the selected instance credentials/base URL instead of falling back to legacy provider-wide keys.
+- Fresh setup now binds both **System AI** and the tenant Sentinel config to the primary Provider Instance. Hub creation of a tenant's first active LLM Provider Instance also auto-attaches any still-unbound System AI, Sentinel config, and tenant Sentinel profiles.
+- Startup reconciliation now repairs legacy rows where System AI already has a Provider Instance but Sentinel still only has `llm_provider` / `llm_model`; this covers existing installs without overwriting explicit bindings.
 - Replaced Sentinel's static provider/model inputs with the shared compact Provider Instance picker, and converted System AI from provider cards to the same compact list/select UX.
+- System AI update/test endpoints now tenant-check explicit `provider_instance_id` values before saving or testing, matching the Sentinel binding guardrails.
 - Provider-instance delete/reassign now treats Sentinel config/profile bindings as dependents alongside agents, preventing Sentinel from retaining stale inactive instance IDs after Hub cleanup.
 
 ### Fixed — Metric card density audit follow-up (2026-05-18)

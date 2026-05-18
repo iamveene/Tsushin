@@ -310,6 +310,20 @@ async def lifespan(app: FastAPI):
                     stats["instances_created"],
                     stats["agents_relinked"],
                 )
+            core_ai_stats = ProviderInstanceService.bootstrap_orphan_core_ai_bindings(boot_db)
+            if (
+                core_ai_stats["system_ai_bound"]
+                or core_ai_stats["sentinel_configs_bound"]
+                or core_ai_stats["sentinel_profiles_bound"]
+            ):
+                logger.info(
+                    "bootstrap_orphan_core_ai_bindings: tenants=%s system_ai_bound=%s "
+                    "sentinel_configs_bound=%s sentinel_profiles_bound=%s",
+                    core_ai_stats["tenants_processed"],
+                    core_ai_stats["system_ai_bound"],
+                    core_ai_stats["sentinel_configs_bound"],
+                    core_ai_stats["sentinel_profiles_bound"],
+                )
         finally:
             boot_db.close()
     except Exception as e:

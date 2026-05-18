@@ -611,7 +611,7 @@ Open the URL printed at the end of install (e.g. `https://localhost`, `http://lo
 
 1. Create admin account + organization.
 2. Configure at least one AI provider API key (Gemini, Claude, OpenAI, Groq, Grok, DeepSeek, Ollama, OpenRouter).
-3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
+3. The wizard automatically creates **ProviderInstance** records for each supported provider key entered during setup. The selected primary provider is also assigned as the **System AI** and the tenant Sentinel LLM Provider Instance — no manual post-setup Hub provisioning is required for the providers entered in the wizard.
 4. At completion, the wizard reveals an auto-generated **global admin** email/password pair. Record these credentials before leaving the completion screen; they are required for `/system/*` validation and system-level administration.
 5. On first login an **onboarding tour** auto-opens. It now uses the v0.7.0 getting-started path instead of the old v0.6.0 showcase: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and final next steps. Setup-oriented steps include direct links or guided wizard actions to the relevant Hub, Studio, Flows, Playground, or setup surface.
 6. The tour highlights mandatory next steps: **connect a communication channel** (WhatsApp, Telegram, Slack, or Discord) via Hub > Channels to enable agent messaging. Signed HTTP events use the separate Webhook Trigger path in Hub > Triggers.
@@ -1900,6 +1900,8 @@ Per-agent security UI: `frontend/app/agents/security/page.tsx` mounts per-agent 
 ### 12.7 Sentinel LLM Provider Binding
 
 Sentinel tenant config and Sentinel profiles may bind to a tenant-scoped `ProviderInstance` through nullable `provider_instance_id` fields. When the link is present, create/update paths validate that the instance belongs to the same tenant and is active, then sync `llm_provider` from the instance vendor while keeping `llm_model` as the chosen/manual model fallback. `SentinelEffectiveConfig` carries the linked instance through profile resolution, and `SentinelService._call_llm()` passes it to `AIClient` so Sentinel analysis resolves credentials/base URL from the selected instance.
+
+Fresh `/setup` binds the tenant Sentinel config to the primary Provider Instance. If a tenant creates its first active LLM Provider Instance later from Hub while System AI or Sentinel rows are still unbound, `ProviderInstanceService.bootstrap_core_ai_bindings()` auto-fills those empty links. Startup reconciliation (`bootstrap_orphan_core_ai_bindings`) repairs legacy installs where System AI already points at an active Provider Instance but Sentinel config/profile rows still only carry `llm_provider` / `llm_model`.
 
 Legacy `llm_provider` / `llm_model` columns remain populated for old rows, explicit unassign flows, and fallback behavior when no provider instance is linked. Provider Instance deletion/reassignment also updates `SentinelConfig` and `SentinelProfile` dependents alongside agents, so Hub cleanup cannot leave Sentinel pointing at an inactive instance.
 
@@ -3846,7 +3848,7 @@ UI flow:
 - "Test Connection" — sends a test message via the selected instance + model.
 - Saves `{provider_instance_id, model_name}` to system config.
 
-Backend resolution (`services/system_ai_config.py`): When `system_ai_provider_instance_id` is set, the vendor is resolved from the ProviderInstance and the AIClient receives the `provider_instance_id` for proper API key/base URL resolution. Falls back to legacy `system_ai_provider`/`system_ai_model` columns when no instance is linked.
+Backend resolution (`services/system_ai_config.py`): When `system_ai_provider_instance_id` is set, the vendor is resolved from the ProviderInstance and the AIClient receives the `provider_instance_id` for proper API key/base URL resolution. Explicit System AI save/test requests tenant-check the Provider Instance before using it. Falls back to legacy `system_ai_provider`/`system_ai_model` columns when no instance is linked.
 
 ### 21.10 Vector Stores (`frontend/app/settings/vector-stores/page.tsx`)
 

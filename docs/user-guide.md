@@ -57,7 +57,7 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 4. Enter your **organization name** -- this becomes your tenant in the system.
 5. Click **Complete Setup**. You are now logged in as the organization owner.
 
-During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI**. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
+During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI** and Sentinel LLM provider. If you skip provider keys during setup and later create the tenant's first LLM Provider Instance in Hub, Tsushin auto-attaches still-unbound System AI and Sentinel settings to that instance. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
 
 After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
 
@@ -1067,7 +1067,7 @@ Assign profiles to agents on the agent's security settings. Create custom profil
 
 ### Sentinel LLM Provider
 
-Go to **Settings > Sentinel Security > LLM Configuration** to choose the Provider Instance and model Sentinel uses for analysis. The selector uses the same compact provider/instance/model picker as **Settings > System AI**: pick an existing instance from Hub, select a discovered model, or type a manual model ID. Custom Sentinel profiles can also bind their own Provider Instance in the profile editor.
+Go to **Settings > Sentinel Security > LLM Configuration** to choose the Provider Instance and model Sentinel uses for analysis. Fresh setup and the first Hub-created LLM Provider Instance auto-fill this binding only while Sentinel is still unbound; after you choose a specific instance, Tsushin preserves that explicit choice. The selector uses the same compact provider/instance/model picker as **Settings > System AI**: pick an existing instance from Hub, select a discovered model, or type a manual model ID. Custom Sentinel profiles can also bind their own Provider Instance in the profile editor.
 
 ### Viewing Security Events
 
