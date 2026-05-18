@@ -88,6 +88,10 @@ class WhisperASRProvider(ASRProvider):
                         data["language"] = request.language
                     if request.vad_filter is not None:
                         data["vad_filter"] = "true" if request.vad_filter else "false"
+                    if request.prompt:
+                        data["prompt"] = request.prompt
+                    if request.hotwords:
+                        data["hotwords"] = request.hotwords
                     # 600s timeout: even Speaches/faster-whisper can queue requests
                     # under CPU bursts. See openai_whisper_asr_provider for context.
                     async with httpx.AsyncClient(timeout=600) as client:

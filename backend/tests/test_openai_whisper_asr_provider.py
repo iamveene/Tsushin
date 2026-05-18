@@ -324,6 +324,9 @@ def test_container_manager_build_environment_per_vendor(monkeypatch):
     assert speaches_env["API_KEY"] == "abc"
     assert speaches_env["SPEACHES_API_KEY"] == "abc"
     assert "model-a" in speaches_env["PRELOAD_MODELS"]
+    assert speaches_env["WHISPER__COMPUTE_TYPE"] == "int8"
+    assert speaches_env["WHISPER__TTL"] == "-1"
+    assert speaches_env["STT_MODEL_TTL"] == "-1"
     assert "ASR_ENGINE" not in speaches_env
 
     oai_env = mgr._build_environment("openai_whisper", token="abc", default_model="base")

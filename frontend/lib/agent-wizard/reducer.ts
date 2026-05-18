@@ -66,6 +66,8 @@ export interface AudioConfig {
   vadFilter: boolean | null
   transcriptModel: string
   rememberTranscript: boolean
+  transcriptionPrompt: string
+  hotwords: string
 }
 
 export interface SkillsConfig {
@@ -120,6 +122,8 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   vadFilter: null,
   transcriptModel: 'whisper-1',
   rememberTranscript: true,
+  transcriptionPrompt: '',
+  hotwords: '',
 }
 
 export const EMPTY_DRAFT: WizardDraft = {

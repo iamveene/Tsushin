@@ -221,12 +221,16 @@ Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voic
 
 Both Audio Agents Wizard and the agent's Skills tab show a list of every active tenant ASR instance so you can pick which one this agent uses. There is **no global Settings → ASR page** and **no tenant-default ASR** in v0.7.0 — assignment is always explicit at the agent level.
 
+**Local ASR guidance (2026-05-18).** When a skill is pinned to a local ASR instance, Audio Agents Wizard and the Skills tab expose optional **Prompt/context** and **Hotwords / terms** fields. Use them for names, product terms, acronyms, PT-BR vocabulary, and words that Speaches tends to miss. The runtime forwards the guidance to Speaches as `prompt` and `hotwords` multipart fields while preserving the configured `language` and `vad_filter` values. OpenAI cloud transcription remains an explicit cloud mode or benchmark reference; pinned-local agents still fail closed and do not silently fall back to OpenAI.
+
 **Mode-aware model field (2026-05-16).** The Audio Transcript config panel renders the model field differently per mode so the picker matches what actually drives transcription:
 
 - In **cloud mode**, the panel shows an editable "OpenAI model" dropdown (e.g. `whisper-1`).
 - In **local instance mode**, the panel shows a read-only "Local model" label of the form `vendor · default_model` (e.g. `speaches · whisper-large-v3`). The local container dictates which model it serves, so the skill config has no per-agent override.
 
 The instance list also auto-refreshes when you switch to instance mode or create a new ASR instance in another tab — you no longer need to close and reopen the modal to pick up a freshly-provisioned instance.
+
+**Speaches CPU tuning and model promotion.** Auto-provisioned Speaches containers default to CPU-friendly `WHISPER__COMPUTE_TYPE=int8` and a keep-warm TTL (`WHISPER__TTL=-1`, with `STT_MODEL_TTL=-1` retained as a compatibility alias) so the promoted model is not repeatedly unloaded between voice notes. Larger models should be trialed through a benchmark instance first, using real user-sent audio and watching latency plus Docker memory. Updating `default_model` on an active auto-provisioned ASR instance reprovisions the same container target and keeps the model-cache volume, so promote only after the benchmark shows acceptable PT-BR accuracy, memory, and roughly realtime-to-2x latency.
 
 **Cascade-aware delete.** Deleting an ASR instance shows a banner enumerating every agent currently pinned to it. The delete reconciles those agents in the same transaction: pinned skills are repointed to another active ASR instance if one exists; otherwise they are disabled (so the agent stops trying to transcribe via a now-deleted endpoint). The cascade summary appears in the response so the UI surfaces "3 agents reassigned to OpenAI Whisper QA" instead of failing silently.
 

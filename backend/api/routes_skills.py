@@ -156,6 +156,16 @@ def _normalize_audio_transcript_config(
         normalized["asr_instance_id"] = None
 
     normalized["asr_mode"] = asr_mode
+    if "transcription_prompt" not in normalized and "prompt" in normalized:
+        normalized["transcription_prompt"] = normalized.get("prompt")
+
+    for key in ("transcription_prompt", "prompt", "hotwords"):
+        value = normalized.get(key)
+        if isinstance(value, (list, tuple, set)):
+            value = "\n".join(str(item) for item in value)
+        if value is not None:
+            value = str(value).strip()
+        normalized[key] = value or None
     if isinstance(remember_transcript, str):
         normalized["remember_transcript"] = remember_transcript.strip().lower() not in {
             "false",

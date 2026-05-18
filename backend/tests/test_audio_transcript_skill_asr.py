@@ -257,6 +257,56 @@ def test_audio_transcript_passes_vad_filter_to_pinned_asr_instance():
         os.remove(audio_path)
 
 
+def test_audio_transcript_passes_prompt_and_hotwords_to_pinned_asr_instance():
+    _ensure_real_whisper_instance_service()
+    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    try:
+        skill = AudioTranscriptSkill()
+        skill.set_db_session(object())
+        local_response = ASRResponse(success=True, provider="speaches", text="transcricao local")
+        fake_provider = _FakeProvider(local_response)
+        asr_instance = SimpleNamespace(
+            id=7,
+            is_active=True,
+            vendor="speaches",
+            default_model="Systran/faster-whisper-small",
+        )
+
+        with patch(
+            "services.whisper_instance_service.WhisperInstanceService.get_instance",
+            return_value=asr_instance,
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_instance_provider",
+            return_value=fake_provider,
+        ):
+            result = asyncio.run(
+                skill.process(
+                    _make_message(audio_path),
+                    {
+                        "tenant_id": "tenant-alpha",
+                        "asr_mode": "instance",
+                        "asr_instance_id": 7,
+                        "model": "whisper-1",
+                        "language": "pt",
+                        "transcription_prompt": "Termos esperados: Tsushin, ArchSec, Speaches.",
+                        "hotwords": ["Tsushin", "ArchSec", "linha digitavel"],
+                        "response_mode": "conversational",
+                    },
+                )
+            )
+
+        assert result.success is True
+        request = fake_provider.requests[0]
+        assert request.language == "pt"
+        assert request.prompt == "Termos esperados: Tsushin, ArchSec, Speaches."
+        assert request.hotwords == "Tsushin\nArchSec\nlinha digitavel"
+        assert result.metadata["prompt_configured"] is True
+        assert result.metadata["hotwords_configured"] is True
+    finally:
+        os.remove(audio_path)
+
+
 def test_audio_transcript_fails_closed_when_pinned_asr_instance_fails():
     _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")

@@ -43,6 +43,8 @@ interface WizardState {
   vadFilter: boolean | null
   transcriptModel: string
   rememberTranscript: boolean
+  transcriptionPrompt: string
+  hotwords: string
   // Kokoro-only
   memLimit: string
   autoProvision: boolean
@@ -70,6 +72,8 @@ function makeInitialState(opts: AudioWizardOpenOptions): WizardState {
     vadFilter: null,
     transcriptModel: 'whisper-1',
     rememberTranscript: true,
+    transcriptionPrompt: '',
+    hotwords: '',
     memLimit: '1.5g',
     autoProvision: true,
     providerInstanceId: null,
@@ -208,6 +212,12 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
       if (state.asrMode === 'instance' && state.asrInstanceId) {
         transcriptConfig.asr_instance_id = state.asrInstanceId
         transcriptConfig.vad_filter = state.vadFilter
+        if (state.transcriptionPrompt.trim()) {
+          transcriptConfig.transcription_prompt = state.transcriptionPrompt.trim()
+        }
+        if (state.hotwords.trim()) {
+          transcriptConfig.hotwords = state.hotwords.trim()
+        }
       }
       await api.updateAgentSkill(agentId, 'audio_transcript', {
         is_enabled: true,
@@ -499,6 +509,8 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
                 asrInstanceId: state.asrInstanceId,
                 vadFilter: state.vadFilter,
                 rememberTranscript: state.rememberTranscript,
+                transcriptionPrompt: state.transcriptionPrompt,
+                hotwords: state.hotwords,
               }}
               onChange={(patch) => setState(s => ({
                 ...s,
@@ -508,6 +520,8 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
                 asrInstanceId: patch.asrInstanceId !== undefined ? patch.asrInstanceId : s.asrInstanceId,
                 vadFilter: patch.vadFilter !== undefined ? patch.vadFilter : s.vadFilter,
                 rememberTranscript: patch.rememberTranscript !== undefined ? patch.rememberTranscript : s.rememberTranscript,
+                transcriptionPrompt: patch.transcriptionPrompt !== undefined ? patch.transcriptionPrompt : s.transcriptionPrompt,
+                hotwords: patch.hotwords !== undefined ? patch.hotwords : s.hotwords,
               }))}
               showResponseMode={false}
             />

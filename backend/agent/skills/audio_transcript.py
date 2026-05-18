@@ -38,6 +38,15 @@ def _coerce_bool(value: Any, *, default: bool = True) -> bool:
     return bool(value)
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        value = "\n".join(str(item) for item in value)
+    text = str(value).strip()
+    return text or None
+
+
 class AudioTranscriptSkill(BaseSkill):
     """
     Transcribes audio messages to text using OpenAI Whisper API.
@@ -154,6 +163,10 @@ class AudioTranscriptSkill(BaseSkill):
             language = config.get("language", "auto")
             model = config.get("model", "whisper-1")
             tenant_id = config.get("tenant_id")
+            prompt = _normalize_optional_text(
+                config.get("transcription_prompt", config.get("prompt"))
+            )
+            hotwords = _normalize_optional_text(config.get("hotwords"))
             raw_vad_filter = config.get("vad_filter")
             vad_filter: Optional[bool] = None
             if isinstance(raw_vad_filter, bool):
@@ -216,6 +229,8 @@ class AudioTranscriptSkill(BaseSkill):
                                 model=provider_model,
                                 language=language,
                                 vad_filter=vad_filter,
+                                prompt=prompt,
+                                hotwords=hotwords,
                                 tenant_id=tenant_id,
                                 agent_id=getattr(message, "agent_id", None),
                                 sender_key=getattr(message, "sender", None),
@@ -305,6 +320,7 @@ class AudioTranscriptSkill(BaseSkill):
                         model=model,
                         language=language,
                         vad_filter=vad_filter,
+                        prompt=prompt,
                         tenant_id=tenant_id,
                         agent_id=getattr(message, "agent_id", None),
                         sender_key=getattr(message, "sender", None),
@@ -401,6 +417,8 @@ class AudioTranscriptSkill(BaseSkill):
                 "language": language,
                 "model": provider_model,
                 "provider": provider_name,
+                "prompt_configured": bool(prompt),
+                "hotwords_configured": bool(hotwords),
                 "response_mode": response_mode,
                 "remember_transcript": remember_transcript,
                 "original_message_id": getattr(message, "id", None),
@@ -456,6 +474,8 @@ class AudioTranscriptSkill(BaseSkill):
             "asr_instance_id": None,  # Pin a specific local Whisper/Speaches/openai_whisper instance when set
             "language": "auto",  # Auto-detect language
             "model": "whisper-1",  # OpenAI Whisper model
+            "transcription_prompt": None,  # Optional transcription context for terms/names
+            "hotwords": None,  # Optional Speaches hotwords/terms hint
             "vad_filter": None,  # Optional Speaches VAD override; false helps music-backed voice notes
             "response_mode": "conversational",  # "conversational" or "transcript_only"
             "remember_transcript": True,  # Store transcript-only audio as user memory by default
@@ -499,6 +519,16 @@ class AudioTranscriptSkill(BaseSkill):
                     "description": "Cloud Whisper model identifier — only used when asr_mode='openai'. When asr_mode='instance' the model is dictated by the local container (ASRInstance.default_model) and this field is ignored.",
                     "default": "whisper-1",
                     "enum": ["whisper-1"]
+                },
+                "transcription_prompt": {
+                    "type": ["string", "null"],
+                    "description": "Optional ASR context prompt with expected names, product terms, or spelling hints.",
+                    "default": None
+                },
+                "hotwords": {
+                    "type": ["string", "null"],
+                    "description": "Optional Speaches/faster-whisper hotwords or phrases to bias recognition.",
+                    "default": None
                 },
                 "vad_filter": {
                     "type": ["boolean", "null"],
