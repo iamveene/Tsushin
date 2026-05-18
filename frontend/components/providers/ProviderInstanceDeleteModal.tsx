@@ -123,12 +123,12 @@ export default function ProviderInstanceDeleteModal({
           <>
             {dependentCount === 0 ? (
               <div className="px-3 py-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-200">
-                No agents are currently using this instance. Safe to delete.
+                No agents or Sentinel settings are currently using this instance. Safe to delete.
               </div>
             ) : (
               <>
                 <div className="px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-                  <strong>{dependentCount}</strong> agent{dependentCount !== 1 ? 's' : ''} currently
+                  <strong>{dependentCount}</strong> dependent setting{dependentCount !== 1 ? 's' : ''} currently
                   use{dependentCount === 1 ? 's' : ''} <strong>{instance.instance_name}</strong>.
                   Pick where to reassign them before deleting.
                 </div>
@@ -138,14 +138,35 @@ export default function ProviderInstanceDeleteModal({
                   data-testid="provider-delete-dependents-list"
                 >
                   {usage?.agents.map((a) => (
-                    <li key={a.id} className="flex items-center justify-between">
+                    <li key={`agent-${a.id}`} className="flex items-center justify-between">
                       <span>
-                        <span className="text-white font-medium">{a.name}</span>
+                        <span className="text-white font-medium">Agent: {a.name}</span>
                         <span className="ml-2 text-tsushin-slate">
                           ({a.model_provider} / {a.model_name})
                         </span>
                       </span>
                       {!a.is_active && <span className="text-amber-400">inactive</span>}
+                    </li>
+                  ))}
+                  {usage?.sentinel_configs.map((c) => (
+                    <li key={`sentinel-config-${c.id}`} className="flex items-center justify-between">
+                      <span>
+                        <span className="text-white font-medium">{c.name}</span>
+                        <span className="ml-2 text-tsushin-slate">
+                          ({c.llm_provider} / {c.llm_model})
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                  {usage?.sentinel_profiles.map((p) => (
+                    <li key={`sentinel-profile-${p.id}`} className="flex items-center justify-between">
+                      <span>
+                        <span className="text-white font-medium">Sentinel profile: {p.name}</span>
+                        <span className="ml-2 text-tsushin-slate">
+                          ({p.llm_provider} / {p.llm_model})
+                        </span>
+                      </span>
+                      {!p.is_enabled && <span className="text-amber-400">disabled</span>}
                     </li>
                   ))}
                 </ul>
@@ -190,7 +211,7 @@ export default function ProviderInstanceDeleteModal({
                       onChange={() => setStrategy('unassign')}
                       data-testid="provider-delete-strategy-unassign"
                     />
-                    <span>Unassign (agents will use the tenant default)</span>
+                    <span>Unassign (dependents will use their fallback provider/model)</span>
                   </label>
                   {strategy === 'unassign' && (
                     <div className="ml-6 px-3 py-2 rounded-md bg-tsushin-ink/40 border border-tsushin-border text-xs text-tsushin-slate">

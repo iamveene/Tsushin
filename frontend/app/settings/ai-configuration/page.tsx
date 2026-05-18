@@ -9,67 +9,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { authenticatedFetch, ProviderInstance, api as apiClient, Config } from '@/lib/client'
-import {
-  GeminiIcon,
-  OpenAIIcon,
-  AnthropicIcon,
-  GlobeIcon,
-  LightningIcon,
-  BrainIcon,
-  BeakerIcon,
-  CloudIcon,
-  BotIcon as BotIconSvg,
-  type IconProps,
-} from '@/components/ui/icons'
-import ProviderModelInput from '@/components/providers/ProviderModelInput'
-import { getPreferredProviderModel, getProviderModelLabels } from '@/lib/provider-models'
-
-// Grok (xAI) icon
-const GrokIcon = ({ size, className }: IconProps) => (
-  <svg className={className} width={size || 20} height={size || 20} viewBox="0 0 24 24" fill="currentColor">
-    <path d="M4.5 2l7.5 10L4.5 22h2.1l6.45-8.55L19.5 22h2.1L12 12 21.6 2h-2.1l-6.45 8.55L6.6 2z" />
-  </svg>
-)
-
-const VENDOR_ICONS: Record<string, React.FC<{ size?: number; className?: string }>> = {
-  openai: OpenAIIcon,
-  anthropic: AnthropicIcon,
-  gemini: GeminiIcon,
-  groq: LightningIcon,
-  grok: GrokIcon,
-  deepseek: BrainIcon,
-  openrouter: GlobeIcon,
-  vertex_ai: CloudIcon,
-  ollama: BotIconSvg,
-  custom: BeakerIcon,
-}
-
-const VENDOR_COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  openai: { text: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
-  anthropic: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30' },
-  gemini: { text: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
-  groq: { text: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30' },
-  grok: { text: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30' },
-  deepseek: { text: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30' },
-  openrouter: { text: 'text-teal-400', bg: 'bg-teal-500/10', border: 'border-teal-500/30' },
-  vertex_ai: { text: 'text-sky-400', bg: 'bg-sky-500/10', border: 'border-sky-500/30' },
-  ollama: { text: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30' },
-  custom: { text: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/30' },
-}
-
-const VENDOR_LABELS: Record<string, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  gemini: 'Google Gemini',
-  groq: 'Groq',
-  grok: 'Grok (xAI)',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter',
-  vertex_ai: 'Vertex AI',
-  ollama: 'Ollama',
-  custom: 'Custom',
-}
+import { authenticatedFetch, api as apiClient, Config } from '@/lib/client'
+import ProviderInstancePicker, { ProviderPickerValue } from '@/components/providers/ProviderInstancePicker'
 
 interface SystemAIConfig {
   provider: string
@@ -99,10 +40,11 @@ export default function AIConfigurationPage() {
   const [success, setSuccess] = useState<string | null>(null)
 
   const [config, setConfig] = useState<SystemAIConfig | null>(null)
-  const [instances, setInstances] = useState<ProviderInstance[]>([])
-
-  const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(null)
-  const [selectedModel, setSelectedModel] = useState<string>('')
+  const [pickerValue, setPickerValue] = useState<ProviderPickerValue>({
+    vendor: 'gemini',
+    instance_id: null,
+    model_name: 'gemini-2.5-flash-lite',
+  })
   const [testResult, setTestResult] = useState<TestResult | null>(null)
 
   // BUG-716: platform-wide bounds for the agentic loop. Lives on the global
@@ -121,24 +63,20 @@ export default function AIConfigurationPage() {
       setLoading(true)
       setError(null)
 
-      const [configRes, instancesRes] = await Promise.all([
+      const [configRes] = await Promise.all([
         authenticatedFetch(`${apiUrl}/api/config/system-ai`),
-        authenticatedFetch(`${apiUrl}/api/provider-instances`),
       ])
 
       if (configRes.ok) {
         const configData: SystemAIConfig = await configRes.json()
         setConfig(configData)
-        setSelectedInstanceId(configData.provider_instance_id)
-        setSelectedModel(configData.model_name)
+        setPickerValue({
+          vendor: configData.vendor || configData.provider || 'gemini',
+          instance_id: configData.provider_instance_id,
+          model_name: configData.model_name || 'gemini-2.5-flash-lite',
+        })
       } else {
         throw new Error('Failed to load configuration')
-      }
-
-      if (instancesRes.ok) {
-        const instancesData: ProviderInstance[] = await instancesRes.json()
-        // Only show active instances
-        setInstances(instancesData.filter(i => i.is_active))
       }
 
       // Platform-wide agentic-loop bounds (BUG-716)
@@ -164,17 +102,8 @@ export default function AIConfigurationPage() {
     }
   }, [authLoading, user, fetchData])
 
-  const selectedInstance = instances.find(i => i.id === selectedInstanceId) || null
-
-  const handleInstanceSelect = (instance: ProviderInstance) => {
-    setSelectedInstanceId(instance.id)
-    setSelectedModel(getPreferredProviderModel(instance.vendor, instance.available_models, selectedModel))
-    setTestResult(null)
-    setSuccess(null)
-  }
-
-  const handleModelChange = (model: string) => {
-    setSelectedModel(model)
+  const handlePickerChange = (next: ProviderPickerValue) => {
+    setPickerValue(next)
     setTestResult(null)
     setSuccess(null)
   }
@@ -188,8 +117,8 @@ export default function AIConfigurationPage() {
       const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai/test`, {
         method: 'POST',
         body: JSON.stringify({
-          provider_instance_id: selectedInstanceId,
-          model_name: selectedModel,
+          provider_instance_id: pickerValue.instance_id,
+          model_name: pickerValue.model_name,
         }),
       })
 
@@ -205,8 +134,8 @@ export default function AIConfigurationPage() {
       setTestResult({
         success: false,
         message: 'Failed to test connection',
-        provider: selectedInstance?.vendor || 'unknown',
-        model: selectedModel,
+        provider: pickerValue.vendor || 'unknown',
+        model: pickerValue.model_name,
       })
     } finally {
       setTesting(false)
@@ -214,7 +143,7 @@ export default function AIConfigurationPage() {
   }
 
   const handleSave = async () => {
-    if (!selectedInstanceId || !selectedModel) return
+    if (!pickerValue.instance_id || !pickerValue.model_name) return
     setSaving(true)
     setError(null)
     setSuccess(null)
@@ -223,8 +152,8 @@ export default function AIConfigurationPage() {
       const response = await authenticatedFetch(`${apiUrl}/api/config/system-ai`, {
         method: 'PUT',
         body: JSON.stringify({
-          provider_instance_id: selectedInstanceId,
-          model_name: selectedModel,
+          provider_instance_id: pickerValue.instance_id,
+          model_name: pickerValue.model_name,
         }),
       })
 
@@ -233,11 +162,11 @@ export default function AIConfigurationPage() {
       if (result.success) {
         setSuccess(result.message)
         setConfig({
-          provider: result.vendor || selectedInstance?.vendor || '',
-          model_name: selectedModel,
-          provider_instance_id: selectedInstanceId,
-          instance_name: result.instance_name || selectedInstance?.instance_name,
-          vendor: result.vendor || selectedInstance?.vendor,
+          provider: result.vendor || pickerValue.vendor || '',
+          model_name: pickerValue.model_name,
+          provider_instance_id: pickerValue.instance_id,
+          instance_name: result.instance_name,
+          vendor: result.vendor || pickerValue.vendor,
         })
       } else {
         setError(result.message || 'Failed to save configuration')
@@ -252,7 +181,7 @@ export default function AIConfigurationPage() {
 
   const hasChanges =
     config &&
-    (selectedInstanceId !== config.provider_instance_id || selectedModel !== config.model_name)
+    (pickerValue.instance_id !== config.provider_instance_id || pickerValue.model_name !== config.model_name)
 
   const handleSavePlatformBounds = async () => {
     setSavingPlatform(true)
@@ -290,19 +219,6 @@ export default function AIConfigurationPage() {
     platformConfig != null &&
     ((platformConfig.platform_min_agentic_rounds ?? 1) !== platformMinRounds ||
       (platformConfig.platform_max_agentic_rounds ?? 8) !== platformMaxRounds)
-
-  const healthDot = (status: string) => {
-    switch (status) {
-      case 'healthy':
-        return 'bg-green-400'
-      case 'degraded':
-        return 'bg-yellow-400'
-      case 'unavailable':
-        return 'bg-red-400'
-      default:
-        return 'bg-gray-400'
-    }
-  }
 
   if (authLoading || loading) {
     return (
@@ -382,232 +298,125 @@ export default function AIConfigurationPage() {
           </div>
         </div>
 
-        {/* No Instances Warning */}
-        {instances.length === 0 && (
-          <div className="glass-card rounded-xl p-8 mb-8 text-center">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-yellow-500/10 flex items-center justify-center">
-              <svg className="w-8 h-8 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
+        <div className="glass-card rounded-xl p-6 mb-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-white">Provider Instance and Model</h3>
+              <p className="text-sm text-tsushin-slate mt-1">
+                System AI uses the selected provider instance credentials and base URL. The model field accepts discovered options or manual IDs.
+              </p>
             </div>
-            <h3 className="text-lg font-semibold text-white mb-2">No Provider Instances Configured</h3>
-            <p className="text-sm text-tsushin-slate mb-4">
-              You need at least one AI provider instance to configure System AI.
-              Create one in the Hub first.
-            </p>
-            <Link
-              href="/hub"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors text-sm font-medium"
-            >
-              Go to Hub
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
+            <Link href="/hub" className="text-sm text-teal-400 hover:text-teal-300 underline">
+              Manage in Hub
             </Link>
+          </div>
+
+          <div className={`mt-5 ${!canEdit ? 'pointer-events-none opacity-60' : ''}`}>
+            <ProviderInstancePicker
+              value={pickerValue}
+              onChange={(next) => {
+                if (!canEdit) return
+                handlePickerChange(next)
+              }}
+              layout="compact"
+              allowCreate={canEdit}
+              className="grid grid-cols-1 md:grid-cols-3 gap-3"
+            />
+          </div>
+        </div>
+
+        {/* Test Connection */}
+        {canEdit && pickerValue.instance_id && pickerValue.model_name && (
+          <div className="glass-card rounded-xl p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Test Connection</h3>
+              <button
+                onClick={handleTestConnection}
+                disabled={testing}
+                className="px-4 py-2 text-sm bg-white/5 hover:bg-white/10 text-white border border-white/20 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {testing ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Test Connection
+                  </>
+                )}
+              </button>
+            </div>
+
+            <p className="text-sm text-tsushin-slate mb-4">
+              Send a test message to verify the provider instance is accessible with the selected model.
+            </p>
+
+            {testResult && (
+              <div className={`p-4 rounded-lg ${testResult.success ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                <div className="flex items-start gap-3">
+                  {testResult.success ? (
+                    <svg className="w-5 h-5 text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                  <div>
+                    <p className={testResult.success ? 'text-green-400' : 'text-red-400'}>
+                      {testResult.message}
+                    </p>
+                    {testResult.token_usage && (
+                      <p className="text-xs text-tsushin-slate mt-1">
+                        Tokens used: {testResult.token_usage.total_tokens || 'N/A'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Provider Instance Selection */}
-        {instances.length > 0 && (
-          <>
-            <div className="glass-card rounded-xl p-6 mb-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Select Provider Instance</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {instances.map((instance) => {
-                  const colors = VENDOR_COLORS[instance.vendor] || VENDOR_COLORS.custom
-                  const VendorIcon = VENDOR_ICONS[instance.vendor] || BeakerIcon
-                  const isSelected = selectedInstanceId === instance.id
-
-                  return (
-                    <button
-                      key={instance.id}
-                      onClick={() => canEdit && handleInstanceSelect(instance)}
-                      disabled={!canEdit}
-                      className={`p-4 rounded-xl border transition-all text-left ${
-                        isSelected
-                          ? `${colors.bg} ${colors.border} ring-2 ring-offset-2 ring-offset-tsushin-darker ring-current`
-                          : 'border-white/10 hover:border-white/20'
-                      } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-lg ${colors.bg} flex items-center justify-center ${colors.text}`}>
-                          <VendorIcon size={20} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="text-white font-medium truncate">{instance.instance_name}</p>
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${healthDot(instance.health_status)}`} />
-                          </div>
-                          <p className="text-xs text-tsushin-slate">
-                            {VENDOR_LABELS[instance.vendor] || instance.vendor}
-                            {instance.available_models.length > 0 && (
-                              <> &middot; {instance.available_models.length} model{instance.available_models.length !== 1 ? 's' : ''}</>
-                            )}
-                          </p>
-                        </div>
-                        {instance.is_default && (
-                          <span className="text-[10px] uppercase tracking-wider text-tsushin-slate bg-white/5 px-1.5 py-0.5 rounded">
-                            default
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-              <p className="text-xs text-tsushin-slate mt-4">
-                Manage instances in the{' '}
-                <Link href="/hub" className="text-teal-400 hover:text-teal-300 underline">Hub</Link>.
-              </p>
-            </div>
-
-            {/* Model Selection */}
-            {selectedInstance && (
-              <div className="glass-card rounded-xl p-6 mb-6">
-                <h3 className="text-lg font-semibold text-white mb-4">Select Model</h3>
-                {selectedInstance.available_models.length === 0 && (
-                  <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-sm text-yellow-100">
-                    No live models are configured for this instance yet. Type any model ID manually,
-                    or edit it in the{' '}
-                    <Link href="/hub" className="text-teal-300 hover:text-teal-200 underline">Hub</Link>.
-                  </div>
-                )}
-                <ProviderModelInput
-                  vendor={selectedInstance.vendor}
-                  models={selectedInstance.available_models}
-                  value={selectedModel}
-                  onChange={handleModelChange}
-                  currentModel={selectedModel}
-                  disabled={!canEdit}
-                  placeholder="Select or type a model ID"
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-tsushin-slate/50 focus:outline-none focus:border-teal-500/50 disabled:opacity-60"
-                  dataTestId="system-ai-model-input"
-                />
-                <div className="space-y-2 mt-4">
-                  {getProviderModelLabels(selectedInstance.vendor, selectedInstance.available_models, {
-                    currentModel: selectedModel,
-                  }).map(({ value: model, label }) => {
-                    const isSelected = selectedModel === model
-                    const colors = VENDOR_COLORS[selectedInstance.vendor] || VENDOR_COLORS.custom
-
-                    return (
-                      <button
-                        key={model}
-                        onClick={() => canEdit && handleModelChange(model)}
-                        disabled={!canEdit}
-                        className={`w-full p-3 rounded-lg border transition-all text-left flex items-center justify-between ${
-                          isSelected
-                            ? `${colors.bg} ${colors.border}`
-                            : 'border-white/10 hover:border-white/20'
-                        } ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                      >
-                        <span className="text-sm text-white font-mono">{label}</span>
-                        {isSelected && (
-                          <svg className={`w-5 h-5 ${colors.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Test Connection */}
-            {canEdit && selectedInstanceId && selectedModel && (
-              <div className="glass-card rounded-xl p-6 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-white">Test Connection</h3>
-                  <button
-                    onClick={handleTestConnection}
-                    disabled={testing}
-                    className="px-4 py-2 text-sm bg-white/5 hover:bg-white/10 text-white border border-white/20 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {testing ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Testing...
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                        Test Connection
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                <p className="text-sm text-tsushin-slate mb-4">
-                  Send a test message to verify the provider instance is accessible with the selected model.
+        {/* Save Button */}
+        {canEdit && (
+          <div className="flex items-center justify-between glass-card rounded-xl p-6">
+            <div>
+              {hasChanges && (
+                <p className="text-sm text-yellow-400 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  You have unsaved changes
                 </p>
-
-                {testResult && (
-                  <div className={`p-4 rounded-lg ${testResult.success ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
-                    <div className="flex items-start gap-3">
-                      {testResult.success ? (
-                        <svg className="w-5 h-5 text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      )}
-                      <div>
-                        <p className={testResult.success ? 'text-green-400' : 'text-red-400'}>
-                          {testResult.message}
-                        </p>
-                        {testResult.token_usage && (
-                          <p className="text-xs text-tsushin-slate mt-1">
-                            Tokens used: {testResult.token_usage.total_tokens || 'N/A'}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Save Button */}
-            {canEdit && (
-              <div className="flex items-center justify-between glass-card rounded-xl p-6">
-                <div>
-                  {hasChanges && (
-                    <p className="text-sm text-yellow-400 flex items-center gap-2">
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                      You have unsaved changes
-                    </p>
-                  )}
-                </div>
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !hasChanges || !selectedInstanceId || !selectedModel}
-                  className="px-6 py-2.5 bg-teal-500 hover:bg-teal-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {saving ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Saving...
-                    </>
-                  ) : (
-                    'Save Configuration'
-                  )}
-                </button>
-              </div>
-            )}
-          </>
+              )}
+            </div>
+            <button
+              onClick={handleSave}
+              disabled={saving || !hasChanges || !pickerValue.instance_id || !pickerValue.model_name}
+              className="px-6 py-2.5 bg-teal-500 hover:bg-teal-400 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {saving ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Saving...
+                </>
+              ) : (
+                'Save Configuration'
+              )}
+            </button>
+          </div>
         )}
 
         {/* Platform AI — Agentic Loop Bounds (BUG-716) */}

@@ -7454,11 +7454,11 @@ export default function HubPage() {
         onDeleted={(result) => {
           if (result.reassigned_count > 0 && result.reassigned_to) {
             toast.success(
-              `Deleted ${result.instance_name} — reassigned ${result.reassigned_count} agent(s) to ${result.reassigned_to.instance_name}`,
+              `Deleted ${result.instance_name} — reassigned ${result.reassigned_count} dependent setting(s) to ${result.reassigned_to.instance_name}`,
             )
           } else if (result.unassigned) {
             toast.success(
-              `Deleted ${result.instance_name} — unassigned ${result.reassigned_count} agent(s)`,
+              `Deleted ${result.instance_name} — unassigned ${result.reassigned_count} dependent setting(s)`,
             )
           } else {
             toast.success(`Deleted ${result.instance_name}`)

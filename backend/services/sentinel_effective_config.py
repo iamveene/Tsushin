@@ -42,6 +42,7 @@ class SentinelEffectiveConfig:
     enable_slash_command_analysis: bool = True
 
     # LLM configuration
+    provider_instance_id: Optional[int] = None
     llm_provider: str = "gemini"
     llm_model: str = "gemini-2.5-flash-lite"
     llm_max_tokens: int = 256
@@ -156,6 +157,7 @@ class SentinelEffectiveConfig:
             enable_shell_analysis=config.enable_shell_analysis,
             enable_slash_command_analysis=getattr(config, "enable_slash_command_analysis", True) or True,
             # LLM
+            provider_instance_id=getattr(config, "provider_instance_id", None),
             llm_provider=config.llm_provider,
             llm_model=config.llm_model,
             llm_max_tokens=config.llm_max_tokens,

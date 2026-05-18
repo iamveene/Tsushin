@@ -23,6 +23,7 @@ from models import (
     SentinelAgentConfig,
     SentinelAnalysisLog,
     Agent,
+    ProviderInstance,
 )
 from models_rbac import User
 from auth_dependencies import TenantContext, get_tenant_context, require_permission, get_current_user_required
@@ -81,6 +82,7 @@ class SentinelConfigResponse(BaseModel):
     detect_vector_store_poisoning: bool
     detect_continuous_agent_action_approval: bool
     aggressiveness_level: int
+    provider_instance_id: Optional[int] = None
     llm_provider: str
     llm_model: str
     llm_max_tokens: int
@@ -129,6 +131,7 @@ class SentinelConfigUpdate(BaseModel):
     detect_vector_store_poisoning: Optional[bool] = None
     detect_continuous_agent_action_approval: Optional[bool] = None
     aggressiveness_level: Optional[int] = Field(None, ge=0, le=3)
+    provider_instance_id: Optional[int] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     llm_max_tokens: Optional[int] = Field(None, ge=64, le=1024)
@@ -263,8 +266,9 @@ class LLMProviderResponse(BaseModel):
 
 class LLMTestRequest(BaseModel):
     """Request model for testing LLM connection."""
-    provider: str
-    model: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    provider_instance_id: Optional[int] = None
 
 
 class LLMTestResponse(BaseModel):
@@ -277,6 +281,23 @@ class LLMTestResponse(BaseModel):
 # =============================================================================
 # Configuration Endpoints
 # =============================================================================
+
+def _get_active_provider_instance_or_400(
+    db: Session,
+    tenant_id: str,
+    provider_instance_id: Optional[int],
+) -> Optional[ProviderInstance]:
+    if provider_instance_id is None:
+        return None
+
+    instance = db.query(ProviderInstance).filter(
+        ProviderInstance.id == provider_instance_id,
+        ProviderInstance.tenant_id == tenant_id,
+        ProviderInstance.is_active == True,  # noqa: E712
+    ).first()
+    if not instance:
+        raise HTTPException(status_code=400, detail="Provider instance not found or inactive")
+    return instance
 
 @router.get("/config", response_model=SentinelConfigResponse)
 async def get_sentinel_config(
@@ -332,6 +353,7 @@ async def get_sentinel_config(
         detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
         detect_continuous_agent_action_approval=getattr(config, 'detect_continuous_agent_action_approval', True),
         aggressiveness_level=config.aggressiveness_level,
+        provider_instance_id=getattr(config, "provider_instance_id", None),
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
         llm_max_tokens=config.llm_max_tokens,
@@ -366,6 +388,21 @@ async def update_sentinel_config(
 
     Creates a tenant-specific config if it doesn't exist.
     """
+    # Accept both legacy `enabled` and canonical `is_enabled`.
+    update_data = update.model_dump(exclude_unset=True)
+    if "enabled" in update_data and "is_enabled" not in update_data:
+        update_data["is_enabled"] = update_data.pop("enabled")
+
+    provider_instance = None
+    if "provider_instance_id" in update_data:
+        provider_instance = _get_active_provider_instance_or_400(
+            db,
+            ctx.tenant_id,
+            update_data["provider_instance_id"],
+        )
+        if provider_instance:
+            update_data["llm_provider"] = provider_instance.vendor
+
     # Get or create tenant config
     config = db.query(SentinelConfig).filter(
         SentinelConfig.tenant_id == ctx.tenant_id
@@ -396,6 +433,7 @@ async def update_sentinel_config(
             detect_vector_store_poisoning=getattr(system_config, 'detect_vector_store_poisoning', True),
             detect_continuous_agent_action_approval=getattr(system_config, 'detect_continuous_agent_action_approval', True),
             aggressiveness_level=system_config.aggressiveness_level,
+            provider_instance_id=None,
             llm_provider=system_config.llm_provider,
             llm_model=system_config.llm_model,
             llm_max_tokens=system_config.llm_max_tokens,
@@ -416,10 +454,6 @@ async def update_sentinel_config(
         )
         db.add(config)
 
-    # Accept both legacy `enabled` and canonical `is_enabled`.
-    update_data = update.dict(exclude_unset=True)
-    if "enabled" in update_data and "is_enabled" not in update_data:
-        update_data["is_enabled"] = update_data.pop("enabled")
     for field, value in update_data.items():
         if hasattr(config, field):
             setattr(config, field, value)
@@ -459,6 +493,7 @@ async def update_sentinel_config(
         detect_vector_store_poisoning=getattr(config, 'detect_vector_store_poisoning', True),
         detect_continuous_agent_action_approval=getattr(config, 'detect_continuous_agent_action_approval', True),
         aggressiveness_level=config.aggressiveness_level,
+        provider_instance_id=getattr(config, "provider_instance_id", None),
         llm_provider=config.llm_provider,
         llm_model=config.llm_model,
         llm_max_tokens=config.llm_max_tokens,
@@ -981,18 +1016,36 @@ async def test_llm_connection(
 
     start_time = time.time()
 
+    provider_instance = _get_active_provider_instance_or_400(
+        db,
+        ctx.tenant_id,
+        request.provider_instance_id,
+    )
+    provider = request.provider
+    model = request.model
+    if provider_instance:
+        provider = provider_instance.vendor
+        if not model and provider_instance.available_models:
+            model = provider_instance.available_models[0]
+    if not provider or not model:
+        raise HTTPException(
+            status_code=400,
+            detail="provider and model are required unless provider_instance_id supplies a saved provider with available models",
+        )
+
     try:
         from analytics.token_tracker import TokenTracker
         tracker = TokenTracker(db, ctx.tenant_id)
 
         client = AIClient(
-            provider=request.provider,
-            model_name=request.model,
+            provider=provider,
+            model_name=model,
             db=db,
             token_tracker=tracker,
             temperature=0.1,
             max_tokens=50,
             tenant_id=ctx.tenant_id,
+            provider_instance_id=request.provider_instance_id,
         )
 
         result = await client.generate(
