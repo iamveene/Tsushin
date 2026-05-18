@@ -451,11 +451,11 @@ function CustomSkillsPageContent() {
   return (
     <div className="min-h-screen" onClick={() => scanDetailSkillId && setScanDetailSkillId(null)}>
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-between items-center">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Custom Skills</h1>
-            <p className="text-tsushin-slate">Author your own skills (instruction, script, or MCP-server) and assign them to agents.</p>
+            <h1 className="text-2xl font-display font-semibold text-white mb-1">Custom Skills</h1>
+            <p className="text-sm text-tsushin-slate">Author your own skills (instruction, script, or MCP-server) and assign them to agents.</p>
           </div>
           {canCreate && (
             <button
@@ -497,24 +497,24 @@ function CustomSkillsPageContent() {
         )}
 
         {/* Stat Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-          <div className="bg-tsushin-surface border border-white/10 rounded-xl p-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-5">
+          <div className="bg-tsushin-surface border border-white/10 rounded-lg p-4">
             <p className="text-tsushin-slate text-xs uppercase tracking-wider mb-1">Total</p>
             <p className="text-2xl font-bold text-white">{totalSkills}</p>
           </div>
-          <div className="bg-tsushin-surface border border-white/10 rounded-xl p-4">
+          <div className="bg-tsushin-surface border border-white/10 rounded-lg p-4">
             <p className="text-tsushin-slate text-xs uppercase tracking-wider mb-1">Active</p>
             <p className="text-2xl font-bold text-emerald-400">{activeSkills}</p>
           </div>
-          <div className="bg-tsushin-surface border border-white/10 rounded-xl p-4">
+          <div className="bg-tsushin-surface border border-white/10 rounded-lg p-4">
             <p className="text-tsushin-slate text-xs uppercase tracking-wider mb-1">Instruction</p>
             <p className="text-2xl font-bold text-blue-400">{instructionSkills}</p>
           </div>
-          <div className="bg-tsushin-surface border border-white/10 rounded-xl p-4">
+          <div className="bg-tsushin-surface border border-white/10 rounded-lg p-4">
             <p className="text-tsushin-slate text-xs uppercase tracking-wider mb-1">Script</p>
             <p className="text-2xl font-bold text-violet-400">{scriptSkills}</p>
           </div>
-          <div className="bg-tsushin-surface border border-white/10 rounded-xl p-4">
+          <div className="bg-tsushin-surface border border-white/10 rounded-lg p-4">
             <p className="text-tsushin-slate text-xs uppercase tracking-wider mb-1">MCP Server</p>
             <p className="text-2xl font-bold text-cyan-400">{mcpSkills}</p>
           </div>

@@ -356,11 +356,11 @@ export default function ContactsPage() {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-between items-center">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Contacts</h1>
-            <p className="text-tsushin-slate">People and inboxes your agents talk to. Assign default agents per contact.</p>
+            <h1 className="text-2xl font-semibold text-white mb-1">Contacts</h1>
+            <p className="text-sm text-tsushin-slate">People and inboxes your agents talk to. Assign default agents per contact.</p>
           </div>
           <div className="flex gap-3">
             <button
@@ -379,20 +379,20 @@ export default function ContactsPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-tsushin-indigo">
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-tsushin-indigo">
             <p className="text-sm font-medium text-tsushin-slate">Total Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{contacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-blue-500">
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-blue-500">
             <p className="text-sm font-medium text-tsushin-slate">Users</p>
             <p className="text-2xl font-bold text-white mt-1">{userContacts.length}</p>
           </div>
-          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-purple-500">
+          <div className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-purple-500">
             <p className="text-sm font-medium text-tsushin-slate">Agent Contacts</p>
             <p className="text-2xl font-bold text-white mt-1">{agentContacts.length}</p>
           </div>
           <div
-            className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-5 border-l-4 border-l-green-500"
+            className="bg-tsushin-surface border border-tsushin-border rounded-lg shadow p-4 border-l-2 border-l-green-500"
             title="Contacts that trigger an agent when they send a direct message."
           >
             <p className="text-sm font-medium text-tsushin-slate">DM Triggers</p>

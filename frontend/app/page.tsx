@@ -83,11 +83,11 @@ export default function WatcherPage() {
   })
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in">
       {/* Page Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-display font-bold text-white mb-2">Watcher</h1>
-        <p className="text-tsushin-slate">Monitor agents, automations, channels, and AI usage.</p>
+      <div className="mb-5">
+        <h1 className="text-2xl font-display font-semibold text-white mb-1">Watcher</h1>
+        <p className="text-sm text-tsushin-slate">Monitor agents, automations, channels, and AI usage.</p>
       </div>
 
       {/* Tab Navigation — Wake Events and Continuous Agents stay mounted inside

@@ -283,11 +283,11 @@ export default function StudioProjectsPage() {
   return (
     <div className="min-h-screen animate-fade-in">
       {/* Header */}
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-between items-center">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-5 flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white mb-2">Projects</h1>
-            <p className="text-tsushin-slate">Configure project workspaces, knowledge bases, and memory</p>
+            <h1 className="text-2xl font-display font-semibold text-white mb-1">Projects</h1>
+            <p className="text-sm text-tsushin-slate">Configure project workspaces, knowledge bases, and memory</p>
           </div>
           <button
             onClick={() => setShowCreateModal(true)}

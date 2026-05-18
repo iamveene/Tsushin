@@ -143,19 +143,19 @@ export default function FilteringSettingsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-5">
           <div className="flex items-center gap-2 text-sm text-tsushin-slate mb-2">
             <Link href="/settings" className="hover:text-teal-400 transition-colors">Settings</Link>
             <span>/</span>
             <span className="text-white">Message Filtering</span>
           </div>
-          <h1 className="text-3xl font-display font-bold text-white">
+          <h1 className="text-2xl font-display font-semibold text-white">
             Message Filtering
           </h1>
-          <p className="text-tsushin-slate mt-2">
+          <p className="text-sm text-tsushin-slate mt-1">
             Configure system-level filters for message routing. These are the default filters used when agents don't have their own specific filters.
           </p>
         </div>

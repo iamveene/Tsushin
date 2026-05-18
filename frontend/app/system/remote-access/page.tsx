@@ -378,18 +378,18 @@ export default function RemoteAccessPage() {
     (config?.tunnel_token_configured ?? false) && !!config?.tunnel_hostname
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-start justify-between mb-8">
+        <div className="flex items-start justify-between mb-5">
           <div>
-            <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-3xl font-bold text-white">Remote Access</h1>
+            <div className="flex items-center gap-3 mb-1">
+              <h1 className="text-2xl font-semibold text-white">Remote Access</h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full inline-flex items-center gap-1">
                 <GlobeIcon size={14} /> Global Admin
               </span>
             </div>
-            <p className="text-tsushin-slate">
+            <p className="text-sm text-tsushin-slate">
               Expose Tsushin through a Cloudflare Tunnel and control per-tenant access.
             </p>
           </div>

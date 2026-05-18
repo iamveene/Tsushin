@@ -193,13 +193,13 @@ export default function TeamManagementPage() {
   }))
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Team Members</h1>
-            <p className="text-gray-600 dark:text-gray-400 mt-2">
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">Team Members</h1>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
               Manage your team and invite new members
             </p>
           </div>

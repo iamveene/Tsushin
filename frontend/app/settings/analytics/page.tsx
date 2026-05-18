@@ -142,7 +142,7 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in">
       <div className="mb-6 flex items-center gap-3 text-sm text-tsushin-slate">
         <Link href="/settings" className="hover:text-white">
           Settings
@@ -151,10 +151,10 @@ export default function AnalyticsPage() {
         <span>Analytics</span>
       </div>
 
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-3xl font-display font-bold text-white">Analytics</h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
+          <h1 className="text-2xl font-display font-semibold text-white">Analytics</h1>
+          <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">
             Token consumption, estimated cost, and per-agent usage trends across this tenant.
           </p>
         </div>
@@ -182,16 +182,16 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+      <div className="mb-5 grid gap-4 md:grid-cols-3">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total tokens</div>
           <div className="mt-2 text-2xl font-semibold text-white">{formatNumber(summary?.total_tokens)}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="text-xs uppercase tracking-wide text-tsushin-slate">Estimated cost</div>
           <div className="mt-2 text-2xl font-semibold text-white">{formatCost(summary?.total_cost)}</div>
         </div>
-        <div className="rounded-xl border border-tsushin-border bg-tsushin-surface/60 p-4">
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/60 p-4">
           <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total requests</div>
           <div className="mt-2 text-2xl font-semibold text-white">{formatNumber(summary?.total_requests)}</div>
         </div>

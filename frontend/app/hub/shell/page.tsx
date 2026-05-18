@@ -600,8 +600,8 @@ export default function ShellDashboardPage() {
 
   return (
     <div className="min-h-screen">
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex justify-between items-center mb-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className="flex justify-between items-center mb-5">
           <div>
             <div className="flex items-center gap-4 mb-2">
               <a href="/hub?tab=developer" className="text-gray-400 hover:text-white transition-colors flex items-center gap-2">
@@ -609,10 +609,10 @@ export default function ShellDashboardPage() {
                 <span className="text-sm">Back to Developer Tools</span>
               </a>
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2 flex items-center gap-3">
-              <TerminalIcon size={36} className="text-teal-400" /> Shell Command Center
+            <h1 className="text-2xl font-semibold text-white mb-1 flex items-center gap-3">
+              <TerminalIcon size={28} className="text-teal-400" /> Shell Command Center
             </h1>
-            <p className="text-gray-400">Manage remote shell beacons and command execution</p>
+            <p className="text-sm text-gray-400">Manage remote shell beacons and command execution</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowWizard(true)} className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors">
@@ -836,22 +836,22 @@ export default function ShellDashboardPage() {
             {activeTab === 'approvals' && (
               <div className="space-y-4">
                 {approvalStats && (
-                  <div className="grid grid-cols-4 gap-4 mb-6">
-                    <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-orange-400">{approvalStats.pending_count}</p>
-                      <p className="text-sm text-gray-400">Pending</p>
+                  <div className="grid grid-cols-4 gap-3 mb-5">
+                    <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-semibold text-orange-400">{approvalStats.pending_count}</p>
+                      <p className="text-xs text-gray-400">Pending</p>
                     </div>
-                    <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-green-400">{approvalStats.approved_today}</p>
-                      <p className="text-sm text-gray-400">Approved Today</p>
+                    <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-semibold text-green-400">{approvalStats.approved_today}</p>
+                      <p className="text-xs text-gray-400">Approved Today</p>
                     </div>
-                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-red-400">{approvalStats.rejected_today}</p>
-                      <p className="text-sm text-gray-400">Rejected Today</p>
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-semibold text-red-400">{approvalStats.rejected_today}</p>
+                      <p className="text-xs text-gray-400">Rejected Today</p>
                     </div>
-                    <div className="bg-gray-500/10 border border-gray-500/30 rounded-lg p-4 text-center">
-                      <p className="text-3xl font-bold text-gray-400">{approvalStats.expired_today}</p>
-                      <p className="text-sm text-gray-400">Expired Today</p>
+                    <div className="bg-gray-500/10 border border-gray-500/30 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-semibold text-gray-400">{approvalStats.expired_today}</p>
+                      <p className="text-xs text-gray-400">Expired Today</p>
                     </div>
                   </div>
                 )}

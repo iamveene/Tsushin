@@ -227,19 +227,19 @@ export default function HubTriggersIndexPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6 animate-fade-in">
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-3 text-sm text-tsushin-slate">
             <Link href="/hub" className="hover:text-white">Hub</Link>
             <span>/</span>
             <span>Triggers</span>
           </div>
-          <h1 className="flex items-center gap-3 text-3xl font-display font-bold text-white">
-            <BellIcon size={26} className="text-cyan-300" />
+          <h1 className="flex items-center gap-3 text-2xl font-display font-semibold text-white">
+            <BellIcon size={22} className="text-cyan-300" />
             Triggers
           </h1>
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">
+          <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">
             All inbound channels that can wake an agent. Jira, Email, GitHub, and Webhook in one place.
           </p>
         </div>
