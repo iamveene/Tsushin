@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Shell header edge alignment (2026-05-18)
+
+- Expanded the authenticated shell header and footer chrome to use the same full-width responsive page padding as the main app surfaces, aligning the logo and logout/actions with the visible page borders on wide screens without widening page content; the Flows page wrapper now uses the same responsive padding rhythm.
+
 ### Changed — Watcher KPI and Flows palette follow-up (2026-05-18)
 
 - Tightened the Watcher dashboard hero KPI cards into a horizontal compact layout, reducing desktop card height from roughly 120px to 72px and the desktop KPI cluster from roughly 146px to 94px.
