@@ -37,6 +37,8 @@ interface TranscriptSkillPayload {
   asr_instance_id?: number
   vad_filter?: boolean | null
   remember_transcript: boolean
+  transcription_prompt?: string
+  hotwords?: string
 }
 
 const PROVIDER_SKILLS_WITH_INTEGRATION = new Set(['password_vault'])
@@ -98,6 +100,14 @@ async function wireAudioSkills(agentId: number, audio: AudioConfig, ttsInstanceI
     if (audio.asrMode === 'instance' && audio.asrInstanceId) {
       transcriptConfig.asr_instance_id = audio.asrInstanceId
       transcriptConfig.vad_filter = audio.vadFilter
+      const transcriptionPrompt = (audio.transcriptionPrompt || '').trim()
+      const hotwords = (audio.hotwords || '').trim()
+      if (transcriptionPrompt) {
+        transcriptConfig.transcription_prompt = transcriptionPrompt
+      }
+      if (hotwords) {
+        transcriptConfig.hotwords = hotwords
+      }
     }
     await api.updateAgentSkill(agentId, 'audio_transcript', {
       is_enabled: true,

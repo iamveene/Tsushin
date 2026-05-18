@@ -15,6 +15,8 @@ class ASRRequest:
     model: str
     language: Optional[str] = None
     vad_filter: Optional[bool] = None
+    prompt: Optional[str] = None
+    hotwords: Optional[str] = None
     tenant_id: Optional[str] = None
     agent_id: Optional[int] = None
     sender_key: Optional[str] = None

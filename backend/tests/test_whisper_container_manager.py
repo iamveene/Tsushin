@@ -483,6 +483,57 @@ def test_reprovision_updates_mem_limit_and_preserves_existing_runtime_targets():
     mock_provision.assert_called_once()
 
 
+def test_reprovision_preserves_runtime_targets_for_model_promotion():
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    db = _FakeDB([])
+    instance = SimpleNamespace(
+        id=92,
+        tenant_id="tenant-1",
+        vendor="speaches",
+        container_name="tsushin-whisper-tenant-92",
+        volume_name="tsushin-whisper-cache-92",
+        container_port=6448,
+        container_status="running",
+        health_status="healthy",
+        health_status_reason=None,
+        last_health_check=None,
+        mem_limit="8g",
+        cpu_quota=None,
+        default_model="Systran/faster-whisper-medium",
+        is_auto_provisioned=True,
+    )
+    container = _FakeContainer(
+        instance.container_name,
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.tenant": "tenant-1",
+            "tsushin.instance_id": "92",
+        },
+    )
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
+
+    def fake_provision(row, db_arg, *, preserve_existing=False):
+        assert preserve_existing is True
+        assert row.default_model == "Systran/faster-whisper-medium"
+        assert row.container_name == "tsushin-whisper-tenant-92"
+        assert row.volume_name == "tsushin-whisper-cache-92"
+        assert row.container_port == 6448
+        row.container_status = "running"
+        row.health_status = "healthy"
+
+    with patch.object(mgr, "_get_instance", return_value=instance), patch.object(
+        mgr,
+        "provision",
+        side_effect=fake_provision,
+    ) as mock_provision:
+        result = mgr.reprovision(92, "tenant-1", db)
+
+    assert result is instance
+    assert instance.default_model == "Systran/faster-whisper-medium"
+    assert db.commits == 1
+    mock_provision.assert_called_once()
+
+
 def test_get_status_surfaces_restart_and_oom_context():
     mgr = WhisperContainerManager.__new__(WhisperContainerManager)
     db = _FakeDB([])

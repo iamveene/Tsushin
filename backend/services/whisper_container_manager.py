@@ -719,10 +719,17 @@ class WhisperContainerManager:
                 "MODEL_IDLE_TIMEOUT": os.getenv("OPENAI_WHISPER_MODEL_IDLE_TIMEOUT", "0"),
             }
         # Default: speaches/faster-whisper.
+        # CPU production hosts should avoid float32 auto-conversion churn and
+        # cold model reloads. The current Speaches image reads WHISPER__TTL;
+        # STT_MODEL_TTL is kept as a harmless compatibility alias for older
+        # operator notes/runbooks that used that spelling.
         return {
             "SPEACHES_API_KEY": token,
             "API_KEY": token,
             "PRELOAD_MODELS": f'["{default_model}"]',
+            "WHISPER__COMPUTE_TYPE": os.getenv("SPEACHES_WHISPER_COMPUTE_TYPE", "int8"),
+            "WHISPER__TTL": os.getenv("SPEACHES_WHISPER_TTL", "-1"),
+            "STT_MODEL_TTL": os.getenv("SPEACHES_STT_MODEL_TTL", "-1"),
         }
 
     def _wait_for_health(self, instance, *, token: str) -> bool:

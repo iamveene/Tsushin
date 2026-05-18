@@ -78,6 +78,8 @@ class OpenAIASRProvider(ASRProvider):
                     }
                     if request.language and request.language != "auto":
                         params["language"] = request.language
+                    if request.prompt:
+                        params["prompt"] = request.prompt
                     response = self._client.audio.transcriptions.create(**params)
                 break
             except _TRANSIENT_OPENAI_EXC as exc:

@@ -147,6 +147,8 @@ interface TranscriptSkillConfig extends Record<string, unknown> {
   asr_instance_id: number | null
   vad_filter: boolean | null
   remember_transcript: boolean
+  transcription_prompt: string
+  hotwords: string
 }
 
 interface SkillCardFact {
@@ -369,6 +371,12 @@ function normalizeTranscriptConfig(
   config: Record<string, unknown> | null | undefined,
 ): TranscriptSkillConfig {
   const raw = config || {}
+  const normalizeHintText = (value: unknown) => {
+    if (Array.isArray(value)) {
+      return value.map(item => String(item)).join('\n')
+    }
+    return typeof value === 'string' ? value : ''
+  }
   // ``tenant_default`` was retired (no tenant-level ASR default — instances
   // are assigned per-agent). Stale rows still carrying it collapse to
   // 'openai' so they fall back to the cloud Whisper API instead of silently
@@ -390,10 +398,14 @@ function normalizeTranscriptConfig(
     asr_instance_id: typeof raw.asr_instance_id === 'number' ? raw.asr_instance_id : null,
     vad_filter: typeof raw.vad_filter === 'boolean' ? raw.vad_filter : null,
     remember_transcript: raw.remember_transcript !== false,
+    transcription_prompt: normalizeHintText(raw.transcription_prompt ?? raw.prompt),
+    hotwords: normalizeHintText(raw.hotwords),
   }
   if (normalized.asr_mode !== 'instance') {
     normalized.asr_instance_id = null
     normalized.vad_filter = null
+    normalized.transcription_prompt = ''
+    normalized.hotwords = ''
   }
   return normalized
 }
@@ -2631,6 +2643,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       asrInstanceId: transcriptConfig.asr_instance_id ?? null,
                       vadFilter: transcriptConfig.vad_filter,
                       rememberTranscript: transcriptConfig.remember_transcript,
+                      transcriptionPrompt: transcriptConfig.transcription_prompt,
+                      hotwords: transcriptConfig.hotwords,
                     }}
                     onChange={(patch) => setTranscriptConfig(prev => normalizeTranscriptConfig({
                       ...prev,
@@ -2641,6 +2655,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       asr_instance_id: patch.asrInstanceId !== undefined ? patch.asrInstanceId : prev.asr_instance_id,
                       vad_filter: patch.vadFilter !== undefined ? patch.vadFilter : prev.vad_filter,
                       remember_transcript: patch.rememberTranscript !== undefined ? patch.rememberTranscript : prev.remember_transcript,
+                      transcription_prompt: patch.transcriptionPrompt !== undefined ? patch.transcriptionPrompt : prev.transcription_prompt,
+                      hotwords: patch.hotwords !== undefined ? patch.hotwords : prev.hotwords,
                     }))}
                   />
 

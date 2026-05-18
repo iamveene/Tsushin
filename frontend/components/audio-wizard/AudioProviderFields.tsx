@@ -448,6 +448,8 @@ export interface AudioTranscriptFieldsValue {
   asrInstanceId: number | null
   vadFilter?: boolean | null
   rememberTranscript?: boolean
+  transcriptionPrompt?: string
+  hotwords?: string
 }
 
 export interface AudioTranscriptFieldsProps {
@@ -508,7 +510,13 @@ export function AudioTranscriptFields({
       onChange({ asrMode: mode, asrInstanceId: nextId })
       return
     }
-    onChange({ asrMode: mode, asrInstanceId: null, vadFilter: null })
+    onChange({
+      asrMode: mode,
+      asrInstanceId: null,
+      vadFilter: null,
+      transcriptionPrompt: '',
+      hotwords: '',
+    })
   }
 
   return (
@@ -658,6 +666,40 @@ export function AudioTranscriptFields({
             size="md"
             title={value.vadFilter !== false ? 'Disable Speaches VAD' : 'Enable Speaches VAD'}
           />
+        </div>
+      )}
+
+      {value.asrMode === 'instance' && selectedInstance && (
+        <div className="space-y-3 p-3 rounded-lg bg-white/[0.02] border border-white/5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-white">Local ASR guidance</div>
+              <div className="text-xs text-gray-400 mt-1">Optional hints for names, terms, and PT-BR domain context.</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-2">Prompt/context</label>
+              <textarea
+                value={value.transcriptionPrompt || ''}
+                onChange={(e) => onChange({ transcriptionPrompt: e.target.value })}
+                rows={3}
+                placeholder="Portuguese Brazil, short WhatsApp voice notes, names or domain context..."
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-teal-400 resize-y min-h-[88px]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Hotwords / terms</label>
+              <textarea
+                value={value.hotwords || ''}
+                onChange={(e) => onChange({ hotwords: e.target.value })}
+                rows={3}
+                placeholder="Consigaz, boleto, Pix, Vinicios"
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-teal-400 resize-y min-h-[88px]"
+              />
+              <div className="mt-1 text-xs text-gray-500">Comma or newline separated.</div>
+            </div>
+          </div>
         </div>
       )}
 
