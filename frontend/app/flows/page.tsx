@@ -2152,11 +2152,11 @@ export default function FlowsPage() {
 
   if (loading && allFlows.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6">
+      <div className="min-h-screen p-6">
         <div className="w-full">
           <h1 className="text-2xl font-display font-semibold text-white mb-3">Flows</h1>
           <div className="flex items-center gap-3 text-slate-400">
-            <div className="animate-spin h-5 w-5 border-2 border-teal-500 border-t-transparent rounded-full"></div>
+            <div className="animate-spin h-5 w-5 border-2 border-tsushin-accent border-t-transparent rounded-full"></div>
             Loading flows...
           </div>
         </div>
@@ -2165,7 +2165,7 @@ export default function FlowsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+    <div className="min-h-screen">
       <div className="w-full p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -2217,7 +2217,7 @@ export default function FlowsPage() {
         />
 
         {/* Search and Filters Bar */}
-        <div className="bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 p-4">
+        <div className="glass-card rounded-xl p-4">
           <div className="flex flex-wrap gap-4 items-center">
             {/* Search */}
             <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -2229,8 +2229,8 @@ export default function FlowsPage() {
                 placeholder="Search flows..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white text-sm
-                           placeholder-slate-500 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none"
+                className="w-full pl-10 pr-4 py-2 bg-tsushin-ink/70 border border-tsushin-border rounded-lg text-white text-sm
+                           placeholder:text-tsushin-muted focus:border-tsushin-accent focus:ring-1 focus:ring-tsushin-accent outline-none"
               />
             </div>
 
@@ -2238,8 +2238,8 @@ export default function FlowsPage() {
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as FlowType | '')}
-              className="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-300 text-sm
-                         focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none min-w-[140px]"
+              className="px-3 py-2 bg-tsushin-ink/70 border border-tsushin-border rounded-lg text-tsushin-fog text-sm
+                         focus:border-tsushin-accent focus:ring-1 focus:ring-tsushin-accent outline-none min-w-[140px]"
             >
               <option value="">All Types</option>
               {FLOW_TYPES.map(type => (
@@ -2251,8 +2251,8 @@ export default function FlowsPage() {
             <select
               value={executionFilter}
               onChange={(e) => setExecutionFilter(e.target.value as ExecutionMethod | '')}
-              className="px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-300 text-sm
-                         focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none min-w-[140px]"
+              className="px-3 py-2 bg-tsushin-ink/70 border border-tsushin-border rounded-lg text-tsushin-fog text-sm
+                         focus:border-tsushin-accent focus:ring-1 focus:ring-tsushin-accent outline-none min-w-[140px]"
             >
               <option value="">All Execution</option>
               {EXECUTION_METHODS.map(method => (
@@ -2286,7 +2286,7 @@ export default function FlowsPage() {
         </div>
 
         {/* Flows List Table */}
-        <div className="bg-slate-900/80 backdrop-blur-sm rounded-xl border border-slate-800 overflow-hidden">
+        <div className="glass-card rounded-xl overflow-hidden">
           {flows.length === 0 ? (
             <div className="p-16 text-center">
               {allFlows.length === 0 ? (
