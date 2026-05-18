@@ -2152,7 +2152,7 @@ export default function FlowsPage() {
 
   if (loading && allFlows.length === 0) {
     return (
-      <div className="min-h-screen p-6">
+      <div className="min-h-screen px-4 sm:px-6 lg:px-8 py-6">
         <div className="w-full">
           <h1 className="text-2xl font-display font-semibold text-white mb-3">Flows</h1>
           <div className="flex items-center gap-3 text-slate-400">
@@ -2166,7 +2166,7 @@ export default function FlowsPage() {
 
   return (
     <div className="min-h-screen">
-      <div className="w-full p-6 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
