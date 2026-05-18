@@ -405,12 +405,14 @@ export default function CommunicationTab() {
           <div className="stat-card stat-card-success group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate" title="Share of agent message sessions that completed.">Success Rate</p>
+                <p
+                  className="text-sm font-medium text-tsushin-slate"
+                  title={`Share of sessions that completed. ${stats?.completed_sessions ?? 0} completed.`}
+                >
+                  Success Rate
+                </p>
                 <p className="text-3xl font-display font-bold text-green-400 mt-1">
                   {statsLoading ? '...' : `${(stats?.success_rate ?? 0).toFixed(1)}%`}
-                </p>
-                <p className="text-xs text-tsushin-muted mt-1">
-                  {stats?.completed_sessions ?? 0} completed
                 </p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">

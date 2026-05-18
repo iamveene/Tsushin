@@ -219,23 +219,23 @@ export default function TenantsPage() {
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
-          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+          <div className="stat-card stat-card-indigo">
             <div className="text-xs uppercase tracking-wide text-tsushin-slate">Total Tenants</div>
             <div className="mt-1 text-2xl font-semibold text-white">{stats.total}</div>
           </div>
-          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+          <div className="stat-card stat-card-success">
             <div className="text-xs uppercase tracking-wide text-tsushin-slate">Active</div>
             <div className="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">
               {stats.active}
             </div>
           </div>
-          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+          <div className="stat-card stat-card-warning">
             <div className="text-xs uppercase tracking-wide text-tsushin-slate">Trial</div>
             <div className="mt-1 text-2xl font-semibold text-yellow-600 dark:text-yellow-400">
               {stats.trial}
             </div>
           </div>
-          <div className="bg-tsushin-surface rounded-lg border border-tsushin-border p-4">
+          <div className="stat-card stat-card-error">
             <div className="text-xs uppercase tracking-wide text-tsushin-slate">Suspended</div>
             <div className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
               {stats.suspended}

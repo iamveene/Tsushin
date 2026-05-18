@@ -330,13 +330,15 @@ export default function ChannelHealthTab() {
           <div className="stat-card stat-card-indigo group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Total Instances</p>
-                <p className="text-3xl font-display font-bold text-white mt-1">{summary.total_instances}</p>
-                <p className="text-xs text-tsushin-muted mt-1">
-                  {Object.keys(summary.by_channel).map(ch =>
+                <p
+                  className="text-sm font-medium text-tsushin-slate"
+                  title={Object.keys(summary.by_channel).map(ch =>
                     `${getChannelLabel(ch)}: ${summary.by_channel[ch].total}`
                   ).join(', ') || 'No channels'}
+                >
+                  Total Instances
                 </p>
+                <p className="text-3xl font-display font-bold text-white mt-1">{summary.total_instances}</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <ServerIcon size={24} className="text-indigo-400" />
@@ -348,9 +350,8 @@ export default function ChannelHealthTab() {
           <div className="stat-card stat-card-success group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Healthy</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Healthy instances with closed circuit breakers.">Healthy</p>
                 <p className="text-3xl font-display font-bold text-emerald-400 mt-1">{summary.healthy}</p>
-                <p className="text-xs text-tsushin-muted mt-1">Circuit closed</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <CheckCircleIcon size={24} className="text-emerald-400" />
@@ -362,9 +363,8 @@ export default function ChannelHealthTab() {
           <div className="stat-card stat-card-error group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Unhealthy</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Instances that need attention.">Unhealthy</p>
                 <p className="text-3xl font-display font-bold text-red-400 mt-1">{summary.unhealthy}</p>
-                <p className="text-xs text-tsushin-muted mt-1">Needs attention</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <XCircleIcon size={24} className="text-red-400" />
@@ -376,11 +376,13 @@ export default function ChannelHealthTab() {
           <div className="stat-card stat-card-warning group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Open Circuits</p>
-                <p className="text-3xl font-display font-bold text-amber-400 mt-1">{summary.circuit_open}</p>
-                <p className="text-xs text-tsushin-muted mt-1">
-                  {summary.circuit_half_open > 0 ? `${summary.circuit_half_open} recovering` : 'Circuit breakers tripped'}
+                <p
+                  className="text-sm font-medium text-tsushin-slate"
+                  title={summary.circuit_half_open > 0 ? `${summary.circuit_half_open} recovering` : 'Circuit breakers tripped'}
+                >
+                  Open Circuits
                 </p>
+                <p className="text-3xl font-display font-bold text-amber-400 mt-1">{summary.circuit_open}</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <ZapIcon size={24} className="text-amber-400" />

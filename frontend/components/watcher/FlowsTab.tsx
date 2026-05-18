@@ -355,46 +355,27 @@ export default function FlowsTab() {
 
       {/* Summary Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-cyan-500/20 to-cyan-500/5 border border-cyan-500/30 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2">Total Runs</h3>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-white">{stats.totalRuns}</span>
-          </div>
-          <div className="mt-2 text-xs text-gray-400">
-            {stats.running} running • {stats.completed} completed • {stats.failed} failed
-          </div>
+        <div
+          className="stat-card stat-card-indigo"
+          title={`${stats.running} running, ${stats.completed} completed, ${stats.failed} failed`}
+        >
+          <p className="text-sm font-medium text-tsushin-slate">Total Runs</p>
+          <p className="text-2xl font-bold text-white mt-1">{stats.totalRuns}</p>
         </div>
 
-        <div className="bg-gradient-to-br from-green-500/20 to-green-500/5 border border-green-500/30 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2">Active Conversations</h3>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-green-400">{stats.activeThreads}</span>
-            <span className="text-sm text-gray-400">threads</span>
-          </div>
-          <div className="mt-2 text-xs text-gray-400">
-            Multi-turn conversations in progress
-          </div>
+        <div className="stat-card stat-card-success" title="Multi-turn conversations in progress.">
+          <p className="text-sm font-medium text-tsushin-slate">Active Conversations</p>
+          <p className="text-2xl font-bold text-green-400 mt-1">{stats.activeThreads}</p>
         </div>
 
-        <div className="bg-gradient-to-br from-blue-500/20 to-blue-500/5 border border-blue-500/30 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2">Running Now</h3>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-blue-400">{stats.running}</span>
-            <span className="text-sm text-gray-400">flows</span>
-          </div>
-          <div className="mt-2 text-xs text-gray-400">
-            Currently executing
-          </div>
+        <div className="stat-card stat-card-accent" title="Flows currently executing.">
+          <p className="text-sm font-medium text-tsushin-slate">Running Now</p>
+          <p className="text-2xl font-bold text-cyan-400 mt-1">{stats.running}</p>
         </div>
 
-        <div className="bg-gradient-to-br from-purple-500/20 to-purple-500/5 border border-purple-500/30 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2">Success Rate</h3>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-purple-400">{stats.successRate}%</span>
-          </div>
-          <div className="mt-2 text-xs text-gray-400">
-            Flow completion rate
-          </div>
+        <div className="stat-card stat-card-accent" title="Flow completion rate.">
+          <p className="text-sm font-medium text-tsushin-slate">Success Rate</p>
+          <p className="text-2xl font-bold text-purple-400 mt-1">{stats.successRate}%</p>
         </div>
       </div>
     </div>

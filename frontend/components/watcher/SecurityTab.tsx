@@ -245,9 +245,8 @@ export default function SecurityTab() {
           <div className="stat-card stat-card-indigo group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Total Analyses</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Total Sentinel analyses over the last 7 days.">Total Analyses (7d)</p>
                 <p className="text-3xl font-display font-bold text-white mt-1">{stats.total_analyses.toLocaleString()}</p>
-                <p className="text-xs text-tsushin-muted mt-1">Last 7 days</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-teal-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <SearchIcon size={24} className="text-teal-400" />
@@ -258,9 +257,8 @@ export default function SecurityTab() {
           <div className="stat-card stat-card-warning group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Threats Detected</p>
+                <p className="text-sm font-medium text-tsushin-slate" title={`${stats.detection_rate}% detection rate`}>Threats Detected</p>
                 <p className="text-3xl font-display font-bold text-orange-400 mt-1">{stats.threats_detected}</p>
-                <p className="text-xs text-tsushin-muted mt-1">{stats.detection_rate}% detection rate</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <AlertTriangleIcon size={24} className="text-orange-400" />
@@ -271,9 +269,8 @@ export default function SecurityTab() {
           <div className="stat-card stat-card-error group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Blocked</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Messages blocked by Sentinel.">Blocked</p>
                 <p className="text-3xl font-display font-bold text-red-400 mt-1">{stats.threats_blocked}</p>
-                <p className="text-xs text-tsushin-muted mt-1">Messages blocked</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <ShieldIcon size={24} className="text-red-400" />
@@ -284,13 +281,12 @@ export default function SecurityTab() {
           <div className="stat-card stat-card-success group">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-tsushin-slate">Protection Rate</p>
+                <p className="text-sm font-medium text-tsushin-slate" title="Share of detected threats mitigated by Sentinel.">Protection Rate</p>
                 <p className="text-3xl font-display font-bold text-green-400 mt-1">
                   {stats.threats_detected > 0
                     ? Math.round((stats.threats_blocked / stats.threats_detected) * 100)
                     : 100}%
                 </p>
-                <p className="text-xs text-tsushin-muted mt-1">Threats mitigated</p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <CheckCircleIcon size={24} className="text-green-400" />

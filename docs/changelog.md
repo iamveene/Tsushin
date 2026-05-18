@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Metric card density audit follow-up (2026-05-18)
+
+- Fixed compact Watcher dashboard success-rate gauges so percentage text scales with the small radial chart and no longer overlaps the ring.
+- Tightened the shared `stat-card` utility and converted remaining bespoke KPI rows in Studio Personas, Studio Contacts, System Tenants, System Plans, Shell security, and Sentinel statistics to the compact shared metric-card treatment.
+- Trimmed third-line helper copy from remaining shared KPI rows and converted the Watcher Flows summary cards to the same compact metric-card treatment for consistent density across adjacent Watcher and Studio surfaces.
+
 ### Changed — Shell header edge alignment (2026-05-18)
 
 - Expanded the authenticated shell header and footer chrome to use the same full-width responsive page padding as the main app surfaces, aligning the logo and logout/actions with the visible page borders on wide screens without widening page content; the Flows page wrapper now uses the same responsive padding rhythm.
