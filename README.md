@@ -104,9 +104,10 @@ python3 install.py --help
 
 # 3. Open the URL printed at the end and finish the /setup wizard:
 #    create admin account + configure at least one AI provider API key.
+#    The first provider is linked to System AI and Sentinel automatically.
 ```
 
-The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation.
+The installer handles infrastructure only (containers, networking, SSL, `.env` secrets). Organization setup and LLM provider keys are configured per-tenant through the `/setup` wizard and Hub UI — not via environment variables — enabling multi-tenant isolation. The setup wizard binds the primary Provider Instance to System AI and Sentinel; if providers are added later, the first active Hub Provider Instance auto-fills those settings only while they are still unbound.
 
 ### UI-first financial automation setup
 

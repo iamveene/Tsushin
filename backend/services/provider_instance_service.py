@@ -15,7 +15,12 @@ import threading
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from models import ProviderInstance, ProviderConnectionAudit
-from constants.llm_models import DEEPSEEK_DEFAULT_BASE_URL, merge_deepseek_v4_models
+from constants.llm_models import (
+    DEEPSEEK_DEFAULT_BASE_URL,
+    DEFAULT_PROVIDER_MODELS,
+    SENTINEL_DEFAULT_MODELS,
+    merge_deepseek_v4_models,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +288,199 @@ class ProviderInstanceService:
         if vendor:
             query = query.filter(ProviderInstance.vendor == vendor)
         return query.order_by(ProviderInstance.vendor, ProviderInstance.is_default.desc(), ProviderInstance.instance_name).all()
+
+    @staticmethod
+    def _first_available_model(instance: ProviderInstance, fallback: Optional[str] = None) -> Optional[str]:
+        models = instance.available_models or []
+        if isinstance(models, str):
+            models = [models]
+        for model in models:
+            if model:
+                return model
+        return fallback
+
+    @staticmethod
+    def _system_model_for_instance(instance: ProviderInstance, preferred_model: Optional[str] = None) -> str:
+        return (
+            preferred_model
+            or ProviderInstanceService._first_available_model(
+                instance,
+                DEFAULT_PROVIDER_MODELS.get(instance.vendor),
+            )
+            or "gemini-2.5-flash"
+        )
+
+    @staticmethod
+    def _sentinel_model_for_instance(instance: ProviderInstance, preferred_model: Optional[str] = None) -> str:
+        return (
+            preferred_model
+            or SENTINEL_DEFAULT_MODELS.get(instance.vendor)
+            or ProviderInstanceService._first_available_model(
+                instance,
+                DEFAULT_PROVIDER_MODELS.get(instance.vendor),
+            )
+            or "gemini-2.5-flash-lite"
+        )
+
+    @staticmethod
+    def _active_instance_count(tenant_id: str, db: Session) -> int:
+        return (
+            db.query(ProviderInstance)
+            .filter(
+                ProviderInstance.tenant_id == tenant_id,
+                ProviderInstance.is_active == True,  # noqa: E712
+            )
+            .count()
+        )
+
+    @staticmethod
+    def bootstrap_core_ai_bindings(
+        tenant_id: str,
+        db: Session,
+        *,
+        provider_instance_id: Optional[int] = None,
+        system_model: Optional[str] = None,
+        sentinel_model: Optional[str] = None,
+        require_single_active_instance: bool = False,
+    ) -> dict:
+        """Bind unbound System AI and tenant Sentinel rows to a ProviderInstance.
+
+        The helper is conservative: it only fills empty FK bindings and never
+        overwrites an explicit System AI, Sentinel config, or Sentinel profile
+        ProviderInstance selection.
+        """
+        from models import Config, SentinelConfig, SentinelProfile
+
+        stats = {
+            "tenant_id": tenant_id,
+            "provider_instance_id": None,
+            "system_ai_bound": False,
+            "sentinel_configs_bound": 0,
+            "sentinel_profiles_bound": 0,
+            "skipped_reason": None,
+        }
+
+        if not tenant_id:
+            stats["skipped_reason"] = "missing_tenant"
+            return stats
+
+        if require_single_active_instance and ProviderInstanceService._active_instance_count(tenant_id, db) != 1:
+            stats["skipped_reason"] = "not_first_active_instance"
+            return stats
+
+        query = db.query(ProviderInstance).filter(
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.is_active == True,  # noqa: E712
+        )
+        if provider_instance_id is not None:
+            query = query.filter(ProviderInstance.id == provider_instance_id)
+        instance = query.order_by(ProviderInstance.is_default.desc(), ProviderInstance.id).first()
+        if not instance:
+            stats["skipped_reason"] = "no_active_instance"
+            return stats
+
+        stats["provider_instance_id"] = instance.id
+
+        config = db.query(Config).first()
+        if config and not getattr(config, "system_ai_provider_instance_id", None):
+            config.system_ai_provider_instance_id = instance.id
+            config.system_ai_provider = instance.vendor
+            config.system_ai_model = ProviderInstanceService._system_model_for_instance(instance, system_model)
+            stats["system_ai_bound"] = True
+
+        sentinel_model_name = ProviderInstanceService._sentinel_model_for_instance(instance, sentinel_model)
+        sentinel_configs = (
+            db.query(SentinelConfig)
+            .filter(
+                SentinelConfig.tenant_id == tenant_id,
+                SentinelConfig.provider_instance_id.is_(None),
+            )
+            .all()
+        )
+        for sentinel_config in sentinel_configs:
+            sentinel_config.provider_instance_id = instance.id
+            sentinel_config.llm_provider = instance.vendor
+            sentinel_config.llm_model = sentinel_model_name
+        stats["sentinel_configs_bound"] = len(sentinel_configs)
+
+        sentinel_profiles = (
+            db.query(SentinelProfile)
+            .filter(
+                SentinelProfile.tenant_id == tenant_id,
+                SentinelProfile.provider_instance_id.is_(None),
+            )
+            .all()
+        )
+        for sentinel_profile in sentinel_profiles:
+            sentinel_profile.provider_instance_id = instance.id
+            sentinel_profile.llm_provider = instance.vendor
+            sentinel_profile.llm_model = sentinel_model_name
+        stats["sentinel_profiles_bound"] = len(sentinel_profiles)
+
+        if stats["system_ai_bound"] or stats["sentinel_configs_bound"] or stats["sentinel_profiles_bound"]:
+            db.commit()
+        return stats
+
+    @staticmethod
+    def bootstrap_orphan_core_ai_bindings(db: Session) -> dict:
+        """Repair legacy unbound System AI/Sentinel rows when safe to infer."""
+        from models import Config
+
+        stats = {
+            "tenants_processed": 0,
+            "system_ai_bound": 0,
+            "sentinel_configs_bound": 0,
+            "sentinel_profiles_bound": 0,
+        }
+        tenant_ids = {
+            row[0]
+            for row in (
+                db.query(ProviderInstance.tenant_id)
+                .filter(ProviderInstance.is_active == True)  # noqa: E712
+                .distinct()
+                .all()
+            )
+            if row[0]
+        }
+
+        config = db.query(Config).first()
+        preferred_by_tenant: dict[str, int] = {}
+        if config and getattr(config, "system_ai_provider_instance_id", None):
+            preferred = (
+                db.query(ProviderInstance)
+                .filter(
+                    ProviderInstance.id == config.system_ai_provider_instance_id,
+                    ProviderInstance.is_active == True,  # noqa: E712
+                )
+                .first()
+            )
+            if preferred and preferred.tenant_id:
+                preferred_by_tenant[preferred.tenant_id] = preferred.id
+                tenant_ids.add(preferred.tenant_id)
+
+        for tenant_id in sorted(tenant_ids):
+            preferred_instance_id = preferred_by_tenant.get(tenant_id)
+            result = ProviderInstanceService.bootstrap_core_ai_bindings(
+                tenant_id,
+                db,
+                provider_instance_id=preferred_instance_id,
+                require_single_active_instance=preferred_instance_id is None,
+            )
+            if result.get("skipped_reason"):
+                continue
+            changed = (
+                int(bool(result["system_ai_bound"]))
+                + int(result["sentinel_configs_bound"])
+                + int(result["sentinel_profiles_bound"])
+            )
+            if not changed:
+                continue
+            stats["tenants_processed"] += 1
+            stats["system_ai_bound"] += int(bool(result["system_ai_bound"]))
+            stats["sentinel_configs_bound"] += int(result["sentinel_configs_bound"])
+            stats["sentinel_profiles_bound"] += int(result["sentinel_profiles_bound"])
+
+        return stats
 
     @staticmethod
     def get_instance(instance_id: int, tenant_id: str, db: Session) -> Optional[ProviderInstance]:

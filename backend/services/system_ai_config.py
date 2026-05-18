@@ -119,10 +119,17 @@ async def test_system_ai_connection(
             provider_instance_id = provider_instance_id or cfg_instance_id
             model = model or cfg_model
             provider = cfg_provider
-        else:
-            # Resolve provider from instance
+        if provider_instance_id:
             from models import ProviderInstance
-            instance = db.query(ProviderInstance).get(provider_instance_id)
+            query = db.query(ProviderInstance).filter(
+                ProviderInstance.id == provider_instance_id,
+                ProviderInstance.is_active == True,  # noqa: E712
+            )
+            if tenant_id:
+                query = query.filter(ProviderInstance.tenant_id == tenant_id)
+            instance = query.first()
+            if not instance:
+                raise ValueError(f"Provider instance {provider_instance_id} not found or inactive")
             provider = instance.vendor if instance else "unknown"
 
         from agent.ai_client import AIClient
@@ -195,6 +202,7 @@ def update_system_ai_config(
     db: Session,
     provider_instance_id: int,
     model: str,
+    tenant_id: Optional[str] = None,
 ) -> Dict:
     """
     Update system AI configuration to point to a ProviderInstance + model.
@@ -211,7 +219,10 @@ def update_system_ai_config(
         instance = db.query(ProviderInstance).filter(
             ProviderInstance.id == provider_instance_id,
             ProviderInstance.is_active == True,  # noqa: E712
-        ).first()
+        )
+        if tenant_id:
+            instance = instance.filter(ProviderInstance.tenant_id == tenant_id)
+        instance = instance.first()
         if not instance:
             return {
                 "success": False,

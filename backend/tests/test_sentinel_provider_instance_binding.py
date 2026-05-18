@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,29 @@ docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=E
 docker_stub.DockerClient = object
 sys.modules.setdefault("docker", docker_stub)
 
+argon2_stub = types.ModuleType("argon2")
+argon2_exceptions_stub = types.ModuleType("argon2.exceptions")
+
+
+class _PasswordHasherStub:
+    def hash(self, password: str) -> str:
+        return f"hashed:{password}"
+
+    def verify(self, hashed_password: str, plain_password: str) -> bool:
+        if hashed_password != f"hashed:{plain_password}":
+            raise _VerifyMismatchError()
+        return True
+
+
+class _VerifyMismatchError(Exception):
+    pass
+
+
+argon2_stub.PasswordHasher = _PasswordHasherStub
+argon2_exceptions_stub.VerifyMismatchError = _VerifyMismatchError
+sys.modules.setdefault("argon2", argon2_stub)
+sys.modules.setdefault("argon2.exceptions", argon2_exceptions_stub)
+
 
 @compiles(JSONB, "sqlite")
 def _compile_jsonb_sqlite(_type, _compiler, **_kw):
@@ -36,11 +60,15 @@ def _compile_jsonb_sqlite(_type, _compiler, **_kw):
 
 
 import models_rbac  # noqa: F401, E402  — register Tenant/User tables
-from models import Base, ProviderInstance, SentinelConfig, SentinelProfile  # noqa: E402
+from models import Base, Config, ProviderInstance, SentinelConfig, SentinelProfile  # noqa: E402
 from services.sentinel_effective_config import SentinelEffectiveConfig  # noqa: E402
 from services.sentinel_profiles_service import SentinelProfilesService  # noqa: E402
 from services.sentinel_service import SentinelService  # noqa: E402
 from services.provider_instance_service import ProviderInstanceService  # noqa: E402
+from services.system_ai_config import (  # noqa: E402
+    test_system_ai_connection as run_system_ai_connection_test,
+    update_system_ai_config,
+)
 from api.routes_sentinel import (  # noqa: E402
     SentinelConfigUpdate,
     _get_active_provider_instance_or_400,
@@ -92,6 +120,14 @@ def _make_system_sentinel_config(db) -> SentinelConfig:
         llm_provider="gemini",
         llm_model="gemini-2.5-flash-lite",
     )
+    db.add(config)
+    db.commit()
+    db.refresh(config)
+    return config
+
+
+def _make_config(db, **kwargs) -> Config:
+    config = Config(messages_db_path="/tmp/messages.db", **kwargs)
     db.add(config)
     db.commit()
     db.refresh(config)
@@ -231,6 +267,139 @@ def test_sentinel_runtime_passes_provider_instance_id_to_ai_client(db, monkeypat
     assert captured["tenant_id"] == "tenant-a"
     assert captured["provider"] == "gemini"
     assert result["content"] == "{\"is_threat_detected\": false}"
+
+
+def test_bootstrap_core_ai_bindings_links_unbound_system_ai_sentinel_rows(db):
+    config = _make_config(db)
+    instance = _make_instance(db, "tenant-a", vendor="openai", models=["gpt-5.5"])
+    sentinel_config = SentinelConfig(
+        tenant_id="tenant-a",
+        llm_provider="gemini",
+        llm_model="gemini-2.5-flash-lite",
+    )
+    profile = SentinelProfile(
+        tenant_id="tenant-a",
+        name="Tenant default",
+        slug="tenant-default",
+        llm_provider="gemini",
+        llm_model="gemini-2.5-flash-lite",
+        detection_overrides="{}",
+    )
+    db.add_all([sentinel_config, profile])
+    db.commit()
+
+    result = ProviderInstanceService.bootstrap_core_ai_bindings(
+        "tenant-a",
+        db,
+        provider_instance_id=instance.id,
+    )
+
+    db.refresh(config)
+    db.refresh(sentinel_config)
+    db.refresh(profile)
+    assert result["system_ai_bound"] is True
+    assert result["sentinel_configs_bound"] == 1
+    assert result["sentinel_profiles_bound"] == 1
+    assert config.system_ai_provider_instance_id == instance.id
+    assert config.system_ai_provider == "openai"
+    assert config.system_ai_model == "gpt-5.5"
+    assert sentinel_config.provider_instance_id == instance.id
+    assert sentinel_config.llm_provider == "openai"
+    assert sentinel_config.llm_model == "gpt-5.5"
+    assert profile.provider_instance_id == instance.id
+    assert profile.llm_provider == "openai"
+    assert profile.llm_model == "gpt-5.5"
+
+
+def test_bootstrap_core_ai_bindings_skips_when_hub_create_is_not_first_instance(db):
+    _make_config(db)
+    first = _make_instance(db, "tenant-a", vendor="gemini", models=["gemini-2.5-flash-lite"])
+    second = _make_instance(db, "tenant-a", vendor="openai", models=["gpt-5.5"])
+    sentinel_config = SentinelConfig(tenant_id="tenant-a")
+    db.add(sentinel_config)
+    db.commit()
+
+    result = ProviderInstanceService.bootstrap_core_ai_bindings(
+        "tenant-a",
+        db,
+        provider_instance_id=second.id,
+        require_single_active_instance=True,
+    )
+
+    db.refresh(sentinel_config)
+    assert result["skipped_reason"] == "not_first_active_instance"
+    assert sentinel_config.provider_instance_id is None
+    assert first.id != second.id
+
+
+def test_bootstrap_orphan_core_ai_bindings_repairs_prod_legacy_sentinel_shape(db):
+    instance = _make_instance(db, "tenant-a", vendor="gemini", models=["gemini-2.5-flash-lite"])
+    config = _make_config(
+        db,
+        system_ai_provider_instance_id=instance.id,
+        system_ai_provider="gemini",
+        system_ai_model="gemini-2.5-flash-lite",
+    )
+    sentinel_config = SentinelConfig(
+        tenant_id="tenant-a",
+        provider_instance_id=None,
+        llm_provider="gemini",
+        llm_model="gemini-2.5-flash-lite",
+    )
+    db.add(sentinel_config)
+    db.commit()
+
+    result = ProviderInstanceService.bootstrap_orphan_core_ai_bindings(db)
+
+    db.refresh(config)
+    db.refresh(sentinel_config)
+    assert result["tenants_processed"] == 1
+    assert result["system_ai_bound"] == 0
+    assert result["sentinel_configs_bound"] == 1
+    assert sentinel_config.provider_instance_id == instance.id
+    assert sentinel_config.llm_provider == "gemini"
+    assert sentinel_config.llm_model == "gemini-2.5-flash-lite"
+
+
+def test_setup_and_hub_entrypoints_call_core_ai_binding_paths():
+    backend_dir = Path(__file__).resolve().parents[1]
+    setup_source = (backend_dir / "auth_routes.py").read_text()
+    provider_route_source = (backend_dir / "api" / "routes_provider_instances.py").read_text()
+
+    assert "provider_instance_id=first_provider_instance.id if first_provider_instance else None" in setup_source
+    assert "bootstrap_core_ai_bindings(" in provider_route_source
+    assert "require_single_active_instance=True" in provider_route_source
+
+
+def test_system_ai_update_rejects_cross_tenant_provider_instance(db):
+    _make_config(db)
+    other_tenant = _make_instance(db, "tenant-b", vendor="openai", models=["gpt-5.5"])
+
+    result = update_system_ai_config(
+        db,
+        other_tenant.id,
+        "gpt-5.5",
+        tenant_id="tenant-a",
+    )
+
+    assert result["success"] is False
+    assert "not found or inactive" in result["message"]
+
+
+def test_system_ai_connection_test_rejects_cross_tenant_provider_instance(db):
+    other_tenant = _make_instance(db, "tenant-b", vendor="openai", models=["gpt-5.5"])
+
+    result = asyncio.run(
+        run_system_ai_connection_test(
+            db,
+            provider_instance_id=other_tenant.id,
+            model="gpt-5.5",
+            tenant_id="tenant-a",
+        )
+    )
+
+    assert result["success"] is False
+    assert "not found or inactive" in result["message"]
 
 
 def test_provider_instance_delete_reassigns_sentinel_config_and_profiles(db):
