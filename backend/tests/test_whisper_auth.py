@@ -21,6 +21,7 @@ import wave
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -235,6 +236,94 @@ class _CapturingAsyncClient:
         )
 
 
+class _SequencedAsyncClient:
+    """Minimal httpx.AsyncClient fake that returns/raises queued outcomes."""
+
+    outcomes = []
+    calls = []
+    file_handles = []
+
+    def __init__(self, *_, **__):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    async def post(self, url, *, headers=None, files=None, data=None):
+        file_handle = (files or {}).get("file", (None, None))[1]
+        _SequencedAsyncClient.file_handles.append(file_handle)
+        _SequencedAsyncClient.calls.append({
+            "url": url,
+            "headers": dict(headers or {}),
+            "data": dict(data or {}),
+            "files_keys": list((files or {}).keys()),
+        })
+        outcome = _SequencedAsyncClient.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _speaches_response(status_code=200, *, text="", payload=None):
+    if payload is None:
+        payload = {"text": "ok"}
+    return SimpleNamespace(
+        status_code=status_code,
+        text=text,
+        json=lambda: payload,
+    )
+
+
+async def _no_sleep(_delay):
+    return None
+
+
+def _make_speaches_provider():
+    instance = SimpleNamespace(
+        base_url="http://whisper-test:8000",
+        default_model="Systran/faster-distil-whisper-small.en",
+        auth_username="tsushin",
+        _token="bearer-secret-abc123",
+    )
+    db = MagicMock()
+    return WhisperASRProvider(instance=instance, db=db, tenant_id="tenant_test"), db
+
+
+def _run_speaches_with_outcomes(audio_path, outcomes):
+    _SequencedAsyncClient.outcomes = list(outcomes)
+    _SequencedAsyncClient.calls = []
+    _SequencedAsyncClient.file_handles = []
+    provider, db = _make_speaches_provider()
+
+    from services import whisper_instance_service as wis
+    with patch.object(
+        wis.WhisperInstanceService,
+        "resolve_api_token",
+        staticmethod(
+            lambda inst, db: getattr(inst, "_token", None)
+            or "test-token-bearer-707"
+        ),
+    ), patch.object(
+        provider_module.httpx,
+        "AsyncClient",
+        _SequencedAsyncClient,
+    ), patch.object(
+        provider_module.asyncio,
+        "sleep",
+        _no_sleep,
+    ):
+        request = ASRRequest(
+            audio_path=audio_path,
+            model="Systran/faster-distil-whisper-small.en",
+        )
+        response = asyncio.run(provider.transcribe(request))
+
+    return response, db, _SequencedAsyncClient.calls, _SequencedAsyncClient.file_handles
+
+
 def test_provider_transcribe_sends_bearer_not_basic():
     """BUG-703: provider must use `Authorization: Bearer <token>` and must
     NOT send Basic auth or X-API-Key."""
@@ -281,6 +370,87 @@ def test_provider_transcribe_sends_bearer_not_basic():
     assert captured["url"].endswith("/v1/audio/transcriptions")
 
     os.unlink(audio_path)
+
+
+@pytest.mark.parametrize("status_code", [429, 503])
+def test_provider_retries_transient_http_and_reopens_audio_file(status_code):
+    audio_path = _silent_wav_path()
+    try:
+        response, db, calls, file_handles = _run_speaches_with_outcomes(
+            audio_path,
+            [
+                _speaches_response(status_code, text="temporary"),
+                _speaches_response(200, payload={"text": "retry ok"}),
+            ],
+        )
+    finally:
+        os.unlink(audio_path)
+
+    assert response.success is True
+    assert response.text == "retry ok"
+    assert response.metadata["attempts"] == 2
+    assert response.metadata["retried"] is True
+    db.rollback.assert_called_once()
+    assert len(calls) == 2
+    assert len(file_handles) == 2
+    assert len({id(handle) for handle in file_handles}) == 2
+    assert all(handle.closed for handle in file_handles)
+
+
+def test_provider_retries_remote_protocol_error():
+    audio_path = _silent_wav_path()
+    try:
+        response, _db, calls, file_handles = _run_speaches_with_outcomes(
+            audio_path,
+            [
+                httpx.RemoteProtocolError("server disconnected without response"),
+                _speaches_response(200, payload={"text": "after remote reset"}),
+            ],
+        )
+    finally:
+        os.unlink(audio_path)
+
+    assert response.success is True
+    assert response.text == "after remote reset"
+    assert response.metadata["attempts"] == 2
+    assert response.metadata["retried"] is True
+    assert len(calls) == 2
+    assert len({id(handle) for handle in file_handles}) == 2
+    assert all(handle.closed for handle in file_handles)
+
+
+def test_provider_does_not_retry_non_transient_4xx():
+    audio_path = _silent_wav_path()
+    try:
+        response, _db, calls, _file_handles = _run_speaches_with_outcomes(
+            audio_path,
+            [_speaches_response(403, text="forbidden")],
+        )
+    finally:
+        os.unlink(audio_path)
+
+    assert response.success is False
+    assert response.error == "http_403: forbidden"
+    assert response.metadata["attempts"] == 1
+    assert response.metadata["retried"] is False
+    assert len(calls) == 1
+
+
+def test_provider_returns_retry_metadata_on_timeout_failure():
+    audio_path = _silent_wav_path()
+    try:
+        response, _db, calls, _file_handles = _run_speaches_with_outcomes(
+            audio_path,
+            [httpx.TimeoutException("queue timeout") for _ in range(4)],
+        )
+    finally:
+        os.unlink(audio_path)
+
+    assert response.success is False
+    assert response.error.startswith("request_error: TimeoutException: queue timeout")
+    assert response.metadata["attempts"] == 4
+    assert response.metadata["retried"] is True
+    assert len(calls) == 4
 
 
 class _CapturingRequests:

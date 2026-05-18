@@ -30,6 +30,7 @@ import sys
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -208,6 +209,63 @@ def test_openai_whisper_provider_propagates_http_error():
 
     assert not result.success
     assert result.error.startswith("http_503")
+
+
+def test_openai_whisper_provider_retries_remote_protocol_error():
+    from hub.providers.asr_provider import ASRRequest
+    from hub.providers.openai_whisper_asr_provider import OpenAIWhisperASRProvider
+    import hub.providers.openai_whisper_asr_provider as provider_module
+
+    audio_path = _make_audio_path()
+    capture: Dict[str, Any] = {"calls": []}
+    outcomes = [
+        httpx.RemoteProtocolError("server disconnected without response"),
+        _MockResponse(200, payload={"text": "after remote reset"}),
+    ]
+
+    class _FlakyClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers=None, params=None, files=None, **kwargs):
+            capture["calls"].append({
+                "url": url,
+                "files": list(files.keys()) if files else [],
+            })
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+    async def _no_sleep(_delay):
+        return None
+
+    instance = _make_instance()
+    db = MagicMock()
+
+    with patch.object(provider_module.httpx, "AsyncClient", _FlakyClient), \
+         patch.object(provider_module.asyncio, "sleep", _no_sleep), \
+         patch.object(provider_module.WhisperInstanceService, "resolve_api_token") as mock_resolve:
+        mock_resolve.return_value = None
+
+        provider = OpenAIWhisperASRProvider(instance=instance, db=db)
+        result = asyncio.run(
+            provider.transcribe(
+                ASRRequest(audio_path=audio_path, model="base", language="en")
+            )
+        )
+
+    assert result.success
+    assert result.text == "after remote reset"
+    assert result.metadata["attempts"] == 2
+    assert result.metadata["retried"] is True
+    assert len(capture["calls"]) == 2
 
 
 def test_openai_whisper_provider_no_db_session_returns_failure():

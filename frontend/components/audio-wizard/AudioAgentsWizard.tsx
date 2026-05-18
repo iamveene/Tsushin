@@ -411,7 +411,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           {stepIndicator}
           {!allowsProviderChoice && (
             <div className="p-3 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sm text-sky-200">
-              Transcript-only agents can still use OpenAI Whisper, the tenant default ASR instance, or a specific local Speaches/Whisper node in the next step.
+              Transcript-only agents can still use OpenAI Whisper or pin a specific local Speaches/Whisper node in the next step.
             </div>
           )}
           <div>

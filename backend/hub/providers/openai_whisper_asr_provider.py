@@ -94,7 +94,7 @@ class OpenAIWhisperASRProvider(ASRProvider):
                             params=params,
                             files=files,
                         )
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = f"request_error: {type(exc).__name__}: {exc or repr(exc)}"
                 if attempt < max_attempts - 1:
                     delay = _RETRY_BACKOFFS_SEC[attempt]

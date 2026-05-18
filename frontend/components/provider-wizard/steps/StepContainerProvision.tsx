@@ -30,14 +30,13 @@ export default function StepContainerProvision() {
   const isSpeaches = vendor === 'speaches'
   const isASRLocal = isOpenAIWhisper || isSpeaches
 
-  // Seed sensible defaults the first time the user lands on this step for
-  // openai_whisper / speaches: ASR vendors need slightly different defaults
-  // than the LLM-tuned 4 GB baseline.
+  // Seed sensible defaults the first time the user lands on this step. Speaches
+  // uses the shared 4 GB baseline; openai_whisper keeps its smaller CPU profile.
   useEffect(() => {
     if (isOpenAIWhisper && (draft.mem_limit === '4g' || !draft.mem_limit)) {
       patchDraft({ mem_limit: '3g' })
-    } else if (isSpeaches && (draft.mem_limit === '4g' || !draft.mem_limit)) {
-      patchDraft({ mem_limit: '2g' })
+    } else if (isSpeaches && (!draft.mem_limit || ['1.5g', '2g', '3g'].includes(draft.mem_limit))) {
+      patchDraft({ mem_limit: '4g' })
     }
     // Seed instance_name so the Review row never shows "(unnamed)".
     if (isASRLocal && !draft.instance_name) {

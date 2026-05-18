@@ -155,7 +155,7 @@ class WhisperInstanceService:
             error_detail = getattr(instance, "health_status_reason", None) or str(e)
             return (
                 f"{context} could not be auto-provisioned. "
-                "You can retry from Settings > ASR. "
+                "You can retry from Hub > Local Services > Speech-to-Text. "
                 f"Error: {error_detail}"
             )
 

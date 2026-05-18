@@ -205,13 +205,13 @@ Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voic
 |---|---|---|
 | **OpenAI Whisper API** | Cloud (OpenAI). Reuses your tenant's saved OpenAI key. | Default if you already have OpenAI configured and don't mind cloud transcription. |
 | **Whisper (local)** | Auto-provisioned container under Hub > Local Services. | Privacy-sensitive deployments — voice data never leaves your infrastructure. CPU-friendly. |
-| **Speaches** | Auto-provisioned container under Hub > Local Services. | Local Whisper alternative with different performance profile. |
+| **Speaches** | Auto-provisioned container under Hub > Local Services. | Local Whisper alternative with different performance profile. The guided wizard recommends and defaults to **4 GB** memory to avoid startup/transcription OOM churn. |
 
 **Setup (Hub > Add Provider > Speech-to-Text):**
 
 1. Go to **Hub > AI Providers > + New Instance**, pick **Speech-to-Text** as the modality.
 2. Choose **Cloud** (OpenAI Whisper API — no extra credentials needed) or **Local** (Whisper or Speaches).
-3. For Local: name the instance, optionally pick a GPU profile, and click **Provision**. The container is created with `auto_provision=true`; the wizard polls until it's healthy.
+3. For Local: name the instance, optionally pick a GPU profile, and click **Provision**. The container is created with `auto_provision=true`; the wizard polls until it's healthy. Speaches defaults to **4 GB** memory; keep that recommendation unless you have host-level evidence that a smaller limit is safe.
 4. Once running, the instance shows up under **Hub > Local Services > Speech-to-Text** with start/stop/restart/logs/status controls.
 
 **Per-agent assignment.** The `audio_transcript` skill on each agent has two modes:
@@ -230,7 +230,7 @@ The instance list also auto-refreshes when you switch to instance mode or create
 
 **Cascade-aware delete.** Deleting an ASR instance shows a banner enumerating every agent currently pinned to it. The delete reconciles those agents in the same transaction: pinned skills are repointed to another active ASR instance if one exists; otherwise they are disabled (so the agent stops trying to transcribe via a now-deleted endpoint). The cascade summary appears in the response so the UI surfaces "3 agents reassigned to OpenAI Whisper QA" instead of failing silently.
 
-**Failure-mode honesty (2026-05-06).** If you pin an agent to a local instance, the runtime does **not** silently fall back to the OpenAI cloud Whisper API on failure. The local provider's error surfaces directly so you find out about a stalled or unhealthy local container instead of leaking voice data to a third-party cloud. To use the cloud path explicitly, set `asr_mode='openai'` on the agent.
+**Failure-mode honesty (2026-05-06).** If you pin an agent to a local instance, the runtime does **not** silently fall back to the OpenAI cloud Whisper API on failure. The local provider's error surfaces directly so you find out about a stalled or unhealthy local container instead of leaking voice data to a third-party cloud. To use the cloud path explicitly, set `asr_mode='openai'` on the agent. Transient local ASR errors are retried through the provider path, and OOM-style failures are reported with diagnostic detail so operators can raise the container memory limit (Speaches recommendation/default: **4 GB**) rather than misreading the incident as a cloud-key problem.
 
 #### MCP Server Registration
 
