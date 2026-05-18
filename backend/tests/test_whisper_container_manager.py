@@ -21,6 +21,7 @@ sys.modules.setdefault("docker", docker_stub)
 from services.whisper_container_manager import (  # noqa: E402
     PORT_RANGE_END,
     PORT_RANGE_START,
+    VENDOR_CONFIGS,
     WhisperContainerManager,
     _build_silent_wav_bytes,
     startup_reconcile,
@@ -82,11 +83,26 @@ class _FakeReconcileDB:
 
 
 class _FakeContainer:
-    def __init__(self, name, *, labels=None, status="running", container_id="cid-123"):
+    def __init__(
+        self,
+        name,
+        *,
+        labels=None,
+        status="running",
+        container_id="cid-123",
+        attrs=None,
+    ):
         self.name = name
         self.labels = labels or {}
         self.status = status
         self.id = container_id
+        self.attrs = attrs or {
+            "Name": name,
+            "Id": container_id,
+            "Config": {"Labels": self.labels},
+            "State": {"Status": status, "ExitCode": 0, "OOMKilled": False},
+            "RestartCount": 0,
+        }
 
     def reload(self):
         return None
@@ -112,6 +128,8 @@ class _FakeManagedRuntime:
         self.removed = []
         self.started = []
         self.restarted = []
+        self.created = []
+        self.logs = {}
 
     def get_container(self, name):
         if name not in self.by_name:
@@ -129,6 +147,20 @@ class _FakeManagedRuntime:
 
     def restart_container(self, name):
         self.restarted.append(name)
+
+    def create_container(self, **kwargs):
+        self.created.append(kwargs)
+        container = _FakeContainer(
+            kwargs["name"],
+            labels=kwargs.get("labels"),
+            status="running",
+            container_id=f"created-{len(self.created)}",
+        )
+        self.by_name[kwargs["name"]] = container
+        return container
+
+    def get_container_logs(self, name, tail=100):
+        return self.logs.get(name, "log line")
 
 
 import pytest
@@ -371,3 +403,181 @@ def test_retry_refuses_to_replace_foreign_container_name():
         )
 
     assert mgr.runtime.removed == []
+
+
+def test_speaches_default_memory_limit_is_4g():
+    assert VENDOR_CONFIGS["speaches"]["default_mem_limit"] == "4g"
+
+
+def test_provision_targets_preserve_existing_volume_port_and_name_on_resize():
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    instance = SimpleNamespace(
+        id=88,
+        tenant_id="tenant-preserve",
+        container_name="tsushin-whisper-existing-88",
+        volume_name="tsushin-whisper-existing-cache-88",
+        container_port=6444,
+    )
+
+    targets = mgr._resolve_provision_targets(
+        instance,
+        _FakeDB([]),
+        preserve_existing=True,
+    )
+
+    assert targets["container_name"] == "tsushin-whisper-existing-88"
+    assert targets["volume_name"] == "tsushin-whisper-existing-cache-88"
+    assert targets["port"] == 6444
+
+
+def test_reprovision_updates_mem_limit_and_preserves_existing_runtime_targets():
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    db = _FakeDB([])
+    instance = SimpleNamespace(
+        id=89,
+        tenant_id="tenant-1",
+        vendor="speaches",
+        container_name="tsushin-whisper-tenant-89",
+        volume_name="tsushin-whisper-cache-89",
+        container_port=6445,
+        container_status="running",
+        health_status="healthy",
+        health_status_reason=None,
+        last_health_check=None,
+        mem_limit="2g",
+        cpu_quota=None,
+        is_auto_provisioned=True,
+    )
+    container = _FakeContainer(
+        instance.container_name,
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.tenant": "tenant-1",
+            "tsushin.instance_id": "89",
+        },
+    )
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
+
+    def fake_provision(row, db_arg, *, preserve_existing=False):
+        assert row is instance
+        assert db_arg is db
+        assert preserve_existing is True
+        assert row.container_name == "tsushin-whisper-tenant-89"
+        assert row.volume_name == "tsushin-whisper-cache-89"
+        assert row.container_port == 6445
+        row.container_status = "running"
+        row.health_status = "healthy"
+        row.health_status_reason = "Auto-provisioned and passed authenticated warm-up"
+
+    with patch.object(mgr, "_get_instance", return_value=instance), patch.object(
+        mgr,
+        "provision",
+        side_effect=fake_provision,
+    ) as mock_provision:
+        result = mgr.reprovision(89, "tenant-1", db, mem_limit="4g")
+
+    assert result is instance
+    assert instance.mem_limit == "4g"
+    assert instance.container_status == "running"
+    assert db.commits == 1
+    mock_provision.assert_called_once()
+
+
+def test_get_status_surfaces_restart_and_oom_context():
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    db = _FakeDB([])
+    instance = SimpleNamespace(
+        id=90,
+        tenant_id="tenant-1",
+        container_name="tsushin-whisper-90",
+        container_port=6446,
+        container_image="speaches:test",
+        volume_name="tsushin-whisper-cache-90",
+        base_url="http://whisper-90:8000",
+        container_status="running",
+        health_status="healthy",
+        health_status_reason=None,
+        last_health_check=None,
+    )
+    container = _FakeContainer(
+        instance.container_name,
+        labels={
+            "tsushin.service": "asr",
+            "tsushin.tenant": "tenant-1",
+            "tsushin.instance_id": "90",
+        },
+        status="exited",
+        attrs={
+            "Name": instance.container_name,
+            "Id": "cid-90",
+            "Config": {"Labels": {
+                "tsushin.service": "asr",
+                "tsushin.tenant": "tenant-1",
+                "tsushin.instance_id": "90",
+            }},
+            "RestartCount": 3,
+            "State": {
+                "Status": "exited",
+                "OOMKilled": True,
+                "ExitCode": 137,
+                "Error": "",
+                "StartedAt": "2026-05-18T10:00:00Z",
+                "FinishedAt": "2026-05-18T10:01:00Z",
+            },
+        },
+    )
+    mgr.runtime = _FakeManagedRuntime(containers=[container])
+
+    with patch.object(mgr, "_get_instance", return_value=instance):
+        status = mgr.get_status(90, "tenant-1", db)
+
+    assert status["status"] == "exited"
+    assert status["restart_count"] == 3
+    assert status["oom_killed"] is True
+    assert status["exit_code"] == 137
+    assert status["recent_exit"] is True
+    assert instance.health_status == "unavailable"
+    assert "oom_killed=true" in instance.health_status_reason
+    assert "exit_code=137" in instance.health_status_reason
+    assert db.commits == 1
+
+
+def test_get_logs_prefixes_recent_exit_context_after_ownership_check():
+    mgr = WhisperContainerManager.__new__(WhisperContainerManager)
+    db = _FakeDB([])
+    instance = SimpleNamespace(
+        id=91,
+        tenant_id="tenant-1",
+        container_name="tsushin-whisper-91",
+    )
+    labels = {
+        "tsushin.service": "asr",
+        "tsushin.tenant": "tenant-1",
+        "tsushin.instance_id": "91",
+    }
+    container = _FakeContainer(
+        instance.container_name,
+        labels=labels,
+        status="exited",
+        attrs={
+            "Name": instance.container_name,
+            "Id": "cid-91",
+            "Config": {"Labels": labels},
+            "RestartCount": 1,
+            "State": {
+                "Status": "exited",
+                "OOMKilled": True,
+                "ExitCode": 137,
+                "FinishedAt": "2026-05-18T10:01:00Z",
+            },
+        },
+    )
+    runtime = _FakeManagedRuntime(containers=[container])
+    runtime.logs[instance.container_name] = "speaches process exited"
+    mgr.runtime = runtime
+
+    with patch.object(mgr, "_get_instance", return_value=instance):
+        logs = mgr.get_logs(91, "tenant-1", db, tail=50)
+
+    assert logs.startswith("[container runtime] restart_count=1, oom_killed=true, exit_code=137")
+    assert "speaches process exited" in logs

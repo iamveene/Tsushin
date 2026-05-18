@@ -57,7 +57,7 @@ VENDOR_CONFIGS: Dict[str, Dict[str, Any]] = {
         # in turn caused 404s on /v1/audio/transcriptions until a model was
         # cached.
         "volume_bind": "/home/ubuntu/.cache/huggingface",
-        "default_mem_limit": "2g",
+        "default_mem_limit": "4g",
         "healthcheck_path": "/health",
         "transcribe_path": "/v1/audio/transcriptions",
         "transcribe_field": "file",
@@ -177,9 +177,9 @@ class WhisperContainerManager:
                 },
             )
 
-    def _assert_container_ownership(self, instance) -> None:
+    def _assert_container_ownership(self, instance):
         if not instance.container_name:
-            return
+            return None
         container = self.runtime.get_container(instance.container_name)
         labels = self._container_labels(container)
         expected = {
@@ -198,6 +198,84 @@ class WhisperContainerManager:
                 f"{instance.container_name}: expected tenant={instance.tenant_id!r} "
                 f"instance_id={instance.id}; got {', '.join(mismatches)}"
             )
+        return container
+
+    @staticmethod
+    def _default_runtime_targets(tenant_id: str, instance_id: int) -> Dict[str, Any]:
+        tenant_hash = hashlib.md5(tenant_id.encode()).hexdigest()[:8]
+        container_name = f"{_get_container_prefix()}{tenant_hash}-{instance_id}"
+        if len(container_name) > 63:
+            container_name = container_name[:63].rstrip("-")
+        return {
+            "tenant_hash": tenant_hash,
+            "container_name": container_name,
+            "volume_name": f"{_get_container_prefix()}{tenant_hash}-{instance_id}",
+        }
+
+    def _resolve_provision_targets(
+        self,
+        instance,
+        db: Session,
+        *,
+        preserve_existing: bool = False,
+    ) -> Dict[str, Any]:
+        targets = self._default_runtime_targets(instance.tenant_id, instance.id)
+        if preserve_existing:
+            targets["container_name"] = instance.container_name or targets["container_name"]
+            targets["volume_name"] = instance.volume_name or targets["volume_name"]
+            targets["port"] = instance.container_port or self._allocate_port(db)
+        else:
+            targets["port"] = self._allocate_port(db)
+        return targets
+
+    @staticmethod
+    def _container_runtime_context(container: Any) -> Dict[str, Any]:
+        attrs = getattr(container, "attrs", None) or {}
+        state = attrs.get("State") or attrs.get("state") or {}
+        restart_count = attrs.get("RestartCount")
+        if restart_count is None:
+            restart_count = attrs.get("restart_count")
+        exit_code = state.get("ExitCode")
+        oom_killed = state.get("OOMKilled")
+        if isinstance(oom_killed, str):
+            oom_killed = oom_killed.strip().lower() == "true"
+        else:
+            oom_killed = bool(oom_killed) if oom_killed is not None else False
+        state_status = state.get("Status") or getattr(container, "status", None)
+        state_error = state.get("Error") or None
+        finished_at = state.get("FinishedAt") or None
+        started_at = state.get("StartedAt") or None
+        recent_exit = bool(
+            oom_killed
+            or state_status in {"exited", "dead"}
+            or (exit_code not in (None, 0, "0"))
+        )
+        return {
+            "restart_count": restart_count,
+            "oom_killed": oom_killed,
+            "exit_code": exit_code,
+            "state": state_status,
+            "state_error": state_error,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "recent_exit": recent_exit,
+        }
+
+    @staticmethod
+    def _format_runtime_context(context: Dict[str, Any]) -> str:
+        parts = []
+        if context.get("restart_count") is not None:
+            parts.append(f"restart_count={context['restart_count']}")
+        if context.get("oom_killed"):
+            parts.append("oom_killed=true")
+        exit_code = context.get("exit_code")
+        if exit_code not in (None, 0, "0"):
+            parts.append(f"exit_code={exit_code}")
+        if context.get("state_error"):
+            parts.append(f"state_error={context['state_error']}")
+        if context.get("finished_at"):
+            parts.append(f"finished_at={context['finished_at']}")
+        return ", ".join(parts)
 
     def _remove_existing_container_for_retry(
         self,
@@ -247,7 +325,7 @@ class WhisperContainerManager:
                 continue
         raise RuntimeError(f"No available ports in range {PORT_RANGE_START}-{PORT_RANGE_END}")
 
-    def provision(self, instance, db: Session) -> None:
+    def provision(self, instance, db: Session, *, preserve_existing: bool = False) -> None:
         vendor = instance.vendor or "speaches"
         if vendor not in VENDOR_CONFIGS:
             raise ValueError(f"Auto-provisioning not supported for vendor: {vendor}")
@@ -255,14 +333,17 @@ class WhisperContainerManager:
         config = VENDOR_CONFIGS[vendor]
         image = config["image_factory"]()
         tenant_id = instance.tenant_id
-        tenant_hash = hashlib.md5(tenant_id.encode()).hexdigest()[:8]
 
         with _provision_lock:
-            port = self._allocate_port(db)
-            container_name = f"{_get_container_prefix()}{tenant_hash}-{instance.id}"
-            if len(container_name) > 63:
-                container_name = container_name[:63].rstrip("-")
-            volume_name = f"{_get_container_prefix()}{tenant_hash}-{instance.id}"
+            targets = self._resolve_provision_targets(
+                instance,
+                db,
+                preserve_existing=preserve_existing,
+            )
+            tenant_hash = targets["tenant_hash"]
+            port = targets["port"]
+            container_name = targets["container_name"]
+            volume_name = targets["volume_name"]
 
         mem_limit = instance.mem_limit or config["default_mem_limit"]
         cpu_quota = instance.cpu_quota or 100000
@@ -386,16 +467,24 @@ class WhisperContainerManager:
                     ASRInstance.id == instance_id,
                     ASRInstance.tenant_id == tenant_id_capture,
                 ).first()
+                status_value = "running" if healthy else "error"
+                health_value = "healthy" if healthy else "unavailable"
+                reason_value = (
+                    "Auto-provisioned and passed authenticated warm-up"
+                    if healthy
+                    else "Container started but authenticated warm-up failed"
+                )
+                checked_at = datetime.utcnow()
                 if row is not None:
-                    row.container_status = "running" if healthy else "error"
-                    row.health_status = "healthy" if healthy else "unavailable"
-                    row.health_status_reason = (
-                        "Auto-provisioned and passed authenticated warm-up"
-                        if healthy
-                        else "Container started but authenticated warm-up failed"
-                    )
-                    row.last_health_check = datetime.utcnow()
+                    row.container_status = status_value
+                    row.health_status = health_value
+                    row.health_status_reason = reason_value
+                    row.last_health_check = checked_at
                     db_final.commit()
+                instance.container_status = status_value
+                instance.health_status = health_value
+                instance.health_status_reason = reason_value
+                instance.last_health_check = checked_at
             finally:
                 db_final.close()
 
@@ -437,6 +526,34 @@ class WhisperContainerManager:
                 )
             logger.error("Failed to provision whisper container: %s", e, exc_info=True)
             raise
+
+    def reprovision(
+        self,
+        instance_id: int,
+        tenant_id: str,
+        db: Session,
+        *,
+        mem_limit: Optional[str] = None,
+        cpu_quota: Optional[int] = None,
+    ):
+        instance = self._get_instance(instance_id, tenant_id, db)
+        if instance.container_name:
+            try:
+                self._assert_container_ownership(instance)
+            except ContainerNotFoundError:
+                pass
+        if mem_limit is not None:
+            instance.mem_limit = mem_limit
+        if cpu_quota is not None:
+            instance.cpu_quota = cpu_quota
+        instance.container_status = "provisioning"
+        instance.health_status = "unknown"
+        instance.health_status_reason = "Reprovisioning ASR container with updated runtime limits"
+        instance.last_health_check = datetime.utcnow()
+        db.commit()
+
+        self.provision(instance, db, preserve_existing=True)
+        return instance
 
     def start_container(self, instance_id: int, tenant_id: str, db: Session) -> str:
         instance = self._get_instance(instance_id, tenant_id, db)
@@ -525,10 +642,25 @@ class WhisperContainerManager:
         if not instance.container_name:
             return {"status": "none", "container_name": None}
         try:
-            self._assert_container_ownership(instance)
-            status = self.runtime.get_container_status(instance.container_name)
+            container = self._assert_container_ownership(instance)
+            status = self._container_status(container)
+            runtime_context = self._container_runtime_context(container)
+            should_commit = False
             if status != instance.container_status:
                 instance.container_status = status
+                should_commit = True
+            context_reason = self._format_runtime_context(runtime_context)
+            if runtime_context.get("recent_exit") and context_reason:
+                instance.health_status = "unavailable"
+                instance.health_status_reason = f"Container runtime context: {context_reason}"[:500]
+                instance.last_health_check = datetime.utcnow()
+                should_commit = True
+                logger.warning(
+                    "ASR container %s reported recent exit context: %s",
+                    instance.container_name,
+                    context_reason,
+                )
+            if should_commit:
                 db.commit()
             return {
                 "status": status,
@@ -537,6 +669,7 @@ class WhisperContainerManager:
                 "image": instance.container_image,
                 "volume": instance.volume_name,
                 "base_url": instance.base_url,
+                **runtime_context,
             }
         except ContainerNotFoundError:
             instance.container_status = "not_found"
@@ -560,8 +693,18 @@ class WhisperContainerManager:
         instance = self._get_instance(instance_id, tenant_id, db)
         if not instance.container_name:
             return ""
-        self._assert_container_ownership(instance)
-        return self.runtime.get_container_logs(instance.container_name, tail=tail)
+        container = self._assert_container_ownership(instance)
+        runtime_context = self._container_runtime_context(container)
+        logs = self.runtime.get_container_logs(instance.container_name, tail=tail)
+        context_reason = self._format_runtime_context(runtime_context)
+        if runtime_context.get("recent_exit") and context_reason:
+            logger.warning(
+                "ASR container %s log request includes runtime context: %s",
+                instance.container_name,
+                context_reason,
+            )
+            return f"[container runtime] {context_reason}\n{logs}"
+        return logs
 
     def _build_environment(self, vendor: str, token: str, default_model: str) -> Dict[str, str]:
         if vendor == "openai_whisper":
