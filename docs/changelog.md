@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — UI density consistency pass (2026-05-18)
+
+- Compacted shared KPI/stat cards and matching custom metric clusters across Watcher, Security, Channels, Agent Messages, Agents, Studio Teams, Settings, Hub, and global-admin system pages.
+- Reduced oversized page header title/description treatments across Settings, Hub, Studio, Watcher, Agents, Flows, and related detail shells so operational surfaces feel less dramatic and more console-like.
+- Kept Settings advanced cards visible under a separator instead of hiding them behind a collapsed toggle, and aligned the Flows page title color with the standard white page-title treatment.
+
 ### Fixed — Speaches ASR OOM resilience and resize path (2026-05-18)
 
 - Raised the guided provider wizard and backend Speaches ASR memory default/fallback to **4 GB**, matching the recommended local runtime headroom.

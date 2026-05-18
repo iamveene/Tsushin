@@ -183,19 +183,51 @@
 
   /* Stat card with accent border */
   .stat-card {
-    @apply relative bg-tsushin-surface border border-tsushin-border rounded-xl p-5;
+    @apply relative bg-tsushin-surface border border-tsushin-border rounded-lg p-4;
     @apply transition-all duration-300 overflow-hidden;
   }
 
   .stat-card::before {
     content: '';
-    @apply absolute top-0 left-0 w-1 h-full rounded-l-xl;
+    @apply absolute top-0 left-0 w-0.5 h-full rounded-l-lg;
   }
 
   .stat-card:hover {
     @apply border-tsushin-muted;
-    transform: translateY(-2px);
-    box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.3);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 16px -8px rgba(0, 0, 0, 0.35);
+  }
+
+  .stat-card .text-3xl {
+    font-size: 1.5rem;
+    line-height: 2rem;
+  }
+
+  .stat-card .text-sm.font-medium,
+  .stat-card div.text-sm.font-medium {
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .stat-card .w-12.h-12 {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.65rem;
+  }
+
+  .stat-card svg:not(.h-full):not(.w-full) {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .stat-card svg.w-6.h-6 {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .stat-card p.mt-1,
+  .stat-card div.mt-1 {
+    margin-top: 0.125rem;
   }
 
   .stat-card-indigo::before {
@@ -208,6 +240,10 @@
 
   .stat-card-warning::before {
     @apply bg-tsushin-warning;
+  }
+
+  .stat-card-error::before {
+    @apply bg-tsushin-vermilion;
   }
 
   .stat-card-accent::before {

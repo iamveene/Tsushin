@@ -333,20 +333,20 @@ export default function GlobalUsersPage() {
   const totalPages = Math.ceil(total / pageSize)
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-3xl font-bold text-white">
+            <div className="flex items-center space-x-3 mb-1">
+              <h1 className="text-2xl font-semibold text-white">
                 User Management
               </h1>
               <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-900 dark:text-purple-200 text-sm font-semibold rounded-full">
                 Global Admin
               </span>
             </div>
-            <p className="text-tsushin-slate">
+            <p className="text-sm text-tsushin-slate">
               Manage users across all organizations
             </p>
           </div>

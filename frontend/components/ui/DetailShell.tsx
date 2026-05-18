@@ -67,11 +67,11 @@ export function DetailShellHeader({
         )}
         <div className="flex flex-wrap items-center gap-3">
           {icon}
-          <h1 className="text-3xl font-display font-bold text-white">{title}</h1>
+          <h1 className="text-2xl font-display font-semibold text-white">{title}</h1>
           {badges}
         </div>
         {description && (
-          <p className="mt-2 max-w-3xl text-sm text-tsushin-slate">{description}</p>
+          <p className="mt-1 max-w-3xl text-sm text-tsushin-slate">{description}</p>
         )}
         {meta && (
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-tsushin-slate">

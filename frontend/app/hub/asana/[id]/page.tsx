@@ -205,17 +205,17 @@ export default function AsanaManagePage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-5">
           <button
             onClick={() => router.push('/hub')}
             className="text-tsushin-slate hover:text-white mb-4 flex items-center gap-2"
           >
             ← Back to Hub
           </button>
-          <h1 className="text-3xl font-bold mb-2">{integration.name}</h1>
-          <p className="text-tsushin-slate">
+          <h1 className="text-2xl font-semibold mb-1">{integration.name}</h1>
+          <p className="text-sm text-tsushin-slate">
             Manage your Asana integration and available tools
           </p>
         </div>

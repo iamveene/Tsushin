@@ -523,14 +523,14 @@ export default function SentinelSettingsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+        <div className="mb-5">
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-1">
             Sentinel Security Agent
           </h1>
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
             AI-powered security layer that detects prompt injection, agent takeover, and malicious shell intent
           </p>
         </div>
@@ -1926,22 +1926,22 @@ If you believe this is an error, please contact support."
         {activeTab === 'stats' && stats && (
           <div className="space-y-6">
             {/* Summary Cards */}
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Total Analyses</p>
-                <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">{stats.total_analyses}</p>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total Analyses</p>
+                <p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{stats.total_analyses}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Threats Detected</p>
-                <p className="text-3xl font-bold text-orange-600">{stats.threats_detected}</p>
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Threats Detected</p>
+                <p className="mt-1 text-2xl font-semibold text-orange-600">{stats.threats_detected}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Threats Blocked</p>
-                <p className="text-3xl font-bold text-red-600">{stats.threats_blocked}</p>
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Threats Blocked</p>
+                <p className="mt-1 text-2xl font-semibold text-red-600">{stats.threats_blocked}</p>
               </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Detection Rate</p>
-                <p className="text-3xl font-bold text-teal-600">{stats.detection_rate}%</p>
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Detection Rate</p>
+                <p className="mt-1 text-2xl font-semibold text-teal-600">{stats.detection_rate}%</p>
               </div>
             </div>
 

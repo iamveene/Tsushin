@@ -125,18 +125,18 @@ export default function SystemSSOPage() {
   if (!user) return null
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="flex items-center space-x-3 mb-2">
-          <h1 className="text-3xl font-display font-bold text-white">
+        <div className="flex items-center space-x-3 mb-1">
+          <h1 className="text-2xl font-display font-semibold text-white">
             Global SSO
           </h1>
           <span className="px-3 py-1 bg-purple-500/20 text-purple-300 text-sm font-semibold rounded-full border border-purple-500/30">
             Global Admin
           </span>
         </div>
-        <p className="text-tsushin-slate mb-8">
+        <p className="text-sm text-tsushin-slate mb-5">
           Platform-wide Google OAuth. Applies to global-admin sign-in and cross-tenant Google auth.
         </p>
 

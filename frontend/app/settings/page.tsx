@@ -6,7 +6,7 @@
  * Agent configuration moved to Studio (/agents)
  */
 
-import React, { useState, useEffect } from 'react'
+import React from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 
@@ -24,78 +24,78 @@ const ESSENTIAL_TITLES = ['Organization', 'Team Members', 'System AI', 'Integrat
 // SVG Icon components
 const icons = {
   organization: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
     </svg>
   ),
   team: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
     </svg>
   ),
   roles: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
     </svg>
   ),
   integrations: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
     </svg>
   ),
   security: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
     </svg>
   ),
   billing: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
     </svg>
   ),
   audit: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
     </svg>
   ),
   pricing: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   ),
   ai: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
     </svg>
   ),
   globe: (
-    <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
     </svg>
   ),
   sentinel: (
-    <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
     </svg>
   ),
   filter: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
     </svg>
   ),
   defaultAgents: (
-    <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.036 3.19a1 1 0 00.95.69h3.354c.969 0 1.371 1.24.588 1.81l-2.714 1.971a1 1 0 00-.364 1.118l1.036 3.19c.3.922-.755 1.688-1.54 1.118l-2.713-1.971a1 1 0 00-1.176 0l-2.714 1.971c-.784.57-1.838-.196-1.539-1.118l1.036-3.19a1 1 0 00-.364-1.118L2.12 8.617c-.783-.57-.38-1.81.588-1.81h3.355a1 1 0 00.95-.69l1.036-3.19z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17.75h6M10.5 20.25h3" />
     </svg>
   ),
   apiClients: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
     </svg>
   ),
   audio: (
-    <svg className="w-8 h-8 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18a3 3 0 003-3V7a3 3 0 10-6 0v8a3 3 0 003 3z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11v4a7 7 0 11-14 0v-4" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 19v3m-4 0h8" />
@@ -105,23 +105,6 @@ const icons = {
 
 export default function SettingsHubPage() {
   const { hasPermission, isGlobalAdmin } = useAuth()
-  const [showAdvanced, setShowAdvanced] = useState(false)
-
-  // Persist preference in localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('tsushin_settings_advanced')
-      if (saved === 'true') setShowAdvanced(true)
-    } catch {}
-  }, [])
-
-  const toggleAdvanced = () => {
-    setShowAdvanced(prev => {
-      const next = !prev
-      try { localStorage.setItem('tsushin_settings_advanced', String(next)) } catch {}
-      return next
-    })
-  }
 
   const settingsSections: SettingCard[] = [
     {
@@ -285,35 +268,35 @@ export default function SettingsHubPage() {
   const advancedSections = availableSections.filter((s) => !ESSENTIAL_TITLES.includes(s.title))
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-display font-bold text-white">Organization Settings</h1>
-          <p className="text-tsushin-slate mt-2">
+        <div className="mb-5">
+          <h1 className="text-2xl font-display font-semibold text-white">Organization Settings</h1>
+          <p className="mt-1 text-sm text-tsushin-slate">
             Manage your organization, team, and billing
           </p>
         </div>
 
         {/* Global Admin Sections */}
         {isGlobalAdmin && (
-          <div className="mb-12">
-            <div className="flex items-center space-x-3 mb-6">
-              <h2 className="text-xl font-display font-semibold text-white">
+          <div className="mb-8">
+            <div className="flex items-center space-x-3 mb-4">
+              <h2 className="text-base font-display font-semibold text-white">
                 System
               </h2>
               <span className="badge badge-indigo">
                 Global Admin
               </span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {globalAdminSections.map((section) => (
                 <Link key={section.href} href={section.href}>
-                  <div className="glass-card rounded-xl p-6 hover:border-purple-500/50 transition-all hover:scale-[1.02] cursor-pointer group">
-                    <div className="w-14 h-14 rounded-xl bg-purple-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="glass-card rounded-lg p-4 hover:border-purple-500/50 transition-all hover:scale-[1.01] cursor-pointer group">
+                    <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                       {section.icon}
                     </div>
-                    <h3 className="text-lg font-semibold text-white mb-2">
+                    <h3 className="text-base font-semibold text-white mb-1">
                       {section.title}
                     </h3>
                     <p className="text-sm text-tsushin-slate">
@@ -327,16 +310,16 @@ export default function SettingsHubPage() {
         )}
 
         {/* Essential Settings */}
-        <div className="mb-8">
+        <div className="mb-6">
           <p className="text-xs font-semibold text-tsushin-slate uppercase tracking-wider mb-3">Essential</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {essentialSections.map((section) => (
               <Link key={section.href} href={section.href}>
-                <div className="glass-card rounded-xl p-6 hover:border-teal-500/50 transition-all hover:scale-[1.02] cursor-pointer group">
-                  <div className="w-14 h-14 rounded-xl bg-teal-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <div className="glass-card rounded-lg p-4 hover:border-teal-500/50 transition-all hover:scale-[1.01] cursor-pointer group">
+                  <div className="w-10 h-10 rounded-lg bg-teal-500/10 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                     {section.icon}
                   </div>
-                  <h3 className="text-lg font-semibold text-white mb-2">
+                  <h3 className="text-base font-semibold text-white mb-1">
                     {section.title}
                   </h3>
                   <p className="text-sm text-tsushin-slate">{section.description}</p>
@@ -346,43 +329,33 @@ export default function SettingsHubPage() {
           </div>
         </div>
 
-        {/* Advanced Settings Toggle */}
+        {/* Advanced Settings */}
         {advancedSections.length > 0 && (
-          <div className="mb-8">
-            <button
-              onClick={toggleAdvanced}
-              className="flex items-center gap-2 text-sm text-tsushin-slate hover:text-white transition-colors mb-3"
-            >
-              <svg className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-              <span className="text-xs font-semibold uppercase tracking-wider">
-                {showAdvanced ? 'Hide' : 'Show'} advanced settings ({advancedSections.length} more)
-              </span>
-            </button>
-            {showAdvanced && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
-                {advancedSections.map((section) => (
-                  <Link key={section.href} href={section.href}>
-                    <div className="glass-card rounded-xl p-6 hover:border-teal-500/50 transition-all hover:scale-[1.02] cursor-pointer group">
-                      <div className="w-14 h-14 rounded-xl bg-teal-500/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                        {section.icon}
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">
-                        {section.title}
-                      </h3>
-                      <p className="text-sm text-tsushin-slate">{section.description}</p>
+          <div className="mb-8 border-t border-tsushin-border/60 pt-5">
+            <p className="text-xs font-semibold text-tsushin-slate uppercase tracking-wider mb-3">
+              Advanced
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
+              {advancedSections.map((section) => (
+                <Link key={section.href} href={section.href}>
+                  <div className="glass-card rounded-lg p-4 hover:border-teal-500/50 transition-all hover:scale-[1.01] cursor-pointer group">
+                    <div className="w-10 h-10 rounded-lg bg-teal-500/10 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                      {section.icon}
                     </div>
-                  </Link>
-                ))}
-              </div>
-            )}
+                    <h3 className="text-base font-semibold text-white mb-1">
+                      {section.title}
+                    </h3>
+                    <p className="text-sm text-tsushin-slate">{section.description}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
           </div>
         )}
 
         {/* Quick Links to Related Sections */}
-        <div className="mt-12 glass-card rounded-xl p-6">
-          <h3 className="text-lg font-semibold text-white mb-4">
+        <div className="mt-8 glass-card rounded-lg p-4">
+          <h3 className="text-base font-semibold text-white mb-3">
             Looking for other settings?
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">

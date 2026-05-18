@@ -195,16 +195,16 @@ export default function SecurityPage() {
       {/* Hero Section */}
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-red-900/20 via-orange-900/10 to-transparent"></div>
-        <div className="w-full px-4 sm:px-6 lg:px-8 pt-8 pb-6 relative">
+        <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 pb-4 relative">
           <div className="flex items-center gap-4 mb-2">
-            <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center">
-              <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
+              <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
             </div>
             <div>
-              <h1 className="text-3xl font-display font-bold text-white">Security</h1>
-              <p className="text-tsushin-slate">Configure Sentinel protection for your agents</p>
+              <h1 className="text-2xl font-display font-semibold text-white">Security</h1>
+              <p className="text-sm text-tsushin-slate">Configure Sentinel protection for your agents</p>
             </div>
           </div>
         </div>

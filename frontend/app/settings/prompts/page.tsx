@@ -52,12 +52,12 @@ export default function PromptsSettingsPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
       <div className="w-full">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-display font-bold text-white">Prompts & Patterns</h1>
-          <p className="text-tsushin-slate mt-2">
+        <div className="mb-5">
+          <h1 className="text-2xl font-display font-semibold text-white">Prompts & Patterns</h1>
+          <p className="text-sm text-tsushin-slate mt-1">
             Manage system prompts, tone presets, slash commands, and project patterns
           </p>
         </div>
