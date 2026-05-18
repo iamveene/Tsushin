@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, List
 from db import get_db
 from models_rbac import User
-from auth_dependencies import require_permission
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from services.system_ai_config import (
     get_system_ai_config_dict,
     test_system_ai_connection,
@@ -93,11 +93,12 @@ async def update_config(
     config: SystemAIConfigUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Update system AI configuration to use a specific ProviderInstance + model.
     """
-    result = update_system_ai_config(db, config.provider_instance_id, config.model_name)
+    result = update_system_ai_config(db, config.provider_instance_id, config.model_name, ctx.tenant_id)
     return UpdateResponse(**result)
 
 
@@ -106,6 +107,7 @@ async def test_connection(
     request: TestConnectionRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Test connection to an AI provider instance.
@@ -115,7 +117,7 @@ async def test_connection(
         db,
         provider_instance_id=request.provider_instance_id,
         model=request.model_name,
-        tenant_id=getattr(current_user, 'tenant_id', None),
+        tenant_id=ctx.tenant_id,
     )
     return TestConnectionResponse(**result)
 
@@ -124,12 +126,13 @@ async def test_connection(
 async def test_current_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Test connection using current system AI configuration.
     """
     result = await test_system_ai_connection(
         db,
-        tenant_id=getattr(current_user, 'tenant_id', None),
+        tenant_id=ctx.tenant_id,
     )
     return TestConnectionResponse(**result)

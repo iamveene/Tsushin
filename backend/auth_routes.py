@@ -908,16 +908,24 @@ async def setup_wizard(
                 **SENTINEL_DEFAULT_MODELS,
                 "ollama": ollama_model_name or _selected_model_for_vendor("ollama"),
             }
+            sentinel_provider = first_provider_instance.vendor if first_provider_instance else model_provider
+            sentinel_model = sentinel_models.get(sentinel_provider, "gemini-2.5-flash-lite")
             sentinel_config = SentinelConfig(
                 tenant_id=tenant.id,
                 is_enabled=True,
                 detection_mode="detect_only",
-                llm_provider=model_provider,
-                llm_model=sentinel_models.get(model_provider, "gemini-2.5-flash-lite"),
+                provider_instance_id=first_provider_instance.id if first_provider_instance else None,
+                llm_provider=sentinel_provider,
+                llm_model=sentinel_model,
             )
             db.add(sentinel_config)
             db.commit()
-            logger.info(f"Setup wizard: Seeded Sentinel config with provider={model_provider}")
+            logger.info(
+                "Setup wizard: Seeded Sentinel config with provider=%s, model=%s, instance=%s",
+                sentinel_provider,
+                sentinel_model,
+                first_provider_instance.id if first_provider_instance else None,
+            )
         except Exception as e:
             db.rollback()
             logger.warning(f"Setup wizard: Failed to seed Sentinel config: {e}")

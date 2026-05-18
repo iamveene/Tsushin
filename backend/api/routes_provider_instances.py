@@ -924,6 +924,40 @@ def create_provider_instance(
         request,
     )
 
+    # First-run hardening: if this is the tenant's first active LLM provider
+    # instance, attach any still-unbound System AI / Sentinel rows to it. This
+    # keeps post-setup Hub onboarding aligned with the fresh /setup path while
+    # preserving explicit admin selections once more than one instance exists.
+    try:
+        from services.provider_instance_service import ProviderInstanceService
+
+        binding_stats = ProviderInstanceService.bootstrap_core_ai_bindings(
+            ctx.tenant_id,
+            db,
+            provider_instance_id=instance.id,
+            require_single_active_instance=True,
+        )
+        if (
+            binding_stats.get("system_ai_bound")
+            or binding_stats.get("sentinel_configs_bound")
+            or binding_stats.get("sentinel_profiles_bound")
+        ):
+            logger.info(
+                "Auto-bound first provider instance %s for tenant %s: %s",
+                instance.id,
+                ctx.tenant_id,
+                binding_stats,
+            )
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Failed to auto-bind first provider instance %s for tenant %s: %s",
+            instance.id,
+            ctx.tenant_id,
+            exc,
+            exc_info=True,
+        )
+
     # Auto-run a connection test in the background so the Hub UI dot reflects
     # real connectivity instead of staying gray ('unknown') until the user
     # clicks Test Connection. Skip when no credentials are configured (the

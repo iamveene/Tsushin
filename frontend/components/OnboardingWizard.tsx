@@ -131,7 +131,7 @@ export default function OnboardingWizard() {
         `Voice providers: ${voiceProviderBullets.slice(0, 3).join('; ')}`,
         'Image and embedding providers are configured in the same Hub area when you need them',
         'Use Test Connection before assigning a provider to agents',
-        'Keep the System AI separate if you want lightweight routing and classification'
+        'The first provider is adopted for System AI and Sentinel when those settings are still unbound'
       ],
       actionButton: {
         label: 'Open Hub → AI Providers',
@@ -211,7 +211,7 @@ export default function OnboardingWizard() {
       sectionLabel: 'Monitoring & safety',
       title: 'Watch Activity and Keep Sentinel On',
       targetSelector: 'nav a[href="/"]',
-      content: "Watcher shows what agents, channels, flows, and security checks are doing. Sentinel is Tsushin's built-in safety layer, and starting with it on in block mode is the safest default.",
+      content: "Watcher shows what agents, channels, flows, and security checks are doing. Sentinel is Tsushin's built-in safety layer; fresh installs start in detect-only mode so admins can review findings before switching to blocking.",
       highlightFeatures: [
         'Dashboard: message and run activity across channels',
         'Graph: how agents, contacts, projects, and security events relate',
