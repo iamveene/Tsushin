@@ -309,6 +309,7 @@ backend/tests/*
 !backend/tests/test_asr_cascade_on_delete.py
 !backend/tests/test_openai_asr_provider.py
 !backend/tests/test_openai_whisper_asr_provider.py
+!backend/tests/test_whisper_asr_provider.py
 !backend/tests/test_whatsapp_audio_skill_output_routing.py
 !backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py
@@ -364,6 +365,8 @@ backend/tests/*
 backend/tests/fixtures/*
 !backend/tests/fixtures/asr_test_en.ogg
 !backend/tests/fixtures/asr_test_pt.ogg
+!backend/dev_tests/
+!backend/dev_tests/asr_ptbr_benchmark.py
 !backend/tests/fixtures/gmail_oauth.enc
 backend/test_flows_fix.sh
 ops/check_persona_assignments.py

@@ -131,6 +131,8 @@ export default function StepAudio() {
               asrInstanceId: audio.asrInstanceId,
               vadFilter: audio.vadFilter,
               rememberTranscript: audio.rememberTranscript,
+              transcriptionPrompt: audio.transcriptionPrompt,
+              hotwords: audio.hotwords,
             }}
             onChange={(patch) => {
               const next: Partial<AudioConfig> = {}
@@ -140,6 +142,8 @@ export default function StepAudio() {
               if (patch.asrInstanceId !== undefined) next.asrInstanceId = patch.asrInstanceId
               if (patch.vadFilter !== undefined) next.vadFilter = patch.vadFilter
               if (patch.rememberTranscript !== undefined) next.rememberTranscript = patch.rememberTranscript
+              if (patch.transcriptionPrompt !== undefined) next.transcriptionPrompt = patch.transcriptionPrompt
+              if (patch.hotwords !== undefined) next.hotwords = patch.hotwords
               patchAudio(next)
             }}
             showResponseMode={false}

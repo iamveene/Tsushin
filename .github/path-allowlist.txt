@@ -44,6 +44,7 @@ platform_utils.py
 # --- Source code subtrees (carve out dev/internal directories) ---
 backend/**
 !backend/dev_tests/**
+backend/dev_tests/asr_ptbr_benchmark.py
 !backend/ops/create_test_users.py
 !backend/**/.private/**
 

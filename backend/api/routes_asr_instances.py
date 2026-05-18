@@ -216,6 +216,9 @@ async def update_asr_instance(
             for key in ("mem_limit", "cpu_quota")
             if key in payload and payload[key] is not None
         }
+        default_model_update = payload.pop("default_model", None)
+        if isinstance(default_model_update, str):
+            default_model_update = default_model_update.strip() or None
         instance = WhisperInstanceService.update_instance(
             instance_id,
             ctx.tenant_id,
@@ -228,10 +231,18 @@ async def update_asr_instance(
             getattr(instance, key, None) != value
             for key, value in runtime_limit_updates.items()
         )
-        if limits_changed:
+        model_changed = (
+            default_model_update is not None
+            and instance.default_model != default_model_update
+        )
+        if limits_changed or model_changed:
             if instance.is_active and instance.is_auto_provisioned:
                 from services.whisper_container_manager import WhisperContainerManager
 
+                if model_changed:
+                    instance.default_model = default_model_update
+                    db.commit()
+                    db.refresh(instance)
                 instance = WhisperContainerManager().reprovision(
                     instance_id,
                     ctx.tenant_id,
@@ -239,6 +250,8 @@ async def update_asr_instance(
                     **runtime_limit_updates,
                 )
             else:
+                if model_changed:
+                    runtime_limit_updates["default_model"] = default_model_update
                 instance = WhisperInstanceService.update_instance(
                     instance_id,
                     ctx.tenant_id,

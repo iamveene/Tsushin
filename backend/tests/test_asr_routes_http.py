@@ -285,6 +285,7 @@ async def test_update_mem_limit_reprovisions_auto_container(db, tenant_id, monke
         db_arg.refresh(row)
         return row
 
+    monkeypatch.setattr(WhisperContainerManager, "__init__", lambda self: None)
     monkeypatch.setattr(WhisperContainerManager, "reprovision", fake_reprovision)
 
     ctx = _make_ctx(tenant_id, db)
@@ -303,6 +304,67 @@ async def test_update_mem_limit_reprovisions_auto_container(db, tenant_id, monke
             "instance_id": inst_id,
             "tenant_id": tenant_id,
             "mem_limit": "4g",
+            "cpu_quota": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_default_model_reprovisions_auto_container(db, tenant_id, monkeypatch):
+    from api.routes_asr_instances import ASRInstanceUpdate, update_asr_instance
+    from models import ASRInstance
+    from services.whisper_container_manager import WhisperContainerManager
+
+    inst_id = _create_asr_instance(db, tenant_id, "speaches-model-promotion", vendor="speaches")
+    inst = db.query(ASRInstance).filter(ASRInstance.id == inst_id).first()
+    inst.is_auto_provisioned = True
+    inst.container_name = "tsushin-whisper-model"
+    inst.volume_name = "tsushin-whisper-model-cache"
+    inst.container_port = 6449
+    inst.default_model = "Systran/faster-whisper-small"
+    db.commit()
+
+    calls = []
+
+    def fake_reprovision(self, instance_id, tenant_id_arg, db_arg, *, mem_limit=None, cpu_quota=None):
+        calls.append(
+            {
+                "instance_id": instance_id,
+                "tenant_id": tenant_id_arg,
+                "mem_limit": mem_limit,
+                "cpu_quota": cpu_quota,
+            }
+        )
+        row = db_arg.query(ASRInstance).filter(
+            ASRInstance.id == instance_id,
+            ASRInstance.tenant_id == tenant_id_arg,
+        ).first()
+        assert row.default_model == "Systran/faster-whisper-medium"
+        row.container_status = "running"
+        row.health_status = "healthy"
+        row.health_status_reason = "Auto-provisioned and passed authenticated warm-up"
+        db_arg.commit()
+        db_arg.refresh(row)
+        return row
+
+    monkeypatch.setattr(WhisperContainerManager, "__init__", lambda self: None)
+    monkeypatch.setattr(WhisperContainerManager, "reprovision", fake_reprovision)
+
+    ctx = _make_ctx(tenant_id, db)
+    body = await update_asr_instance(
+        instance_id=inst_id,
+        data=ASRInstanceUpdate(default_model=" Systran/faster-whisper-medium "),
+        ctx=ctx,
+        db=db,
+    )
+
+    assert body["default_model"] == "Systran/faster-whisper-medium"
+    assert body["container_status"] == "running"
+    assert calls == [
+        {
+            "instance_id": inst_id,
+            "tenant_id": tenant_id,
+            "mem_limit": None,
             "cpu_quota": None,
         }
     ]

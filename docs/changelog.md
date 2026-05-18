@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — PT-BR Speaches accuracy hardening (2026-05-18)
+
+- Added optional local-ASR guidance for `audio_transcript`: agent config can now carry `transcription_prompt` and `hotwords`, which flow through `ASRRequest` to Speaches multipart `prompt` / `hotwords` fields while preserving `language=pt`, `vad_filter=false`, and pinned-local fail-closed behavior.
+- Added the same local-ASR guidance fields to the Audio Agents Wizard, Agent Wizard, and Agent Skills Manager so operators can provide PT-BR names, product terms, acronyms, and other vocabulary without changing cloud routing.
+- Tuned auto-provisioned Speaches containers for CPU-only production by defaulting to `WHISPER__COMPUTE_TYPE=int8` and keeping the selected model warm with `WHISPER__TTL=-1` / `STT_MODEL_TTL=-1`.
+- Updating an active auto-provisioned ASR instance's `default_model` now reprovisions the same container target while preserving port/name/volume, enabling safe model promotion after benchmarking.
+- Added `backend/dev_tests/asr_ptbr_benchmark.py` for side-by-side PT-BR benchmarks against current Speaches, candidate local Speaches models, and optional OpenAI cloud reference without committing audio or transcript artifacts.
+
 ### Changed — Sentinel provider-instance binding (2026-05-18)
 
 - Sentinel tenant config and Sentinel profiles now support a nullable `provider_instance_id` link to a tenant-scoped active Provider Instance. The legacy `llm_provider` / `llm_model` fields remain as synced fallback fields for old rows and manual model IDs.
