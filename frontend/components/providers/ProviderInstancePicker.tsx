@@ -234,6 +234,9 @@ export default function ProviderInstancePicker({
                     className="flex-1 px-3 py-2 bg-tsushin-surface border border-tsushin-border rounded-md text-sm text-white focus:outline-none focus:ring-2 focus:ring-teal-500/40"
                     data-testid="provider-instance-select"
                   >
+                    {(value.instance_id == null || !currentInstance) && (
+                      <option value="">Select instance...</option>
+                    )}
                     {currentVendor.instances.map((inst) => {
                       const statusLabel = (() => {
                         if (!inst.health_status || inst.health_status === 'healthy') return ''
