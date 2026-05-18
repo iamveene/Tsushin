@@ -509,6 +509,7 @@ export interface SentinelConfig {
   aggressiveness_level: number
   llm_provider: string
   llm_model: string
+  provider_instance_id: number | null
   llm_max_tokens: number
   llm_temperature: number
   cache_ttl_seconds: number
@@ -545,6 +546,7 @@ export interface SentinelConfigUpdate {
   aggressiveness_level?: number
   llm_provider?: string
   llm_model?: string
+  provider_instance_id?: number | null
   llm_max_tokens?: number
   llm_temperature?: number
   cache_ttl_seconds?: number
@@ -645,6 +647,12 @@ export interface SentinelLLMTestResult {
   response_time_ms: number
 }
 
+export interface SentinelLLMTestRequest {
+  provider?: string
+  model: string
+  provider_instance_id?: number | null
+}
+
 export interface SentinelDetectionType {
   name: string
   description: string
@@ -734,6 +742,7 @@ export interface SentinelProfile {
   enable_slash_command_analysis: boolean
   llm_provider: string
   llm_model: string
+  provider_instance_id: number | null
   llm_max_tokens: number
   llm_temperature: number
   cache_ttl_seconds: number
@@ -782,6 +791,7 @@ export interface SentinelProfileCreate {
   enable_slash_command_analysis?: boolean
   llm_provider?: string
   llm_model?: string
+  provider_instance_id?: number | null
   llm_max_tokens?: number
   llm_temperature?: number
   cache_ttl_seconds?: number
@@ -843,6 +853,7 @@ export interface SentinelEffectiveConfig {
   enable_tool_analysis: boolean
   enable_shell_analysis: boolean
   enable_slash_command_analysis: boolean
+  provider_instance_id: number | null
   llm_provider: string
   llm_model: string
   llm_max_tokens: number
@@ -4463,11 +4474,30 @@ export interface ProviderInstanceUsageAgent {
   is_active: boolean
 }
 
+export interface ProviderInstanceUsageSentinelConfig {
+  id: number
+  name: string
+  llm_provider: string
+  llm_model: string
+}
+
+export interface ProviderInstanceUsageSentinelProfile {
+  id: number
+  name: string
+  slug: string
+  llm_provider: string
+  llm_model: string
+  is_default: boolean
+  is_enabled: boolean
+}
+
 export interface ProviderInstanceUsage {
   instance_id: number
   vendor: string
   instance_name: string
   agents: ProviderInstanceUsageAgent[]
+  sentinel_configs: ProviderInstanceUsageSentinelConfig[]
+  sentinel_profiles: ProviderInstanceUsageSentinelProfile[]
   dependent_count: number
 }
 
@@ -10074,10 +10104,17 @@ export const api = {
     return res.json()
   },
 
-  async testSentinelLLMConnection(provider: string, model: string): Promise<SentinelLLMTestResult> {
+  async testSentinelLLMConnection(
+    requestOrProvider: SentinelLLMTestRequest | string,
+    model?: string,
+  ): Promise<SentinelLLMTestResult> {
+    const request: SentinelLLMTestRequest =
+      typeof requestOrProvider === 'string'
+        ? { provider: requestOrProvider, model: model || '' }
+        : requestOrProvider
     const res = await authenticatedFetch(`${API_URL}/api/sentinel/llm/test`, {
       method: 'POST',
-      body: JSON.stringify({ provider, model }),
+      body: JSON.stringify(request),
     })
     if (!res.ok) await handleApiError(res, 'Failed to test LLM connection')
     return res.json()

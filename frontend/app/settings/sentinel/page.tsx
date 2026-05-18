@@ -25,9 +25,8 @@ function displayProfileName(name: string | null | undefined): string {
   return name.replace(/^tenant_[\w-]+\s+/i, '').trim() || name
 }
 import { useRequireAuth } from '@/contexts/AuthContext'
-import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelLLMProvider, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem, SentinelProfileAssignment, SentinelEffectiveConfig } from '@/lib/client'
-import { getPreferredProviderModel, getProviderModelOptions } from '@/lib/provider-models'
-import ProviderModelInput from '@/components/providers/ProviderModelInput'
+import { api, SentinelConfig, SentinelConfigUpdate, SentinelPrompt, SentinelStats, SentinelException, SentinelExceptionCreate, SentinelExceptionUpdate, Contact, SentinelProfile, SentinelProfileDetail, SentinelProfileCreate, SentinelProfileUpdate, SentinelProfileCloneRequest, DetectionConfigItem, SentinelProfileAssignment, SentinelEffectiveConfig } from '@/lib/client'
+import ProviderInstancePicker, { ProviderPickerValue } from '@/components/providers/ProviderInstancePicker'
 import Link from 'next/link'
 import EffectiveSecurityConfig from '@/components/EffectiveSecurityConfig'
 import SentinelHierarchyView from '@/components/sentinel/SentinelHierarchyView'
@@ -68,7 +67,6 @@ export default function SentinelSettingsPage() {
   // Config state
   const [config, setConfig] = useState<SentinelConfig | null>(null)
   const [prompts, setPrompts] = useState<SentinelPrompt[]>([])
-  const [providers, setProviders] = useState<SentinelLLMProvider[]>([])
   const [stats, setStats] = useState<SentinelStats | null>(null)
   const [exceptions, setExceptions] = useState<SentinelException[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
@@ -113,7 +111,7 @@ export default function SentinelSettingsPage() {
     is_enabled: true, detection_mode: 'block', aggressiveness_level: 1,
     enable_prompt_analysis: true, enable_tool_analysis: true,
     enable_shell_analysis: true, enable_slash_command_analysis: true,
-    llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite',
+    llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite', provider_instance_id: null,
     llm_max_tokens: 256, llm_temperature: 0.1,
     cache_ttl_seconds: 300, max_input_chars: 5000, timeout_seconds: 5.0,
     block_on_detection: true, log_all_analyses: false,
@@ -145,18 +143,13 @@ export default function SentinelSettingsPage() {
     setLoading(true)
     setError(null)
     try {
-      const [configData, providersData, statsData, contactsData] = await Promise.all([
+      const [configData, statsData, contactsData] = await Promise.all([
         api.getSentinelConfig(),
-        api.getSentinelLLMProviders(),
         api.getSentinelStats(7),
         api.getContacts(),
       ])
 
       setConfig(configData)
-      setProviders(providersData.map(provider => ({
-        ...provider,
-        models: getProviderModelOptions(provider.name, provider.models),
-      })))
       setStats(statsData)
       setContacts(contactsData)
 
@@ -179,6 +172,7 @@ export default function SentinelSettingsPage() {
         aggressiveness_level: configData.aggressiveness_level,
         llm_provider: configData.llm_provider,
         llm_model: configData.llm_model,
+        provider_instance_id: configData.provider_instance_id ?? null,
         llm_max_tokens: configData.llm_max_tokens,
         llm_temperature: configData.llm_temperature,
         cache_ttl_seconds: configData.cache_ttl_seconds,
@@ -273,7 +267,7 @@ export default function SentinelSettingsPage() {
         is_enabled: true, detection_mode: 'block', aggressiveness_level: 1,
         enable_prompt_analysis: true, enable_tool_analysis: true,
         enable_shell_analysis: true, enable_slash_command_analysis: true,
-        llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite',
+        llm_provider: 'gemini', llm_model: 'gemini-2.5-flash-lite', provider_instance_id: null,
         llm_max_tokens: 256, llm_temperature: 0.1,
         cache_ttl_seconds: 300, max_input_chars: 5000, timeout_seconds: 5.0,
         block_on_detection: true, log_all_analyses: false,
@@ -297,6 +291,7 @@ export default function SentinelSettingsPage() {
           enable_shell_analysis: detail.enable_shell_analysis,
           enable_slash_command_analysis: detail.enable_slash_command_analysis,
           llm_provider: detail.llm_provider, llm_model: detail.llm_model,
+          provider_instance_id: detail.provider_instance_id ?? null,
           llm_max_tokens: detail.llm_max_tokens, llm_temperature: detail.llm_temperature,
           cache_ttl_seconds: detail.cache_ttl_seconds, max_input_chars: detail.max_input_chars,
           timeout_seconds: detail.timeout_seconds,
@@ -391,10 +386,11 @@ export default function SentinelSettingsPage() {
 
   const slugify = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
-  const getSentinelModelOptions = (providerName?: string | null, currentModel?: string | null) => {
-    const provider = providers.find(p => p.name === providerName)
-    return getProviderModelOptions(providerName, provider?.models || [], { currentModel })
-  }
+  const currentGlobalLlmValue = (): ProviderPickerValue => ({
+    vendor: formState.llm_provider || config?.llm_provider || 'gemini',
+    instance_id: formState.provider_instance_id ?? config?.provider_instance_id ?? null,
+    model_name: formState.llm_model || config?.llm_model || 'gemini-2.5-flash-lite',
+  })
 
   // Close profile modals on Escape key
   useEffect(() => {
@@ -452,8 +448,11 @@ export default function SentinelSettingsPage() {
     setLLMTestResult(null)
     try {
       const result = await api.testSentinelLLMConnection(
-        formState.llm_provider || config?.llm_provider || 'gemini',
-        formState.llm_model || config?.llm_model || 'gemini-2.0-flash-lite'
+        {
+          provider: formState.llm_provider || config?.llm_provider || 'gemini',
+          model: formState.llm_model || config?.llm_model || 'gemini-2.5-flash-lite',
+          provider_instance_id: formState.provider_instance_id ?? config?.provider_instance_id ?? null,
+        }
       )
       setLLMTestResult(result.success ? `Success (${result.response_time_ms}ms): ${result.message}` : `Failed: ${result.message}`)
     } catch (err: any) {
@@ -1783,46 +1782,30 @@ If you believe this is an error, please contact support."
                 </p>
               </div>
               <div className="p-6 space-y-6">
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Provider
-                    </label>
-                    <select
-                      value={formState.llm_provider || config?.llm_provider || 'gemini'}
-                      onChange={(e) => {
-                        const nextProvider = e.target.value
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Provider Instance and Model
+                  </label>
+                  <div className={!canEdit ? 'pointer-events-none opacity-60' : ''}>
+                    <ProviderInstancePicker
+                      value={currentGlobalLlmValue()}
+                      onChange={(next) => {
+                        if (!canEdit) return
                         setFormState({
                           ...formState,
-                          llm_provider: nextProvider,
-                          llm_model: getPreferredProviderModel(nextProvider, [], null, { sentinel: true }),
+                          llm_provider: next.vendor,
+                          provider_instance_id: next.instance_id,
+                          llm_model: next.model_name,
                         })
                       }}
-                      disabled={!canEdit}
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                    >
-                      {providers.map((p) => (
-                        <option key={p.name} value={p.name}>{p.display_name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Model
-                    </label>
-                    <ProviderModelInput
-                      vendor={formState.llm_provider || config?.llm_provider}
-                      models={getSentinelModelOptions(
-                        formState.llm_provider || config?.llm_provider,
-                        formState.llm_model || config?.llm_model
-                      )}
-                      value={formState.llm_model || config?.llm_model || ''}
-                      onChange={(llm_model) => setFormState({ ...formState, llm_model })}
-                      disabled={!canEdit}
-                      placeholder="Select or type a model ID"
-                      className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                      layout="compact"
+                      allowCreate={canEdit}
+                      className="grid grid-cols-1 md:grid-cols-3 gap-3"
                     />
                   </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Sentinel uses the selected provider instance credentials and base URL; model IDs can still be typed manually.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-3 gap-6">
@@ -2525,37 +2508,34 @@ If you believe this is an error, please contact support."
                 {/* LLM Section */}
                 {profileEditorSection === 'llm' && (
                   <>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Provider</label>
-                        <input
-                          type="text"
-                          value={profileForm.llm_provider || 'gemini'}
-                          onChange={(e) => {
-                            const nextProvider = e.target.value
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Provider Instance and Model
+                      </label>
+                      <div className={editingProfile?.is_system ? 'pointer-events-none opacity-60' : ''}>
+                        <ProviderInstancePicker
+                          value={{
+                            vendor: profileForm.llm_provider || 'gemini',
+                            instance_id: profileForm.provider_instance_id ?? null,
+                            model_name: profileForm.llm_model || 'gemini-2.5-flash-lite',
+                          }}
+                          onChange={(next) => {
+                            if (editingProfile?.is_system) return
                             setProfileForm({
                               ...profileForm,
-                              llm_provider: nextProvider,
-                              llm_model: getPreferredProviderModel(nextProvider, [], null, { sentinel: true }),
+                              llm_provider: next.vendor,
+                              provider_instance_id: next.instance_id,
+                              llm_model: next.model_name,
                             })
                           }}
-                          disabled={editingProfile?.is_system}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                          layout="compact"
+                          allowCreate={!editingProfile?.is_system}
+                          className="grid grid-cols-1 md:grid-cols-3 gap-3"
                         />
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
-                        <ProviderModelInput
-                          vendor={profileForm.llm_provider}
-                          models={getSentinelModelOptions(profileForm.llm_provider, profileForm.llm_model)}
-                          value={profileForm.llm_model || 'gemini-2.5-flash-lite'}
-                          onChange={(llm_model) => setProfileForm({ ...profileForm, llm_model })}
-                          listId="sentinel-profile-llm-models"
-                          placeholder="Select or type a model ID"
-                          disabled={editingProfile?.is_system}
-                          className="w-full px-3 py-2 border dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
-                        />
-                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        Custom profiles can bind Sentinel analysis to a specific provider instance while keeping manual model IDs available.
+                      </p>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>

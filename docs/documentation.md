@@ -1897,6 +1897,12 @@ Effective per-skill profile resolution: `backend/services/sentinel_effective_con
 
 Per-agent security UI: `frontend/app/agents/security/page.tsx` mounts per-agent overrides.
 
+### 12.7 Sentinel LLM Provider Binding
+
+Sentinel tenant config and Sentinel profiles may bind to a tenant-scoped `ProviderInstance` through nullable `provider_instance_id` fields. When the link is present, create/update paths validate that the instance belongs to the same tenant and is active, then sync `llm_provider` from the instance vendor while keeping `llm_model` as the chosen/manual model fallback. `SentinelEffectiveConfig` carries the linked instance through profile resolution, and `SentinelService._call_llm()` passes it to `AIClient` so Sentinel analysis resolves credentials/base URL from the selected instance.
+
+Legacy `llm_provider` / `llm_model` columns remain populated for old rows, explicit unassign flows, and fallback behavior when no provider instance is linked. Provider Instance deletion/reassignment also updates `SentinelConfig` and `SentinelProfile` dependents alongside agents, so Hub cleanup cannot leave Sentinel pointing at an inactive instance.
+
 ---
 
 ## 13. Flows
@@ -3835,8 +3841,8 @@ See §19.4.
 The System AI config now points to an existing **Provider Instance** (managed in the Hub) instead of maintaining its own duplicated provider/model lists. The `Config` table stores `system_ai_provider_instance_id` (FK to `provider_instance`) alongside the model name.
 
 UI flow:
-- "Select Provider Instance" — card grid of active Provider Instances showing vendor icon, instance name, health dot, model count, and default badge. Managed via the Hub link.
-- "Select Model" — list of models from the selected instance's `available_models`. If the instance has no discovered models, a manual text input is shown.
+- "Provider Instance and Model" — compact shared Provider Instance picker with vendor, instance, and select-or-type model controls. The Hub link opens the source of truth for instance management.
+- "Model" — discovered instance models plus curated fallbacks are available, and manual IDs can still be typed and saved.
 - "Test Connection" — sends a test message via the selected instance + model.
 - Saves `{provider_instance_id, model_name}` to system config.
 
@@ -3883,6 +3889,8 @@ Large 2877-line page with 8 tabs (`sentinel/page.tsx:541-548`):
 | stats | Statistics |
 | exceptions | Exceptions |
 | hierarchy | Hierarchy |
+
+The LLM tab uses the shared compact Provider Instance picker. Saving the tenant config stores `provider_instance_id` plus the selected/manual model, while profiles can also bind their own provider instance in the profile editor. The backend validates same-tenant active instances and keeps `llm_provider` / `llm_model` synced as fallback fields.
 
 **Enforcement Modes** (`sentinel/page.tsx:787-790`):
 

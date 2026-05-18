@@ -415,13 +415,21 @@ class ProviderInstanceService:
 
     @staticmethod
     def delete_instance(instance_id: int, tenant_id: str, db: Session) -> bool:
-        """Soft delete: set is_active=False. Clear provider_instance_id on affected agents."""
+        """Soft delete: set is_active=False and clear direct dependents."""
         instance = ProviderInstanceService.get_instance(instance_id, tenant_id, db)
         if not instance:
             return False
 
-        from models import Agent
+        from models import Agent, SentinelConfig, SentinelProfile
         db.query(Agent).filter(Agent.provider_instance_id == instance_id).update({"provider_instance_id": None})
+        db.query(SentinelConfig).filter(
+            SentinelConfig.tenant_id == tenant_id,
+            SentinelConfig.provider_instance_id == instance_id,
+        ).update({"provider_instance_id": None})
+        db.query(SentinelProfile).filter(
+            SentinelProfile.tenant_id == tenant_id,
+            SentinelProfile.provider_instance_id == instance_id,
+        ).update({"provider_instance_id": None})
         instance.is_active = False
         db.commit()
         return True
@@ -517,11 +525,17 @@ class ProviderInstanceService:
         choose where to reassign dependents before the instance disappears.
         Tenant-scoped — never leaks cross-tenant data.
         """
-        from models import Agent, Contact
+        from models import Agent, Contact, SentinelConfig, SentinelProfile
 
         instance = ProviderInstanceService.get_instance(instance_id, tenant_id, db)
         if not instance:
-            return {"instance_id": instance_id, "agents": [], "dependent_count": 0}
+            return {
+                "instance_id": instance_id,
+                "agents": [],
+                "sentinel_configs": [],
+                "sentinel_profiles": [],
+                "dependent_count": 0,
+            }
 
         rows = (
             db.query(Agent, Contact.friendly_name)
@@ -543,12 +557,41 @@ class ProviderInstanceService:
             }
             for agent, friendly_name in rows
         ]
+        sentinel_configs = [
+            {
+                "id": config.id,
+                "name": "Sentinel tenant configuration",
+                "llm_provider": config.llm_provider,
+                "llm_model": config.llm_model,
+            }
+            for config in db.query(SentinelConfig).filter(
+                SentinelConfig.tenant_id == tenant_id,
+                SentinelConfig.provider_instance_id == instance_id,
+            ).all()
+        ]
+        sentinel_profiles = [
+            {
+                "id": profile.id,
+                "name": profile.name,
+                "slug": profile.slug,
+                "llm_provider": profile.llm_provider,
+                "llm_model": profile.llm_model,
+                "is_default": bool(profile.is_default),
+                "is_enabled": bool(profile.is_enabled),
+            }
+            for profile in db.query(SentinelProfile).filter(
+                SentinelProfile.tenant_id == tenant_id,
+                SentinelProfile.provider_instance_id == instance_id,
+            ).order_by(SentinelProfile.name).all()
+        ]
         return {
             "instance_id": instance_id,
             "vendor": instance.vendor,
             "instance_name": instance.instance_name,
             "agents": agents,
-            "dependent_count": len(agents),
+            "sentinel_configs": sentinel_configs,
+            "sentinel_profiles": sentinel_profiles,
+            "dependent_count": len(agents) + len(sentinel_configs) + len(sentinel_profiles),
         }
 
     @staticmethod
@@ -560,7 +603,7 @@ class ProviderInstanceService:
         reassign_to_instance_id: Optional[int] = None,
         unassign: bool = False,
     ) -> dict:
-        """Delete an instance after reassigning all dependent agents.
+        """Delete an instance after reassigning all direct dependents.
 
         Behavior:
         - If there are no dependents, soft-deletes (same as ``delete_instance``).
@@ -575,7 +618,7 @@ class ProviderInstanceService:
 
         Returns ``{instance_name, deleted, reassigned_count, reassigned_to}``.
         """
-        from models import Agent
+        from models import Agent, SentinelConfig, SentinelProfile
 
         instance = ProviderInstanceService.get_instance(instance_id, tenant_id, db)
         if not instance:
@@ -585,10 +628,22 @@ class ProviderInstanceService:
             Agent.tenant_id == tenant_id,
             Agent.provider_instance_id == instance_id,
         )
-        dependents = dependents_q.all()
+        sentinel_configs_q = db.query(SentinelConfig).filter(
+            SentinelConfig.tenant_id == tenant_id,
+            SentinelConfig.provider_instance_id == instance_id,
+        )
+        sentinel_profiles_q = db.query(SentinelProfile).filter(
+            SentinelProfile.tenant_id == tenant_id,
+            SentinelProfile.provider_instance_id == instance_id,
+        )
+        dependent_count = (
+            dependents_q.count()
+            + sentinel_configs_q.count()
+            + sentinel_profiles_q.count()
+        )
 
         reassigned_to_instance: Optional[ProviderInstance] = None
-        if dependents:
+        if dependent_count:
             if reassign_to_instance_id is not None:
                 if reassign_to_instance_id == instance_id:
                     raise ValueError("reassign_target_is_self")
@@ -603,7 +658,7 @@ class ProviderInstanceService:
 
         # Apply reassignment.
         reassigned_count = 0
-        if dependents:
+        if dependent_count:
             if reassigned_to_instance is not None:
                 update_payload: dict = {
                     "provider_instance_id": reassigned_to_instance.id,
@@ -616,12 +671,34 @@ class ProviderInstanceService:
                 if target_models:
                     update_payload["model_name"] = target_models[0]
                 reassigned_count = dependents_q.update(update_payload, synchronize_session=False)
+                sentinel_payload: dict = {
+                    "provider_instance_id": reassigned_to_instance.id,
+                    "llm_provider": reassigned_to_instance.vendor,
+                }
+                if target_models:
+                    sentinel_payload["llm_model"] = target_models[0]
+                reassigned_count += sentinel_configs_q.update(
+                    sentinel_payload,
+                    synchronize_session=False,
+                )
+                reassigned_count += sentinel_profiles_q.update(
+                    sentinel_payload,
+                    synchronize_session=False,
+                )
             else:
-                # Unassign — agent keeps current model_provider / model_name
-                # and falls back to the tenant default instance for that vendor
+                # Unassign — dependents keep current provider/model fallback
+                # fields and fall back to the tenant default instance for that vendor
                 # (or to the legacy global path if none exists).
                 reassigned_count = dependents_q.update(
                     {"provider_instance_id": None}, synchronize_session=False
+                )
+                reassigned_count += sentinel_configs_q.update(
+                    {"provider_instance_id": None},
+                    synchronize_session=False,
+                )
+                reassigned_count += sentinel_profiles_q.update(
+                    {"provider_instance_id": None},
+                    synchronize_session=False,
                 )
 
         instance.is_active = False
@@ -642,7 +719,7 @@ class ProviderInstanceService:
                 if reassigned_to_instance is not None
                 else None
             ),
-            "unassigned": bool(dependents) and reassigned_to_instance is None,
+            "unassigned": bool(dependent_count) and reassigned_to_instance is None,
         }
 
     @staticmethod

@@ -79,6 +79,7 @@ class SentinelProfileResponse(BaseModel):
     enable_slash_command_analysis: bool
 
     # LLM configuration
+    provider_instance_id: Optional[int] = None
     llm_provider: str
     llm_model: str
     llm_max_tokens: int
@@ -153,6 +154,7 @@ class SentinelProfileCreate(BaseModel):
     enable_slash_command_analysis: bool = True
 
     # LLM configuration
+    provider_instance_id: Optional[int] = None
     llm_provider: str = Field(default="gemini", max_length=20)
     llm_model: str = Field(default="gemini-2.5-flash-lite", max_length=100)
     llm_max_tokens: int = Field(default=256, ge=64, le=1024)
@@ -208,6 +210,7 @@ class SentinelProfileUpdate(BaseModel):
     enable_slash_command_analysis: Optional[bool] = None
 
     # LLM configuration
+    provider_instance_id: Optional[int] = None
     llm_provider: Optional[str] = Field(None, max_length=20)
     llm_model: Optional[str] = Field(None, max_length=100)
     llm_max_tokens: Optional[int] = Field(None, ge=64, le=1024)
@@ -312,6 +315,7 @@ class SentinelEffectiveConfigResponse(BaseModel):
     enable_slash_command_analysis: bool
 
     # LLM
+    provider_instance_id: Optional[int] = None
     llm_provider: str
     llm_model: str
     llm_max_tokens: int
@@ -556,6 +560,7 @@ async def get_effective_config(
         enable_tool_analysis=effective.enable_tool_analysis,
         enable_shell_analysis=effective.enable_shell_analysis,
         enable_slash_command_analysis=effective.enable_slash_command_analysis,
+        provider_instance_id=effective.provider_instance_id,
         llm_provider=effective.llm_provider,
         llm_model=effective.llm_model,
         llm_max_tokens=effective.llm_max_tokens,
@@ -660,6 +665,7 @@ async def get_profile(
         enable_tool_analysis=profile.enable_tool_analysis,
         enable_shell_analysis=profile.enable_shell_analysis,
         enable_slash_command_analysis=profile.enable_slash_command_analysis,
+        provider_instance_id=getattr(profile, "provider_instance_id", None),
         llm_provider=profile.llm_provider,
         llm_model=profile.llm_model,
         llm_max_tokens=profile.llm_max_tokens,

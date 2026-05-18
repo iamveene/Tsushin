@@ -2697,6 +2697,7 @@ class SentinelConfig(Base):
     aggressiveness_level = Column(Integer, default=1, nullable=False)
 
     # LLM configuration for analysis
+    provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
     llm_provider = Column(String(20), default="gemini", nullable=False)
     llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
     llm_max_tokens = Column(Integer, default=256, nullable=False)
@@ -2746,6 +2747,7 @@ class SentinelConfig(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
+    provider_instance = relationship("ProviderInstance", foreign_keys=[provider_instance_id])
     creator = relationship("User", foreign_keys=[created_by], backref="created_sentinel_configs")
     updater = relationship("User", foreign_keys=[updated_by], backref="updated_sentinel_configs")
 
@@ -3011,6 +3013,7 @@ class SentinelProfile(Base):
     enable_slash_command_analysis = Column(Boolean, default=True, nullable=False)
 
     # LLM configuration
+    provider_instance_id = Column(Integer, ForeignKey("provider_instance.id", ondelete="SET NULL"), nullable=True)
     llm_provider = Column(String(20), default="gemini", nullable=False)
     llm_model = Column(String(100), default="gemini-2.5-flash-lite", nullable=False)
     llm_max_tokens = Column(Integer, default=256, nullable=False)
@@ -3044,6 +3047,7 @@ class SentinelProfile(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
+    provider_instance = relationship("ProviderInstance", foreign_keys=[provider_instance_id])
     creator = relationship("User", foreign_keys=[created_by], backref="created_sentinel_profiles")
     updater = relationship("User", foreign_keys=[updated_by], backref="updated_sentinel_profiles")
 

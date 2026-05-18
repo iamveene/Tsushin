@@ -283,6 +283,7 @@ backend/tests/*
 !backend/tests/test_team_triggers.py
 !backend/tests/test_teams_api.py
 !backend/tests/test_agent_teams_models.py
+!backend/tests/test_sentinel_provider_instance_binding.py
 !backend/tests/test_team_orchestrator_line.py
 !backend/tests/test_team_orchestrator_mesh.py
 !backend/tests/test_team_memory_scoping.py
