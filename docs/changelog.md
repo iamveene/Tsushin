@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Search slash command registry (2026-05-19)
+
+- Restored the `_system` `/search <query>` slash-command registry row through Alembic migration `0096_restore_search_slash_command`, matching the retained handler and documented deterministic web-search entry point.
+- Added regression coverage that `/search` dispatches through the explicit slash-command tool path alongside `/browser` and `/flights`.
+
 ### Changed — Retired legacy and hybrid skill execution (2026-05-19)
 
 - Removed raw-text skill dispatch from the active runtime: tool skills now run through LLM tool calls or explicit slash commands, passive skills remain response hooks, and special skills remain media-triggered.
 - Removed legacy/hybrid execution-mode and keyword-trigger configuration from built-in skill schemas, custom skill validation, Agent Skills UI, Custom Skills UI, Shell setup, and Flow skill-step editing.
 - Added deterministic slash-command entry points for `/image`, `/browser`, and `/flights`, preserving existing `/invoke`, `/shell`, `/search`, `/email`, `/flows`, and `/scheduler` behavior.
 - Flow Skill steps now require explicit `tool_arguments`; prompt-only skill execution fails closed with guidance to use a Slash Command step for command strings.
-- Added Alembic migration `0094_retire_legacy_hybrid_skill_execution` to normalize persisted `agent_skill` and `custom_skill` rows away from retired modes/keyword configs and seed the new skill slash commands.
+- Added Alembic migration `0095_retire_legacy_hybrid_skill_execution` to normalize persisted `agent_skill` and `custom_skill` rows away from retired modes/keyword configs and seed the new skill slash commands.
 - Added regression tests proving raw natural-language `can_handle()` paths no longer trigger tool skills, custom keyword trigger configs are rejected/ignored, `/image`/`/browser`/`/flights` route programmatically, and Flow Skill steps require structured arguments.
 
 ### Fixed — Provider credential alias wiring (2026-05-18)

@@ -1208,6 +1208,18 @@ def seed_slash_commands(session):
             "handler_type": "built-in",
             "sort_order": 47
         },
+        {
+            "tenant_id": "_system",
+            "category": "tool",
+            "command_name": "search",
+            "language_code": "en",
+            "pattern": r"^/search\s+(.+)$",
+            "aliases": json.dumps(["s"]),
+            "description": "Search the web from an explicit query",
+            "help_text": "Usage: /search <query>\nExample: /search latest AI news",
+            "handler_type": "built-in",
+            "sort_order": 47
+        },
         # Tool output injection commands
         {
             "tenant_id": "_system",
