@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Google Flights SerpAPI configuration wiring (2026-05-18)
+
+- Fixed Google Flights provider configuration so the unified SerpAPI key created by the Tool APIs wizard also satisfies the `google_flights` flight-search provider, including tenant-scoped provider listing and runtime lookup.
+- Fixed the agent flight-provider link endpoint to update the agent's `flight_search` skill row instead of an obsolete agent config field, so assigning Google Flights to an agent persists and is used by Flow skill steps.
+
 ### Changed — PT-BR Speaches accuracy hardening (2026-05-18)
 
 - Added optional local-ASR guidance for `audio_transcript`: agent config can now carry `transcription_prompt` and `hotwords`, which flow through `ASRRequest` to Speaches multipart `prompt` / `hotwords` fields while preserving `language=pt`, `vad_filter=false`, and pinned-local fail-closed behavior.

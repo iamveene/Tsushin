@@ -101,10 +101,10 @@ def _travel_tenant_has_configured(provider_id: str, tenant_id: Optional[str], db
     if q.first() is not None:
         return True
 
-    # google_flights can also be driven by a plain ApiKey(service='google_flights')
+    # google_flights can also be driven by the unified SerpAPI key the wizard saves.
     if provider_id == "google_flights":
         kq = db.query(ApiKey).filter(
-            ApiKey.service == "google_flights",
+            ApiKey.service.in_(("google_flights", "serpapi")),
             ApiKey.is_active == True,
         )
         if tenant_id is not None:

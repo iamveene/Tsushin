@@ -17,7 +17,7 @@ import logging
 import os
 
 from db import get_db
-from models import Agent, HubIntegration, AmadeusIntegration
+from models import Agent, AgentSkill, AmadeusIntegration
 from models_rbac import User
 from auth_dependencies import require_permission, get_tenant_context, TenantContext
 from hub.providers import FlightProviderRegistry
@@ -97,7 +97,8 @@ class AmadeusConfigCreate(BaseModel):
 @router.get("", response_model=List[ProviderInfo])
 def list_flight_providers(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("hub.read"))
+    current_user: User = Depends(require_permission("hub.read")),
+    ctx: TenantContext = Depends(get_tenant_context)
 ):
     """
     List all available flight search providers.
@@ -107,7 +108,7 @@ def list_flight_providers(
     Requires: hub.read permission
     """
     try:
-        providers = FlightProviderRegistry.list_available_providers(db)
+        providers = FlightProviderRegistry.list_available_providers(db, tenant_id=ctx.tenant_id)
 
         return [
             ProviderInfo(
@@ -138,15 +139,17 @@ def get_agent_flight_provider(
     """
     Get current flight provider configuration for an agent.
 
-    Returns the selected provider and settings from agent.config JSON.
+    Returns the selected provider and settings from the AgentSkill row.
 
     Requires: agents.read permission
     """
     agent = verify_agent_access(agent_id, ctx, db)
 
-    config = agent.config or {}
-    skills = config.get("skills", {})
-    flight_search = skills.get("flight_search", {})
+    skill = db.query(AgentSkill).filter(
+        AgentSkill.agent_id == agent.id,
+        AgentSkill.skill_type == "flight_search",
+    ).first()
+    flight_search = skill.config if skill and skill.config else {}
 
     return AgentFlightProviderResponse(
         provider=flight_search.get("provider"),
@@ -178,35 +181,48 @@ def update_agent_flight_provider(
             detail=f"Provider '{update.provider}' is not registered"
         )
 
-    # Check if provider is configured
-    integration = db.query(HubIntegration).filter(
-        HubIntegration.type == update.provider,
-        HubIntegration.is_active == True
-    ).first()
-
-    if not integration:
+    # Check if the provider is configured for this tenant. Registry lookup also
+    # performs the Google Flights SerpAPI -> HubIntegration sync when needed.
+    provider = FlightProviderRegistry.get_provider(update.provider, db, tenant_id=ctx.tenant_id)
+    if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Provider '{update.provider}' is not configured. Please configure it first."
         )
 
-    # Update agent config
-    config = agent.config or {}
-    if "skills" not in config:
-        config["skills"] = {}
+    default_settings = {
+        "default_currency": "BRL",
+        "max_results": 5,
+        "prefer_direct_flights": False,
+    }
+    settings = {**default_settings, **(update.settings or {})}
 
-    config["skills"]["flight_search"] = {
-        "enabled": True,
+    skill = db.query(AgentSkill).filter(
+        AgentSkill.agent_id == agent.id,
+        AgentSkill.skill_type == "flight_search",
+    ).first()
+    existing_config = skill.config if skill and skill.config else {}
+    skill_config = {
+        **existing_config,
         "provider": update.provider,
-        "settings": update.settings or {
-            "default_currency": "BRL",
-            "max_results": 5,
-            "prefer_direct_flights": False
-        }
+        "settings": settings,
+        "execution_mode": existing_config.get("execution_mode", "tool"),
+        "use_ai_fallback": existing_config.get("use_ai_fallback", True),
     }
 
-    agent.config = config
+    if skill:
+        skill.is_enabled = True
+        skill.config = skill_config
+    else:
+        skill = AgentSkill(
+            agent_id=agent.id,
+            skill_type="flight_search",
+            is_enabled=True,
+            config=skill_config,
+        )
+        db.add(skill)
     db.commit()
+    db.refresh(skill)
 
     logger.info(f"Agent {agent_id} flight provider updated to '{update.provider}' by user {current_user.id}")
 
@@ -214,7 +230,8 @@ def update_agent_flight_provider(
         "success": True,
         "message": f"Flight provider updated to '{update.provider}'",
         "provider": update.provider,
-        "settings": config["skills"]["flight_search"]["settings"]
+        "settings": settings,
+        "skill_id": skill.id,
     }
 
 

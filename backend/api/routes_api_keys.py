@@ -102,6 +102,8 @@ SUPPORTED_SERVICES = {
     'tavily': 'Tavily (Web Search)',
 }
 
+GOOGLE_FLIGHTS_API_KEY_SERVICES = {"google_flights", "serpapi"}
+
 
 # BUG-666: minimum shape checks per service so the Tool-API card cannot be
 # "activated" with a 1-character placeholder. These are intentionally loose —
@@ -234,7 +236,7 @@ def sync_to_hub_integration(db: Session, api_key: ApiKey, plaintext_key: str):
         api_key: The ApiKey record
         plaintext_key: The plaintext API key (needed for re-encryption for HubIntegration)
     """
-    if api_key.service == 'google_flights':
+    if api_key.service in GOOGLE_FLIGHTS_API_KEY_SERVICES:
         # Check if integration exists
         integration = db.query(HubIntegration).filter(
             HubIntegration.type == 'google_flights',
