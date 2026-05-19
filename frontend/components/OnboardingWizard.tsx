@@ -107,7 +107,7 @@ export default function OnboardingWizard() {
       sectionLabel: 'Overview',
       title: 'Welcome to Tsushin!',
       targetSelector: null,
-      content: 'Tsushin helps you build AI agents, connect them to channels, wire repository integrations, and monitor what they do. Quick walkthrough of the essentials. For detailed documentation, open the User Guide anytime via the ? button in the header.',
+      content: 'Tsushin helps you build AI agents, connect them to channels, wire repository connections, and monitor what they do. Quick walkthrough of the essentials. For detailed documentation, open the User Guide anytime via the ? button in the header.',
       highlightFeatures: [
         'Multiple agents working together',
         'WhatsApp & Telegram integration',
@@ -143,16 +143,16 @@ export default function OnboardingWizard() {
       sectionLabel: 'Channels, triggers & repos',
       title: 'Connect Channels, Triggers, and Repositories',
       targetSelector: null,
-      content: 'Channels are for conversations. Triggers are for events that wake an agent or flow. Keeping those two paths separate makes setup easier: connect chat apps in Hub → Channels, configure event sources in Hub → Triggers, and reuse GitHub/GitLab connections from Hub → Repository Integrations.',
+      content: 'Channels are for conversations. Triggers are for events that wake an agent or flow. Keeping those two paths separate makes setup easier: connect chat apps in Hub → Channels, configure event sources in Hub → Triggers, and reuse GitHub/GitLab repository connections from Hub → Developer Tools.',
       highlightFeatures: [
         'Channels: WhatsApp, Telegram, Slack, Discord, and Playground testing',
         'Triggers: Gmail, Jira, GitHub, GitLab, and signed webhooks',
-        'Repository Integrations: shared GitHub/GitLab connections for triggers and Code Repository skills',
+        'Repository connections: shared GitHub/GitLab credentials for triggers and Code Repository skills',
         'Inbound services may need a public HTTPS URL through Remote Access or an ingress override',
         'Route each connected channel or trigger to the agent that should handle it'
       ],
       actionButton: {
-        label: 'Open Hub → Repository Integrations',
+        label: 'Open Hub → Developer Tools',
         action: () => router.push('/hub?tab=developer')
       }
     },

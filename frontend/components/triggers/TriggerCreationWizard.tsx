@@ -309,7 +309,7 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
     headline: 'GitHub webhook path',
     summary: 'Use this when repository events should wake an agent.',
     prerequisites: [
-      'A Hub GitHub connection under Repository Integrations.',
+      'A Hub GitHub repository connection under Developer Tools.',
       'Repository owner/name, selected webhook events, optional webhook secret, and optional default agent.',
     ],
     criteria: [
@@ -325,7 +325,7 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
     headline: 'GitLab webhook path',
     summary: 'Use this when GitLab project events should wake an agent.',
     prerequisites: [
-      'A Hub GitLab connection under Repository Integrations.',
+      'A Hub GitLab repository connection under Developer Tools.',
       'A full project path, selected webhook events, optional webhook secret, and optional default agent.',
     ],
     criteria: [
@@ -1009,11 +1009,11 @@ export default function TriggerCreationWizard({
             ? selectedGitlabIntegration.integration_name || selectedGitlabIntegration.name || `GitLab connection #${selectedGitlabIntegration.id}`
             : gitlabIntegrationsLoading
               ? 'Loading available GitLab connections.'
-              : 'Required. Use Open Repository Integrations below if no GitLab connection appears.',
+              : 'Required. Use Open Developer Tools below if no GitLab connection appears.',
           tone: selectedGitlabIntegration ? 'ready' : 'required',
           action: selectedGitlabIntegration ? null : (
             <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
-              Open Repository Integrations
+              Open Developer Tools
             </a>
           ),
         },
@@ -1054,11 +1054,11 @@ export default function TriggerCreationWizard({
           ? selectedGithubIntegration.integration_name || selectedGithubIntegration.name || `GitHub connection #${selectedGithubIntegration.id}`
           : githubIntegrationsLoading
             ? 'Loading available GitHub connections.'
-            : 'Required. Use Open Repository Integrations below if no GitHub connection appears.',
+            : 'Required. Use Open Developer Tools below if no GitHub connection appears.',
         tone: selectedGithubIntegration ? 'ready' : 'required',
         action: selectedGithubIntegration ? null : (
           <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
-            Open Repository Integrations
+            Open Developer Tools
           </a>
         ),
       },
@@ -3336,7 +3336,7 @@ function GitHubSourceBody({
           </select>
           <p className="text-xs text-tsushin-slate">
             Triggers reuse Hub-side GitHub integrations. Create one under{' '}
-            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-violet-300 hover:text-white">Hub → Repository Integrations</a>{' '}
+            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-violet-300 hover:text-white">Hub → Developer Tools</a>{' '}
             if none exist yet.
           </p>
         </div>
@@ -3345,7 +3345,7 @@ function GitHubSourceBody({
           <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 md:col-span-2">
             <div className="text-sm font-medium text-white">No GitHub connections yet</div>
             <p className="mt-1 text-xs text-tsushin-slate">
-              GitHub triggers require a Hub GitHub connection. Create one in Repository Integrations, then return here and select it before continuing.
+              GitHub triggers require a Hub GitHub repository connection. Create one in Developer Tools, then return here and select it before continuing.
             </p>
             <a
               href="/hub?tab=developer"
@@ -3544,7 +3544,7 @@ function GitLabSourceBody({
           </select>
           <p className="text-xs text-tsushin-slate">
             Triggers reuse Hub-side GitLab integrations. Create one under{' '}
-            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-orange-300 hover:text-white">Hub - Repository Integrations</a>{' '}
+            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-orange-300 hover:text-white">Hub - Developer Tools</a>{' '}
             if none exist yet.
           </p>
         </div>
@@ -3553,7 +3553,7 @@ function GitLabSourceBody({
           <div className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4 md:col-span-2">
             <div className="text-sm font-medium text-white">No GitLab connections yet</div>
             <p className="mt-1 text-xs text-tsushin-slate">
-              GitLab triggers require a Hub GitLab connection. Create one in Repository Integrations, then return here and select it before continuing.
+              GitLab triggers require a Hub GitLab repository connection. Create one in Developer Tools, then return here and select it before continuing.
             </p>
             <a
               href="/hub?tab=developer"

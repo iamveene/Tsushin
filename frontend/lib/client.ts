@@ -2017,7 +2017,7 @@ export interface GitHubTriggerCreateRequest {
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
 
 // GitHubTriggerTestConnection types removed in v0.7.0-fix Phase 3 — connectivity
-// is verified at the integration level (Hub → Repository Integrations), not per trigger.
+// is verified at the integration level (Hub -> Developer Tools), not per trigger.
 
 // v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
 // shared GitHub connection + default owner/repo so the code_repository skill

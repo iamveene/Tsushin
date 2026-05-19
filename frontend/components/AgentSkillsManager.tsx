@@ -1510,7 +1510,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                 Attach a Hub connection before this skill can run. {providerKey === 'password_vault' ? (
                   <a href="/hub?tab=tool-apis" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Tool APIs</a>
                 ) : providerKey === 'code_repository' ? (
-                  <a href="/hub?tab=developer" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Repository Integrations</a>
+                  <a href="/hub?tab=developer" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Developer Tools</a>
                 ) : 'Open the Hub and create the required provider connection.'}
               </div>
             )}
@@ -2159,7 +2159,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
                               {configuringProvider === 'password_vault' ? (
                                 <a href="/hub?tab=tool-apis" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Tool APIs.</a>
                               ) : configuringProvider === 'code_repository' ? (
-                                <a href="/hub?tab=developer" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Repository Integrations.</a>
+                                <a href="/hub?tab=developer" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Developer Tools.</a>
                               ) : (
                                 <span>Visit the Hub to connect one.</span>
                               )}
