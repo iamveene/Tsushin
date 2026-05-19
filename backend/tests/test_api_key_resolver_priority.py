@@ -278,3 +278,69 @@ def test_system_wide_legacy_key_fills_in_when_nothing_tenant_scoped():
         assert resolved == "sk-system-wide"
     finally:
         db.close()
+
+
+def test_provider_id_alias_resolves_brave_search_service_key():
+    """Provider id 'brave' must resolve the Tool APIs service 'brave_search'."""
+    db = _make_session()
+    try:
+        _seed_legacy_api_key(
+            db,
+            tenant_id=TENANT_A,
+            service="brave_search",
+            plaintext="brave-real-api-key-value",
+        )
+
+        resolved = api_key_service.get_api_key("brave", db, tenant_id=TENANT_A)
+        assert resolved == "brave-real-api-key-value"
+    finally:
+        db.close()
+
+
+def test_google_search_alias_resolves_serpapi_before_google_flights():
+    """Google Search should prefer serpapi while retaining legacy flight-key fallback."""
+    db = _make_session()
+    try:
+        _seed_legacy_api_key(
+            db,
+            tenant_id=TENANT_A,
+            service="google_flights",
+            plaintext="legacy-google-flights-key",
+        )
+        _seed_legacy_api_key(
+            db,
+            tenant_id=TENANT_A,
+            service="serpapi",
+            plaintext="primary-serpapi-key",
+        )
+
+        assert api_key_service.get_api_key("google", db, tenant_id=TENANT_A) == "primary-serpapi-key"
+        assert api_key_service.get_api_key("serpapi", db, tenant_id=TENANT_A) == "primary-serpapi-key"
+    finally:
+        db.close()
+
+
+def test_google_flights_alias_prefers_dedicated_key_then_serpapi_fallback():
+    """Google Flights keeps its dedicated-key priority but accepts SerpAPI."""
+    db = _make_session()
+    try:
+        _seed_legacy_api_key(
+            db,
+            tenant_id=TENANT_A,
+            service="serpapi",
+            plaintext="shared-serpapi-key",
+        )
+        assert api_key_service.get_api_key("google_flights", db, tenant_id=TENANT_A) == "shared-serpapi-key"
+
+        _seed_legacy_api_key(
+            db,
+            tenant_id=TENANT_A,
+            service="google_flights",
+            plaintext="dedicated-google-flights-key",
+        )
+        assert (
+            api_key_service.get_api_key("google_flights", db, tenant_id=TENANT_A)
+            == "dedicated-google-flights-key"
+        )
+    finally:
+        db.close()

@@ -30,11 +30,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db import get_db
-from models import ApiKey, GoogleOAuthCredentials, HubIntegration, SearxngInstance
+from models import GoogleOAuthCredentials, HubIntegration, SearxngInstance
 from models_rbac import User
 from auth_dependencies import require_permission, get_tenant_context, TenantContext
 from hub.productivity_catalog import PRODUCTIVITY_CATALOG
 from hub.providers import SearchProviderRegistry, FlightProviderRegistry
+from services.api_key_service import has_api_key
 
 
 logger = logging.getLogger(__name__)
@@ -60,15 +61,6 @@ class ProviderCatalogEntry(BaseModel):
 # Tenant-config probes
 # ---------------------------------------------------------------------------
 
-# Map of search provider id -> the api_key.service value that configures it.
-# Keep in sync with AddIntegrationWizard.tsx `apiKeyService` per provider.
-_SEARCH_API_KEY_SERVICE: Dict[str, str] = {
-    "brave": "brave_search",
-    "google": "serpapi",
-    "tavily": "tavily",
-}
-
-
 def _search_tenant_has_configured(provider_id: str, tenant_id: Optional[str], db: Session) -> bool:
     """Best-effort check: does this tenant already have credentials/provisioning
     for this search provider?"""
@@ -78,14 +70,7 @@ def _search_tenant_has_configured(provider_id: str, tenant_id: Optional[str], db
             q = q.filter(SearxngInstance.tenant_id == tenant_id)
         return q.first() is not None
 
-    svc = _SEARCH_API_KEY_SERVICE.get(provider_id)
-    if not svc:
-        return False
-
-    q = db.query(ApiKey).filter(ApiKey.service == svc, ApiKey.is_active == True)
-    if tenant_id is not None:
-        q = q.filter(ApiKey.tenant_id == tenant_id)
-    return q.first() is not None
+    return has_api_key(provider_id, db, tenant_id=tenant_id)
 
 
 def _travel_tenant_has_configured(provider_id: str, tenant_id: Optional[str], db: Session) -> bool:
@@ -103,13 +88,7 @@ def _travel_tenant_has_configured(provider_id: str, tenant_id: Optional[str], db
 
     # google_flights can also be driven by the unified SerpAPI key the wizard saves.
     if provider_id == "google_flights":
-        kq = db.query(ApiKey).filter(
-            ApiKey.service.in_(("google_flights", "serpapi")),
-            ApiKey.is_active == True,
-        )
-        if tenant_id is not None:
-            kq = kq.filter(ApiKey.tenant_id == tenant_id)
-        return kq.first() is not None
+        return has_api_key(provider_id, db, tenant_id=tenant_id)
 
     return False
 

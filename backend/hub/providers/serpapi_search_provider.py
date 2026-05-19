@@ -55,12 +55,7 @@ class SerpApiSearchProvider(SearchProvider):
     def _load_api_key(self):
         """Load API key from database only (configured via Hub → API Keys)."""
         if self.db:
-            # Try 'serpapi' from ApiKey table first
-            self._api_key = get_api_key('serpapi', self.db, tenant_id=self.tenant_id)
-
-            # Fallback: Try ApiKey table with 'google_flights' service (legacy)
-            if not self._api_key:
-                self._api_key = get_api_key('google_flights', self.db, tenant_id=self.tenant_id)
+            self._api_key = get_api_key('google', self.db, tenant_id=self.tenant_id)
 
             # Fallback: Try GoogleFlightsIntegration table (encrypted key, legacy)
             if not self._api_key:
@@ -69,9 +64,14 @@ class SerpApiSearchProvider(SearchProvider):
                     from hub.security import TokenEncryption
                     from services.encryption_key_service import get_api_key_encryption_key
 
-                    gf_integration = self.db.query(GoogleFlightsIntegration).filter(
+                    gf_query = self.db.query(GoogleFlightsIntegration).filter(
                         GoogleFlightsIntegration.is_active == True
-                    ).first()
+                    )
+                    if self.tenant_id:
+                        gf_query = gf_query.filter(GoogleFlightsIntegration.tenant_id == self.tenant_id)
+                    else:
+                        gf_query = gf_query.filter(GoogleFlightsIntegration.tenant_id == None)
+                    gf_integration = gf_query.first()
 
                     if gf_integration:
                         # CRIT-004 fix: Use dedicated API key encryption key (not JWT_SECRET_KEY)

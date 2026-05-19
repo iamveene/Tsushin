@@ -14,10 +14,12 @@ Priority order (post-2026-05-07 fix; see get_api_key docstring for context):
 No env var fallback — all keys must be stored in the database.
 """
 
-from typing import Optional
+from typing import Iterable, Optional, Sequence, TypeVar
 from sqlalchemy.orm import Session
 from models import ApiKey
 import logging
+
+from services.provider_aliases import get_api_key_service_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,25 @@ def _decrypt_provider_instance_key(encrypted_key: str, tenant_id: str, db: Sessi
         return None
 
 
+T = TypeVar("T")
+
+
+def _pick_by_candidate_priority(
+    rows: Iterable[T],
+    candidates: Sequence[str],
+    attr_name: str,
+) -> Optional[T]:
+    """Select the row matching the highest-priority service/vendor alias."""
+    ordered = list(rows)
+    if not ordered:
+        return None
+    priority = {candidate: idx for idx, candidate in enumerate(candidates)}
+    return sorted(
+        ordered,
+        key=lambda row: priority.get(getattr(row, attr_name, None), len(priority)),
+    )[0]
+
+
 def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> Optional[str]:
     """
     Get API key for a service.
@@ -139,7 +160,10 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     ProviderInstance exists.
 
     Args:
-        service: Service name ('anthropic', 'openai', 'gemini', 'openrouter', 'brave_search', 'amadeus', 'serpapi')
+        service: Service name or provider id ('anthropic', 'openai', 'gemini',
+            'openrouter', 'brave_search', 'brave', 'amadeus', 'serpapi',
+            'google_flights'). Provider/service aliases are resolved by
+            services.provider_aliases.
         db: Database session
         tenant_id: Optional tenant ID for multi-tenant key isolation
 
@@ -151,30 +175,42 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
         logger.error(f"❌ get_api_key called with db=None for service={service}")
         return None
 
+    service = str(service or "").strip().lower()
+    candidate_services = get_api_key_service_candidates(service)
+    if not candidate_services:
+        logger.warning("No API key service requested")
+        return None
+
     # Step 1+2: Tenant ProviderInstance — modern, UI-visible config wins.
     if tenant_id:
         try:
             from models import ProviderInstance
-            instance = db.query(ProviderInstance).filter(
-                ProviderInstance.vendor == service,
+            default_instances = db.query(ProviderInstance).filter(
+                ProviderInstance.vendor.in_(candidate_services),
                 ProviderInstance.tenant_id == tenant_id,
                 ProviderInstance.is_active == True,
                 ProviderInstance.is_default == True,
                 ProviderInstance.api_key_encrypted.isnot(None)
-            ).first()
+            ).all()
+            instance = _pick_by_candidate_priority(
+                default_instances, candidate_services, "vendor"
+            )
 
             if instance:
                 key = _decrypt_provider_instance_key(
                     instance.api_key_encrypted, tenant_id, db
                 )
                 if key:
-                    logger.info(f" Using provider instance key for {service} (instance: {instance.instance_name})")
+                    logger.info(
+                        f" Using provider instance key for {service} "
+                        f"(vendor: {instance.vendor}, instance: {instance.instance_name})"
+                    )
                     return key
 
             # If no default but exactly one active instance has a key, use it.
             # Avoids "not configured" confusion when one candidate clearly exists.
             active_instances = db.query(ProviderInstance).filter(
-                ProviderInstance.vendor == service,
+                ProviderInstance.vendor.in_(candidate_services),
                 ProviderInstance.tenant_id == tenant_id,
                 ProviderInstance.is_active == True,
                 ProviderInstance.api_key_encrypted.isnot(None)
@@ -187,7 +223,7 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
                 if key:
                     logger.info(
                         f" Using the only active provider instance key for {service} "
-                        f"(instance: {only_instance.instance_name})"
+                        f"(vendor: {only_instance.vendor}, instance: {only_instance.instance_name})"
                     )
                     return key
         except Exception as e:
@@ -197,28 +233,40 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     # a ProviderInstance (e.g. ElevenLabs TTS today, search/maps tool keys).
     if tenant_id:
         try:
-            tenant_key = db.query(ApiKey).filter(
-                ApiKey.service == service,
+            tenant_keys = db.query(ApiKey).filter(
+                ApiKey.service.in_(candidate_services),
                 ApiKey.tenant_id == tenant_id,
                 ApiKey.is_active == True
-            ).first()
+            ).all()
+            tenant_key = _pick_by_candidate_priority(
+                tenant_keys, candidate_services, "service"
+            )
 
             if tenant_key:
-                logger.info(f" Using tenant-specific legacy ApiKey for {service} (tenant: {tenant_id})")
+                logger.info(
+                    f" Using tenant-specific legacy ApiKey for {service} "
+                    f"(resolved service: {tenant_key.service}, tenant: {tenant_id})"
+                )
                 return _decrypt_api_key(tenant_key, db)
         except Exception as e:
             logger.warning(f"Failed to load tenant-specific API key for {service}: {e}")
 
     # Step 4: System-wide legacy ApiKey row (tenant_id = NULL).
     try:
-        system_key = db.query(ApiKey).filter(
-            ApiKey.service == service,
+        system_keys = db.query(ApiKey).filter(
+            ApiKey.service.in_(candidate_services),
             ApiKey.tenant_id.is_(None),
             ApiKey.is_active == True
-        ).first()
+        ).all()
+        system_key = _pick_by_candidate_priority(
+            system_keys, candidate_services, "service"
+        )
 
         if system_key:
-            logger.info(f" Using system-wide legacy ApiKey for {service}")
+            logger.info(
+                f" Using system-wide legacy ApiKey for {service} "
+                f"(resolved service: {system_key.service})"
+            )
             return _decrypt_api_key(system_key, db)
     except Exception as e:
         logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
@@ -227,7 +275,7 @@ def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> O
     return None
 
 
-def has_api_key(service: str, db: Session) -> bool:
+def has_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> bool:
     """
     Check if an API key exists for a service.
 
@@ -238,7 +286,7 @@ def has_api_key(service: str, db: Session) -> bool:
     Returns:
         True if key exists, False otherwise
     """
-    return get_api_key(service, db) is not None
+    return get_api_key(service, db, tenant_id=tenant_id) is not None
 
 
 def store_api_key(service: str, api_key: str, tenant_id: Optional[str], db: Session) -> ApiKey:
