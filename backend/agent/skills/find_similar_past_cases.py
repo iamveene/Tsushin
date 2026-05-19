@@ -42,10 +42,10 @@ class FindSimilarPastCasesSkill(BaseSkill):
     auto_enabled_for: List[str] = []
     wizard_visible = True
 
-    # ----------------------------------------------------------------- legacy
+    # ------------------------------------------------------------- raw text path
 
     async def can_handle(self, message: InboundMessage) -> bool:
-        # Tool-only skill — never matches via keyword/legacy routing.
+        # Tool-only skill — never matches via raw-text routing.
         return False
 
     async def process(
@@ -57,7 +57,7 @@ class FindSimilarPastCasesSkill(BaseSkill):
                 "find_similar_past_cases is a tool-only skill — invoke it via "
                 "the LLM tool call."
             ),
-            metadata={"error": "legacy_disabled"},
+            metadata={"error": "raw_text_disabled"},
         )
 
     # -------------------------------------------------------------- tool spec

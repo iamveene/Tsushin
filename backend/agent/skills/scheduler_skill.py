@@ -157,39 +157,8 @@ class SchedulerSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains scheduling intent.
-
-        Returns True if:
-        - Message is routed to Agendador agent (ID 7) - ALL messages to @agendador are scheduling requests
-        - Message contains scheduling keywords (for other agents)
+        Scheduler is triggered by tool calls and /scheduler slash commands only.
         """
-        config = getattr(self, '_config', {}) or {}
-        if not self.is_legacy_enabled(config):
-            return False
-
-        body_lower = message.body.lower()
-
-        # Phase 6.11.4: Removed special handling for Agendador agent
-        # Asana operations are now handled through scheduler provider configuration
-
-        # Defer to SchedulerQuerySkill if query keywords present
-        # is_dedicated_scheduler: when True, this agent handles ALL messages as scheduling
-        if config.get('is_dedicated_scheduler', False):
-            query_keywords = ['quais', 'meus lembretes', 'meus agendamentos', 'o que']
-            if any(keyword in message.body.lower() for keyword in query_keywords):
-                logger.info(f"SchedulerSkill: Query keywords detected, deferring to SchedulerQuerySkill")
-                return False
-
-            # Default: handle all other scheduling/reminder messages
-            logger.info(f"SchedulerSkill: Dedicated scheduler agent detected, handling message as reminder/flow")
-            return True
-
-        # Check for scheduling keywords (for other agents)
-        for keyword in self.SCHEDULE_KEYWORDS:
-            if keyword in body_lower:
-                logger.info(f"SchedulerSkill: Detected keyword '{keyword}' in message")
-                return True
-
         return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:

@@ -328,7 +328,7 @@ Use the **Clone** action on the Agents list to duplicate an agent with all confi
 
 Two built-in skills for agents to work together:
 
-- **Agent Switcher** -- lets users switch their default agent via natural language (e.g., "Switch me to the Support agent"). **Default execution mode in v0.6.0 is `hybrid`** — both the keyword trigger ("Switch me to ...") and the LLM tool call work, so deterministic phrasings never miss and the LLM can also route on intent.
+- **Agent Switcher** -- lets users switch their default agent through `/invoke` or an LLM tool call (e.g., "Switch me to the Support agent"). Raw text keyword matching is no longer used for skill dispatch.
 - **Agent Communication (A2A)** -- allows agents to ask other agents questions, discover agents, or delegate tasks.
 
 Manage inter-agent messaging from **Studio > Agent Communication**.
@@ -441,23 +441,23 @@ Tsushin ships with 22 built-in skills. Enable or disable them per agent from the
 | **Ticket Management** *(v0.7.0)* | Tool | Search/read/act on Jira tickets. Read on by default; write actions (update, add_comment, transition) off by default. |
 | **Automation** | Tool | Multi-step workflow automation. |
 | **Scheduler** | Tool | Schedules reminders and conversations via natural language. |
-| **Scheduler Query** | Legacy | Lists scheduled events (merged into Scheduler). |
+| **Scheduler Query** | Tool | Lists scheduled events (merged into Scheduler). |
 | **Flows** | Tool | Runs and manages workflows and scheduled events. |
 | **Flight Search** | Tool | Searches for flights via configured providers (Amadeus, Google Flights via SerpAPI). |
-| **Shell Commands** | Hybrid | Executes shell commands on registered remote hosts via secure beacon agents. |
+| **Shell Commands** | Tool | Executes shell commands on registered remote hosts via secure beacon agents and `/shell`. |
 | **Sandboxed Tools** | Passive | Gates access to isolated security tools (nmap, dig, nuclei, httpx, whois, katana, subfinder, sqlmap, webhook). |
 | **Browser Automation** | Tool | Navigates websites, fills forms, extracts content, captures screenshots. |
 | **Password Vault** *(v0.7.x)* | Tool | Resolves approved vault references through 1Password-backed Hub Tool APIs with redacted outputs and short-lived handles. |
 | **Knowledge Sharing** | Passive | Shares learned facts into a cross-agent memory pool. |
 | **Adaptive Personality** | Passive | Extracts user facts and adapts the persona over time. |
-| **OKG Term Memory** | Hybrid | Stores/recalls structured term memory (own knowledge graph) with MemGuard validation. |
-| **Agent Switcher** | Tool | Lets users switch their default agent via natural language. Default execution mode is `hybrid`. |
+| **OKG Term Memory** | Tool | Stores/recalls structured term memory (own knowledge graph) with MemGuard validation. |
+| **Agent Switcher** | Tool | Lets users switch their default agent through `/invoke` or the LLM tool. |
 | **Agent Communication (A2A)** | Tool | Enables inter-agent questions and task delegation, gated by `agent_communication_permission` rules. |
 | **Custom Skill (Adapter)** | Tool | Runtime adapter for tenant-authored custom skills (Instruction / Script / MCP Server). |
 
 Provider names in skills and Flow steps are normalized to the matching Tool API credential. For example, Brave web search can use a `brave_search` Tool API key, Google web search uses the SerpAPI key, and Google Flights accepts either a dedicated `google_flights` key or the shared SerpAPI key configured in **Hub > Tool APIs**. Agents that use the **Flight Search** skill can then select Google Flights as their provider.
 
-**Execution modes:** `Tool` (LLM decides when to invoke), `Passive` (runs automatically after every response), `Hybrid` (both), `Special` (media-triggered), `Legacy` (keywords/commands only).
+**Active skill modes:** `Tool` (LLM tool call or explicit slash command), `Passive` (runs automatically after every response), and `Special` (media-triggered).
 
 ### Custom Skills
 
@@ -469,7 +469,7 @@ No code required. Provide natural-language instructions the LLM follows.
 
 1. Click **Create Skill** > select **Instruction**.
 2. Write your instructions (up to 8,000 characters, Markdown supported).
-3. Choose a trigger mode: **LLM Decided**, **Keyword**, or **Always**.
+3. Choose whether the skill is a callable tool or passive instructions. Custom skills no longer support keyword trigger mode.
 
 #### Script Skills
 

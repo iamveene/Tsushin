@@ -1,15 +1,8 @@
-"""
-Regression contract for the LLM-classified skill intent system.
+"""Regression contract for retired raw-text skill execution.
 
-After dropping the bilingual keyword chip-list anti-pattern, every affected skill
-routes intent through AISkillClassifier. These tests pin that contract:
-
-1. Each affected skill's get_default_config() and get_config_schema() no longer
-   surface the keyword arrays the user complained about.
-2. can_handle() consults the LLM classifier (mocked) and respects its verdict.
-3. Cheap structural guards still short-circuit before any LLM call.
-4. Slash dispatch is upstream of can_handle() — verified separately by Stage 2
-   of the verification plan; this file only covers can_handle behavior.
+Skills may run through LLM tool calls, slash commands, passive hooks, or
+special media hooks. Plain natural-language text must not dispatch tool skills
+through SkillManager.process_message_with_skills().
 """
 
 from __future__ import annotations
@@ -20,7 +13,7 @@ import os
 import sys
 import types as pytypes
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 
 
 BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +40,11 @@ def _load_module(module_name: str, relative_path: str):
     return module
 
 
+if "dateparser" not in sys.modules:
+    fake_dateparser = pytypes.ModuleType("dateparser")
+    fake_dateparser.parse = lambda *_args, **_kwargs: None
+    sys.modules["dateparser"] = fake_dateparser
+
 _ensure_package("agent", "agent")
 _ensure_package("agent.skills", os.path.join("agent", "skills"))
 _ensure_package("services", "services")
@@ -54,385 +52,191 @@ _ensure_package("services", "services")
 base_module = _load_module("agent.skills.base", os.path.join("agent", "skills", "base.py"))
 InboundMessage = base_module.InboundMessage
 
-
-# ---------------------------------------------------------------------------
-# Shared classifier stub
-# ---------------------------------------------------------------------------
-
-
-class StubClassifier:
-    """Fake AISkillClassifier that returns pre-programmed verdicts."""
-
-    def __init__(self, intent_value: bool = True, entity_value: Optional[str] = None):
-        self.intent_value = intent_value
-        self.entity_value = entity_value
-        self.intent_calls: List[Dict[str, Any]] = []
-        self.entity_calls: List[Dict[str, Any]] = []
-
-    async def classify_intent(self, **kwargs):
-        self.intent_calls.append(kwargs)
-        return self.intent_value
-
-    async def extract_entity(self, **kwargs):
-        self.entity_calls.append(kwargs)
-        return self.entity_value
+skills_package = sys.modules["agent.skills"]
+skills_package.BaseSkill = base_module.BaseSkill
+skills_package.InboundMessage = base_module.InboundMessage
+skills_package.SkillResult = base_module.SkillResult
 
 
-def _patch_classifier(monkeypatch, module, classifier: StubClassifier):
-    """Patch the get_classifier import that lives inside each skill's helper."""
+def _get_skill_manager_proxy():
+    from agent.skills.skill_manager import get_skill_manager
+
+    return get_skill_manager()
+
+
+skills_package.get_skill_manager = _get_skill_manager_proxy
+
+
+SKILL_CLASSES = [
+    ("agent_switcher_skill.py", "AgentSwitcherSkill"),
+    ("shell_skill.py", "ShellSkill"),
+    ("gmail_skill.py", "GmailSkill"),
+    ("image_skill.py", "ImageSkill"),
+    ("search_skill.py", "SearchSkill"),
+    ("flight_search_skill.py", "FlightSearchSkill"),
+    ("automation_skill.py", "AutomationSkill"),
+    ("flows_skill.py", "FlowsSkill"),
+    ("browser_automation_skill.py", "BrowserAutomationSkill"),
+    ("scheduler_skill.py", "SchedulerSkill"),
+    ("scheduler_query_skill.py", "SchedulerQuerySkill"),
+    ("okg_term_memory_skill.py", "OKGTermMemorySkill"),
+    ("image_analysis_skill.py", "ImageAnalysisSkill"),
+    ("jira_skill.py", "JiraSkill"),
+    ("code_repository_skill.py", "CodeRepositorySkill"),
+    ("password_vault_skill.py", "PasswordVaultSkill"),
+]
+
+TEXT_ONLY_TOOL_CLASSES = [
+    item
+    for item in SKILL_CLASSES
+    if item[1] != "ImageAnalysisSkill"
+]
+
+RETIRED_CONFIG_KEYS = {
+    "execution_mode",
+    "keywords",
+    "trigger_keywords",
+    "trigger_mode",
+    "use_ai_fallback",
+    "edit_keywords",
+    "generate_keywords",
+    "edit_handoff_keywords",
+}
+
+
+def _skill_class(module_file: str, class_name: str):
+    module_name = f"agent.skills.{module_file.removesuffix('.py')}"
+    module = _load_module(module_name, os.path.join("agent", "skills", module_file))
+    return getattr(module, class_name)
+
+
+def _message(body: str, **overrides) -> InboundMessage:
+    payload = {
+        "id": overrides.pop("id", "msg-test"),
+        "sender": "+5527999616279",
+        "sender_key": "user-1",
+        "body": body,
+        "chat_id": "chat-1",
+        "chat_name": None,
+        "is_group": False,
+        "timestamp": datetime.utcnow(),
+        "channel": "whatsapp",
+    }
+    payload.update(overrides)
+    return InboundMessage(**payload)
+
+
+def test_affected_skill_config_schemas_do_not_expose_retired_modes_or_keywords():
+    for module_file, class_name in SKILL_CLASSES:
+        cls = _skill_class(module_file, class_name)
+        default_config = cls.get_default_config() or {}
+        schema_props = (cls.get_config_schema() or {}).get("properties", {})
+
+        for key in RETIRED_CONFIG_KEYS:
+            assert key not in default_config, f"{class_name} default exposes {key}"
+            assert key not in schema_props, f"{class_name} schema exposes {key}"
+
+
+def test_runtime_ignores_persisted_execution_mode_overrides():
+    class ConcreteSkill(base_module.BaseSkill):
+        async def can_handle(self, _message):
+            return False
+
+        async def process(self, _message, _config):
+            return base_module.SkillResult(success=True, output="")
+
+    tool_skill = ConcreteSkill()
+    tool_skill.execution_mode = "tool"
+    tool_skill._config = {"execution_mode": "hybrid"}
+
+    passive_skill = ConcreteSkill()
+    passive_skill.execution_mode = "passive"
+    passive_skill._config = {"execution_mode": "tool"}
+
+    assert tool_skill.is_tool_enabled({"execution_mode": "legacy"}) is True
+    assert passive_skill.is_tool_enabled({"execution_mode": "tool"}) is False
+
+
+def test_tool_skills_do_not_can_handle_raw_text_even_with_retired_persisted_config(monkeypatch):
+    class ExplodingClassifier:
+        async def classify_intent(self, **_kwargs):
+            raise AssertionError("raw-text skill dispatch must not call AISkillClassifier")
+
+        async def extract_entity(self, **_kwargs):
+            raise AssertionError("raw-text skill dispatch must not call AISkillClassifier")
+
     fake_module = pytypes.ModuleType("agent.skills.ai_classifier")
-    fake_module.get_classifier = lambda: classifier
+    fake_module.get_classifier = lambda: ExplodingClassifier()
     monkeypatch.setitem(sys.modules, "agent.skills.ai_classifier", fake_module)
 
+    msg = _message("please search flights, email me, browse this site, and switch agents")
+    for module_file, class_name in TEXT_ONLY_TOOL_CLASSES:
+        cls = _skill_class(module_file, class_name)
+        skill = cls()
+        skill._config = {
+            **(cls.get_default_config() or {}),
+            "execution_mode": "hybrid",
+            "keywords": ["search", "email", "switch"],
+            "use_ai_fallback": True,
+        }
 
-def _msg(body: str, **overrides) -> InboundMessage:
-    base = dict(
-        id=overrides.pop("id", "msg-test"),
-        sender="+5527999616279",
-        sender_key="user-1",
-        body=body,
-        chat_id="chat-1",
-        chat_name=None,
-        is_group=False,
-        timestamp=datetime.utcnow(),
-        channel="whatsapp",
-    )
-    base.update(overrides)
-    return InboundMessage(**base)
+        assert asyncio.run(skill.can_handle(msg)) is False, class_name
 
 
-# ---------------------------------------------------------------------------
-# Schema regression: keyword arrays are GONE from user-facing config
-# ---------------------------------------------------------------------------
+def test_image_media_hook_still_handles_attached_image_edit_requests(monkeypatch):
+    image_module = _load_module("agent.skills.image_skill", os.path.join("agent", "skills", "image_skill.py"))
+
+    class StubClassifier:
+        async def extract_entity(self, **_kwargs):
+            return "edit"
+
+    fake_module = pytypes.ModuleType("agent.skills.ai_classifier")
+    fake_module.get_classifier = lambda: StubClassifier()
+    monkeypatch.setitem(sys.modules, "agent.skills.ai_classifier", fake_module)
+
+    skill = image_module.ImageSkill()
+    skill._config = skill.get_default_config()
+    msg = _message("make the background white", id="img-edit", media_type="image/png")
+
+    assert asyncio.run(skill.can_handle(msg)) is True
 
 
-def test_image_skill_config_no_keyword_fields():
-    image_skill = _load_module(
-        "agent.skills.image_skill",
-        os.path.join("agent", "skills", "image_skill.py"),
-    )
-    default = image_skill.ImageSkill.get_default_config()
-    schema = image_skill.ImageSkill.get_config_schema()
-    for key in ("edit_keywords", "generate_keywords", "keywords"):
-        assert key not in default, f"ImageSkill default still exposes {key}"
-        assert key not in schema["properties"], f"ImageSkill schema still exposes {key}"
-
-
-def test_image_analysis_skill_config_no_keyword_fields():
-    skill_module = _load_module(
+def test_image_analysis_media_hook_still_handles_plain_attached_images():
+    image_analysis_module = _load_module(
         "agent.skills.image_analysis_skill",
         os.path.join("agent", "skills", "image_analysis_skill.py"),
     )
-    default = skill_module.ImageAnalysisSkill.get_default_config()
-    schema = skill_module.ImageAnalysisSkill.get_config_schema()
-    for key in ("edit_handoff_keywords", "keywords"):
-        assert key not in default
-        assert key not in schema["properties"]
-
-
-def test_gmail_skill_config_no_keyword_fields():
-    skill_module = _load_module(
-        "agent.skills.gmail_skill",
-        os.path.join("agent", "skills", "gmail_skill.py"),
-    )
-    default = skill_module.GmailSkill.get_default_config()
-    schema = skill_module.GmailSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-    assert not hasattr(skill_module.GmailSkill, "EMAIL_KEYWORDS")
-
-
-def test_automation_skill_no_hardcoded_keyword_lists():
-    src_path = os.path.join(BACKEND_ROOT, "agent", "skills", "automation_skill.py")
-    contents = open(src_path).read()
-    assert "automation_keywords = [" not in contents, \
-        "AutomationSkill should no longer carry an automation_keywords list"
-    for sub_intent in ("list_keywords =", "run_keywords =", "status_keywords =", "help_keywords ="):
-        assert sub_intent not in contents, \
-            f"AutomationSkill should no longer carry {sub_intent.split(' ')[0]}"
-
-
-def test_browser_automation_skill_config_no_keyword_field():
-    skill_module = _load_module(
-        "agent.skills.browser_automation_skill",
-        os.path.join("agent", "skills", "browser_automation_skill.py"),
-    )
-    default = skill_module.BrowserAutomationSkill.get_default_config()
-    schema = skill_module.BrowserAutomationSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-
-
-def test_flight_search_skill_config_no_keyword_field():
-    skill_module = _load_module(
-        "agent.skills.flight_search_skill",
-        os.path.join("agent", "skills", "flight_search_skill.py"),
-    )
-    default = skill_module.FlightSearchSkill.get_default_config()
-    schema = skill_module.FlightSearchSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-
-
-def test_search_skill_config_no_keyword_field():
-    skill_module = _load_module(
-        "agent.skills.search_skill",
-        os.path.join("agent", "skills", "search_skill.py"),
-    )
-    default = skill_module.SearchSkill.get_default_config()
-    schema = skill_module.SearchSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-
-
-def test_agent_switcher_skill_config_no_keyword_field():
-    skill_module = _load_module(
-        "agent.skills.agent_switcher_skill",
-        os.path.join("agent", "skills", "agent_switcher_skill.py"),
-    )
-    default = skill_module.AgentSwitcherSkill.get_default_config()
-    schema = skill_module.AgentSwitcherSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-
-
-def test_base_skill_no_longer_advertises_keywords():
-    default = base_module.BaseSkill.get_default_config()
-    schema = base_module.BaseSkill.get_config_schema()
-    assert "keywords" not in default
-    assert "keywords" not in schema["properties"]
-
-
-# ---------------------------------------------------------------------------
-# can_handle() behavior: trust the classifier, no keyword shortcuts
-# ---------------------------------------------------------------------------
-
-
-def test_image_skill_can_handle_image_caption_uses_classifier(monkeypatch):
-    image_skill = _load_module(
-        "agent.skills.image_skill",
-        os.path.join("agent", "skills", "image_skill.py"),
-    )
-    stub = StubClassifier(entity_value="edit")
-    _patch_classifier(monkeypatch, image_skill, stub)
-
-    skill = image_skill.ImageSkill()
+    skill = image_analysis_module.ImageAnalysisSkill()
     skill._config = skill.get_default_config()
+    msg = _message("", id="img-analysis", media_type="image/png")
 
-    msg = _msg("torna ela em preto e branco", media_type="image/png", id="img-edit-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-    assert len(stub.entity_calls) == 1
-
-
-def test_image_skill_can_handle_image_caption_none_defers(monkeypatch):
-    image_skill = _load_module(
-        "agent.skills.image_skill",
-        os.path.join("agent", "skills", "image_skill.py"),
-    )
-    stub = StubClassifier(entity_value="none")
-    _patch_classifier(monkeypatch, image_skill, stub)
-
-    skill = image_skill.ImageSkill()
-    skill._config = skill.get_default_config()
-
-    msg = _msg("bonita né?", media_type="image/png", id="img-comment-1")
-    assert asyncio.run(skill.can_handle(msg)) is False
-
-
-def test_image_skill_text_only_generate_intent_handled_in_legacy_mode(monkeypatch):
-    image_skill = _load_module(
-        "agent.skills.image_skill",
-        os.path.join("agent", "skills", "image_skill.py"),
-    )
-    stub = StubClassifier(entity_value="generate")
-    _patch_classifier(monkeypatch, image_skill, stub)
-
-    skill = image_skill.ImageSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"  # text-only path requires legacy/hybrid
-    skill._config = cfg
-
-    msg = _msg("crie uma imagem de um elefante azul", id="img-gen-1")
     assert asyncio.run(skill.can_handle(msg)) is True
 
 
-def test_image_skill_regression_mudar_no_longer_triggers(monkeypatch):
-    """The old keyword 'mudar' substring would falsely trigger image edit on
-    'vou mudar de assunto'. With the classifier in place this must NOT fire."""
-    image_skill = _load_module(
-        "agent.skills.image_skill",
-        os.path.join("agent", "skills", "image_skill.py"),
+def test_custom_skill_adapter_ignores_keyword_trigger_mode():
+    adapter_module = _load_module(
+        "agent.skills.custom_skill_adapter",
+        os.path.join("agent", "skills", "custom_skill_adapter.py"),
     )
-    stub = StubClassifier(entity_value="none")
-    _patch_classifier(monkeypatch, image_skill, stub)
-
-    skill = image_skill.ImageSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-    skill._cache_recent_image(_msg("", media_type="image/png", id="prior-img"))
-
-    msg = _msg("vou mudar de assunto agora", id="benign-1")
-    assert asyncio.run(skill.can_handle(msg)) is False
-
-
-def test_gmail_skill_can_handle_calls_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.gmail_skill",
-        os.path.join("agent", "skills", "gmail_skill.py"),
+    adapter = adapter_module.CustomSkillAdapter(
+        SimpleNamespace(
+            slug="old-keyword-skill",
+            name="Old Keyword Skill",
+            description="Old keyword config should not dispatch raw text",
+            execution_mode="tool",
+            trigger_mode="keyword",
+            trigger_keywords=["run me"],
+        )
     )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
 
-    skill = skill_module.GmailSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("mostra meus emails", id="gmail-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-    assert len(stub.intent_calls) == 1
-    assert stub.intent_calls[0]["message"] == "mostra meus emails"
+    assert asyncio.run(adapter.can_handle(_message("run me now"))) is False
 
 
-def test_gmail_skill_can_handle_no_keyword_required(monkeypatch):
-    """Confirms the keyword pre-filter is gone — a body with zero email-words
-    still reaches the classifier (the LLM, not a substring scan, decides)."""
-    skill_module = _load_module(
-        "agent.skills.gmail_skill",
-        os.path.join("agent", "skills", "gmail_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
+def test_custom_skill_api_rejects_retired_modes_and_keyword_triggers():
+    source = open(os.path.join(BACKEND_ROOT, "api", "routes_custom_skills.py"), encoding="utf-8").read()
 
-    skill = skill_module.GmailSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("alguma coisa nova de ontem?", id="gmail-2")
-    assert asyncio.run(skill.can_handle(msg)) is True
-    assert stub.intent_calls, "Classifier must be consulted, not bypassed by keyword pre-filter"
-
-
-def test_automation_skill_can_handle_uses_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.automation_skill",
-        os.path.join("agent", "skills", "automation_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.AutomationSkill()
-    cfg = skill.get_default_config() if hasattr(skill_module.AutomationSkill, "get_default_config") else {}
-    cfg["execution_mode"] = "hybrid"
-    cfg["is_enabled"] = True
-    skill._config = cfg
-
-    msg = _msg("rodar meu fluxo de relatórios", id="auto-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-    assert stub.intent_calls
-
-
-def test_automation_skill_detect_intent_uses_extract_entity(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.automation_skill",
-        os.path.join("agent", "skills", "automation_skill.py"),
-    )
-    stub = StubClassifier(entity_value="run")
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.AutomationSkill()
-    msg = _msg("execute o flow de sincronização", id="auto-detect-1")
-    intent = asyncio.run(skill._detect_intent(msg, {}))
-    assert intent == "run"
-    assert stub.entity_calls
-    assert stub.entity_calls[0]["available_options"] == ["list", "run", "status", "help"]
-
-
-def test_browser_automation_skill_can_handle_uses_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.browser_automation_skill",
-        os.path.join("agent", "skills", "browser_automation_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.BrowserAutomationSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("tira print de google.com", id="browser-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-
-
-def test_flight_search_skill_can_handle_uses_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.flight_search_skill",
-        os.path.join("agent", "skills", "flight_search_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.FlightSearchSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("voos GRU LIS amanhã", id="flight-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-
-
-def test_search_skill_can_handle_uses_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.search_skill",
-        os.path.join("agent", "skills", "search_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.SearchSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("busca na web pelo Brasil 2026", id="search-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-
-
-def test_agent_switcher_skill_can_handle_uses_classifier(monkeypatch):
-    skill_module = _load_module(
-        "agent.skills.agent_switcher_skill",
-        os.path.join("agent", "skills", "agent_switcher_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.AgentSwitcherSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("invocar agente Tsushin", id="switch-1")
-    assert asyncio.run(skill.can_handle(msg)) is True
-
-
-def test_agent_switcher_skill_skips_slash_commands(monkeypatch):
-    """Slash commands are dispatched upstream of can_handle() but the skill's
-    own structural guard for '/' is preserved — verifies it still fires."""
-    skill_module = _load_module(
-        "agent.skills.agent_switcher_skill",
-        os.path.join("agent", "skills", "agent_switcher_skill.py"),
-    )
-    stub = StubClassifier(intent_value=True)
-    _patch_classifier(monkeypatch, skill_module, stub)
-
-    skill = skill_module.AgentSwitcherSkill()
-    cfg = skill.get_default_config()
-    cfg["execution_mode"] = "hybrid"
-    skill._config = cfg
-
-    msg = _msg("/switch Tsushin", id="switch-slash-1")
-    assert asyncio.run(skill.can_handle(msg)) is False
-    assert not stub.intent_calls, "Slash command must short-circuit before LLM call"
+    assert "execution_mode not in ('tool', 'passive')" in source
+    assert "trigger_mode != 'llm_decided'" in source
+    assert "trigger_keywords are no longer supported" in source
+    assert '"hybrid"' not in source
+    assert "'hybrid'" not in source

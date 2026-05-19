@@ -57,7 +57,7 @@ class JiraSkill(BaseSkill):
         "system. Today: Atlassian Jira via REST API."
     )
     execution_mode = "tool"
-    # Tool-only — no keyword/legacy path. Wizard-visible so it appears in the
+    # Tool-only — no keyword/raw-text path. Wizard-visible so it appears in the
     # agent creation wizard once a Jira integration exists.
     wizard_visible = True
 
@@ -146,17 +146,17 @@ class JiraSkill(BaseSkill):
     def _is_capability_enabled(self, config: Optional[Dict[str, Any]], action: str) -> bool:
         return action in set(self._enabled_actions(config))
 
-    # ------------------------------------------------------------ legacy path
+    # -------------------------------------------------------- raw text path
 
     async def can_handle(self, message: InboundMessage) -> bool:
-        # Tool-only skill — no keyword routing.
+        # Tool-only skill — no keyword/raw-text routing.
         return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         return SkillResult(
             success=False,
             output="Ticket Management skill is tool-only; invoke via the LLM tool call.",
-            metadata={"error": "legacy_disabled"},
+            metadata={"error": "raw_text_disabled"},
         )
 
     # ----------------------------------------------------------- tool spec
@@ -548,7 +548,6 @@ class JiraSkill(BaseSkill):
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {
-            "execution_mode": "tool",
             "enabled": True,
             "integration_id": None,
             "capabilities": {
@@ -588,12 +587,6 @@ class JiraSkill(BaseSkill):
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
         base = super().get_config_schema()
-        base["properties"]["execution_mode"] = {
-            "type": "string",
-            "enum": ["tool"],
-            "title": "Execution Mode",
-            "default": "tool",
-        }
         base["properties"]["integration_id"] = {
             "type": ["integer", "null"],
             "title": "Jira Connection",

@@ -161,7 +161,7 @@ class OKGTermMemorySkill(BaseSkill):
         "Structured long-term memory with ontological metadata. "
         "Stores, recalls, and manages durable facts and relationships."
     )
-    execution_mode = "hybrid"  # tool calls + passive post-response hook
+    execution_mode = "tool"
 
     def __init__(self, db=None, agent_id=None):
         super().__init__()

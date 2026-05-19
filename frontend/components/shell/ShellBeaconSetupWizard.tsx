@@ -120,7 +120,7 @@ export default function ShellBeaconSetupWizard({ isOpen, onClose, onComplete }: 
         try {
           await api.updateAgentSkill(agent.id, 'shell', {
             is_enabled: true,
-            config: { execution_mode: 'hybrid' },
+            config: {},
           })
           setAssignmentResults((prev) =>
             prev.map((r, idx) => (idx === i ? { ...r, status: 'ok' } : r)),

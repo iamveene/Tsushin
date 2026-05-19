@@ -895,7 +895,7 @@ class CustomSkill(Base):
     description = Column(Text, nullable=True)
     icon = Column(String(10), nullable=True)  # emoji
     skill_type_variant = Column(String(20), nullable=False, default='instruction')  # instruction|script|mcp_server
-    execution_mode = Column(String(20), nullable=False, default='tool')  # tool|hybrid|passive
+    execution_mode = Column(String(20), nullable=False, default='tool')  # tool|passive
     instructions_md = Column(Text, nullable=True)
     script_entrypoint = Column(String(50), nullable=True)
     script_content = Column(Text, nullable=True)
@@ -904,7 +904,7 @@ class CustomSkill(Base):
     input_schema = Column(JSON, default=dict)
     output_schema = Column(JSON, nullable=True)
     config_schema = Column(JSON, default=list)
-    trigger_mode = Column(String(20), default='llm_decided')  # keyword|always_on|llm_decided
+    trigger_mode = Column(String(20), default='llm_decided')  # llm_decided
     trigger_keywords = Column(JSON, default=list)
     priority = Column(Integer, default=50)
     sentinel_profile_id = Column(Integer, nullable=True)
