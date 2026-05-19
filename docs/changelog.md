@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Developer Tools repository connection entrypoint (2026-05-19)
+
+- Restored the Hub tab label and section heading to **Developer Tools** because Shell Command Center and Sandboxed Tools live there alongside repository connections.
+- Replaced separate top-level GitHub/GitLab add buttons with one centralized **Add Repository Connection** modal that asks the user to choose GitHub or GitLab before entering credentials.
+- Removed per-provider `+ Add` buttons from the GitHub/GitLab cards so repository credentials have one creation path instead of drifting across provider-specific entrypoints.
+
 ### Added — Repository Automation Wizard and repository team templates (2026-05-19)
 
 - Added `POST /api/wizards/repository-automation` to create or reuse tenant-scoped GitHub/GitLab repository triggers, explicitly generate the linked Flow, and wire either a line-topology review team or standalone PR/MR reviewer agent with Code Repository + A2A skills.
-- Added the Repository Automation Wizard UI from Hub Repository Integrations, trigger creation success states, trigger detail outputs, Flow triggered setup, and Team Wizard templates.
+- Added the Repository Automation Wizard UI from Hub Developer Tools repository connections, trigger creation success states, trigger detail outputs, Flow triggered setup, and Team Wizard templates.
 - Normalized repository team events to canonical provider-prefixed values (`github.pull_request`, `gitlab.merge_request`) and aligned GitHub inbound accepted responses with GitLab by returning `team_run_ids`.
 - Aligned README, platform documentation, and user guide wording around the Repository Automation Wizard as the recommended GitHub/GitLab repository automation path.
 - Documented the shared primitives consistently: Repository Integration stores credentials, Trigger listens, Flow runs deterministic steps, Agent acts with tools, and Team coordinates actors.
@@ -22,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added GitLab.com as a first-class repository provider alongside GitHub: tenant-scoped Hub connections, encrypted PAT storage with preview-only reads, `/api/hub/gitlab-integrations`, `/api/triggers/gitlab`, criteria dry-runs, inbound webhook ingestion, generated system-flow support, default-agent sync, and Team trigger bindings.
 - Extended the Code Repository skill to select `provider=github|gitlab`; existing configs without a provider continue to resolve as GitHub. GitLab read actions use GitLab REST API project paths and MR/issue semantics, while GitLab write actions remain fail-closed/unsupported unless a future release explicitly enables them.
 - Promoted repository trigger criteria to shared GitHub/GitLab event constants for push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events, preserving legacy GitHub PR criteria and top-level filters.
-- Updated Hub Repository Integrations, Agent Skills, Trigger Wizard/detail/index, Team Wizard/detail bindings, Flow Source rendering, documentation, and the generated OpenAPI artifact for GitHub/GitLab repository parity.
-- Updated the onboarding tour, platform documentation, and user guide to call out GitLab Repository Integrations, shared repository-trigger/skill credentials, token-scope expectations, and the live `mvpenha/questnexus` MR read validation.
+- Updated Hub Developer Tools repository connections, Agent Skills, Trigger Wizard/detail/index, Team Wizard/detail bindings, Flow Source rendering, documentation, and the generated OpenAPI artifact for GitHub/GitLab repository parity.
+- Updated the onboarding tour, platform documentation, and user guide to call out GitLab repository connections, shared repository-trigger/skill credentials, token-scope expectations, and the live `mvpenha/questnexus` MR read validation.
 
 ### Fixed — Empty skill configuration modals (2026-05-19)
 

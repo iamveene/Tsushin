@@ -624,7 +624,7 @@ export default function CustomToolsPage() {
       <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-5 flex items-center gap-4">
           <Link href="/hub?tab=developer" className="text-tsushin-slate hover:text-white transition-colors">
-            ← Back to Repository Integrations
+            ← Back to Developer Tools
           </Link>
         </div>
         <div className="flex justify-between items-start">

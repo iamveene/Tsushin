@@ -59,7 +59,7 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 
 During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI** and Sentinel LLM provider. If you skip provider keys during setup and later create the tenant's first LLM Provider Instance in Hub, Tsushin auto-attaches still-unbound System AI and Sentinel settings to that instance. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
 
-After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, GitHub/GitLab repository integrations, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
+After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, GitHub/GitLab repository connections, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
 
 ### Creating Your Organization
 
@@ -515,11 +515,11 @@ For full parameter details, see [documentation.md §9.4](documentation.md#94-san
 
 ### Code Repository skill (GitHub/GitLab) — v0.7.x
 
-The `code_repository` skill lets agents read from GitHub or GitLab and, for providers that support it, optionally act on repository objects. It's backed by a tenant-scoped repository connection in **Hub > Repository Integrations**.
+The `code_repository` skill lets agents read from GitHub or GitLab and, for providers that support it, optionally act on repository objects. It's backed by a tenant-scoped repository connection in **Hub > Developer Tools**.
 
 **Setup:**
 
-1. Go to **Hub > Repository Integrations** and add either a GitHub or GitLab connection. GitLab asks for a GitLab.com personal/project access token and optional default project path; GitHub asks for the GitHub token/default owner/repo fields.
+1. Go to **Hub > Developer Tools**, click **Add Repository Connection**, choose GitHub or GitLab, and enter the connection details. GitLab asks for a GitLab.com personal/project access token and optional default project path; GitHub asks for the GitHub token/default owner/repo fields.
 2. Open an agent's **Skills** tab, click **Add Skill**, pick **Code Repository**, choose GitHub or GitLab, and select the connection you just created.
 3. The capability matrix is split into **read** (default ON) and **write** (default OFF) groups:
    - **Read:** `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`.
@@ -675,15 +675,15 @@ The built-in web chat interface. No setup required -- always available in the si
 
 Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, a GitHub PR is opened, or a GitLab MR is updated) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
 
-All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Repository Integrations**, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows. For repository-review automation, prefer the Repository Automation Wizard; it wraps this trigger setup together with the review Flow and Agent/Team template choices.
+All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Developer Tools** repository connections, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows. For repository-review automation, prefer the Repository Automation Wizard; it wraps this trigger setup together with the review Flow and Agent/Team template choices.
 
 ### The trigger kinds
 
 - **Email** -- a Gmail saved-query polled every minute. Filter by subject, sender, label, body. Operators paste a saved Gmail search query (e.g., `is:unread label:support has:attachment`); the trigger fires once per matching message and dedupes on the message id.
 - **Webhook** -- inbound HMAC-signed POST from any external system. The wizard generates a slug (auto or custom), an HMAC signing secret, and an inbound URL like `https://<your-host>/api/webhooks/<slug>/inbound` that you paste into the external system.
 - **Jira** -- live JQL polling against a Jira Cloud project. Connect your Jira account once via Hub > Tool APIs > Jira (with an API token); the wizard then asks for a JQL query and a poll interval. One notification per deduped issue.
-- **GitHub** -- repository events on a connected repo. Connect your GitHub account once via Hub > Repository Integrations; the wizard then asks for the events to listen to and repository filters (branch, paths changed, author, draft state, title/body matchers for PRs).
-- **GitLab** -- GitLab.com project webhook events on a connected project. Connect GitLab once via Hub > Repository Integrations; the wizard asks for the full project path, events such as push or merge request, and the same shared repository criteria model.
+- **GitHub** -- repository events on a connected repo. Connect your GitHub account once via Hub > Developer Tools; the wizard then asks for the events to listen to and repository filters (branch, paths changed, author, draft state, title/body matchers for PRs).
+- **GitLab** -- GitLab.com project webhook events on a connected project. Connect GitLab once via Hub > Developer Tools; the wizard asks for the full project path, events such as push or merge request, and the same shared repository criteria model.
 
 ### What happens after you click "Create Trigger"
 
@@ -720,7 +720,7 @@ v0.7.0 split the Hub into four roles so the right surface owns each concern:
 |---|---|
 | **Hub > Channels** | WhatsApp / Telegram / Slack / Discord / Playground — bidirectional conversational transports. |
 | **Hub > Triggers** | Email / Webhook / Jira / GitHub / GitLab trigger instances. |
-| **Hub > Repository Integrations** | GitHub and GitLab connections reused by repository triggers and the Code Repository skill. |
+| **Hub > Developer Tools** | Shell Command Center, Sandboxed Tools, and GitHub/GitLab repository connections reused by repository triggers and the Code Repository skill. |
 | **Hub > Tool APIs** | Programmatic credentials reused by triggers and skills: Jira API token, Password Vault (1Password), Asana OAuth, search/flight providers, etc. The Email trigger reuses the Hub > Google connection for Gmail. |
 | **Hub > Local Services** | Auto-provisioned containers — Whisper / Speaches (ASR), Kokoro (TTS), Ollama (LLM), Qdrant (vector store). Lifecycle controls (start/stop/restart/logs/status) live here. |
 
