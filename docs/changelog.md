@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Empty skill configuration modals (2026-05-19)
+
+- Removed dead **Configure** and **Edit Options** affordances from standard skill cards when the only remaining schema fields are retired legacy/hybrid/keyword-trigger controls or other non-configurable runtime plumbing.
+- Agent Switcher no longer opens an empty configuration modal after retiring raw-text intent classification; the card remains visible with operational facts and only offers removal.
+
 ### Fixed — Provider credential alias wiring (2026-05-18)
 
 - Fixed provider configuration so API-key service aliases are resolved through one shared backend map: `brave` accepts `brave_search`, Google web search accepts `serpapi`, and Google Flights accepts either `google_flights` or the unified SerpAPI key created by the Tool APIs wizard.

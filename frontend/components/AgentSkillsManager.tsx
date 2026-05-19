@@ -169,6 +169,21 @@ const HIDDEN_CARD_CONFIG_KEYS = new Set([
   'use_ai_fallback',
 ])
 
+const RETIRED_FORM_CONFIG_KEYS = new Set([
+  'edit_handoff_keywords',
+  'edit_keywords',
+  'execution_mode',
+  'generate_keywords',
+  'keywords',
+  'trigger_keywords',
+  'trigger_mode',
+  'use_ai_fallback',
+])
+
+const SKILL_SPECIFIC_HIDDEN_FORM_CONFIG_KEYS: Record<string, Set<string>> = {
+  agent_switcher: new Set(['ai_model']),
+}
+
 const MODEL_LABELS: Record<string, string> = {
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   'gemini-2.5-flash-image': 'Gemini 2.5 Flash Image',
@@ -585,6 +600,29 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
+  const getSkillDefinition = (skillType: string): SkillDefinition | undefined => {
+    return availableSkills.find(s => s.skill_type === skillType)
+  }
+
+  const isConfigFieldVisible = (skillType: string, key: string): boolean => {
+    if (RETIRED_FORM_CONFIG_KEYS.has(key)) return false
+    if (SKILL_SPECIFIC_HIDDEN_FORM_CONFIG_KEYS[skillType]?.has(key)) return false
+    return true
+  }
+
+  const getVisibleConfigEntries = (skillType: string): [string, ConfigSchemaProperty][] => {
+    const schemaProperties = (getSkillDefinition(skillType)?.config_schema?.properties || {}) as Record<string, ConfigSchemaProperty>
+    return Object.entries(schemaProperties).filter(([key]) => isConfigFieldVisible(skillType, key))
+  }
+
+  const hasVisibleConfigFields = (skillType: string): boolean => {
+    return getVisibleConfigEntries(skillType).length > 0
+  }
+
+  const hasConfigUi = (skillType: string): boolean => {
+    return skillType === 'sandboxed_tools' || hasVisibleConfigFields(skillType)
+  }
+
   const getSkillIntegration = (skillType: string): SkillIntegration | undefined => {
     return skillIntegrations.find(si => si.skill_type === skillType)
   }
@@ -605,7 +643,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     }
   }
 
-  // Add a built-in skill and open its config modal
+  // Add a built-in skill and open its config UI only when one exists.
   const addBuiltinSkill = async (skillType: string) => {
     try {
       const skillDef = availableSkills.find(s => s.skill_type === skillType)
@@ -627,7 +665,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         openAudioConfig(skillType === 'audio_transcript' ? 'transcript' : 'tts')
       } else if (info?.configType === 'shell') {
         openShellConfig()
-      } else {
+      } else if (hasConfigUi(skillType)) {
         openConfig(skillType)
       }
     } catch (err) {
@@ -661,6 +699,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
   }
 
   const openConfig = (skillType: string) => {
+    if (skillType !== 'sandboxed_tools' && !hasVisibleConfigFields(skillType)) return
     setConfiguring(skillType)
     setConfigData(getSkillConfig(skillType))
     if (skillType === 'sandboxed_tools') {
@@ -1485,12 +1524,14 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
 
             <div className="mt-3 flex gap-2">
-              <button
-                onClick={() => openConfig(skillType)}
-                className="px-3 py-1 text-sm text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/30 rounded"
-              >
-                Edit Options
-              </button>
+              {hasVisibleConfigFields(skillType) && (
+                <button
+                  onClick={() => openConfig(skillType)}
+                  className="px-3 py-1 text-sm text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/30 rounded"
+                >
+                  Edit Options
+                </button>
+              )}
               <button
                 onClick={() => removeSkill(skillType, displayName)}
                 className="px-3 py-1 text-sm text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
@@ -1822,6 +1863,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     const Icon = display.icon
     const schemaProperties = (skill.config_schema?.properties || {}) as Record<string, ConfigSchemaProperty>
     const cardFacts = getSkillCardFacts(skill.skill_type, config, schemaProperties).slice(0, 6)
+    const canConfigure = hasConfigUi(skill.skill_type)
 
     return (
       <div
@@ -1839,14 +1881,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
             <p className="text-sm text-tsushin-slate">{display.description}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => openConfig(skill.skill_type)}
-              className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-1.5"
-            >
-              <SettingsIcon size={14} /> Configure
-            </button>
-          </div>
+          {canConfigure && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => openConfig(skill.skill_type)}
+                className="px-4 py-2 bg-teal-600 text-white text-sm rounded-lg hover:bg-teal-700 transition-colors inline-flex items-center gap-1.5"
+              >
+                <SettingsIcon size={14} /> Configure
+              </button>
+            </div>
+          )}
         </div>
 
         {cardFacts.length > 0 && (
@@ -1939,6 +1983,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
     configuringProvider === 'password_vault' ? passwordVaultProviders :
     []
   const selectedProviderData = currentProviders.find(p => p.provider_type === selectedProvider)
+  const visibleStandardConfigEntries =
+    configuring && configuring !== 'sandboxed_tools'
+      ? getVisibleConfigEntries(configuring)
+      : []
 
   return (
     <div className="space-y-6">
@@ -2036,6 +2084,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
             <div className="overflow-y-auto p-6 space-y-6 flex-1">
               {providerLoading ? (
                 <div className="text-center py-8">Loading providers...</div>
+              ) : currentProviders.length === 0 ? (
+                <div className="rounded-lg border border-tsushin-border bg-tsushin-ink/40 p-4 text-sm text-tsushin-slate">
+                  No provider options are available for this skill yet.
+                </div>
               ) : (
                 <>
                   {/* Provider Selection */}
@@ -2933,7 +2985,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       )}
 
       {/* Standard Configuration Modal */}
-      {configuring && configuring !== 'sandboxed_tools' && (
+      {configuring && configuring !== 'sandboxed_tools' && visibleStandardConfigEntries.length > 0 && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-tsushin-surface rounded-lg max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="bg-tsushin-elevated px-6 py-4 border-b flex justify-between items-center">
@@ -2949,18 +3001,17 @@ export default function AgentSkillsManager({ agentId }: Props) {
             </div>
 
             <div className="overflow-y-auto p-6 space-y-4 flex-1">
-              {availableSkills.find(s => s.skill_type === configuring)?.config_schema?.properties &&
-                Object.entries((availableSkills.find(s => s.skill_type === configuring)!.config_schema.properties || {}) as Record<string, ConfigSchemaProperty>).map(([key, schema]) => (
-                  <div key={key}>
-                    <label className="block text-sm font-medium mb-2 capitalize">
-                      {schema.title || key.replace(/_/g, ' ')}
-                    </label>
-                    {renderConfigInput(key, schema, configData[key])}
-                    {schema.description && (
-                      <p className="text-xs text-tsushin-muted mt-1">{schema.description}</p>
-                    )}
-                  </div>
-                ))}
+              {visibleStandardConfigEntries.map(([key, schema]) => (
+                <div key={key}>
+                  <label className="block text-sm font-medium mb-2 capitalize">
+                    {schema.title || key.replace(/_/g, ' ')}
+                  </label>
+                  {renderConfigInput(key, schema, configData[key])}
+                  {schema.description && (
+                    <p className="text-xs text-tsushin-muted mt-1">{schema.description}</p>
+                  )}
+                </div>
+              ))}
             </div>
 
             <div className="bg-tsushin-elevated px-6 py-4 border-t flex justify-end gap-3">
