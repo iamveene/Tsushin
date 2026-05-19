@@ -1243,7 +1243,7 @@ Type `/help all` to see syntax for all commands.
                 CustomSkill.tenant_id == tenant_id,
                 CustomSkill.is_enabled == True,
                 CustomSkill.scan_status == "clean",
-                CustomSkill.execution_mode.in_(["tool", "hybrid"]),
+                CustomSkill.execution_mode == "tool",
             ).order_by(CustomSkill.name).all()
 
             if custom_assignments:
@@ -1659,7 +1659,13 @@ Type `/help all` to see syntax for all commands.
                 return await self._execute_schedule_tool(tool_args, agent_id, sender_key, tenant_id)
 
             elif tool_name in ("flights", "voos", "flight"):
-                return await self._execute_flights_tool(tool_args, agent_id, sender_key)
+                return await self._execute_flights_tool(tool_args, agent_id, sender_key, tenant_id)
+
+            elif tool_name in ("browser", "navegador"):
+                return await self._execute_browser_tool(tool_args, agent_id, sender_key, tenant_id)
+
+            elif tool_name in ("image", "imagem"):
+                return await self._execute_image_tool(tool_args, agent_id, sender_key, tenant_id)
 
             else:
                 # Try to execute as custom tool
@@ -1701,7 +1707,7 @@ Type `/help all` to see syntax for all commands.
             }
 
     def _parse_shell_target_and_command(self, groups: tuple, args: str) -> Tuple[str, str]:
-        """Parse /shell target and command from either legacy or current regex groups."""
+        """Parse /shell target and command from supported regex groups."""
         if groups and len(groups) > 1:
             target = groups[0].strip() if groups[0] else "default"
             command = groups[1].strip() if groups[1] else ""
@@ -1747,7 +1753,8 @@ Type `/help all` to see syntax for all commands.
         self,
         args: str,
         agent_id: int,
-        sender_key: str
+        sender_key: str,
+        tenant_id: str
     ) -> Dict[str, Any]:
         """Execute the flights search tool via skill system."""
         if not args:
@@ -1756,13 +1763,176 @@ Type `/help all` to see syntax for all commands.
                 "message": "❌ Please specify flight details. Usage: /flights <origin> to <destination> on <date>\nExample: /flights NYC to LAX on 2025-02-15"
             }
 
-        # Flight search is handled by the skill system
-        # Return guidance for using the full message flow
-        return {
-            "status": "success",
-            "action": "flights_request",
-            "message": f"✈️ **Flight Search**\n\nSearching for: {args}\n\nFor best results, send a complete message like:\n\"Find flights from New York to Los Angeles on February 15\"\n\nThe agent will use the FlightSearchSkill to find options."
+        return await self._execute_skill_process_command(
+            skill_type="flight_search",
+            command_text=args,
+            agent_id=agent_id,
+            sender_key=sender_key,
+            tenant_id=tenant_id,
+            tool_name="flights",
+        )
+
+    async def _execute_browser_tool(
+        self,
+        args: str,
+        agent_id: int,
+        sender_key: str,
+        tenant_id: str
+    ) -> Dict[str, Any]:
+        """Execute explicit /browser instructions via BrowserAutomationSkill."""
+        if not args:
+            return {
+                "status": "error",
+                "message": "❌ Please specify a browser instruction. Usage: /browser <instruction>\nExample: /browser navigate to https://example.com and take a screenshot"
+            }
+
+        return await self._execute_skill_process_command(
+            skill_type="browser_automation",
+            command_text=args,
+            agent_id=agent_id,
+            sender_key=sender_key,
+            tenant_id=tenant_id,
+            tool_name="browser",
+        )
+
+    async def _execute_image_tool(
+        self,
+        args: str,
+        agent_id: int,
+        sender_key: str,
+        tenant_id: str
+    ) -> Dict[str, Any]:
+        """Execute explicit /image generation via ImageSkill's tool contract."""
+        if not args:
+            return {
+                "status": "error",
+                "message": "❌ Please describe the image to generate. Usage: /image <prompt>\nExample: /image a clean product mockup of a solar-powered backpack"
+            }
+
+        from agent.skills.base import InboundMessage, SkillResult
+        from agent.skills.skill_manager import SkillManager
+
+        message = InboundMessage(
+            id=f"slash_image_{datetime.utcnow().timestamp()}",
+            sender=sender_key,
+            sender_key=sender_key,
+            body=args,
+            chat_id=f"slash_{agent_id}",
+            chat_name=None,
+            is_group=False,
+            timestamp=datetime.utcnow(),
+            channel="slash_command",
+            metadata={"slash_command": True}
+        )
+        setattr(message, "tenant_id", tenant_id)
+        setattr(message, "agent_id", agent_id)
+
+        manager = SkillManager()
+        result = await manager.execute_tool_call(
+            db=self.db,
+            agent_id=agent_id,
+            tool_name="generate_image",
+            arguments={"prompt": args},
+            message=message,
+            sender_key=sender_key,
+            return_full_result=True,
+        )
+        if not isinstance(result, SkillResult):
+            return {
+                "status": "error",
+                "action": "tool_failed",
+                "tool_name": "image",
+                "message": str(result or "Image generation failed.")
+            }
+        return self._format_skill_command_result(result, tool_name="image")
+
+    async def _execute_skill_process_command(
+        self,
+        skill_type: str,
+        command_text: str,
+        agent_id: int,
+        sender_key: str,
+        tenant_id: str,
+        tool_name: str,
+    ) -> Dict[str, Any]:
+        """Run a skill's process() only for an explicit slash-command invocation."""
+        from models import Agent, AgentSkill
+        from agent.skills.base import InboundMessage
+        from agent.skills.skill_manager import SkillManager
+
+        skill_record = self.db.query(AgentSkill).filter(
+            AgentSkill.agent_id == agent_id,
+            AgentSkill.skill_type == skill_type,
+            AgentSkill.is_enabled == True,
+        ).first()
+        if not skill_record:
+            return {
+                "status": "error",
+                "action": "tool_failed",
+                "tool_name": tool_name,
+                "message": f"❌ The {skill_type} skill is not enabled for this agent."
+            }
+
+        manager = SkillManager()
+        skill_class = manager.registry.get(skill_type)
+        if not skill_class:
+            return {
+                "status": "error",
+                "action": "tool_failed",
+                "tool_name": tool_name,
+                "message": f"❌ The {skill_type} skill is not registered."
+            }
+
+        skill_instance = manager._create_skill_instance(skill_class, self.db, agent_id)
+        if hasattr(skill_instance, "set_db_session"):
+            skill_instance.set_db_session(self.db)
+        skill_instance._agent_id = agent_id
+
+        agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        config = {
+            **skill_class.get_default_config(),
+            **(skill_record.config or {}),
+            "agent_id": agent_id,
+            "tenant_id": tenant_id or (agent.tenant_id if agent else None),
+            "db": self.db,
         }
+        skill_instance._config = config
+
+        message = InboundMessage(
+            id=f"slash_{skill_type}_{datetime.utcnow().timestamp()}",
+            sender=sender_key,
+            sender_key=sender_key,
+            body=command_text,
+            chat_id=f"slash_{agent_id}",
+            chat_name=None,
+            is_group=False,
+            timestamp=datetime.utcnow(),
+            channel="slash_command",
+            metadata={"slash_command": True}
+        )
+        setattr(message, "tenant_id", config.get("tenant_id"))
+        setattr(message, "agent_id", agent_id)
+
+        result = await skill_instance.process(message, config)
+        return self._format_skill_command_result(result, tool_name=tool_name)
+
+    def _format_skill_command_result(self, result, tool_name: str) -> Dict[str, Any]:
+        """Convert SkillResult into a slash-command response."""
+        payload = {
+            "status": "success" if result.success else "error",
+            "action": "tool_executed" if result.success else "tool_failed",
+            "tool_name": tool_name,
+            "message": result.output,
+        }
+        if getattr(result, "media_paths", None):
+            payload["media_paths"] = result.media_paths
+        if getattr(result, "metadata", None):
+            payload["tool_result_structured"] = {
+                "skill_type": result.metadata.get("skill_type", tool_name),
+                "metadata": result.metadata,
+                "output": result.output,
+            }
+        return payload
 
     def _parse_tool_arguments(
         self,

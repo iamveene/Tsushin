@@ -4641,6 +4641,22 @@ Current turn: {thread.current_turn} of {thread.max_turns}
                 else:
                     self.logger.error(f"[SLASH] Failed to send response to {recipient} via {channel}")
 
+            if result.get("media_paths"):
+                recipient = message.get("chat_id") or message.get("sender")
+                channel = message.get("channel", "whatsapp")
+                for media_path in result["media_paths"]:
+                    media_success = await self._send_message(
+                        recipient=recipient,
+                        message_text="",
+                        channel=channel,
+                        agent_id=agent_id,
+                        media_path=media_path,
+                    )
+                    if media_success:
+                        self.logger.info(f"[SLASH] Media sent to {channel}: {media_path}")
+                    else:
+                        self.logger.error(f"[SLASH] Failed to send media to {channel}: {media_path}")
+
             # Handle special actions from command execution
             if result.get("action") == "switch_agent" and result.get("data", {}).get("agent_id"):
                 # Save agent preference

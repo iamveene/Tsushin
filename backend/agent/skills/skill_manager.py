@@ -362,15 +362,14 @@ class SkillManager:
         agent_id: int
     ) -> Tuple[List[Dict[str, Any]], str]:
         """
-        Get tool definitions from skills that are in agentic mode.
+        Get tool definitions from enabled tool skills.
 
         DEPRECATED: Use get_tool_definitions_for_agent() for new code.
 
         Phase 18.3.8: For skills with is_tool_enabled() returning True,
         collect their tool definitions for LLM function calling.
 
-        This allows skills like ShellSkill to expose their tools to the AI
-        when configured in 'agentic' execution_mode.
+        This allows skills like ShellSkill to expose their tools to the AI.
 
         Args:
             db: Database session
@@ -459,17 +458,6 @@ class SkillManager:
                                             "description": mcp_def.get("description", ""),
                                             "parameters": mcp_def.get("inputSchema", {"type": "object", "properties": {}})
                                         }
-                                    }
-
-                        # Fallback to legacy get_tool_definition
-                        if not tool_def and hasattr(skill_class, 'get_tool_definition'):
-                            tool_def = skill_class.get_tool_definition()
-                            if tool_def:
-                                # Convert to OpenAI function-calling format if needed
-                                if "type" not in tool_def:
-                                    tool_def = {
-                                        "type": "function",
-                                        "function": tool_def
                                     }
 
                         if tool_def:
@@ -836,12 +824,13 @@ class SkillManager:
                     return result
                 return result.output if result.success else f"Error: {result.output}"
             except NotImplementedError:
-                # SKILL-004 Fix: Use WARNING level to improve visibility of legacy fallback
-                logger.warning(
-                    f"Skill '{skill_class.skill_type}' doesn't support execute_tool() - "
-                    f"using legacy handler. Consider migrating to Skills-as-Tools."
+                logger.error(
+                    f"Skill '{skill_class.skill_type}' exposes tool '{tool_name}' but does not implement execute_tool()."
                 )
-                return await self._legacy_execute_skill_tool(db, agent_id, tool_name, arguments, sender_key)
+                error = f"Error: Skill '{skill_class.skill_type}' does not support tool execution"
+                if return_full_result:
+                    return SkillResult(success=False, output=error, metadata={"error": "tool_not_implemented"})
+                return error
 
         except Exception as e:
             logger.error(f"Error executing tool '{tool_name}': {e}", exc_info=True)
@@ -880,18 +869,8 @@ class SkillManager:
                 if mcp_def and mcp_def.get("name") == tool_name:
                     return skill_class
 
-                # Fallback: Check legacy get_tool_definition
-                tool_def = inst.get_tool_definition() if hasattr(inst, 'get_tool_definition') else skill_class.get_tool_definition()
             except Exception:
                 continue
-
-            if tool_def:
-                # Handle both wrapped and unwrapped formats
-                if tool_def.get("type") == "function":
-                    if tool_def.get("function", {}).get("name") == tool_name:
-                        return skill_class
-                elif tool_def.get("name") == tool_name:
-                    return skill_class
 
         # BUG-353 FIX: Custom skills are registered under "custom:{slug}" keys but
         # their tool definitions use "custom_{slug}" names.  The dynamic subclass
@@ -1042,118 +1021,6 @@ class SkillManager:
             logger.error(f"Error getting skill record: {e}")
             return None
 
-    async def _legacy_execute_skill_tool(
-        self,
-        db: Session,
-        agent_id: int,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        sender_key: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Legacy handler for skills that haven't migrated to execute_tool().
-
-        Preserves backward compatibility with existing tool execution.
-        """
-        # Map tool names to skill types (legacy mapping)
-        tool_to_skill = {
-            'run_shell_command': 'shell'
-        }
-
-        skill_type = tool_to_skill.get(tool_name)
-        if not skill_type:
-            return None
-
-        # Handle shell tool execution (legacy)
-        if tool_name == 'run_shell_command':
-            from agent.tools.shell_tool import run_shell_command
-
-            script = arguments.get('script', '')
-            target = arguments.get('target', 'default')
-            timeout = arguments.get('timeout', 60)
-
-            result = await run_shell_command(
-                script=script,
-                db=db,
-                agent_id=agent_id,
-                target=target,
-                timeout=timeout,
-                sender_key=sender_key
-            )
-
-            return result
-
-        return None
-
-    async def execute_skill_tool(
-        self,
-        db: Session,
-        agent_id: int,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        sender_key: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Execute a skill-based tool call (legacy method).
-
-        DEPRECATED: New code should use execute_tool_call() which supports
-        the Skills-as-Tools architecture with execute_tool() on skill classes.
-
-        Phase 18.3.8: When AI calls a skill tool (like run_shell_command),
-        this method routes the call to the appropriate skill.
-
-        Args:
-            db: Database session
-            agent_id: Agent ID
-            tool_name: Name of the tool (e.g., 'run_shell_command')
-            arguments: Tool arguments from AI
-            sender_key: Sender identifier for tracking
-
-        Returns:
-            Tool execution result as string, or None if tool not found
-        """
-        try:
-            # Map tool names to skill types
-            tool_to_skill = {
-                'run_shell_command': 'shell'
-            }
-
-            skill_type = tool_to_skill.get(tool_name)
-            if not skill_type:
-                logger.warning(f"Unknown skill tool: {tool_name}")
-                return None
-
-            # Check if skill is enabled for this agent
-            skill_config = await self.get_skill_config(db, agent_id, skill_type)
-            if skill_config is None:
-                logger.warning(f"Skill '{skill_type}' not enabled for agent {agent_id}")
-                return f"L Error: {skill_type} skill is not enabled for this agent"
-
-            # Handle shell tool execution
-            if tool_name == 'run_shell_command':
-                from agent.tools.shell_tool import run_shell_command
-
-                script = arguments.get('script', '')
-                target = arguments.get('target', 'default')
-                timeout = arguments.get('timeout', 60)
-
-                result = await run_shell_command(
-                    script=script,
-                    db=db,
-                    agent_id=agent_id,
-                    target=target,
-                    timeout=timeout,
-                    sender_key=sender_key
-                )
-
-                return result
-
-            return None
-
-        except Exception as e:
-            logger.error(f"Error executing skill tool '{tool_name}': {e}", exc_info=True)
-            return f"L Error executing {tool_name}: {str(e)}"
-
     async def process_message_with_skills(
         self,
         db: Session,
@@ -1161,9 +1028,11 @@ class SkillManager:
         message: InboundMessage
     ) -> Optional[SkillResult]:
         """
-        Try to process message with agent's enabled skills.
+        Process special media hooks for enabled skills.
 
-        Skills are tried in order until one handles the message.
+        Text-only skill dispatch is intentionally not performed here. Tool
+        skills are triggered by LLM tool calls; deterministic user triggers go
+        through SlashCommandService.
 
         Args:
             db: Database session
@@ -1176,7 +1045,7 @@ class SkillManager:
         try:
             logger.info(f"process_message_with_skills called for agent {agent_id}, media_type={message.media_type}")
 
-            # Track if audio was transcribed (for returning transcript if no other skill handles it)
+            # Track if audio was transcribed (for returning transcript if no media hook handles it)
             saved_transcript_result = None
 
             # Get enabled skills for this agent
@@ -1187,7 +1056,68 @@ class SkillManager:
                 logger.debug(f"No skills enabled for agent {agent_id}")
                 return None
 
-            # Special handling for audio messages: transcribe first, then let other skills process
+            agent_obj = None
+
+            def _get_agent():
+                nonlocal agent_obj
+                if agent_obj is None:
+                    from models import Agent
+                    agent_obj = db.query(Agent).filter(Agent.id == agent_id).first()
+                return agent_obj
+
+            async def _run_direct_media_skill(skill_record: AgentSkill) -> Optional[SkillResult]:
+                skill_type = skill_record.skill_type
+                if skill_type not in self.registry:
+                    logger.warning(
+                        f"Skill type '{skill_type}' enabled for agent {agent_id} "
+                        f"but not registered in manager"
+                    )
+                    return None
+
+                skill_class = self.registry[skill_type]
+                skill_instance = self._create_skill_instance(skill_class, db, agent_id)
+                if hasattr(skill_instance, 'set_db_session'):
+                    skill_instance.set_db_session(db)
+                if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
+                    skill_instance.set_token_tracker(self.token_tracker)
+                skill_instance._agent_id = agent_id
+
+                config = dict(skill_record.config or {})
+                config['agent_id'] = agent_id
+                agent = _get_agent()
+                if agent and agent.tenant_id and not config.get('tenant_id'):
+                    config['tenant_id'] = agent.tenant_id
+                skill_instance._config = config
+
+                try:
+                    can_handle = await skill_instance.can_handle(message)
+                    logger.info(f"Media skill '{skill_type}' can_handle result: {can_handle}")
+                    if not can_handle:
+                        return None
+
+                    tenant_id = config.get('tenant_id')
+                    if tenant_id:
+                        emit_skill_used_async(
+                            tenant_id=tenant_id,
+                            agent_id=agent_id,
+                            skill_type=skill_type,
+                            skill_name=getattr(skill_instance, 'name', skill_type)
+                        )
+
+                    result = await skill_instance.process(message, config)
+                    if not result.metadata:
+                        result.metadata = {}
+                    result.metadata['skill_type'] = skill_type
+                    return result
+                except Exception as e:
+                    logger.error(
+                        f"Error executing media skill '{skill_type}' for agent {agent_id}: {e}",
+                        exc_info=True
+                    )
+                    return None
+
+            # Special handling for audio messages: transcribe first. The transcript
+            # is returned to the caller; it does not re-enter text skill dispatch.
             if message.media_type and message.media_type.lower().startswith('audio'):
                 logger.info("Audio message detected - checking for audio_transcript skill first")
 
@@ -1212,8 +1142,7 @@ class SkillManager:
                         config = dict(audio_skill.config or {})
                         config['agent_id'] = agent_id
 
-                        from models import Agent
-                        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+                        agent = _get_agent()
                         if agent:
                             if agent.tenant_id and not config.get('tenant_id'):
                                 config['tenant_id'] = agent.tenant_id
@@ -1235,7 +1164,7 @@ class SkillManager:
                                 message.body = transcript_result.processed_content
                                 message.media_type = None  # Clear media type so other skills see it as text
 
-                                logger.info("Message updated with transcript - continuing to other skills")
+                                logger.info("Message updated with transcript")
 
                                 # Save transcript result to return if no other skill handles it
                                 saved_transcript_result = transcript_result
@@ -1247,114 +1176,20 @@ class SkillManager:
                             logger.error(f"Error during audio transcription: {e}", exc_info=True)
                             # Continue to try other skills even if transcription fails
 
-            # Try each skill in order
-            for skill_record in agent_skills:
-                skill_type = skill_record.skill_type
-
-                # Skip audio_transcript if we already processed it above
-                if skill_type == 'audio_transcript':
-                    logger.info(f"Skipping audio_transcript (already processed)")
-                    continue
-
-                logger.info(f"Checking skill: {skill_type}")
-
-                # Check if skill type is registered
-                if skill_type not in self.registry:
-                    logger.warning(
-                        f"Skill type '{skill_type}' enabled for agent {agent_id} "
-                        f"but not registered in manager"
-                    )
-                    continue
-
-                logger.info(f"Skill '{skill_type}' is registered, creating instance...")
-                skill_class = self.registry[skill_type]
-
-                # SKILL-002 Fix: Use centralized _create_skill_instance method
-                skill_instance = self._create_skill_instance(skill_class, db, agent_id)
-
-                # Phase 7.4: Set database session for all skills (for API key loading in AI classification)
-                if hasattr(skill_instance, 'set_db_session'):
-                    skill_instance.set_db_session(db)
-
-                # Phase 0.6.0: Set token tracker for all skills (for LLM cost monitoring)
-                if hasattr(skill_instance, 'set_token_tracker') and self.token_tracker:
-                    skill_instance.set_token_tracker(self.token_tracker)
-
-                # Phase 6.11.4: Pass agent_id to all skills for Agendador detection
-                skill_instance._agent_id = agent_id
-
-                # Phase 7.1: Inject skill configuration for can_handle() to access
-                skill_instance._config = skill_record.config or {}
-
-                # Check if skill can handle this message
-                try:
-                    logger.info(f"Calling can_handle for '{skill_type}'...")
-                    can_handle = await skill_instance.can_handle(message)
-                    logger.info(f"Skill '{skill_type}' can_handle result: {can_handle}")
-
-                    if not can_handle:
-                        logger.debug(
-                            f"Skill '{skill_type}' cannot handle message "
-                            f"(media_type={message.media_type})"
-                        )
+            # Special image media handoff: analysis runs first and can defer to
+            # image editing/generation when the attached caption asks for it.
+            media_type = (message.media_type or "").lower()
+            if media_type in {"image", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}:
+                records_by_type = {s.skill_type: s for s in agent_skills if s.is_enabled}
+                for skill_type in ("image_analysis", "image"):
+                    skill_record = records_by_type.get(skill_type)
+                    if not skill_record:
                         continue
+                    result = await _run_direct_media_skill(skill_record)
+                    if result:
+                        return result
 
-                    # Skill can handle - process the message
-                    logger.info(
-                        f"Processing message with skill '{skill_type}' "
-                        f"for agent {agent_id}"
-                    )
-
-                    # Inject agent_id and tenant_id into config for skills that need database access
-                    config = skill_record.config or {}
-                    config['agent_id'] = agent_id
-
-                    # BUG-384: Get tenant_id from agent — also handle config with tenant_id=None
-                    if not config.get('tenant_id'):
-                        from models import Agent
-                        agent = db.query(Agent).filter(Agent.id == agent_id).first()
-                        if agent:
-                            config['tenant_id'] = agent.tenant_id
-
-                    # Phase 8: Emit skill_used event BEFORE processing
-                    # so Graph View shows the glow immediately when a skill is activated
-                    tenant_id = config.get('tenant_id')
-                    if tenant_id:
-                        emit_skill_used_async(
-                            tenant_id=tenant_id,
-                            agent_id=agent_id,
-                            skill_type=skill_type,
-                            skill_name=getattr(skill_instance, 'name', skill_type)
-                        )
-
-                    result = await skill_instance.process(message, config)
-
-                    if result.success:
-                        logger.info(
-                            f"Skill '{skill_type}' successfully processed message "
-                            f"for agent {agent_id}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Skill '{skill_type}' processing failed: {result.output}"
-                        )
-
-                    # Add skill_type to metadata for tracking
-                    if not result.metadata:
-                        result.metadata = {}
-                    result.metadata['skill_type'] = skill_type
-
-                    return result
-
-                except Exception as e:
-                    logger.error(
-                        f"Error executing skill '{skill_type}' for agent {agent_id}: {e}",
-                        exc_info=True
-                    )
-                    # Continue to next skill instead of failing completely
-                    continue
-
-            # No skill handled the message, but if we transcribed audio, return that
+            # No media hook handled the message, but if we transcribed audio, return that
             if saved_transcript_result:
                 logger.info("Returning transcript result (no other skill handled the message)")
                 return saved_transcript_result
@@ -1624,7 +1459,7 @@ class SkillManager:
         - Assigned and enabled for this agent
         - Globally enabled on the CustomSkill record
         - Have clean scan status
-        - Are in 'tool' or 'hybrid' execution mode
+        - Are in 'tool' execution mode
 
         Args:
             db: Database session
@@ -1644,7 +1479,7 @@ class SkillManager:
                 AgentCustomSkill.is_enabled == True,
                 CustomSkill.is_enabled == True,
                 CustomSkill.scan_status == 'clean',
-                CustomSkill.execution_mode.in_(['tool', 'hybrid']),
+                CustomSkill.execution_mode == 'tool',
             ).all()
 
             tool_defs = []
@@ -1676,11 +1511,10 @@ class SkillManager:
         assigned to this agent.
 
         BUG-509: Only skills with ``execution_mode == 'passive'`` inject their raw
-        ``instructions_md`` into the system prompt. Tool/hybrid instruction skills
-        are exposed as callable tools instead and execute through the LLM adapter
-        at runtime (matching the /api/custom-skills/{id}/test behavior), so their
-        raw instructions must NOT be dumped back into the prompt (that is what
-        caused the Playground response to leak the instruction template verbatim).
+        ``instructions_md`` into the system prompt. Tool instruction skills are
+        exposed as callable tools instead and execute through the LLM adapter at
+        runtime (matching the /api/custom-skills/{id}/test behavior), so their raw
+        instructions must NOT be dumped back into the prompt.
 
         Args:
             db: Database session

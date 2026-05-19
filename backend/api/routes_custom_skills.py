@@ -420,12 +420,14 @@ async def create_custom_skill(
         raise HTTPException(status_code=400, detail="skill_type_variant must be one of: instruction, script, mcp_server")
 
     # Validate execution_mode
-    if payload.execution_mode not in ('tool', 'hybrid', 'passive'):
-        raise HTTPException(status_code=400, detail="execution_mode must be one of: tool, hybrid, passive")
+    if payload.execution_mode not in ('tool', 'passive'):
+        raise HTTPException(status_code=400, detail="execution_mode must be one of: tool, passive")
 
     # Validate trigger_mode
-    if payload.trigger_mode not in ('keyword', 'always_on', 'llm_decided'):
-        raise HTTPException(status_code=400, detail="trigger_mode must be one of: keyword, always_on, llm_decided")
+    if payload.trigger_mode != 'llm_decided':
+        raise HTTPException(status_code=400, detail="trigger_mode must be llm_decided")
+    if payload.trigger_keywords:
+        raise HTTPException(status_code=400, detail="trigger_keywords are no longer supported for custom skills")
 
     # Validate script_language if provided
     if payload.script_language and payload.script_language not in ('python', 'bash', 'nodejs'):
@@ -481,7 +483,7 @@ async def create_custom_skill(
         input_schema=payload.input_schema or {},
         config_schema=payload.config_schema or [],
         trigger_mode=payload.trigger_mode,
-        trigger_keywords=payload.trigger_keywords or [],
+        trigger_keywords=[],
         priority=payload.priority,
         sentinel_profile_id=payload.sentinel_profile_id,
         timeout_seconds=payload.timeout_seconds,
@@ -581,6 +583,13 @@ async def update_custom_skill(
     # Validate script_language if provided
     if payload.script_language and payload.script_language not in ('python', 'bash', 'nodejs'):
         raise HTTPException(status_code=400, detail="script_language must be one of: python, bash, nodejs")
+
+    if payload.execution_mode is not None and payload.execution_mode not in ('tool', 'passive'):
+        raise HTTPException(status_code=400, detail="execution_mode must be one of: tool, passive")
+    if payload.trigger_mode is not None and payload.trigger_mode != 'llm_decided':
+        raise HTTPException(status_code=400, detail="trigger_mode must be llm_decided")
+    if payload.trigger_keywords:
+        raise HTTPException(status_code=400, detail="trigger_keywords are no longer supported for custom skills")
 
     # Validate script_entrypoint (prevent path traversal / injection)
     # BUG-498: Accept both filenames (main.py) and bare function names (main)

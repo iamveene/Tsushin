@@ -27,8 +27,8 @@ class SearchSkill(BaseSkill):
     """
     Multi-provider Web Search: Search the internet for information.
 
-    When triggered by search-related keywords, this skill performs web searches
-    using the configured provider and returns formatted results.
+    When invoked as an LLM tool or through /search, this skill performs web
+    searches using the configured provider and returns formatted results.
 
     PROVIDERS (via SearchProviderRegistry):
     - Brave Search: Fast and privacy-focused (default)
@@ -41,14 +41,12 @@ class SearchSkill(BaseSkill):
         "max_results": 5,              # Number of results (1-20)
         "language": "en",              # Search language preference
         "country": "US",               # Search country preference
-        "safe_search": true,           # Enable safe search filtering
-        "ai_model": "gemini-2.5-flash", # Model for LLM intent classification
-        "execution_mode": "tool"       # "tool", "legacy", or "hybrid"
+        "safe_search": true            # Enable safe search filtering
     }
 
     Skills-as-Tools (Phase 2):
     - Tool name: web_search
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     """
 
     skill_type = "web_search"
@@ -144,20 +142,9 @@ class SearchSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains web-search intent.
-
-        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
+        Search is triggered by LLM tool calls and /search slash commands only.
         """
-        config = getattr(self, '_config', {}) or self.get_default_config()
-        if not self.is_legacy_enabled(config):
-            return False
-
-        if not (message.body and message.body.strip()):
-            return False
-
-        result = await self._ai_classify(message.body, config)
-        logger.info(f"SearchSkill: AI classification result={result}")
-        return result
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -519,7 +506,6 @@ Search query:"""
         """
         return {
             "provider": "brave",  # Default provider
-            "ai_model": "gemini-2.5-flash",
             "max_results": 5,
             "language": "en",
             "country": "US",
@@ -547,11 +533,6 @@ Search query:"""
                     "description": "Search provider to use",
                     "default": "brave"
                 },
-                "ai_model": {
-                    "type": "string",
-                    "description": "AI model for intent classification",
-                    "default": "gemini-2.5-flash"
-                },
                 "max_results": {
                     "type": "integer",
                     "minimum": 1,
@@ -573,12 +554,6 @@ Search query:"""
                     "type": "boolean",
                     "description": "Enable safe search filtering",
                     "default": True
-                },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
-                    "default": "tool"
                 }
             }
         }

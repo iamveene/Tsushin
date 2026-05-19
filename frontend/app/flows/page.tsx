@@ -582,6 +582,21 @@ function rowsToToolArguments(rows: FlowHeaderConfig[]): Record<string, any> {
   }, {})
 }
 
+function formatToolArguments(value: Record<string, any> | undefined | null): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '{}'
+  return JSON.stringify(value, null, 2)
+}
+
+function parseToolArguments(value: string): Record<string, any> | null {
+  if (!value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 function normalizeStringMapRows(value: Record<string, any> | undefined | null): FlowHeaderConfig[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
@@ -2191,7 +2206,7 @@ export default function FlowsPage() {
                 className="px-4 py-2.5 bg-teal-500/10 text-teal-300 border border-teal-500/30 font-medium rounded-lg
                            hover:bg-teal-500/15 hover:border-teal-500/50 transition-all
                            flex items-center gap-2"
-                title="Create a flow from a pre-built hybrid automation template"
+                title="Create a flow from a pre-built automation template"
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -4835,21 +4850,26 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
-              Prompt
-              <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
+              Tool Arguments
+              <span className="text-slate-500 text-xs ml-2">JSON passed directly to the skill tool</span>
             </label>
             <TemplateTextarea
-              value={currentConfig?.prompt || ''}
-              onValueChange={(v) => updateConfig('prompt', v)}
-              rows={3}
-              placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+              value={formatToolArguments(currentConfig?.tool_arguments)}
+              onValueChange={(v) => {
+                const parsed = parseToolArguments(v)
+                if (parsed !== null) {
+                  updateConfigMany({ use_tool_mode: true, tool_arguments: parsed })
+                }
+              }}
+              rows={5}
+              placeholder='{"action":"list","days_ahead":7}'
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm font-mono
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
               allSteps={stepInfoList}
               currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
-              <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
+              <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Use a Slash Command step for command strings such as /flights, /browser, or /image.</span>
             </p>
           </div>
 
@@ -4857,16 +4877,16 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
           {currentConfig?.skill_type === 'flight_search' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><PlaneIcon size={12} /> Flight Search Tips:</span> Include origin, destination, date, and currency.
-                <br />Example: "busque voos de VIX para GRU dia 20 de Janeiro de 2026 em BRL"
+                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><PlaneIcon size={12} /> Flight Search Tips:</span> Use keys such as origin, destination, departure_date, return_date, passengers, and currency.
+                <br />Example: {'{'}"origin":"VIX","destination":"GRU","departure_date":"2026-01-20","currency":"BRL"{'}'}
               </p>
             </div>
           )}
           {currentConfig?.skill_type === 'scheduler' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium">📅 Scheduler Tips:</span> Be specific about date, time, and event details.
-                <br />Example: "agende uma reunião para amanhã às 14h com título Sync Semanal"
+                <span className="text-cyan-400 font-medium">📅 Scheduler Tips:</span> Use action plus the required fields for that action.
+                <br />Example: {'{'}"action":"create","title":"Sync Semanal","datetime":"2026-05-20T14:00:00"{'}'}
               </p>
             </div>
           )}
@@ -6334,21 +6354,26 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
-              Prompt
-              <span className="text-slate-500 text-xs ml-2">Natural language instruction for the skill</span>
+              Tool Arguments
+              <span className="text-slate-500 text-xs ml-2">JSON passed directly to the skill tool</span>
             </label>
             <TemplateTextarea
-              value={currentConfig?.prompt || ''}
-              onValueChange={(v) => updateConfig('prompt', v)}
-              rows={3}
-              placeholder="e.g., busque voos de VIX para CGH dia 16 de Março de 2026 em BRL"
-              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm
+              value={formatToolArguments(currentConfig?.tool_arguments)}
+              onValueChange={(v) => {
+                const parsed = parseToolArguments(v)
+                if (parsed !== null) {
+                  updateConfigMany({ use_tool_mode: true, tool_arguments: parsed })
+                }
+              }}
+              rows={5}
+              placeholder='{"action":"list","days_ahead":7}'
+              className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm font-mono
                          focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
               allSteps={stepInfoList}
               currentStepPosition={step.position}
             />
             <p className="text-xs text-slate-500 mt-1">
-              <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Write as if you were asking the agent directly. Use {'{{'}step_N.field{'}}'} to inject data from previous steps.</span>
+              <span className="inline-flex items-center gap-1"><LightbulbIcon size={12} /> Use a Slash Command step for command strings such as /flights, /browser, or /image.</span>
             </p>
           </div>
 
@@ -6356,16 +6381,16 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
           {currentConfig?.skill_type === 'flight_search' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><PlaneIcon size={12} /> Flight Search Tips:</span> Include origin, destination, date, and currency.
-                <br />Example: "busque voos de VIX para GRU dia 20 de Janeiro de 2026 em BRL"
+                <span className="text-cyan-400 font-medium inline-flex items-center gap-1"><PlaneIcon size={12} /> Flight Search Tips:</span> Use keys such as origin, destination, departure_date, return_date, passengers, and currency.
+                <br />Example: {'{'}"origin":"VIX","destination":"GRU","departure_date":"2026-01-20","currency":"BRL"{'}'}
               </p>
             </div>
           )}
           {currentConfig?.skill_type === 'scheduler' && (
             <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
               <p className="text-xs text-slate-400">
-                <span className="text-cyan-400 font-medium">📅 Scheduler Tips:</span> Be specific about date, time, and event details.
-                <br />Example: "agende uma reunião para amanhã às 14h com título Sync Semanal"
+                <span className="text-cyan-400 font-medium">📅 Scheduler Tips:</span> Use action plus the required fields for that action.
+                <br />Example: {'{'}"action":"create","title":"Sync Semanal","datetime":"2026-05-20T14:00:00"{'}'}
               </p>
             </div>
           )}

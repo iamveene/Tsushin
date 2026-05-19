@@ -360,8 +360,7 @@ class ImageAnalysisSkill(BaseSkill):
                 "If it is a screenshot, explain the key issue or information visible. "
                 "Be concise but useful."
             ),
-            "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"],
-            "execution_mode": "special"
+            "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"]
         }
 
     @classmethod
@@ -383,12 +382,6 @@ class ImageAnalysisSkill(BaseSkill):
                     "type": "array",
                     "items": {"type": "string", "enum": ["whatsapp", "playground", "telegram", "slack", "discord"]},
                     "description": "Channels where this skill is active"
-                },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["special", "legacy"],
-                    "description": "Execution mode for media-triggered analysis",
-                    "default": "special"
                 }
             },
             "required": ["model"]

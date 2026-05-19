@@ -59,7 +59,7 @@ class BaseSkill(ABC):
     - process(): Execute the skill logic
 
     Skills-as-Tools (MCP Standard):
-    Skills can optionally implement tool mode to be exposed as LLM function calls:
+    Skills can implement tool mode to be exposed as LLM function calls:
     - get_mcp_tool_definition(): Return MCP-compliant tool definition
     - execute_tool(): Execute the skill as a tool call
     - is_tool_enabled(): Check if tool mode is active
@@ -70,14 +70,13 @@ class BaseSkill(ABC):
     skill_name: str = "Base Skill"
     skill_description: str = "Base skill class (override this)"
 
-    # Skills-as-Tools: Execution mode (can be overridden by subclass or config)
-    # Values: "legacy", "tool", "hybrid", "passive", "special"
-    # - "legacy"/"programmatic": Keyword/slash command only (no LLM tool exposure)
-    # - "tool"/"agentic": LLM tool call only (no keyword detection)
-    # - "hybrid": Both tool and legacy modes supported
+    # Skills-as-Tools: Execution mode.
+    # Active values: "tool", "passive", "special".
+    # - "tool": LLM tool call only
     # - "passive": Post-processing hook (e.g., adaptive_personality, knowledge_sharing)
     # - "special": Media-triggered (e.g., audio_transcript)
-    execution_mode: str = "legacy"
+    # Slash commands are separate deterministic entry points, not execution modes.
+    execution_mode: str = "tool"
 
     # Wizard-facing metadata (read by SkillManager.list_available_skills() and
     # rendered by the frontend Agent Wizard → Step Skills). Backend is the single
@@ -183,12 +182,7 @@ class BaseSkill(ABC):
                 "ai_model": "gemini-2.5-flash"
             }
         """
-        return {
-            # use_ai_fallback retained for back-compat with stored configs (no-op when
-            # the skill no longer uses keyword routing — skills route via LLM now).
-            "use_ai_fallback": True,
-            "ai_model": "gemini-2.5-flash-lite"  # Model for intent classification
-        }
+        return {}
 
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
@@ -212,14 +206,7 @@ class BaseSkill(ABC):
         """
         return {
             "type": "object",
-            "properties": {
-                "ai_model": {
-                    "type": "string",
-                    "enum": ["gemini-2.5-flash", "gpt-3.5-turbo", "claude-haiku"],
-                    "description": "AI model for intent classification",
-                    "default": "gemini-2.5-flash"
-                }
-            },
+            "properties": {},
             "required": []
         }
 
@@ -288,47 +275,31 @@ class BaseSkill(ABC):
         sent to the LLM for function calling.
 
         Args:
-            config: Skill configuration (from AgentSkill.config)
+            config: Ignored compatibility argument. Persisted configuration no
+                longer controls skill execution mode.
 
         Returns:
-            True if tool should be available for AI/agentic use.
-            False if only slash command/keyword triggers work.
+            True if tool should be available for AI tool calls.
+            False for passive or special media-only skills.
         """
-        config = config or getattr(self, '_config', {}) or {}
-        execution_mode = config.get('execution_mode', self.execution_mode)
+        _ = config or getattr(self, '_config', {}) or {}
+        execution_mode = self.execution_mode
 
-        # Support both old and new terminology
-        if execution_mode in ('tool', 'agentic'):
+        if execution_mode == 'tool':
             return True
-        if execution_mode == 'hybrid':
-            return True  # Hybrid exposes as tool AND supports legacy
-        if execution_mode in ('legacy', 'programmatic', 'passive', 'special'):
+        if execution_mode in ('passive', 'special'):
             return False
 
-        return False  # Default to not exposing as tool
+        return False
 
     def is_legacy_enabled(self, config: Optional[Dict[str, Any]] = None) -> bool:
         """
-        Check if legacy keyword/slash command mode is enabled.
+        Compatibility shim for old callers.
 
-        Args:
-            config: Skill configuration
-
-        Returns:
-            True if keyword matching and slash commands should work.
+        Raw text skill triggering has been retired. Slash commands are handled by
+        SlashCommandService and do not depend on skill execution mode.
         """
-        config = config or getattr(self, '_config', {}) or {}
-        execution_mode = config.get('execution_mode', self.execution_mode)
-
-        if execution_mode in ('legacy', 'programmatic'):
-            return True
-        if execution_mode == 'hybrid':
-            return True  # Hybrid supports both
-        # Tool-only mode doesn't support legacy
-        if execution_mode in ('tool', 'agentic'):
-            return False
-
-        return True  # Default to legacy enabled for backward compatibility
+        return False
 
     # =========================================================================
     # SKILLS-AS-TOOLS: MCP TOOL DEFINITION (Canonical Format)
@@ -490,58 +461,6 @@ class BaseSkill(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support tool execution. "
             f"Override execute_tool() to enable tool mode."
-        )
-
-    def _keyword_matches(self, message: str, keywords: List[str]) -> bool:
-        """
-        Check if message contains any of the specified keywords (case-insensitive).
-
-        Phase 7.1: Helper method for keyword pre-filtering.
-
-        Args:
-            message: Message text to check
-            keywords: List of keywords to match
-
-        Returns:
-            True if any keyword found in message
-
-        Example:
-            keywords = ["agent", "switch"]
-            self._keyword_matches("I want to switch agents", keywords)  # True
-            self._keyword_matches("Hello there", keywords)  # False
-        """
-        if not keywords:
-            return False
-
-        message_lower = message.lower()
-        return any(keyword.lower() in message_lower for keyword in keywords)
-
-    async def _ai_classify(self, message: str, config: Dict[str, Any]) -> bool:
-        """
-        Use AI to classify message intent.
-
-        Args:
-            message: Message text to classify
-            config: Skill configuration (may contain ai_model override)
-
-        Returns:
-            True if AI classifies message as matching skill intent
-        """
-        from agent.skills.ai_classifier import get_classifier
-
-        classifier = get_classifier()
-
-        # Phase 17: Use config's ai_model if specified, otherwise None (uses system config)
-        ai_model = config.get("ai_model") if config.get("ai_model") else None
-
-        return await classifier.classify_intent(
-            message=message,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=ai_model,  # None = use system AI config
-            db=self._db_session,
-            token_tracker=self._token_tracker,
-            tenant_id=self._resolve_tenant_id_for_classifier(config),
         )
 
     def _resolve_tenant_id_for_classifier(self, config: Dict[str, Any]) -> Optional[str]:

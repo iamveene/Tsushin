@@ -23,41 +23,13 @@ class SchedulerQuerySkill(BaseSkill):
 
     skill_type = "scheduler_query"
     skill_name = "Scheduler Query"
-    skill_description = "Query and list scheduled events via natural language"
-    execution_mode = "legacy"  # Query functionality merged into SchedulerSkill's list action
-
-    # Query detection keywords
-    QUERY_KEYWORDS = [
-        "list", "show", "what", "which", "tell me about",
-        "listar", "mostrar", "quais", "qual",
-        "scheduled", "agendado", "agendados",
-        "upcoming", "próximo", "próximos",
-        "my events", "meus eventos",
-        "my reminders", "meus lembretes",
-        "my conversations", "minhas conversas",
-        "what's scheduled", "o que está agendado"
-    ]
+    skill_description = "Query and list scheduled events via explicit scheduler tool actions"
+    execution_mode = "tool"  # Query functionality merged into SchedulerSkill's list action
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains query intent.
-
-        Returns True if message contains query keywords AND scheduler-related terms.
+        Scheduler query is no longer raw-text triggered.
         """
-        body_lower = message.body.lower()
-
-        # Must contain both a query keyword and a scheduler term
-        has_query = any(keyword in body_lower for keyword in self.QUERY_KEYWORDS)
-        has_scheduler_term = any(term in body_lower for term in [
-            'schedule', 'agendar', 'event', 'evento',
-            'reminder', 'lembrete', 'notification', 'notific',
-            'conversation', 'conversa', 'message', 'mensagem'
-        ])
-
-        if has_query and has_scheduler_term:
-            logger.info(f"SchedulerQuerySkill: Detected query intent in message")
-            return True
-
         return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:

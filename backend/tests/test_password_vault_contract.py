@@ -1100,7 +1100,8 @@ def test_password_vault_skill_default_config_and_tool_spec_gate_write_actions():
     skill = _make_password_vault_skill()
 
     defaults = skill.get_default_config()
-    assert defaults["execution_mode"] == "tool"
+    assert skill.execution_mode == "tool"
+    assert "execution_mode" not in defaults
     assert defaults["enabled"] is True
     assert defaults["integration_id"] is None
     assert defaults["provider"] == "onepassword"

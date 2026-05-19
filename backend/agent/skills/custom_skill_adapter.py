@@ -37,14 +37,7 @@ class CustomSkillAdapter(BaseSkill):
             self.execution_mode = skill_record.execution_mode
 
     async def can_handle(self, message: InboundMessage) -> bool:
-        if not self._record:
-            return False
-        if self._record.trigger_mode == 'always_on':
-            return True
-        if self._record.trigger_mode == 'keyword' and self._record.trigger_keywords:
-            msg_lower = message.body.lower() if message.body else ""
-            return any(kw.lower() in msg_lower for kw in self._record.trigger_keywords)
-        return False  # llm_decided -- handled via tool call
+        return False
 
     async def process(self, message: InboundMessage, config: Dict) -> SkillResult:
         return await self.execute_tool({}, message, config)

@@ -1339,6 +1339,18 @@ class PlaygroundService:
                         "timestamp": datetime.utcnow().isoformat() + "Z"
                     }
 
+                    media_paths = slash_result.get("media_paths") or []
+                    if media_paths:
+                        image_urls = []
+                        import os
+                        for media_path in media_paths:
+                            if os.path.exists(media_path):
+                                cached_url = self._cache_image(media_path)
+                                image_urls.append(cached_url)
+                        if image_urls:
+                            done_data["image_url"] = image_urls[0]
+                            done_data["image_urls"] = image_urls
+
                     # Include action data for frontend handling (e.g., switch_agent)
                     if slash_result.get("data"):
                         done_data["data"] = slash_result.get("data")
