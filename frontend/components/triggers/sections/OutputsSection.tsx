@@ -3,13 +3,13 @@
 /**
  * OutputsSection
  *
- * Vertical stack of per-kind output cards. Supports jira / github / email /
- * webhook (schedule retired in v0.7.0-fix Phase 2).
+ * Vertical stack of per-kind output cards. Supports jira / github / gitlab /
+ * email / webhook (schedule retired in v0.7.0-fix Phase 2).
  * Every kind also renders the shared `WiredFlowsCard` listing live
  * Flow bindings and the Create-from-this-trigger deep link.
  *
  * Jira renders the Manual Poll card. Email renders Manual Poll plus Managed
- * Triage. github / webhook render the WiredFlowsCard (which carries
+ * Triage. repository triggers / webhook render the WiredFlowsCard (which carries
  * empty-state messaging when no flows are bound).
  */
 
@@ -19,6 +19,7 @@ import type {
   EmailTrigger,
   FlowTriggerBinding,
   GitHubTrigger,
+  GitLabTrigger,
   JiraPollNowResponse,
   JiraTrigger,
   WebhookIntegration,
@@ -32,8 +33,10 @@ import WiredTeamsCard, {
 } from '@/components/triggers/sections/WiredTeamsCard'
 import WiredContinuousCard from '@/components/triggers/sections/WiredContinuousCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
+import { BotIcon, UsersIcon } from '@/components/ui/icons'
 
-type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
+type OutputsKind = 'jira' | 'github' | 'gitlab' | 'email' | 'webhook'
 
 // AgentTeamTrigger.trigger_kind validates jira/github/webhook/gmail. Email
 // triggers persist as kind='gmail' (see _validate_team_trigger_instance and
@@ -42,6 +45,7 @@ type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
 const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
   jira: 'jira',
   github: 'github',
+  gitlab: 'gitlab',
   webhook: 'webhook',
   email: 'gmail',
 }
@@ -52,7 +56,7 @@ const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
 function continuousChannelType(kind: OutputsKind): string {
   return kind === 'email' ? 'gmail' : kind
 }
-type OutputsTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type OutputsTrigger = JiraTrigger | GitHubTrigger | GitLabTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: OutputsKind
@@ -91,6 +95,7 @@ export default function OutputsSection({
   emailTriageLoading = false,
   emailGmailReauthLoading = false,
 }: Props) {
+  const repositoryAutomationWizard = useRepositoryAutomationWizard()
   // Track bindings so WiredFlowsCard can refresh after local changes.
   const [, setBindings] = useState<FlowTriggerBinding[]>([])
 
@@ -157,12 +162,61 @@ export default function OutputsSection({
     )
   }
 
-  // github + webhook: no managed outputs — Wired Flows IS the
+  // repository triggers + webhook: no managed outputs — Wired Flows IS the
   // outputs surface. The card carries its own empty-state copy.
   const generic = trigger as { id: number }
   const teamKind = TEAM_KIND_BY_OUTPUT[kind]
+  const repositoryLabel = kind === 'gitlab'
+    ? (trigger as GitLabTrigger).project_path
+    : kind === 'github'
+      ? `${(trigger as GitHubTrigger).repo_owner}/${(trigger as GitHubTrigger).repo_name}`
+      : ''
   return (
     <div className="space-y-4">
+      {(kind === 'github' || kind === 'gitlab') && (
+        <div className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-white">Repository automation</h3>
+              <p className="mt-1 text-sm text-cyan-100/80">
+                Create a review team or standalone reviewer agent from this {kind === 'gitlab' ? 'GitLab MR' : 'GitHub PR'} trigger.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => repositoryAutomationWizard.openWizard({
+                  provider: kind,
+                  templateId: 'repository_review_team',
+                  triggerKind: kind,
+                  triggerId: generic.id,
+                  triggerName: (trigger as GitHubTrigger | GitLabTrigger).integration_name,
+                  repositoryLabel,
+                  source: 'trigger_detail',
+                })}
+                className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-50 hover:text-white"
+              >
+                <UsersIcon size={16} /> Create Review Team
+              </button>
+              <button
+                type="button"
+                onClick={() => repositoryAutomationWizard.openWizard({
+                  provider: kind,
+                  templateId: 'repository_pr_agent',
+                  triggerKind: kind,
+                  triggerId: generic.id,
+                  triggerName: (trigger as GitHubTrigger | GitLabTrigger).integration_name,
+                  repositoryLabel,
+                  source: 'trigger_detail',
+                })}
+                className="inline-flex items-center gap-2 rounded-lg border border-tsushin-border bg-tsushin-surface/70 px-3 py-2 text-sm text-tsushin-fog hover:text-white"
+              >
+                <BotIcon size={16} /> Create Reviewer Agent
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <WiredFlowsCard
         triggerKind={kind}
         triggerId={generic.id}

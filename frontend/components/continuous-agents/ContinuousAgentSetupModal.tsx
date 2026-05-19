@@ -193,7 +193,7 @@ export function ContinuousAgentSetupModal({ isOpen, onClose, onSaved, existing, 
             </h2>
             <p className="mt-1 text-sm text-tsushin-slate">
               An always-on wrapper around an agent built in Studio. It wakes when an external event fires
-              (email, Jira, GitHub, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong> instead.
+              (email, Jira, GitHub, GitLab, webhook). For multi-step orchestration, create a <strong className="text-white">Flow</strong> instead.
             </p>
           </div>
           <button

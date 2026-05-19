@@ -17,6 +17,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import {
   api,
   type FlowDefinition,
@@ -106,7 +107,7 @@ const EXECUTION_METHODS: { value: ExecutionMethod; label: string; Icon: React.FC
   { value: 'triggered', label: 'Triggered', Icon: ZapIcon },  // v0.7.0 Wave 2: Triggers \u2194 Flows unification
 ]
 
-const FLOW_TRIGGER_KINDS: TriggerKind[] = ['email', 'jira', 'github', 'webhook']
+const FLOW_TRIGGER_KINDS: TriggerKind[] = ['email', 'jira', 'github', 'gitlab', 'webhook']
 
 type TriggerOption = {
   kind: TriggerKind
@@ -121,6 +122,7 @@ const TRIGGER_KIND_OPTIONS: { value: TriggerKind; label: string; description: st
   { value: 'email', label: 'Gmail / Email', description: 'New messages or Gmail query matches', Icon: MailIcon },
   { value: 'jira', label: 'Jira', description: 'JQL matches from a Jira integration', Icon: ClipboardIcon },
   { value: 'github', label: 'GitHub', description: 'Repository webhook events', Icon: GitHubIcon },
+  { value: 'gitlab', label: 'GitLab', description: 'Project webhook events', Icon: CodeIcon },
   { value: 'webhook', label: 'Webhook', description: 'Inbound webhook payloads', Icon: WebhookIcon },
 ]
 
@@ -204,6 +206,12 @@ function triggerOptionFromRecord(kind: TriggerKind, raw: unknown): TriggerOption
     const repoLabel = owner && repo ? `${owner}/${repo}` : null
     label = integrationName || repoLabel || defaultLabel
     if (repoLabel) details.push(repoLabel)
+    const events = Array.isArray(record.events) ? record.events.filter((event): event is string => typeof event === 'string') : []
+    if (events.length > 0) details.push(`Events: ${events.join(', ')}`)
+  } else if (kind === 'gitlab') {
+    const projectPath = readString(record, 'project_path')
+    label = integrationName || projectPath || defaultLabel
+    if (projectPath) details.push(projectPath)
     const events = Array.isArray(record.events) ? record.events.filter((event): event is string => typeof event === 'string') : []
     if (events.length > 0) details.push(`Events: ${events.join(', ')}`)
   } else if (kind === 'webhook') {
@@ -1770,7 +1778,7 @@ export default function FlowsPage() {
   const prefillKindParam = searchParams?.get('source_trigger_kind') as TriggerKind | null
   const prefillTriggerIdParam = Number(searchParams?.get('source_trigger_id') || '')
   const prefillKind: TriggerKind | null =
-    prefillKindParam && ['jira', 'email', 'github', 'webhook'].includes(prefillKindParam)
+    prefillKindParam && ['jira', 'email', 'github', 'gitlab', 'webhook'].includes(prefillKindParam)
       ? prefillKindParam
       : null
   const prefillTriggerId =
@@ -2855,12 +2863,13 @@ function TypeBadge({ type }: { type: FlowType }) {
 // chip surfaces the origin so operators don't mistake it for a hand-built
 // flow. Renders nothing for user-authored flows.
 const TRIGGER_KIND_BADGE: Record<
-  'jira' | 'email' | 'github' | 'webhook',
+  'jira' | 'email' | 'github' | 'gitlab' | 'webhook',
   { label: string; classes: string; Icon: React.FC<IconProps> }
 > = {
   jira:     { label: 'Jira Trigger',     classes: 'bg-blue-500/10 border-blue-500/30 text-blue-300',         Icon: CodeIcon },
   email:    { label: 'Email Trigger',    classes: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300', Icon: EnvelopeIcon },
   github:   { label: 'GitHub Trigger',   classes: 'bg-violet-500/10 border-violet-500/30 text-violet-300',   Icon: GitHubIcon },
+  gitlab:   { label: 'GitLab Trigger',   classes: 'bg-orange-500/10 border-orange-500/30 text-orange-300',   Icon: CodeIcon },
   webhook:  { label: 'Webhook Trigger',  classes: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',         Icon: WebhookIcon },
 }
 
@@ -3097,6 +3106,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
   prefillTriggerName?: string
 }) {
   const toast = useToast()
+  const repositoryAutomationWizard = useRepositoryAutomationWizard()
   const [step, setStep] = useState<'config' | 'steps'>('config')
   const hasTriggerPrefill = Boolean(prefillTriggerKind && prefillTriggerId > 0)
   const initialTriggerKind = prefillTriggerKind || 'email'
@@ -3157,6 +3167,8 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
         records = await api.listJiraTriggers()
       } else if (kind === 'github') {
         records = await api.listGitHubTriggers()
+      } else if (kind === 'gitlab') {
+        records = await api.listGitLabTriggers()
       } else if (kind === 'webhook') {
         records = await api.listWebhookIntegrations()
       }
@@ -3257,7 +3269,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
 
     if (data.execution_method === 'triggered') {
       if (!selectedTriggerId || selectedTriggerId <= 0) {
-        toast.warning('Choose a trigger first', 'Select an existing Gmail, Jira, GitHub, or Webhook trigger to wire the Source step.')
+        toast.warning('Choose a trigger first', 'Select an existing Gmail, Jira, GitHub, GitLab, or Webhook trigger to wire the Source step.')
         return false
       }
     }
@@ -3466,7 +3478,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                   {flowData.execution_method === 'scheduled' && 'Run once at a specific timestamp. Best for one-off future runs (e.g. send a digest tomorrow at 9am).'}
                   {flowData.execution_method === 'recurring' && 'Run on a cron expression / RRule. Best for daily/weekly/hourly batch work.'}
                   {flowData.execution_method === 'keyword' && 'Fires when a configured slash-command keyword is matched in chat. Best for on-demand workflows the operator triggers manually.'}
-                  {flowData.execution_method === 'triggered' && 'Bind to a Hub trigger so the flow fires when an external event arrives (Email/Jira/GitHub/Webhook).'}
+                  {flowData.execution_method === 'triggered' && 'Bind to a Hub trigger so the flow fires when an external event arrives (Email/Jira/GitHub/GitLab/Webhook).'}
                 </p>
               </div>
 
@@ -3474,7 +3486,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                 <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-cyan-50 mb-2">Trigger source</label>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       {TRIGGER_KIND_OPTIONS.map(option => {
                         const KindIcon = option.Icon
                         const active = selectedTriggerKind === option.value
@@ -3502,9 +3514,27 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                   <div>
                     <div className="flex items-center justify-between gap-3 mb-2">
                       <label className="block text-sm font-medium text-cyan-50">Existing trigger</label>
-                      <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
-                        Manage triggers
-                      </a>
+                      <div className="flex items-center gap-3">
+                        {(selectedTriggerKind === 'github' || selectedTriggerKind === 'gitlab') && (
+                          <button
+                            type="button"
+                            onClick={() => repositoryAutomationWizard.openWizard({
+                              provider: selectedTriggerKind,
+                              templateId: 'repository_review_team',
+                              triggerKind: selectedTriggerKind,
+                              triggerId: selectedTriggerId > 0 ? selectedTriggerId : null,
+                              triggerName: selectedTrigger?.label || null,
+                              source: 'flow_setup',
+                            })}
+                            className="text-xs text-cyan-200 hover:text-white"
+                          >
+                            Repository wizard
+                          </button>
+                        )}
+                        <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
+                          Manage triggers
+                        </a>
+                      </div>
                     </div>
 
                     {triggerOptionsLoading && (
@@ -7125,8 +7155,8 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                   </Link>
                   . To change <span className="text-white">what happens after</span>, edit the
                   steps below — the Source step shows the trigger config, the Gate runs
-                  secondary filtering, the Default agent processes the event, and the
-                  Notification fires once enabled.
+                  secondary filtering, the Default agent step runs only when an agent is
+                  assigned, and the Notification fires once enabled.
                 </p>
               </div>
             )

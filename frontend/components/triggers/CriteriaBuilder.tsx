@@ -66,6 +66,7 @@ const JSONPATH_TEMPLATE = {
 }
 
 const GITHUB_EVENT_OPTIONS = ['push', 'pull_request', 'issues', 'issue_comment', 'release', 'workflow_run']
+const GITLAB_EVENT_OPTIONS = ['push', 'merge_request', 'issue', 'note', 'tag_push', 'pipeline']
 
 function pretty(value: unknown): string {
   return JSON.stringify(value, null, 2)
@@ -166,21 +167,21 @@ export function buildCriteriaTemplate(kind: TriggerKind = 'webhook', source: Cri
     })
   }
 
-  if (kind === 'github') {
-    return baseCriteria({
-      github: {
-        events: csvValues(source.githubEventsText),
-        branch: nullableTrim(source.githubBranchFilter),
-        paths: csvValues(source.githubPathFiltersText),
-        author: nullableTrim(source.githubAuthorFilter),
+  if (kind === 'github' || kind === 'gitlab') {
+    return {
+      criteria_version: 1,
+      event: kind === 'gitlab' ? 'merge_request' : 'pull_request',
+      actions: kind === 'gitlab' ? ['open'] : ['opened'],
+      filters: {
+        target_branch_filter: nullableTrim(source.githubBranchFilter),
+        path_filters: csvValues(source.githubPathFiltersText),
+        author_filter: nullableTrim(source.githubAuthorFilter),
+        exclude_drafts: false,
+        title_contains: null,
+        body_contains: null,
       },
-      jsonpath_matchers: [
-        {
-          path: '$.sender.login',
-          operator: 'exists',
-        },
-      ],
-    })
+      ordering: 'oldest_first',
+    }
   }
 
   return JSONPATH_TEMPLATE
@@ -240,6 +241,7 @@ export default function CriteriaBuilder({
     if (kind === 'email') return { title: 'Email criteria', Icon: EnvelopeIcon, accent: 'text-cyan-200' }
     if (kind === 'jira') return { title: 'Jira criteria', Icon: CodeIcon, accent: 'text-blue-200' }
     if (kind === 'github') return { title: 'GitHub criteria', Icon: GitHubIcon, accent: 'text-violet-200' }
+    if (kind === 'gitlab') return { title: 'GitLab criteria', Icon: CodeIcon, accent: 'text-orange-200' }
     return { title: 'Webhook criteria', Icon: WebhookIcon, accent: 'text-cyan-200' }
   }, [kind])
 
@@ -267,7 +269,7 @@ export default function CriteriaBuilder({
     setMessage({ tone: 'info', text: 'Email criteria preview refreshed.' })
   }
 
-  const toggleGithubEvent = (eventName: string) => {
+  const toggleRepositoryEvent = (eventName: string) => {
     const current = csvValues(source.githubEventsText)
     const next = current.includes(eventName)
       ? current.filter((item) => item !== eventName)
@@ -386,22 +388,30 @@ export default function CriteriaBuilder({
       )
     }
 
-    if (kind === 'github') {
+    if (kind === 'github' || kind === 'gitlab') {
+      const providerLabel = kind === 'gitlab' ? 'GitLab' : 'GitHub'
+      const eventOptions = kind === 'gitlab' ? GITLAB_EVENT_OPTIONS : GITHUB_EVENT_OPTIONS
+      const selectedClass = kind === 'gitlab'
+        ? 'border-orange-500/50 bg-orange-500/10 text-orange-200'
+        : 'border-violet-500/50 bg-violet-500/10 text-violet-200'
+      const templateClass = kind === 'gitlab'
+        ? 'border-orange-500/40 bg-orange-500/10 text-orange-200 hover:text-white'
+        : 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:text-white'
       const selectedEvents = csvValues(source.githubEventsText)
       return (
         <div className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2 md:col-span-2">
             <FieldLabel>Events</FieldLabel>
             <div className="flex flex-wrap gap-2">
-              {GITHUB_EVENT_OPTIONS.map((eventName) => (
+              {eventOptions.map((eventName) => (
                 <button
                   key={eventName}
                   type="button"
-                  onClick={() => toggleGithubEvent(eventName)}
+                  onClick={() => toggleRepositoryEvent(eventName)}
                   disabled={!canEditSource}
                   className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                     selectedEvents.includes(eventName)
-                      ? 'border-violet-500/50 bg-violet-500/10 text-violet-200'
+                      ? selectedClass
                       : 'border-tsushin-border text-tsushin-slate hover:text-white'
                   } disabled:opacity-50`}
                 >
@@ -443,11 +453,11 @@ export default function CriteriaBuilder({
           </div>
           <button
             type="button"
-            onClick={() => applyTemplate('github')}
+            onClick={() => applyTemplate(kind)}
             disabled={disabled}
-            className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs text-violet-200 hover:text-white disabled:opacity-50 md:col-span-2"
+            className={`rounded-lg px-3 py-2 text-xs disabled:opacity-50 md:col-span-2 ${templateClass}`}
           >
-            GitHub JSON Template
+            {providerLabel} JSON Template
           </button>
         </div>
       )

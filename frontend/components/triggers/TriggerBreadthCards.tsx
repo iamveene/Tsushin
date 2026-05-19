@@ -3,18 +3,19 @@
 import { useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import Link from 'next/link'
-import { api, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type TriggerKind, type WebhookIntegration } from '@/lib/client'
+import { api, type EmailTrigger, type GitHubTrigger, type GitLabTrigger, type JiraTrigger, type TriggerKind, type WebhookIntegration } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
 import { CodeIcon, EnvelopeIcon, GitHubIcon, WebhookIcon, type IconProps } from '@/components/ui/icons'
 
-type BreadthTriggerKind = Extract<TriggerKind, 'email' | 'webhook' | 'jira' | 'github'>
-type BreadthTrigger = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger
+type BreadthTriggerKind = Extract<TriggerKind, 'email' | 'webhook' | 'jira' | 'github' | 'gitlab'>
+type BreadthTrigger = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger | GitLabTrigger
 
 interface Props {
   emailTriggers: EmailTrigger[]
   webhookTriggers: WebhookIntegration[]
   jiraTriggers: JiraTrigger[]
   githubTriggers: GitHubTrigger[]
+  gitlabTriggers: GitLabTrigger[]
   canWrite: boolean
   onChanged: () => Promise<void> | void
   onError?: (message: string) => void
@@ -71,6 +72,7 @@ export default function TriggerBreadthCards({
   webhookTriggers,
   jiraTriggers,
   githubTriggers,
+  gitlabTriggers,
   canWrite,
   onChanged,
   onError,
@@ -127,6 +129,18 @@ export default function TriggerBreadthCards({
       detailBase: '/hub/triggers/github',
       items: githubTriggers,
     },
+    {
+      kind: 'gitlab',
+      title: 'GitLab Triggers',
+      description: 'Project activity from pushes, merge requests, issues, and pipelines.',
+      emptyTitle: 'No GitLab triggers',
+      emptyBody: 'Connect a GitLab project and route selected events to an agent.',
+      Icon: CodeIcon,
+      iconClass: 'text-orange-300',
+      borderClass: 'border-orange-700/30',
+      detailBase: '/hub/triggers/gitlab',
+      items: gitlabTriggers,
+    },
   ]
 
   const handleToggle = async (kind: BreadthTriggerKind, trigger: BreadthTrigger) => {
@@ -140,8 +154,10 @@ export default function TriggerBreadthCards({
         await api.updateWebhookIntegration(trigger.id, { is_active: next })
       } else if (kind === 'jira') {
         await api.updateJiraTrigger(trigger.id, { is_active: next })
-      } else {
+      } else if (kind === 'github') {
         await api.updateGitHubTrigger(trigger.id, { is_active: next })
+      } else {
+        await api.updateGitLabTrigger(trigger.id, { is_active: next })
       }
       await onChanged()
       onSuccess?.(next ? `${trigger.integration_name} resumed` : `${trigger.integration_name} paused`)
@@ -184,6 +200,16 @@ export default function TriggerBreadthCards({
             <span title="JQL is Jira Query Language, Jira's issue search syntax.">{jira.jql}</span>
           </DetailLine>
           <DetailLine label="Checks every">{jira.poll_interval_seconds}s</DetailLine>
+        </>
+      )
+    }
+    if (kind === 'gitlab') {
+      const gitlab = trigger as GitLabTrigger
+      return (
+        <>
+          <DetailLine label="Project">{gitlab.project_path}</DetailLine>
+          <DetailLine label="Events">{(gitlab.events || []).length > 0 ? gitlab.events!.join(', ') : 'Default'}</DetailLine>
+          <DetailLine label="Branch">{gitlab.branch_filter || 'Any branch'}</DetailLine>
         </>
       )
     }

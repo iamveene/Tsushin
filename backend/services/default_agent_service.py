@@ -14,6 +14,7 @@ from models import (
     DiscordIntegration,
     EmailChannelInstance,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
@@ -168,6 +169,7 @@ def _resolve_instance_default_agent(
         "email": EmailChannelInstance,
         "jira": JiraChannelInstance,
         "github": GitHubChannelInstance,
+        "gitlab": GitLabChannelInstance,
     }.get(channel_type)
     if model is None or not hasattr(model, "default_agent_id"):
         return None

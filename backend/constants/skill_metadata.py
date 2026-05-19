@@ -66,7 +66,7 @@ SKILL_METADATA: Dict[str, Dict[str, str]] = {
     "team_scratch": {"category": "memory", "name": "Team Scratch", "description": "Shared scratchpad for agent team runs"},
     # Provider-backed skills
     "ticket_management": {"category": "integration", "name": "Ticket Management", "description": "Search and act on tickets (Jira)"},
-    "code_repository": {"category": "integration", "name": "Code Repository", "description": "Browse and act on a code repository (GitHub)"},
+    "code_repository": {"category": "integration", "name": "Code Repository", "description": "Browse and act on code repositories (GitHub/GitLab)"},
     "password_vault": {"category": "integration", "name": "Password Vault", "description": "Reference secrets from a connected vault (1Password)"},
 }
 

@@ -1045,7 +1045,7 @@ export interface TeamListResponse {
 
 export type TeamTopology = 'line' | 'mesh'
 export type TeamStatus = 'draft' | 'active' | 'paused' | 'archived'
-export type TeamTriggerBindingKind = 'webhook' | 'github' | 'jira' | 'gmail'
+export type TeamTriggerBindingKind = 'webhook' | 'github' | 'gitlab' | 'jira' | 'gmail'
 
 export interface TeamMemberCreatePayload {
   agent_id: number
@@ -1723,7 +1723,7 @@ export interface DefaultAgentsSettings {
   user_defaults: UserChannelDefaultAgent[]
 }
 
-export type TriggerKind = 'email' | 'webhook' | 'jira' | 'github'
+export type TriggerKind = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab'
 export type TriggerCriteria = Record<string, unknown>
 
 export interface TriggerInstanceBase {
@@ -2017,7 +2017,7 @@ export interface GitHubTriggerCreateRequest {
 export type GitHubTriggerUpdateRequest = Partial<GitHubTriggerCreateRequest>
 
 // GitHubTriggerTestConnection types removed in v0.7.0-fix Phase 3 — connectivity
-// is verified at the integration level (Hub → Developer Tools), not per trigger.
+// is verified at the integration level (Hub → Repository Integrations), not per trigger.
 
 // v0.7.0: GitHub Integration (Hub-side, mirrors JiraIntegration). Stores a
 // shared GitHub connection + default owner/repo so the code_repository skill
@@ -2056,6 +2056,152 @@ export interface GitHubIntegrationUpdateRequest {
   default_owner?: string | null
   default_repo?: string | null
   is_active?: boolean
+}
+
+export interface GitLabTrigger extends TriggerInstanceBase {
+  gitlab_integration_id: number
+  gitlab_integration_name?: string | null
+  project_path: string
+  webhook_secret_preview?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  last_delivery_id?: string | null
+  inbound_url?: string
+}
+
+export interface GitLabTriggerCreateRequest {
+  integration_name: string
+  gitlab_integration_id: number
+  project_path: string
+  webhook_secret?: string | null
+  events?: string[] | null
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  default_agent_id?: number | null
+  is_active?: boolean
+}
+
+export type GitLabTriggerUpdateRequest = Partial<GitLabTriggerCreateRequest>
+
+export interface GitLabIntegration {
+  id: number
+  tenant_id?: string
+  integration_name?: string | null
+  name?: string | null
+  provider?: 'gitlab' | string
+  pat_token_preview?: string | null
+  default_namespace?: string | null
+  default_project?: string | null
+  default_project_path?: string | null
+  is_active: boolean
+  health_status?: string | null
+  health_status_reason?: string | null
+  last_health_check?: string | null
+  last_test_status?: string | null
+  last_tested_at?: string | null
+  trigger_count?: number
+  skill_attached_count?: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface GitLabIntegrationCreateRequest {
+  integration_name: string
+  pat_token: string
+  default_namespace?: string | null
+  default_project?: string | null
+  default_project_path?: string | null
+  is_active?: boolean
+}
+
+export interface GitLabIntegrationUpdateRequest {
+  integration_name?: string
+  pat_token?: string | null
+  default_namespace?: string | null
+  default_project?: string | null
+  default_project_path?: string | null
+  is_active?: boolean
+}
+
+export type RepositoryAutomationProvider = 'github' | 'gitlab'
+export type RepositoryAutomationTemplateId = 'repository_review_team' | 'repository_pr_agent'
+export type RepositoryAutomationRoutingMode = 'team_primary' | 'agent_flow'
+
+export interface RepositoryAutomationRequest {
+  provider: RepositoryAutomationProvider
+  integration_id: number
+  template_id: RepositoryAutomationTemplateId
+  repo_owner?: string | null
+  repo_name?: string | null
+  project_path?: string | null
+  target?: Record<string, unknown>
+  existing_trigger_id?: number | null
+  events?: string[]
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  integration_name?: string | null
+  trigger_name?: string | null
+  agent_name?: string | null
+  team_name?: string | null
+  flow_name?: string | null
+  routing_mode?: RepositoryAutomationRoutingMode | null
+}
+
+export interface RepositoryAutomationResponse {
+  integration: {
+    id: number
+    provider: RepositoryAutomationProvider
+    name: string
+    reused: boolean
+  }
+  trigger: {
+    id: number
+    provider: RepositoryAutomationProvider
+    name: string
+    events: string[]
+    canonical_events: string[]
+    reused: boolean
+    is_active: boolean
+    inbound_url: string
+  }
+  flow: {
+    id: number
+    name: string
+    default_agent_id?: number | null
+    is_active: boolean
+    created: boolean
+  }
+  team?: {
+    id: number
+    name: string
+    status: string
+    member_count: number
+  } | null
+  agents: Array<{
+    id: number
+    name: string
+    skills: string[]
+  }>
+  bindings: Array<{
+    id: number
+    kind: string
+    trigger_kind: string
+    trigger_instance_id: number
+    event_types: string[]
+    is_active: boolean
+    flow_definition_id?: number | null
+    team_id?: number | null
+    suppress_default_agent?: boolean | null
+  }>
+  links: Record<string, string>
+  routing_mode: RepositoryAutomationRoutingMode
+  created_at: string
 }
 
 export type PasswordVaultProviderType = 'onepassword'
@@ -2198,6 +2344,15 @@ export type PRSubmittedAction =
   | 'synchronize'
   | 'edited'
   | 'ready_for_review'
+  | 'open'
+  | 'reopen'
+  | 'update'
+  | 'close'
+  | 'merge'
+  | 'approved'
+  | 'unapproved'
+  | 'approval'
+  | 'unapproval'
 
 // v0.7.0 — must mirror backend ``validate_pr_criteria`` in
 // ``backend/channels/github/criteria.py``. Earlier shape used
@@ -2210,7 +2365,7 @@ export type PRSubmittedAction =
 // release-finishing wizard E2E QA pass.
 export interface PRSubmittedCriteria {
   criteria_version?: number  // defaults to 1 server-side
-  event: 'pull_request'
+  event: 'pull_request' | 'merge_request'
   actions: PRSubmittedAction[]
   filters: {
     branch_filter?: string | null
@@ -2504,7 +2659,7 @@ export interface ChannelRoutingRuleReorderRequest {
 export type ChannelRoutingRuleListParams = PageParams
 
 export type TriggerDetailKind = TriggerKind
-export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger | GitLabTrigger
 
 // v0.7.0 Wave 4: Triggers ↔ Flows binding model
 export interface FlowTriggerBinding {
@@ -2546,7 +2701,7 @@ export interface FlowTriggerBindingUpdate {
 
 // Reverse-lookup: every Agent Team trigger wired to one trigger instance.
 // Powers the "Wired Agent Teams" card on the trigger detail page so
-// operators can see at a glance which teams a Jira/GitHub/Webhook event
+// operators can see at a glance which teams a Jira/GitHub/GitLab/Webhook event
 // will fan out to.
 export interface TeamTriggerWithTeam extends TeamTriggerResponse {
   team_id: number
@@ -2833,7 +2988,7 @@ export interface FlowDefinition {
   is_system_owned?: boolean
   editable_by_tenant?: boolean
   deletable_by_tenant?: boolean
-  system_trigger_kind?: 'jira' | 'email' | 'github' | 'webhook' | null
+  system_trigger_kind?: 'jira' | 'email' | 'github' | 'gitlab' | 'webhook' | null
 }
 
 export interface FlowNode {
@@ -5766,6 +5921,16 @@ export const api = {
     return res.json()
   },
 
+  async createRepositoryAutomation(data: RepositoryAutomationRequest): Promise<RepositoryAutomationResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/wizards/repository-automation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create repository automation')
+    return res.json()
+  },
+
   async getContinuousAgents(params: ContinuousAgentListParams = {}): Promise<PageResponse<ContinuousAgent>> {
     const query = new URLSearchParams()
     if (params.limit !== undefined) query.set('limit', String(params.limit))
@@ -6674,7 +6839,7 @@ export const api = {
   // Mutations live on the team-side routes (`updateTeamTrigger`,
   // `deleteTeamTrigger`); each row in the response carries `team_id`.
   async listTeamTriggersByInstance(params: {
-    trigger_kind: 'jira' | 'github' | 'webhook'
+    trigger_kind: TeamTriggerBindingKind
     trigger_instance_id: number
   }): Promise<TeamTriggerWithTeam[]> {
     const search = new URLSearchParams({
@@ -7632,6 +7797,45 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
   },
 
+  async listGitLabTriggers(): Promise<GitLabTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitLab triggers')
+    return res.json()
+  },
+
+  async getGitLabTrigger(id: number): Promise<GitLabTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitLab trigger')
+    return res.json()
+  },
+
+  async createGitLabTrigger(data: GitLabTriggerCreateRequest): Promise<GitLabTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitLab trigger')
+    return res.json()
+  },
+
+  async updateGitLabTrigger(id: number, data: GitLabTriggerUpdateRequest): Promise<GitLabTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitLab trigger')
+    return res.json()
+  },
+
+  async deleteGitLabTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitLab trigger')
+  },
+
   // ---- v0.7.0: GitHub Hub Integrations (mirrors Jira) ----
 
   async listGitHubIntegrations(): Promise<GitHubIntegration[]> {
@@ -7665,6 +7869,40 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub integration')
+  },
+
+  // GitLab Hub Integrations (shared by Code Repository skill + GitLab triggers).
+  async listGitLabIntegrations(): Promise<GitLabIntegration[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/gitlab-integrations`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitLab integrations')
+    return res.json()
+  },
+
+  async createGitLabIntegration(data: GitLabIntegrationCreateRequest): Promise<GitLabIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/gitlab-integrations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitLab integration')
+    return res.json()
+  },
+
+  async updateGitLabIntegration(id: number, data: GitLabIntegrationUpdateRequest): Promise<GitLabIntegration> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/gitlab-integrations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitLab integration')
+    return res.json()
+  },
+
+  async deleteGitLabIntegration(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/gitlab-integrations/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitLab integration')
   },
 
   // Password Vault Integrations (Hub-side). Initial provider: 1Password.
@@ -7794,12 +8032,33 @@ export const api = {
     return res.json()
   },
 
+  async testGitLabMRCriteria(criteria: PRSubmittedCriteria, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criteria, payload: samplePayload ?? {} }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test MR criteria')
+    return res.json()
+  },
+
+  async testGitLabMRCriteriaForTrigger(triggerId: number, samplePayload?: Record<string, unknown> | null): Promise<GitHubPRCriteriaTestResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/${triggerId}/test-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: samplePayload ?? {} }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test MR criteria')
+    return res.json()
+  },
+
   async getTriggerDetail(kind: TriggerDetailKind, id: number): Promise<TriggerDetail> {
     const pathByKind: Record<TriggerDetailKind, string> = {
       email: `/api/triggers/email/${id}`,
       webhook: `/api/triggers/webhook/${id}`,
       jira: `/api/triggers/jira/${id}`,
       github: `/api/triggers/github/${id}`,
+      gitlab: `/api/triggers/gitlab/${id}`,
     }
     const path = pathByKind[kind]
     const res = await authenticatedFetch(`${API_URL}${path}`)

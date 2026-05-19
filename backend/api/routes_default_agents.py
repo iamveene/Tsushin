@@ -17,6 +17,7 @@ from models import (
     DiscordIntegration,
     EmailChannelInstance,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     SlackIntegration,
     TelegramBotInstance,
@@ -133,6 +134,11 @@ INSTANCE_CONFIG: dict[str, dict[str, object]] = {
         "kind": "trigger",
         "model": GitHubChannelInstance,
         "display_name": lambda row: row.integration_name or f"{row.repo_owner}/{row.repo_name}",
+    },
+    "gitlab": {
+        "kind": "trigger",
+        "model": GitLabChannelInstance,
+        "display_name": lambda row: row.integration_name or row.project_path or f"GitLab #{row.id}",
     },
 }
 

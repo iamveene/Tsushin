@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Repository Automation Wizard and repository team templates (2026-05-19)
+
+- Added `POST /api/wizards/repository-automation` to create or reuse tenant-scoped GitHub/GitLab repository triggers, explicitly generate the linked Flow, and wire either a line-topology review team or standalone PR/MR reviewer agent with Code Repository + A2A skills.
+- Added the Repository Automation Wizard UI from Hub Repository Integrations, trigger creation success states, trigger detail outputs, Flow triggered setup, and Team Wizard templates.
+- Normalized repository team events to canonical provider-prefixed values (`github.pull_request`, `gitlab.merge_request`) and aligned GitHub inbound accepted responses with GitLab by returning `team_run_ids`.
+- Aligned README, platform documentation, and user guide wording around the Repository Automation Wizard as the recommended GitHub/GitLab repository automation path.
+- Documented the shared primitives consistently: Repository Integration stores credentials, Trigger listens, Flow runs deterministic steps, Agent acts with tools, and Team coordinates actors.
+- Added the repository-review templates to the user guide and technical docs: a Coordinator/Reviewer/Merge Readiness review team, and a standalone PR/MR reviewer agent with A2A enabled.
+- Corrected stale trigger and flow wording: retired schedule-trigger copy from Trigger Wizard docs, included GitLab in `system_trigger_kind`, and documented Gmail support for Agent Team trigger bindings.
+
+### Added — GitLab repository integration foundation (2026-05-19)
+
+- Added GitLab.com as a first-class repository provider alongside GitHub: tenant-scoped Hub connections, encrypted PAT storage with preview-only reads, `/api/hub/gitlab-integrations`, `/api/triggers/gitlab`, criteria dry-runs, inbound webhook ingestion, generated system-flow support, default-agent sync, and Team trigger bindings.
+- Extended the Code Repository skill to select `provider=github|gitlab`; existing configs without a provider continue to resolve as GitHub. GitLab read actions use GitLab REST API project paths and MR/issue semantics, while GitLab write actions remain fail-closed/unsupported unless a future release explicitly enables them.
+- Promoted repository trigger criteria to shared GitHub/GitLab event constants for push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events, preserving legacy GitHub PR criteria and top-level filters.
+- Updated Hub Repository Integrations, Agent Skills, Trigger Wizard/detail/index, Team Wizard/detail bindings, Flow Source rendering, documentation, and the generated OpenAPI artifact for GitHub/GitLab repository parity.
+- Updated the onboarding tour, platform documentation, and user guide to call out GitLab Repository Integrations, shared repository-trigger/skill credentials, token-scope expectations, and the live `mvpenha/questnexus` MR read validation.
+
+### Fixed — Empty skill configuration modals (2026-05-19)
+
+- Removed dead **Configure** and **Edit Options** affordances from standard skill cards when the only remaining schema fields are retired legacy/hybrid/keyword-trigger controls or other non-configurable runtime plumbing.
+- Agent Switcher no longer opens an empty configuration modal after retiring raw-text intent classification; the card remains visible with operational facts and only offers removal.
+
 ### Fixed — Search slash command registry (2026-05-19)
 
 - Restored the `_system` `/search <query>` slash-command registry row through Alembic migration `0096_restore_search_slash_command`, matching the retained handler and documented deterministic web-search entry point.
@@ -967,9 +990,9 @@ Post-tag fix sweep that addresses the structural issues surfaced after the wizar
 
 Items deferred to v0.7.x (tracked in `.private/070fix_plan.md`): full manifest-driven wizard centralization (Phase 5), Studio New-Agent kind selector + base-agent select dark-mode polish (Phase 6b), runtime channel migration off the legacy `jira_notification_service` / `email_notification_service` paths to read solely from the auto-flow Notification node (Phase 4b).
 
-### Release 0.7.0 — Unified Trigger Creation Wizard + Visual Schedule Picker (2026-04-28)
+### Release 0.7.0 — Unified Trigger Creation Wizard (2026-04-28)
 
-A single 5-step wizard now creates triggers for all five kinds (Email / Webhook / Jira / Schedule / GitHub), replacing three legacy entry-points (`TriggerSetupModal`, `TriggerWizard`, the standalone `EmailTriggerWizard` for the create path). The Schedule step uses a new visual picker — operators no longer need to remember cron syntax. The wizard ends with a Confirmation step that hands off to the auto-generated flow at `/flows?edit=<auto_flow_id>`, closing the loop from "I want a notification on Jira issues" to "the flow that will fire it is open in the editor".
+A single 5-step wizard creates event triggers from Hub > Triggers, replacing three legacy entry-points (`TriggerSetupModal`, `TriggerWizard`, the standalone `EmailTriggerWizard` for the create path). The current trigger set is Email, Webhook, Jira, GitHub, and GitLab; scheduled and recurring automation now belongs to Flows rather than Hub Triggers. The wizard ends with a Confirmation step that hands off to the auto-generated flow at `/flows?edit=<auto_flow_id>`, closing the loop from "I want a notification on Jira issues" to "the flow that will fire it is open in the editor".
 
 The standalone `EmailTriggerWizard` is **retired for the create path**. It still exists as a code module to preserve any read-only/edit affordances downstream, but every "+ New Trigger" entry-point in the UI now opens `TriggerCreationWizard`.
 
@@ -977,8 +1000,8 @@ QA evidence: `docs/qa/v0.7.0/wizard-e2e/REPORT.md` (10 test cases, all PASS) inc
 
 **New components:**
 
-- **`frontend/components/triggers/TriggerCreationWizard.tsx`** (~3,300 lines) — the unified 5-step shell. Steps: (1) Kind picker (skipped when `initialKind` is supplied — i.e. when entry-points like `Create Jira Trigger` short-circuit straight to step 2), (2) Source (per-kind input grid: Jira project + JQL + poll interval / Schedule cron via SchedulePicker / GitHub repo + PAT + events / Email Gmail account + saved query / Webhook name + slug + callback), (3) Criteria (per-kind: Jira read-only JQL preview + Test Query, GitHub event/action/filters builder via `CriteriaBuilder`, Email saved-query test, Schedule + Webhook are no-op pass-through), (4) Notification (universal — checkbox + WhatsApp recipient phone input + message hint, gated to require valid phone when ON), (5) Confirmation (pre-save summary cards; post-save: "trigger created" panel + Wired Flow card + "Open Flow Editor" CTA). All trigger kinds inherit the same Notification + Confirmation steps, so the operator-facing UX is identical regardless of which trigger they're creating.
-- **`frontend/components/triggers/SchedulePicker.tsx`** (~700 lines) + **`schedulePickerUtils.ts`** (~385 lines) — visual cron builder. 6 frequency modes (Hourly, Daily, Weekly, Monthly, Once, Custom), live natural-language preview ("Every Monday, Wednesday and Friday at 9:00 AM (America/Sao_Paulo)") in `role="status" aria-live="polite"`, read-only cron chip showing the compiled expression, and a live "Next 3 fire times" preview computed via `cronstrue` + `next-fire-times` helpers. Switching from Custom → Visual best-effort decomposes simple expressions; complex expressions fall back to defaults with a notice. Switching Visual → Custom seeds the textarea with the compiled cron so the operator can edit further.
+- **`frontend/components/triggers/TriggerCreationWizard.tsx`** (~3,300 lines) — the unified 5-step shell. Steps: (1) Kind picker (skipped when `initialKind` is supplied — i.e. when entry-points like `Create Jira Trigger` short-circuit straight to step 2), (2) Source (per-kind input grid: Jira project + JQL + poll interval / GitHub or GitLab repository integration + events / Email Gmail account + saved query / Webhook name + slug + callback), (3) Criteria (per-kind: Jira read-only JQL preview + Test Query, GitHub/GitLab event/action/filters builder via `CriteriaBuilder`, Email saved-query test, Webhook JSONPath criteria), (4) Notification (universal — checkbox + WhatsApp recipient phone input + message hint, gated to require valid phone when ON), (5) Confirmation (pre-save summary cards; post-save: "trigger created" panel + Wired Flow card + "Open Flow Editor" CTA). All trigger kinds inherit the same Notification + Confirmation steps, so the operator-facing UX is identical regardless of which trigger they're creating.
+- **Historical note:** `SchedulePicker.tsx` and `schedulePickerUtils.ts` were part of the original schedule-trigger experiment. Scheduled and recurring work has since moved to Flow execution methods, so Trigger Wizard documentation should not advertise schedule setup as a trigger kind.
 
 | Frequency | Inputs | Compiled cron pattern |
 |---|---|---|
@@ -1060,7 +1083,7 @@ User-reported gaps in the v0.7.0 flow editor:
 2. Auto-generated trigger flows (`is_system_owned=true`, minted by `ensure_system_managed_flow_for_trigger`) had no visual cue separating them from user-authored flows. Operators could open them, edit them, even try to delete them — and only learn from a 403 error that they're built-in.
 
 **Backend (additive — no schema migration):**
-- **`backend/api/routes_flows.py`** — `FlowDefinitionResponse` gains four optional fields: `is_system_owned`, `editable_by_tenant`, `deletable_by_tenant`, `system_trigger_kind` (`'jira'|'email'|'github'|'schedule'|'webhook'|null`). `flow_to_response()` populates them; `system_trigger_kind` is looked up from `flow_trigger_binding` only when `is_system_owned=True`, so user-authored flows pay no extra query cost. Mirror onto `backend/schemas.py::FlowResponse` (the v2 schema).
+- **`backend/api/routes_flows.py`** — `FlowDefinitionResponse` gains four optional fields: `is_system_owned`, `editable_by_tenant`, `deletable_by_tenant`, `system_trigger_kind` (`'jira'|'email'|'github'|'gitlab'|'webhook'|null`). `flow_to_response()` populates them; `system_trigger_kind` is looked up from `flow_trigger_binding` only when `is_system_owned=True`, so user-authored flows pay no extra query cost. Mirror onto `backend/schemas.py::FlowResponse` (the v2 schema).
 - **`backend/api/routes_flows.py`** also imports `FlowTriggerBinding` for the lookup.
 
 **Frontend — Variable Reference coverage:**

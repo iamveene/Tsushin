@@ -238,7 +238,7 @@ export default function StudioAgentSelector({ agents, selectedAgentId, onAgentSe
                   <div className="text-sm font-medium capitalize">{mode}</div>
                   <div className="text-[10px] opacity-70 mt-0.5">
                     {mode === 'conversational' && 'Replies to direct chat (default).'}
-                    {mode === 'continuous' && 'Always-on; wakes on triggers (email, Jira, GitHub, webhook).'}
+                    {mode === 'continuous' && 'Always-on; wakes on triggers (email, Jira, GitHub, GitLab, webhook).'}
                   </div>
                 </button>
               ))}

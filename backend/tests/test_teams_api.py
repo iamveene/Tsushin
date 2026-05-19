@@ -89,6 +89,8 @@ from models import (  # noqa: E402
     EmailChannelInstance,
     GitHubChannelInstance,
     GitHubIntegration,
+    GitLabChannelInstance,
+    GitLabIntegration,
     JiraChannelInstance,
     SentinelProfile,
     TeamMemberRole,
@@ -230,6 +232,33 @@ def _create_github_trigger(db, *, tenant_id: str = "tenant-a", trigger_id: int |
         github_integration_id=integration.id,
         repo_owner="owner",
         repo_name="repo",
+        events=["push"],
+        is_active=is_active,
+        status="active" if is_active else "paused",
+        created_by=1 if tenant_id == "tenant-a" else 2,
+    )
+    db.add(trigger)
+    db.flush()
+    return trigger
+
+
+def _create_gitlab_trigger(db, *, tenant_id: str = "tenant-a", trigger_id: int | None = None, is_active: bool = True) -> GitLabChannelInstance:
+    integration = GitLabIntegration(
+        tenant_id=tenant_id,
+        type="gitlab",
+        name=f"GitLab {trigger_id or 'new'}",
+        display_name=f"GitLab {trigger_id or 'new'}",
+        is_active=True,
+        provider="gitlab",
+    )
+    db.add(integration)
+    db.flush()
+    trigger = GitLabChannelInstance(
+        id=trigger_id,
+        tenant_id=tenant_id,
+        integration_name=f"GitLab Trigger {trigger_id or 'new'}",
+        gitlab_integration_id=integration.id,
+        project_path="group/project",
         events=["push"],
         is_active=is_active,
         status="active" if is_active else "paused",
@@ -942,6 +971,7 @@ def test_team_trigger_binding_rejects_foreign_and_inactive_triggers(db_session):
     [
         ("webhook", "_create_webhook_trigger"),
         ("github", "_create_github_trigger"),
+        ("gitlab", "_create_gitlab_trigger"),
         ("jira", "_create_jira_trigger"),
         ("gmail", "_create_email_trigger"),
     ],

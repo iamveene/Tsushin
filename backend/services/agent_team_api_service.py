@@ -22,6 +22,7 @@ from models import (
     Contact,
     EmailChannelInstance,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     SentinelProfile,
     TeamMemberRole,
@@ -41,6 +42,7 @@ CANCELLED_STATUS = "cancelled"
 SUPPORTED_TEAM_TRIGGER_KINDS = {
     TeamTriggerKind.WEBHOOK.value,
     TeamTriggerKind.GITHUB.value,
+    TeamTriggerKind.GITLAB.value,
     TeamTriggerKind.JIRA.value,
     TeamTriggerKind.GMAIL.value,
 }
@@ -909,6 +911,7 @@ class AgentTeamApiService:
         model_by_kind = {
             TeamTriggerKind.WEBHOOK.value: WebhookIntegration,
             TeamTriggerKind.GITHUB.value: GitHubChannelInstance,
+            TeamTriggerKind.GITLAB.value: GitLabChannelInstance,
             TeamTriggerKind.JIRA.value: JiraChannelInstance,
             TeamTriggerKind.GMAIL.value: EmailChannelInstance,
         }

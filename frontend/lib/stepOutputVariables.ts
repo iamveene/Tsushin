@@ -118,7 +118,7 @@ const STEP_OUTPUT_FIELDS: Record<string, StepVariable[]> = {
 // v0.7.0 Wave 5/finishing: per-kind Source-step deep payload paths
 // ============================================================
 //
-// When the Source step is bound to a Jira / Email / GitHub / Webhook
+// When the Source step is bound to a Jira / Email / GitHub / GitLab / Webhook
 // trigger, the wake-event payload has a kind-specific shape. Downstream steps
 // (Notification, Conversation, Gate, etc.) typically want to reference deep
 // fields like `{{source.payload.issue.key}}` (Jira ticket key) or

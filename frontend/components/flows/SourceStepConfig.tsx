@@ -11,7 +11,7 @@
  * `{{source.payload.field}}` references with confidence.
  *
  * Source step config_json shape (set by Wave 2 SourceStepHandler):
- *   { trigger_kind: 'jira'|'email'|'github'|'webhook',
+ *   { trigger_kind: 'jira'|'email'|'github'|'gitlab'|'webhook',
  *     trigger_instance_id: number }
  *
  * Sample payload sourcing:
@@ -21,7 +21,7 @@
  *     descent, max depth 4, max 50 paths) to render clickable JSON-path
  *     chips. Clicking a chip copies `{{source.payload.<path>}}` to the
  *     clipboard. Empty state shows curl + "How to test" expander.
- *   - jira / email / github: most recent WakeEvent for the
+ *   - jira / email / repository triggers: most recent WakeEvent for the
  *     bound trigger via `getWakeEvents` + `getWakeEventPayload`.
  *
  * The component degrades quietly if the backend hasn't merged the
@@ -59,6 +59,7 @@ const KIND_LABELS: Record<TriggerKind, string> = {
   jira: 'Jira',
   email: 'Email',
   github: 'GitHub',
+  gitlab: 'GitLab',
   webhook: 'Webhook',
 }
 
@@ -66,6 +67,7 @@ function KindIcon({ kind, size = 16 }: { kind: TriggerKind; size?: number }) {
   if (kind === 'webhook') return <WebhookIcon size={size} />
   if (kind === 'jira') return <WrenchIcon size={size} />
   if (kind === 'github') return <GlobeIcon size={size} />
+  if (kind === 'gitlab') return <WrenchIcon size={size} />
   if (kind === 'email') return <EnvelopeIcon size={size} />
   return <LightningIcon size={size} />
 }
@@ -326,18 +328,22 @@ export default function SourceStepConfig({ config }: Props) {
         ...(t.search_query ? [{ label: 'Search query', value: t.search_query, mono: true } as ConfigEntry] : []),
       ]
     }
-    if (triggerKind === 'github') {
+    if (triggerKind === 'github' || triggerKind === 'gitlab') {
       const t = trigger as {
         repo_owner?: string
         repo_name?: string
+        project_path?: string
         events?: string[] | null
         branch_filter?: string | null
         path_filters?: string[] | null
         author_filter?: string | null
       }
+      const repoLabel = triggerKind === 'gitlab'
+        ? t.project_path || (t.repo_owner && t.repo_name ? `${t.repo_owner}/${t.repo_name}` : null)
+        : (t.repo_owner && t.repo_name ? `${t.repo_owner}/${t.repo_name}` : null)
       return [
-        ...(t.repo_owner && t.repo_name
-          ? [{ label: 'Repository', value: `${t.repo_owner}/${t.repo_name}`, mono: true } as ConfigEntry]
+        ...(repoLabel
+          ? [{ label: triggerKind === 'gitlab' ? 'Project' : 'Repository', value: repoLabel, mono: true } as ConfigEntry]
           : []),
         ...(t.events && t.events.length > 0
           ? [{ label: 'Events', value: t.events.join(', '), mono: true } as ConfigEntry]
