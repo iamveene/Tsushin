@@ -102,7 +102,6 @@ function CustomSkillsPageContent() {
   const [formIcon, setFormIcon] = useState('')
   const [formType, setFormType] = useState<string>('instruction')
   const [formExecMode, setFormExecMode] = useState<string>('tool')
-  const [formTriggerMode, setFormTriggerMode] = useState<string>('llm_decided')
   const [formInstructions, setFormInstructions] = useState('')
   const [formScriptContent, setFormScriptContent] = useState('')
   const [formScriptEntrypoint, setFormScriptEntrypoint] = useState('')
@@ -185,7 +184,6 @@ function CustomSkillsPageContent() {
         setFormIcon('')
         setFormType('mcp_server')
         setFormExecMode('tool')
-        setFormTriggerMode('llm_decided')
         setFormInstructions('')
         setFormScriptContent('')
         setFormScriptEntrypoint('main.py')
@@ -228,7 +226,6 @@ function CustomSkillsPageContent() {
     setFormIcon('')
     setFormType('instruction')
     setFormExecMode('tool')
-    setFormTriggerMode('llm_decided')
     setFormInstructions('')
     setFormScriptContent('')
     setFormScriptEntrypoint('main.py')
@@ -248,8 +245,7 @@ function CustomSkillsPageContent() {
     setFormDescription(skill.description || '')
     setFormIcon(skill.icon || '')
     setFormType(skill.skill_type_variant)
-    setFormExecMode(skill.execution_mode)
-    setFormTriggerMode(skill.trigger_mode)
+    setFormExecMode(skill.execution_mode === 'passive' ? 'passive' : 'tool')
     setFormInstructions(skill.instructions_md || '')
     setFormScriptContent(skill.script_content || '')
     setFormScriptEntrypoint(skill.script_entrypoint || 'main.py')
@@ -282,8 +278,9 @@ function CustomSkillsPageContent() {
           description: formDescription || undefined,
           icon: formIcon || undefined,
           skill_type_variant: formType,
-          execution_mode: formExecMode,
-          trigger_mode: formTriggerMode,
+          execution_mode: formExecMode === 'passive' ? 'passive' : 'tool',
+          trigger_mode: 'llm_decided',
+          trigger_keywords: [],
           instructions_md: (formType === 'instruction' || formType === 'mcp_server') ? formInstructions || undefined : undefined,
           script_content: formType === 'script' ? formScriptContent : undefined,
           script_entrypoint: formType === 'script' ? formScriptEntrypoint : undefined,
@@ -301,8 +298,9 @@ function CustomSkillsPageContent() {
           description: formDescription || undefined,
           icon: formIcon || undefined,
           skill_type_variant: formType,
-          execution_mode: formExecMode,
-          trigger_mode: formTriggerMode,
+          execution_mode: formExecMode === 'passive' ? 'passive' : 'tool',
+          trigger_mode: 'llm_decided',
+          trigger_keywords: [],
           instructions_md: (formType === 'instruction' || formType === 'mcp_server') ? formInstructions || undefined : undefined,
           script_content: formType === 'script' ? formScriptContent : undefined,
           script_entrypoint: formType === 'script' ? formScriptEntrypoint : undefined,
@@ -725,7 +723,7 @@ function CustomSkillsPageContent() {
                         {skill.description || 'No description'}
                       </p>
                       <p className="text-xs text-tsushin-slate/60 mt-1">
-                        v{skill.version} &middot; {skill.execution_mode} &middot; {skill.trigger_mode} &middot; Updated {formatDateTime(skill.updated_at)}
+                        v{skill.version} &middot; {skill.execution_mode === 'passive' ? 'passive' : 'tool'} &middot; Updated {formatDateTime(skill.updated_at)}
                         {skill.last_scan_result?.scanned_at && (
                           <> &middot; Scanned {formatDateTime(skill.last_scan_result.scanned_at)}</>
                         )}
@@ -867,7 +865,7 @@ function CustomSkillsPageContent() {
 
 
                 {/* Type row */}
-                <div className="grid grid-cols-3 gap-4">
+	                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-tsushin-slate mb-1">Type</label>
                     <select
@@ -895,23 +893,10 @@ function CustomSkillsPageContent() {
                       className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-tsushin-accent/50"
                     >
                       <option value="tool">Tool</option>
-                      <option value="hybrid">Hybrid</option>
-                      <option value="passive">Passive</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-tsushin-slate mb-1">Trigger Mode</label>
-                    <select
-                      value={formTriggerMode}
-                      onChange={(e) => setFormTriggerMode(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-tsushin-accent/50"
-                    >
-                      <option value="llm_decided">LLM Decided</option>
-                      <option value="keyword">Keyword</option>
-                      <option value="always_on">Always On</option>
-                    </select>
-                  </div>
-                </div>
+	                      <option value="passive">Passive</option>
+	                    </select>
+	                  </div>
+	                </div>
 
                 {/* MCP Server configuration */}
                 {formType === 'mcp_server' && (

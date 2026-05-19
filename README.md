@@ -18,7 +18,7 @@
 
 ## Feature Highlights
 
-- **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
+- **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), slash-command triggers, and dynamic agent switching.
 - **Agent Teams** — line and mesh topologies, hidden internal coordinator, Studio Team Wizard + full Team Builder, Sentinel team-profile override, Watcher Team Runs observability with live WebSocket updates.
 - **Continuous Agents** — wake on event/schedule, queue-driven runs, required Purpose + action_kind contract, and a Watcher run history that surfaces every wake event and outcome. Configure in **Studio → Continuous Agents**, monitor in **Watcher → Agents → Continuous Agents**.
 - **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, and GitHub under Hub → Triggers; scheduled and recurring automation lives in Flows; Jira/GitHub/Password Vault credentials are managed under Hub → Tool APIs; auto-provisioned Whisper/Speaches/Kokoro/Ollama under Hub → Local Services.

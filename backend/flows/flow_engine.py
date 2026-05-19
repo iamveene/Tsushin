@@ -2250,15 +2250,15 @@ class SlashCommandStepHandler(FlowStepHandler):
 
 class SkillStepHandler(FlowStepHandler):
     """
-    Phase 16: Handles Skill steps - executes agentic skills (flight_search, etc.).
+    Phase 16: Handles Skill steps - executes skills through explicit tool args.
 
-    Allows flows to call skills like FlightSearchSkill with a natural language prompt
-    and receive structured output that can be injected into subsequent steps.
+    Allows flows to call skills like FlightSearchSkill with structured tool
+    arguments and receive output that can be injected into subsequent steps.
 
     Config schema:
     {
         "skill_type": "flight_search",  # Skill type from SkillManager registry
-        "prompt": "busque voos de VIX para CGH",  # Natural language prompt
+        "tool_arguments": {"origin": "VIX", "destination": "CGH"},
         "skill_config": {  # Optional: Override skill configuration
             "provider": "google_flights",
             "settings": {"default_currency": "BRL"}
@@ -2378,43 +2378,45 @@ class SkillStepHandler(FlowStepHandler):
             # Inject config for can_handle
             skill_instance._config = final_config
 
-            # Phase 4 Skills-as-Tools: Determine execution mode
-            # Tool mode requires explicit tool_arguments in step config.
-            # If only a prompt is provided, use legacy mode (AI parameter extraction).
-            use_tool_mode = config.get("use_tool_mode")  # None means auto-detect
-            tool_arguments = config.get("tool_arguments", {})
-
-            # Check if skill supports tool mode
+            # Skill steps require explicit tool arguments. Prompt-only skill
+            # execution was retired with raw-text skill dispatch; use a Slash
+            # Command step when the desired behavior is a command string.
+            tool_arguments = config.get("tool_arguments")
             has_execute_tool = hasattr(skill_instance, 'execute_tool')
-            is_tool_enabled = has_execute_tool and skill_instance.is_tool_enabled(final_config)
+            if not has_execute_tool:
+                return {
+                    "skill_type": skill_type,
+                    "skill_name": skill_class.skill_name,
+                    "prompt": prompt,
+                    "success": False,
+                    "output": f"Skill '{skill_type}' does not support tool execution.",
+                    "processed_content": None,
+                    "metadata": {"error": "tool_not_supported"},
+                    "status": "failed",
+                    "agent_id": agent_id,
+                    "executed_at": datetime.utcnow().isoformat() + "Z",
+                    "execution_mode": "tool",
+                    "error": f"Skill '{skill_type}' does not support tool execution.",
+                }
+            if not isinstance(tool_arguments, dict):
+                return {
+                    "skill_type": skill_type,
+                    "skill_name": skill_class.skill_name,
+                    "prompt": prompt,
+                    "success": False,
+                    "output": "Skill steps require explicit tool_arguments. Use a Slash Command step for command-string execution.",
+                    "processed_content": None,
+                    "metadata": {"error": "missing_tool_arguments"},
+                    "status": "failed",
+                    "agent_id": agent_id,
+                    "executed_at": datetime.utcnow().isoformat() + "Z",
+                    "execution_mode": "tool",
+                    "error": "Missing tool_arguments for skill step.",
+                }
 
-            # Auto-detect mode: use tool mode only if tool_arguments are explicitly provided
-            if use_tool_mode is None:
-                # Default behavior: use tool mode if tool_arguments exist, legacy otherwise
-                use_tool_mode = bool(tool_arguments) and is_tool_enabled
-                logger.info(f"SkillStepHandler: Auto-detected mode for '{skill_type}': "
-                           f"{'tool' if use_tool_mode else 'legacy'} "
-                           f"(tool_arguments={'yes' if tool_arguments else 'no'})")
-
-            # BUG-393 fix: When use_tool_mode is explicitly True in step config,
-            # respect it even if the skill's agent-level config has execution_mode="legacy".
-            # The flow step explicitly requested tool mode, so bypass is_tool_enabled check.
-            if use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True):
-                logger.info(f"SkillStepHandler: Using execute_tool() for skill '{skill_type}'")
-                # Execute skill via tool mode
-                result = await skill_instance.execute_tool(tool_arguments, inbound_message, final_config)
-            else:
-                # Legacy mode: Execute the skill via process()
-                if use_tool_mode and has_execute_tool and not is_tool_enabled:
-                    logger.info(f"SkillStepHandler: Tool mode preferred but not enabled for '{skill_type}', using process()")
-                elif use_tool_mode and not has_execute_tool:
-                    logger.info(f"SkillStepHandler: Skill '{skill_type}' doesn't support tool mode, using process()")
-                else:
-                    logger.info(f"SkillStepHandler: Using legacy mode for skill '{skill_type}' (prompt-based parameter extraction)")
-                result = await skill_instance.process(inbound_message, final_config)
-
-            # Determine actual execution mode used
-            actual_execution_mode = "tool" if (use_tool_mode and has_execute_tool and (is_tool_enabled or config.get("use_tool_mode") is True)) else "legacy"
+            logger.info(f"SkillStepHandler: Using execute_tool() for skill '{skill_type}'")
+            result = await skill_instance.execute_tool(tool_arguments, inbound_message, final_config)
+            actual_execution_mode = "tool"
 
             # Return structured output for template injection
             # BUG-635: when the skill reports failure (result.success=False),
@@ -4035,14 +4037,13 @@ class BrowserAutomationStepHandler(FlowStepHandler):
 
         prompt = self._replace_variables(prompt_template, input_data)
         url = self._render_and_resolve_secret_handles(url, input_data or {})
-        use_tool_mode = config.get("use_tool_mode", False)
         tool_action = config.get("tool_action")  # e.g., "navigate", "screenshot", etc.
 
         # Get tenant_id from flow_run
         tenant_id = flow_run.tenant_id if flow_run else None
 
         # Build the command (prefer prompt, fallback to URL navigation)
-        command = prompt if prompt else f"navigate to {url}" if url else f"{tool_action} via browser" if (use_tool_mode and tool_action) else ""
+        command = prompt if prompt else f"navigate to {url}" if url else f"{tool_action} via browser" if tool_action else ""
 
         if not command:
             return {
@@ -4080,26 +4081,26 @@ class BrowserAutomationStepHandler(FlowStepHandler):
                 "provider_type": config.get("provider_type", "playwright"),
                 "timeout_seconds": self._timeout_seconds(config, step),
                 "allowed_user_keys": config.get("allowed_user_keys", []),
-                "keywords": ["browser", "navigate", "screenshot", "click", "fill", "extract"],
-                "use_ai_fallback": True,
                 "session_persistence": config.get("session_persistence", True),
                 "session_ttl_seconds": config.get("session_ttl_seconds", 300),
                 "browser_session_profile_name": config.get("browser_session_profile_name") or config.get("session_profile_name"),
                 "browser_session_integration_id": config.get("browser_session_integration_id"),
             }
 
-            # Phase 4 Skills-as-Tools: Check if step config requests tool mode execution
-            if use_tool_mode and tool_action and skill.is_tool_enabled(skill_config):
-                # Execute via tool mode with explicit action and arguments
-                arguments = self._build_tool_arguments(config, input_data or {}, tool_action, url)
-                arguments = {"action": tool_action, **arguments}
-                logger.info(f"BrowserAutomationStepHandler: Using execute_tool() with action='{tool_action}'")
-                result = await skill.execute_tool(arguments, message, skill_config)
-                execution_mode = "tool"
-            else:
-                # Legacy mode: Execute the skill via natural language processing
-                result = await skill.process(message, skill_config)
-                execution_mode = "legacy"
+            if not tool_action:
+                return {
+                    "status": "failed",
+                    "output": "Browser automation steps require an explicit tool action.",
+                    "error": "Missing tool_action for browser automation step",
+                    "screenshot_paths": [],
+                    "actions_executed": 0,
+                    "execution_mode": "tool",
+                }
+
+            arguments = self._build_tool_arguments(config, input_data or {}, tool_action, url)
+            arguments = {"action": tool_action, **arguments}
+            logger.info(f"BrowserAutomationStepHandler: Using execute_tool() with action='{tool_action}'")
+            result = await skill.execute_tool(arguments, message, skill_config)
 
             result_metadata = result.metadata or {}
             raw_browser_result_handle = None
@@ -4118,7 +4119,7 @@ class BrowserAutomationStepHandler(FlowStepHandler):
                             "tenant_id": tenant_id,
                             "flow_run_id": flow_run.id if flow_run else None,
                             "step_id": step.id,
-                            "action": tool_action if execution_mode == "tool" else "prompt",
+                            "action": tool_action,
                         },
                     )["secret_handle"]
                 except Exception as handle_exc:
@@ -4135,8 +4136,8 @@ class BrowserAutomationStepHandler(FlowStepHandler):
                 "mode": result_metadata.get("mode"),
                 "error": result_metadata.get("error") if not result.success else None,
                 "executed_at": datetime.utcnow().isoformat() + "Z",
-                "execution_mode": execution_mode,
-                "tool_action": tool_action if execution_mode == "tool" else None,
+                "execution_mode": "tool",
+                "tool_action": tool_action,
                 "raw_browser_result_handle": raw_browser_result_handle,
                 "redacted": True,
             }

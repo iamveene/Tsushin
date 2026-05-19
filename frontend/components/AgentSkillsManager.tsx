@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { api, AgentSkill, SkillDefinition, SkillIntegration, SkillProvider, TTSProviderInfo, TTSVoice, AgentTTSConfig, SentinelProfile, SentinelProfileAssignment, AgentSandboxedTool, SandboxedTool } from '@/lib/client'
 import { ArrayConfigInput } from './ArrayConfigInput'
 import {
-  PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
+  PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
   SearchIcon, AlertTriangleIcon, CheckIcon, GitHubIcon,
   LockIcon,
@@ -117,7 +117,6 @@ interface CustomSkillSummary {
 }
 
 interface ShellSkillConfig extends SkillConfig {
-  execution_mode?: string
   wait_for_result?: boolean
   default_timeout?: number
 }
@@ -168,6 +167,14 @@ const HIDDEN_CARD_CONFIG_KEYS = new Set([
   'processing_message',
   'use_ai_fallback',
 ])
+
+const sanitizeShellSkillConfig = (config: SkillConfig): ShellSkillConfig => {
+  const supportedConfig: SkillConfig = { ...config }
+  for (const key of ['execution_mode', 'keywords', 'use_ai_fallback', 'ai_model']) {
+    delete supportedConfig[key]
+  }
+  return supportedConfig as ShellSkillConfig
+}
 
 const MODEL_LABELS: Record<string, string> = {
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
@@ -885,7 +892,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         const mergedConfig: SkillConfig = {
           ...currentConfig,
-          execution_mode: 'tool',
           integration_id: selectedIntegration,
           capabilities,
         }
@@ -915,7 +921,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         const mergedConfig: SkillConfig = {
           ...currentConfig,
-          execution_mode: 'tool',
           integration_id: selectedIntegration,
           capabilities,
         }
@@ -947,7 +952,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         const mergedConfig: SkillConfig = {
           ...currentConfig,
-          execution_mode: 'tool',
           integration_id: selectedIntegration,
           capabilities,
         }
@@ -974,7 +978,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
         }
         const mergedConfig: SkillConfig = {
           ...currentConfig,
-          execution_mode: 'tool',
           integration_id: selectedIntegration,
           provider: selectedProvider,
           reference_mode: 'vault_reference',
@@ -1685,7 +1688,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       // Load current shell config
       const shellSkill = agentSkills.find(s => s.skill_type === 'shell')
       if (shellSkill?.config) {
-        setShellConfig(shellSkill.config)
+        setShellConfig(sanitizeShellSkillConfig(shellSkill.config))
       } else {
         setShellConfig({ wait_for_result: false, default_timeout: 60 })
       }
@@ -1711,7 +1714,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     try {
       await api.updateAgentSkill(agentId, 'shell', {
         is_enabled: true,
-        config: shellConfig,
+	        config: shellConfig,
       })
       setConfiguringShell(false)
       loadData()
@@ -1748,7 +1751,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               {enabled && <SecurityIndicator skillType="shell" />}
             </div>
             <p className="text-sm text-tsushin-slate">
-              Execute remote shell commands on connected beacons. Supports programmatic (/shell) and agentic (natural language) modes.
+              Execute remote shell commands on connected beacons through the /shell command or the agent tool.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1767,7 +1770,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
               <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
                 <div className="text-xs text-tsushin-muted mb-1">Agent Mode</div>
                 <div className="font-medium text-teal-700 dark:text-teal-300">
-                  <span className="inline-flex items-center gap-1">{config.execution_mode === 'agentic' ? <><BotIcon size={14} /> Agentic</> : <><WrenchIcon size={14} /> Programmatic</>}</span>
+                  <span className="inline-flex items-center gap-1"><WrenchIcon size={14} /> Tool + /shell</span>
                 </div>
               </div>
               <div className="bg-tsushin-surface rounded-lg p-3 border border-tsushin-border">
@@ -2733,65 +2736,6 @@ export default function AgentSkillsManager({ agentId }: Props) {
                       size="md"
                       title={isSkillEnabled('shell') ? 'Disable shell' : 'Enable shell'}
                     />
-                  </div>
-
-                  {/* Agent Execution Mode */}
-                  <div>
-                    <label className="block text-sm font-medium mb-3">Agent Execution Mode</label>
-                    <div className="space-y-2">
-                      <div
-                        onClick={() => setShellConfig(prev => ({ ...prev, execution_mode: 'programmatic' }))}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          shellConfig.execution_mode !== 'agentic'
-                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-tsushin-border hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium flex items-center gap-1.5"><WrenchIcon size={14} /> Programmatic Only</div>
-                            <div className="text-sm text-tsushin-muted">
-                              Only <code>/shell &lt;command&gt;</code> works. Natural language is ignored.
-                            </div>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            shellConfig.execution_mode !== 'agentic'
-                              ? 'border-teal-500 bg-teal-500'
-                              : 'border-tsushin-border'
-                          }`}>
-                            {shellConfig.execution_mode !== 'agentic' && (
-                              <div className="w-2 h-2 rounded-full bg-white" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        onClick={() => setShellConfig(prev => ({ ...prev, execution_mode: 'agentic' }))}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          shellConfig.execution_mode === 'agentic'
-                            ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
-                            : 'border-tsushin-border hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium flex items-center gap-1.5"><BotIcon size={14} /> Agentic (Natural Language)</div>
-                            <div className="text-sm text-tsushin-muted">
-                              Both <code>/shell</code> AND natural language like &quot;list files in /tmp&quot; work.
-                            </div>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            shellConfig.execution_mode === 'agentic'
-                              ? 'border-teal-500 bg-teal-500'
-                              : 'border-tsushin-border'
-                          }`}>
-                            {shellConfig.execution_mode === 'agentic' && (
-                              <div className="w-2 h-2 rounded-full bg-white" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
                   </div>
 
                   {/* Result Mode (for /shell command) */}

@@ -35,7 +35,7 @@ class AutomationSkill(BaseSkill):
 
     Skills-as-Tools (Phase 4):
     - Tool name: manage_flows
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     - Actions: list, run, status
     """
 
@@ -59,71 +59,9 @@ class AutomationSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Determine if this skill should handle the message.
-
-        Intent is decided by AISkillClassifier with workflow-automation examples —
-        no keyword lists. The classifier returns YES when the user is asking to
-        run, list, monitor, or get help on workflows / flows / automations.
+        Automation is triggered by LLM tool calls and /flows slash commands only.
         """
-        config = getattr(self, '_config', {}) or {}
-        if not self.is_legacy_enabled(config):
-            return False
-
-        # Check if skill is enabled in config
-        if not config.get('is_enabled', True):
-            return False
-
-        if not (message.body and message.body.strip()):
-            return False
-
-        return await self._ai_classify(message.body, config)
-
-    async def _ai_classify(self, body: str, config: Dict[str, Any]) -> bool:
-        """LLM-based intent check for the workflow-automation skill."""
-        from agent.skills.ai_classifier import get_classifier
-        classifier = get_classifier()
-
-        custom_examples = {
-            "yes": [
-                "run my weekly report workflow",
-                "execute the data sync flow",
-                "start the onboarding automation",
-                "trigger flow X",
-                "show me my flows",
-                "list my workflows",
-                "what automations do I have?",
-                "status of my workflows",
-                "is the report flow still running?",
-                "how do automations work here?",
-                "rodar meu fluxo de relatórios",
-                "execute o flow de sincronização",
-                "liste minhas automações",
-                "quais workflows eu tenho?",
-                "status dos meus flows",
-            ],
-            "no": [
-                "what is a workflow?",
-                "tell me a joke",
-                "schedule a meeting tomorrow",  # scheduler, not workflow runner
-                "send an email to John",
-                "create an image of a cat",
-                "remind me to buy milk",
-                "qual é a previsão do tempo?",
-                "como você está?",
-                "agende uma reunião amanhã",
-            ],
-        }
-
-        return await classifier.classify_intent(
-            message=body,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=config.get("ai_model"),
-            custom_examples=custom_examples,
-            db=self._db_session,
-            token_tracker=self._token_tracker,
-            tenant_id=self._resolve_tenant_id_for_classifier(config),
-        )
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -431,12 +369,6 @@ Need more help? Check the documentation or use `/help automation`
                     "default": 5,
                     "minimum": 1,
                     "maximum": 20
-                },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (AI decides), legacy (keywords only), hybrid (both)",
-                    "default": "hybrid"
                 }
             }
         }

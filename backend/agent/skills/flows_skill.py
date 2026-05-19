@@ -55,7 +55,7 @@ class FlowsSkill(BaseSkill):
 
     Skills-as-Tools (Phase 4):
     - Tool name: manage_reminders (single tool with action parameter)
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     - Actions: create, list, update, delete
     """
 
@@ -195,7 +195,6 @@ class FlowsSkill(BaseSkill):
         - Not set/empty: Use default "gemini-2.5-flash"
 
         Phase 7.5: Configurable intent detection model.
-        Backward compatible with legacy 'ai_model' field.
 
         Args:
             config: Skill configuration
@@ -203,8 +202,7 @@ class FlowsSkill(BaseSkill):
         Returns:
             Resolved model name (e.g., "gemini-2.5-flash", "gemma2:4b")
         """
-        # Phase 7.5: Check new field first, fall back to legacy field, then agent's model
-        intent_model = config.get('intent_detection_model') or config.get('ai_model')
+        intent_model = config.get('intent_detection_model')
 
         # If no specific intent model configured, use agent's main model
         if not intent_model:
@@ -1053,215 +1051,11 @@ Return ONLY a valid JSON object, no other text."""
             logger.error(f"FlowsSkill: Error parsing event from message: {e}", exc_info=True)
             return None
 
-    async def _ai_classify(self, message: str, config: Dict[str, Any]) -> bool:
-        """
-        Override AI classification with Flows-specific examples.
-
-        Phase 7.1.3: Provide specific examples for scheduling/flow operations.
-        Phase 7.5: Use configurable intent detection model.
-        """
-        from agent.skills.ai_classifier import get_classifier
-
-        classifier = get_classifier()
-        # Phase 7.5: Resolve intent detection model (supports "inherit")
-        ai_model = self._resolve_intent_detection_model(config)
-
-        # Flows-specific examples
-        custom_examples = {
-            "yes": [
-                "Quais são meus lembretes?",
-                "Me lembre de comprar pão em 5 minutos",
-                "Agende uma reunião para amanhã",
-                "What are my scheduled events?",
-                "Remind me to call John tomorrow",
-                "List my reminders",
-                "Mostra meus lembretes agendados",
-                "Create a reminder for next Monday",
-                "Delete the calendar event tomorrow",
-                "Remove my scheduled meeting",
-                "Cancel the reminder",
-                "Update my calendar event"
-            ],
-            "no": [
-                "What is a reminder?",
-                "How do reminders work?",
-                "Can reminders be useful?",
-                "Tell me about scheduling",
-                "I like reminders",
-                "I need to delete that email",
-                "Remove this message",
-                "Check your calendar later",
-                "That was a great event yesterday",
-                "Delete that file",
-                "What's on your calendar?",
-                "Create a new document"
-            ]
-        }
-
-        return await classifier.classify_intent(
-            message=message,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=ai_model,
-            custom_examples=custom_examples,
-            db=self._db_session  # Phase 7.4: Pass database session for API key loading
-        )
-
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Determine if this message should be handled by Flows skill.
-
-        Phase 7.1.3: Uses configurable keywords + AI fallback approach.
+        Flows/Scheduler access is triggered by tool calls and slash commands.
         """
-        # Get agent-specific config
-        config = getattr(self, '_config', {}) or {}
-        if not self.is_legacy_enabled(config):
-            return False
-        capabilities = config.get('capabilities', {})
-        body_lower = message.body.lower()
-
-        # Phase 6.11.4: Removed special handling for Agendador agent
-        # Asana operations are now handled through scheduler provider configuration
-
-        # Phase 7.1.3: Get configurable keywords (simple array)
-        keywords = config.get('keywords', self.get_default_config()['keywords'])
-
-        # Step 1: Keyword pre-filter with category-based matching to reduce false positives
-        # Categorize keywords to require meaningful combinations
-        primary_keywords = ['lembrete', 'lembrar', 'lembre', 'lembra', 'reminder', 'remind', 'flows', 'flow']
-        secondary_keywords = ['calendar', 'calendario', 'calendário', 'agenda', 'event', 'events', 'evento',
-                             'eventos', 'meeting', 'meetings', 'reunião', 'reuniões']
-        action_keywords = ['delete', 'deletar', 'remover', 'cancelar', 'cancel', 'remove',
-                          'update', 'atualizar', 'modificar', 'alterar', 'mudar',
-                          'create', 'criar', 'crie', 'cria', 'schedule', 'agendar', 'agendamento', 'agenda',
-                          'list', 'listar', 'show', 'mostrar', 'ver', 'quais', 'qual', 'what', 'which',
-                          # Natural query patterns for checking calendar/events
-                          'have', 'tenho', 'any', 'algum', 'alguma', 'check', 'checar', 'verificar',
-                          'today', 'hoje', 'tomorrow', 'amanhã', 'amanha', 'week', 'semana',
-                          'month', 'mês', 'mes', 'next', 'próximo', 'proximo']
-
-        # Check matches across categories
-        primary_match = any(kw in body_lower for kw in primary_keywords)
-        secondary_match = any(kw in body_lower for kw in secondary_keywords)
-        action_match = any(kw in body_lower for kw in action_keywords)
-
-        # #region agent log
-        import time
-        import json as json_lib
-        try:
-            with open('/app/.cursor/debug.log', 'a') as f:
-                f.write(json_lib.dumps({
-                    'location': 'flows_skill.py:1133',
-                    'message': 'FlowsSkill can_handle keyword check',
-                    'data': {
-                        'body': message.body,
-                        'primary_match': primary_match,
-                        'secondary_match': secondary_match,
-                        'action_match': action_match
-                    },
-                    'timestamp': time.time() * 1000,
-                    'sessionId': 'debug-session',
-                    'hypothesisId': 'H6'
-                }) + '\n')
-        except:
-            pass
-        # #endregion
-
-        # Count how many categories matched
-        category_matches = sum([primary_match, secondary_match, action_match])
-
-        # Require at least 2 keyword categories OR a strong primary keyword
-        if category_matches < 2 and not primary_match:
-            # #region agent log
-            try:
-                with open('/app/.cursor/debug.log', 'a') as f:
-                    f.write(json_lib.dumps({
-                        'location': 'flows_skill.py:1157',
-                        'message': 'FlowsSkill REJECTED: insufficient keywords',
-                        'data': {'category_matches': category_matches},
-                        'timestamp': time.time() * 1000,
-                        'sessionId': 'debug-session',
-                        'hypothesisId': 'H6'
-                    }) + '\n')
-            except:
-                pass
-            # #endregion
-            logger.debug(f"FlowsSkill: Insufficient keyword matches ({category_matches} categories) in '{message.body[:50]}...'")
-            return False
-
-        logger.info(f"FlowsSkill: Keywords matched ({category_matches} categories) in '{message.body[:50]}...'")
-
-        # Step 2: Check capabilities and use AI to determine specific intent
-        # (The AI classification will determine if it's query/create/delete/update)
-
-        # For now, check if ANY capability is enabled
-        has_enabled_capability = False
-        for cap_name, cap_config in capabilities.items():
-            cap_enabled = cap_config.get('enabled', True) if isinstance(cap_config, dict) else True
-            if cap_enabled:
-                has_enabled_capability = True
-                break
-
-        # #region agent log
-        try:
-            with open('/app/.cursor/debug.log', 'a') as f:
-                f.write(json_lib.dumps({
-                    'location': 'flows_skill.py:1191',
-                    'message': 'FlowsSkill capability check',
-                    'data': {
-                        'has_enabled_capability': has_enabled_capability,
-                        'capabilities': capabilities
-                    },
-                    'timestamp': time.time() * 1000,
-                    'sessionId': 'debug-session',
-                    'hypothesisId': 'H6'
-                }) + '\n')
-        except:
-            pass
-        # #endregion
-
-        if not has_enabled_capability:
-            logger.info(f"FlowsSkill: All capabilities disabled")
-            return False
-
-        # Use AI fallback if enabled
-        use_ai = config.get('use_ai_fallback', True)
-        # #region agent log
-        try:
-            with open('/app/.cursor/debug.log', 'a') as f:
-                f.write(json_lib.dumps({
-                    'location': 'flows_skill.py:1215',
-                    'message': 'FlowsSkill before AI classify',
-                    'data': {'use_ai': use_ai},
-                    'timestamp': time.time() * 1000,
-                    'sessionId': 'debug-session',
-                    'hypothesisId': 'H6'
-                }) + '\n')
-        except:
-            pass
-        # #endregion
-        if use_ai:
-            result = await self._ai_classify(message.body, config)
-            # #region agent log
-            try:
-                with open('/app/.cursor/debug.log', 'a') as f:
-                    f.write(json_lib.dumps({
-                        'location': 'flows_skill.py:1230',
-                        'message': 'FlowsSkill AI classify result',
-                        'data': {'result': result, 'body': message.body},
-                        'timestamp': time.time() * 1000,
-                        'sessionId': 'debug-session',
-                        'hypothesisId': 'H6'
-                    }) + '\n')
-            except:
-                pass
-            # #endregion
-            logger.info(f"FlowsSkill: AI classification result={result}")
-            return result
-
-        # Keywords matched, no AI verification needed
-        logger.info(f"FlowsSkill: Keywords matched, AI disabled, handling message")
-        return True
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -1443,17 +1237,13 @@ Return ONLY a valid JSON object, no other text."""
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         """
-        Get default configuration with all capabilities and configurable keywords.
+        Get default configuration with all capabilities.
 
         Phase 7.1.3: Added multi-category keyword configuration.
         Phase 7.5: Added configurable intent detection model.
         Phase 9: Added scheduler provider configuration.
         """
         return {
-            # Phase 7.1.3: Minimal keywords with verb forms for grammatical coverage
-            "keywords": [],
-            "use_ai_fallback": True,
-            "ai_model": "gemini-2.5-flash",  # DEPRECATED: Use intent_detection_model instead
             # Phase 7.5: Configurable intent detection model
             "intent_detection_model": "gemini-2.5-flash",  # Can be "inherit", specific model, or default
             # Phase 9: Scheduler provider configuration
@@ -1493,16 +1283,12 @@ Return ONLY a valid JSON object, no other text."""
         """
         Get JSON schema for configuration UI.
 
-        Phase 7.1.3: Merges base schema (keywords, AI fallback) with Flows-specific capabilities.
-        Phase 7.5: Added intent_detection_model configuration, deprecated ai_model.
+        Phase 7.1.3: Merges base schema with Flows-specific capabilities.
+        Phase 7.5: Added intent_detection_model configuration.
         Phase 9: Added scheduler provider selection.
         """
-        # Get base schema (includes keywords, use_ai_fallback, ai_model)
+        # Get base schema
         base_schema = super().get_config_schema()
-
-        # Phase 7.5: Hide the legacy ai_model field (use intent_detection_model instead)
-        if "ai_model" in base_schema["properties"]:
-            del base_schema["properties"]["ai_model"]
 
         # Phase 7.5: Add intent_detection_model field
         base_schema["properties"]["intent_detection_model"] = {

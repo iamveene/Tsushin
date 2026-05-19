@@ -54,7 +54,7 @@ class BrowserAutomationSkill(BaseSkill):
 
     Skills-as-Tools (Phase 4):
     - Multiple atomic tools: browser_navigate, browser_click, browser_fill, browser_screenshot, browser_extract
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     - Mode parameter: 'container' (isolated) or 'host' (authenticated sessions)
     """
 
@@ -421,74 +421,9 @@ Rules:
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains browser automation intent.
-
-        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
+        Browser automation is triggered by LLM tool calls and /browser slash commands only.
         """
-        config = getattr(self, '_config', {}) or self.get_default_config()
-        if not self.is_legacy_enabled(config):
-            return False
-
-        # Skip if message has media (audio, image, etc.)
-        if message.media_type:
-            return False
-
-        if not (message.body and message.body.strip()):
-            return False
-
-        result = await self._ai_classify_browser(message.body, config)
-        logger.info(f"BrowserAutomationSkill: AI classification result={result}")
-        return result
-
-    async def _ai_classify_browser(self, message: str, config: Dict[str, Any]) -> bool:
-        """
-        Browser automation specific AI classification with custom examples.
-
-        Provides explicit YES/NO examples for browser automation commands,
-        including URLs without scheme (example.com) and with scheme (https://example.com).
-        """
-        from agent.skills.ai_classifier import get_classifier
-
-        classifier = get_classifier()
-
-        # Browser automation specific examples
-        custom_examples = {
-            'yes': [
-                "take a screenshot of example.com",
-                "screenshot google.com",
-                "navigate to https://example.com",
-                "go to example.com",
-                "open google.com and take a screenshot",
-                "browse to facebook.com",
-                "capture the page example.com",
-                "extract text from example.com",
-                "click on the login button on example.com",
-                "captura de tela do site google.com",
-                "navegar para example.com",
-                "abrir o site facebook.com",
-            ],
-            'no': [
-                "what is example.com about?",
-                "tell me about google",
-                "who owns facebook?",
-                "is example.com a real website?",
-                "what's the weather today?",
-                "send a message to John",
-                "translate this text",
-                "how are you?",
-            ]
-        }
-
-        ai_model = config.get("ai_model") if config.get("ai_model") else None
-
-        return await classifier.classify_intent(
-            message=message,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=ai_model,
-            custom_examples=custom_examples,
-            db=self._db
-        )
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -1162,7 +1097,7 @@ Return JSON array only:"""
             "properties": {
                 "ai_model": {
                     "type": "string",
-                    "description": "AI model for intent classification",
+                    "description": "AI model for parsing explicit /browser instructions",
                     "default": "gemini-2.5-flash"
                 },
                 "provider_type": {

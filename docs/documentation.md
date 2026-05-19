@@ -1178,7 +1178,7 @@ Cloning is performed via the agents API (`api.deleteAgent`, `api.updateAgent` ex
 
 Two skills drive inter-agent behavior:
 
-- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="hybrid"` (default as of v0.6.0). "Allows users to switch their default agent for direct messages via natural language commands." Claims detection-type exemption for `agent_takeover`.
+- **Agent Switcher Skill** — `skill_type="agent_switcher"`, `execution_mode="tool"`. Allows users to switch their default agent through `/invoke` or the LLM `switch_agent` tool. Raw text keyword matching is not used for skill dispatch.
   Source: `backend/agent/skills/agent_switcher_skill.py:37-43`
 
 - **Agent Communication Skill (A2A)** — `skill_type="agent_communication"`, `execution_mode="tool"`. "Ask other agents questions, discover available agents, or delegate tasks."
@@ -1186,15 +1186,7 @@ Two skills drive inter-agent behavior:
 
 Agent Teams is the v0.7.0 productized orchestration track layered on top of this A2A foundation. Phase 1 is storage-only: `agent_team*` tables model team configuration and run history, `team_run_scratch` prepares cross-agent run-local scratch state, and `agent_team_member_a2a_snapshot` prepares soft-disable/restore of external A2A permissions when an agent joins a team. Phase 2 adds the internal line orchestrator service and member-run audit persistence, but it still does not expose Teams through API, queue dispatch, or UI. Phase 3 adds the internal mesh runtime: hidden `is_internal=true` coordinators issue JSON `dispatch`, `finish`, or `escalate` commands, member and coordinator turns are retained as audit rows, and public agent/skill/tool/knowledge surfaces hide or reject coordinator access. Phase 4 adds the backend safety layer: mounted Studio/v2/A2A guard closure, team-run memory scoping, team scratch tools available only during team execution, Sentinel run-start and handoff checks, and transactional A2A membership snapshot/restore. Phase 5 is the HTTP CRUD API layer under `/api/teams` and `/api/v1/teams`, reusing `agents.*` permissions, manual background-task runs, and soft archive with A2A restore. Phase 6 adds backend Webhook/GitHub/Jira trigger bindings and `team_run` queue dispatch for external-event-driven team runs. Phase 7 adds the Studio Teams list foundation, split create affordance, Team badges, and team-member warnings. Phase 8 adds the Studio Team Wizard for UI team creation, local template presets, existing trigger binding, draft persistence, and a minimal team detail landing. Phase 9 adds Team Builder/canvas editing, Team-level Sentinel overrides, and run drill-down inside Studio. Phase 10 adds Watcher Team Runs observability: a tenant-wide read-only run list/detail surface with live WebSocket updates, Sentinel visibility, and mesh coordinator evidence.
 
-**Agent Switcher execution modes** (v0.6.0):
-
-| Mode | Behavior |
-|---|---|
-| `tool` | LLM decides via MCP tool schema only. No keyword scanning. |
-| `legacy` | Keyword-only path (e.g., "Switch me to Support"). |
-| `hybrid` | **Default.** Both paths active — keyword triggers fire deterministically, and the LLM can also call the tool by name. Prevents keyword-only misses while keeping tool-calling precision. |
-
-Set the mode per-agent in Studio → Skills → Agent Switcher → Config. The schema is defined at `backend/agent/skills/agent_switcher_skill.py:505-509`.
+Agent Switcher has no per-agent execution-mode picker. Deterministic switching belongs to `/invoke`; model-decided switching belongs to the tool schema.
 
 **A2A Communications live in Studio** (`/agents/communication`) — a first-class Studio tab sitting between Security and Builder in the Studio sub-nav. It mounts `A2APermissionsManager` (`frontend/components/studio/A2APermissionsManager.tsx`), which owns the full permission-rule CRUD: Source/Target/Max Depth/Rate Limit/Target Skills/Status/Delete table plus the Add-Permission modal. Observability (session log + statistics) lives separately in Watcher → A2A Comms (`frontend/components/watcher/CommunicationTab.tsx`), which is read-only since v0.7.2 and shows a banner pointing back to Studio for rule management.
 
@@ -1247,7 +1239,7 @@ Seeded presets are created by `tone_preset_seeding.py` at install/bootstrap.
 
 ### 9.1 Built-in Skills Catalog
 
-Each entry below is taken directly from the skill's class attributes. Config is inherited from `BaseSkill.get_config_schema()` (keywords, use_ai_fallback, ai_model) unless the subclass overrides.
+Each entry below is taken directly from the skill's class attributes. Base skill config is intentionally empty; individual skills add only their own supported fields.
 Common base schema source: `backend/agent/skills/base.py:183-227`.
 
 | skill_type | skill_name | execution_mode | Description | Source file |
@@ -1260,15 +1252,15 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `gmail` | Gmail | tool | Read and search emails from connected Gmail accounts | `gmail_skill.py:47-50` |
 | `automation` | Automation | tool | Multi-step workflow automation and process orchestration | `automation_skill.py:42-45` |
 | `scheduler` | Scheduler | tool | Schedule reminders and AI-driven conversations via natural language | `scheduler_skill.py:40-43` |
-| `scheduler_query` | Scheduler Query | legacy | Query and list scheduled events via natural language (merged into `scheduler` list action) | `scheduler_query_skill.py:24-27` |
+| `scheduler_query` | Scheduler Query | tool | Query and list scheduled events (merged into `scheduler` list action) | `scheduler_query_skill.py:24-27` |
 | `flows` | Flows | tool | Schedule reminders, AI-driven conversations, and manage scheduled events | `flows_skill.py:62-65` |
 | `flight_search` | Flight Search | tool | Search for flights using configured providers such as Amadeus or Google Flights | `flight_search_skill.py:42-45` |
-| `shell` | Shell Commands | hybrid | Execute shell commands on registered remote hosts via secure beacon agents. Exempts `shell_malicious`. | `shell_skill.py:39-42` |
+| `shell` | Shell Commands | tool | Execute shell commands on registered remote hosts via secure beacon agents and `/shell`. Exempts `shell_malicious`. | `shell_skill.py:39-42` |
 | `sandboxed_tools` | Sandboxed Tools | passive | Gate for running security tools (nmap, dig, nuclei, httpx) inside isolated Docker containers | `sandboxed_tools_skill.py:29-36` |
 | `browser_automation` | Browser Automation | tool | Navigate, click, fill forms, extract content, capture screenshots | `browser_automation_skill.py:56-59` |
 | `knowledge_sharing` | Knowledge Sharing | passive | Post-response hook for sharing facts into shared memory pool | `knowledge_sharing_skill.py:43-50` |
 | `adaptive_personality` | Adaptive Personality | passive | Post-processing hook for fact extraction / persona learning | `adaptive_personality_skill.py:32-39` |
-| `okg_term_memory` | OKG Term Memory | hybrid | Store/recall structured term memory with MemGuard validation | `okg_term_memory_skill.py:158-164` |
+| `okg_term_memory` | OKG Term Memory | tool | Store/recall structured term memory with MemGuard validation | `okg_term_memory_skill.py:158-164` |
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
 | `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
@@ -1278,27 +1270,21 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 
 Provider-backed skills resolve stored provider ids through `backend/services/provider_aliases.py` before checking credentials or creating runtime providers. This keeps the UI-facing provider names and the Tool APIs credential services aligned: `brave`/`brave_search`, `google`/`serpapi`, and `google_flights`/`serpapi` are accepted consistently by skill execution, Flow credential preflight, and Hub configured-state checks.
 
-Execution modes (Source: `backend/agent/skills/base.py:71-78`):
-- `legacy`/`programmatic` — keyword or slash command only (no LLM tool call).
-- `tool`/`agentic` — exposed as an LLM function-call tool.
-- `hybrid` — both tool and legacy modes.
+Active skill modes (Source: `backend/agent/skills/base.py:71-78`):
+- `tool` — exposed as an LLM function-call tool; deterministic entry points are separate slash commands such as `/invoke`, `/shell`, `/search`, `/email`, `/flows`, `/scheduler`, `/image`, `/browser`, and `/flights`.
 - `passive` — post-processing hook (no direct trigger).
-- `special` — media-triggered (e.g., audio).
+- `special` — media-triggered (e.g., audio or image attachments).
 
 All skills inherit the base config schema:
 
 ```json
-{"type":"object","properties":{
-  "keywords": {"type":"array","items":{"type":"string"},"default":[]},
-  "use_ai_fallback": {"type":"boolean","default":true},
-  "ai_model": {"type":"string","enum":["gemini-2.5-flash","gpt-3.5-turbo","claude-haiku"],"default":"gemini-2.5-flash"}
-}}
+{"type":"object","properties":{}}
 ```
-Source: `backend/agent/skills/base.py:204-227`. Individual skills override to add their own fields (e.g., `scheduler_skill.py:1081`, `gmail_skill.py:1136-1138`, `browser_automation_skill.py:725`, `image_skill.py:659`).
+Source: `backend/agent/skills/base.py:204-227`. Individual skills override to add their own fields.
 
 ### 9.2 Per-Agent Skill Binding & Config
 
-Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag, a per-agent `execution_mode` override, and a JSON `config` blob validated against the skill's `get_config_schema()`.
+Bindings are stored in the `agent_skill` table (Source: `backend/models.py:712` — class AgentSkill). Each row associates an `agent_id` + `skill_type` with an `is_enabled` flag and a JSON `config` blob validated against the skill's `get_config_schema()`.
 
 The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-220`, component `AgentSkillsManager`) lists available skills from the `SkillManager` catalog (Source: `backend/agent/skills/skill_manager.py:146-184`) and renders a per-skill config modal using the returned `config_schema`. The visible skill cards use curated, user-facing summaries instead of dumping raw JSON defaults, so implementation-only fields such as fallback classifier models, empty keyword arrays, and nested settings do not appear as misleading operational configuration.
 
@@ -1342,8 +1328,8 @@ Custom skills are tenant-authored skills registered under `backend/api/routes_cu
 | `icon` | string | null | Icon identifier |
 | `skill_type_variant` | string | `"instruction"` | `instruction` \| `script` \| `mcp_server` |
 | `execution_mode` | string | `"tool"` | `tool` (LLM-facing) \| `passive` (post-processing) |
-| `trigger_mode` | string | `"llm_decided"` | `llm_decided` (LLM decides when to call) \| `keyword` \| `always` |
-| `trigger_keywords` | string[] | `[]` | Keywords that activate the skill (when `trigger_mode=keyword`) |
+| `trigger_mode` | string | `"llm_decided"` | Fixed to `llm_decided`; keyword and always-on custom skill triggers are rejected |
+| `trigger_keywords` | string[] | `[]` | Always empty; retained only for compatibility readback |
 | `timeout_seconds` | integer | `30` | Execution timeout |
 | `priority` | integer | `50` | Priority order (lower = higher priority) |
 | `sentinel_profile_id` | integer | null | Security profile for Sentinel scan at save-time |
@@ -1351,21 +1337,21 @@ Custom skills are tenant-authored skills registered under `backend/api/routes_cu
 
 Lifecycle fields rendered in UI: `scan_status` (`pending`, `clean`, `rejected`, `unknown`), `last_scan_result`, `skill_type_variant` (Source: `:20-66`). Deployment handled by `backend/services/custom_skill_deploy_service.py`.
 
-At runtime, custom skills are adapted by `CustomSkillAdapter` (Source: `backend/agent/skills/custom_skill_adapter.py:25-53`): its `skill_type` becomes `"custom:{slug}"`, `skill_name` and `execution_mode` are pulled from the database record; `passive` adapters have no `can_handle`.
+At runtime, custom skills are adapted by `CustomSkillAdapter` (Source: `backend/agent/skills/custom_skill_adapter.py:25-53`): its `skill_type` becomes `"custom:{slug}"`, `skill_name` and `execution_mode` are pulled from the database record; `passive` adapters inject instructions, while tool adapters are callable only through the LLM tool path.
 
 #### 9.3.1 Instruction Skills
 
 Natural-language instructions executed by the LLM as a tool. The simplest custom skill type — no code required.
 
-**Runtime execution semantics (BUG-509, 2026-04-10):** Instruction skills behave differently depending on `execution_mode`:
-- `execution_mode: tool` or `hybrid` (the default) — the skill is exposed to the agent as a callable tool. When the LLM invokes it, `CustomSkillAdapter.execute_tool` routes through `execute_instruction_with_llm`, which runs the `instructions_md` as a system prompt against the tenant's LLM and returns the LLM's processed output. This is the same code path that the `/api/custom-skills/{id}/test` endpoint uses, so the `/test` and runtime paths now always agree. Every runtime invocation writes a `CustomSkillExecution` history row just like `/test`.
+**Runtime execution semantics (BUG-509, 2026-04-10; updated 2026-05-19):** Instruction skills behave differently depending on `execution_mode`:
+- `execution_mode: tool` — the skill is exposed to the agent as a callable tool. When the LLM invokes it, `CustomSkillAdapter.execute_tool` routes through `execute_instruction_with_llm`, which runs the `instructions_md` as a system prompt against the tenant's LLM and returns the LLM's processed output. This is the same code path that the `/api/custom-skills/{id}/test` endpoint uses, so the `/test` and runtime paths now always agree. Every runtime invocation writes a `CustomSkillExecution` history row just like `/test`.
 - `execution_mode: passive` — the skill's `instructions_md` is concatenated into the agent's system prompt as always-on context and the skill is NOT exposed as a callable tool. Use this when you want the instructions to shape every response rather than be selectively invoked.
 
 Before 2026-04-10, all instruction skills had their raw `instructions_md` dumped into the system prompt regardless of execution mode, which caused the LLM to parrot the template back verbatim when invoked. Passive mode is now the only path that injects raw instructions.
 
 | Field | Type | Description |
 |---|---|---|
-| `instructions_md` | string (max 8,000 chars) | Markdown instructions executed by the LLM (tool/hybrid mode) or injected as always-on context (passive mode) |
+| `instructions_md` | string (max 8,000 chars) | Markdown instructions executed by the LLM (tool mode) or injected as always-on context (passive mode) |
 
 **Example — Create a "Policy Lookup" instruction skill:**
 
@@ -1945,8 +1931,8 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | `tool` | `ToolStepHandler` | Invokes a tool/function (built-in tool, sandboxed tool, or skill in tool mode). |
 | `conversation` | `ConversationStepHandler` | Multi-turn AI conversation via `ConversationThread` (up to `max_turns`). On system-managed (auto-generated from a trigger) flows the Default-agent step hides outbound-message fields. |
 | `slash_command` | `SlashCommandStepHandler` | Runs a platform slash command. |
-| `skill` | `SkillStepHandler` | Agentic skill execution (Phase 16). |
-| `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22). |
+| `skill` | `SkillStepHandler` | Skill execution with explicit `tool_arguments`; prompt-only skill execution fails closed. Use `slash_command` for command strings. |
+| `custom_skill` | `SkillStepHandler` | Alias for tenant custom skills (Phase 22); also requires explicit `tool_arguments`. |
 | `summarization` | `SummarizationStepHandler` | AI summarization. Supports `thread_id`, `source_step`, or inline `text`/`content` in `config_json`. |
 | `gate` | `GateStepHandler` | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values. |
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
@@ -4586,12 +4572,15 @@ Seed entries (`backend/db.py:830-1259`, all `tenant_id="_system"`, `handler_type
 | email | `email list` | `^/email\s+list(?:\s+(\w+))?$` | List emails with optional filter: `unread`, `today`, or a count |
 | email | `email read` | `^/email\s+read\s+(.+)$` | Read full email by ID or list index |
 | search | `search` | `^/search\s+"?(.+?)"?$` | Web search (zero AI tokens, uses Brave Search) |
+| tool | `image` | `^/(?:image|imagem)\s+(.+)$` | Generate an image from an explicit prompt |
+| tool | `browser` | `^/browser\s+(.+)$` | Run browser automation from an explicit instruction |
+| tool | `flights` | `^/(?:flights|flight|voos)\s+(.+)$` | Search flights from an explicit travel request |
 | shell | `shell` | `^/shell\s+(?:([\w\-@]+):)?(.+)$` | Execute shell command on a registered beacon host |
 | thread | `thread end` | `^/thread\s+end$` | End the active conversation thread |
 | thread | `thread list` | `^/thread\s+list$` | List active conversation threads for this sender |
 | thread | `thread status` | `^/thread\s+status$` | Show current thread details (objective, progress, time) |
 
-**Total: 37 built-in commands** (26 seeded in `db.py` + 11 added via migrations).
+**Total: 40 built-in commands** after current migrations (26 seeded in `db.py` + 14 added via migrations).
 
 **Tenant customization:** `SlashCommand.tenant_id` supports per-tenant overrides; the service query unions the tenant and `_system` rows (`slash_command_service.py:58-73`). Tenant custom commands are managed under **Settings → Prompts & Patterns → Slash Commands** (§21.11).
 
