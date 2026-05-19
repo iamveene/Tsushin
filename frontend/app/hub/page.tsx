@@ -8,7 +8,7 @@
  * - Channels: WhatsApp, Telegram, Discord, and Slack
  * - Triggers: Email, Webhook, Jira, GitHub, and GitLab
  * - Productivity: Asana, Google Calendar
- * - Repository Integrations: GitHub, GitLab, Shell, Sandboxed Tools
+ * - Developer Tools: Shell, Sandboxed Tools, and repository connections
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
@@ -633,7 +633,7 @@ function JiraIntegrationsPanel({
 // v0.7.0: GitHub Integration (Hub-side, mirrors Jira pair).
 // Shared GitHub connection + default owner/repo so both the GitHub trigger and
 // the generic `code_repository` skill can reuse one connection per tenant.
-// Mounted under the Repository Integrations tab.
+// Mounted under the Developer Tools tab.
 // =============================================================================
 
 type GitHubIntegrationDraft = {
@@ -784,7 +784,6 @@ function GitHubIntegrationsPanel({
   integrations,
   loading,
   canWriteHub,
-  onAdd,
   onEdit,
   onDelete,
   onAutomate,
@@ -792,7 +791,6 @@ function GitHubIntegrationsPanel({
   integrations: GitHubIntegration[]
   loading: boolean
   canWriteHub: boolean
-  onAdd: () => void
   onEdit: (integration: GitHubIntegration) => void
   onDelete: (integration: GitHubIntegration) => void
   onAutomate: (integration?: GitHubIntegration | null) => void
@@ -814,22 +812,13 @@ function GitHubIntegrationsPanel({
             {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
           </span>
           {canWriteHub && (
-            <>
-              <button
-                type="button"
-                onClick={() => onAutomate(null)}
-                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
-              >
-                Automate
-              </button>
-              <button
-                type="button"
-                onClick={onAdd}
-                className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
-              >
-                + Add
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => onAutomate(null)}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+            >
+              Automate
+            </button>
           )}
         </div>
       </div>
@@ -839,7 +828,7 @@ function GitHubIntegrationsPanel({
       ) : integrations.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-ink/30 p-5 text-center">
           <p className="text-sm text-tsushin-slate">
-            {canWriteHub ? 'No GitHub connections yet. Add one here, then attach it to agent skills or PR triggers.' : 'No GitHub connections configured.'}
+            {canWriteHub ? 'No GitHub connections yet. Use Add Repository Connection above, then attach it to agent skills or PR triggers.' : 'No GitHub connections configured.'}
           </p>
         </div>
       ) : (
@@ -1024,11 +1013,186 @@ function GitLabIntegrationModal({
   )
 }
 
+function RepositoryIntegrationCreateModal({
+  isOpen,
+  saving,
+  onClose,
+  onSaveGitHub,
+  onSaveGitLab,
+}: {
+  isOpen: boolean
+  saving: boolean
+  onClose: () => void
+  onSaveGitHub: (draft: GitHubIntegrationDraft) => void
+  onSaveGitLab: (draft: GitLabIntegrationDraft) => void
+}) {
+  const [provider, setProvider] = useState<'github' | 'gitlab'>('github')
+  const [githubDraft, setGithubDraft] = useState<GitHubIntegrationDraft>(() => githubIntegrationDraftFromTarget(null))
+  const [gitlabDraft, setGitlabDraft] = useState<GitLabIntegrationDraft>(() => gitlabIntegrationDraftFromTarget(null))
+
+  const canSave = provider === 'github'
+    ? Boolean(githubDraft.integration_name.trim() && githubDraft.pat_token.trim() && !saving)
+    : Boolean(gitlabDraft.integration_name.trim() && gitlabDraft.pat_token.trim() && !saving)
+
+  const providerButtonClass = (target: 'github' | 'gitlab') =>
+    `flex-1 rounded-lg border px-3 py-2 text-sm transition-colors ${
+      provider === target
+        ? 'border-teal-400/60 bg-teal-500/15 text-white'
+        : 'border-tsushin-border bg-black/20 text-tsushin-slate hover:text-white'
+    }`
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Add Repository Connection"
+      footer={(
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-tsushin-border px-4 py-2 text-sm text-tsushin-slate hover:text-white disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (provider === 'github') onSaveGitHub(githubDraft)
+              else onSaveGitLab(gitlabDraft)
+            }}
+            disabled={!canSave}
+            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save Connection'}
+          </button>
+        </div>
+      )}
+    >
+      <div className="space-y-5">
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-300">Repository provider</label>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setProvider('github')} className={providerButtonClass('github')}>
+              GitHub
+            </button>
+            <button type="button" onClick={() => setProvider('gitlab')} className={providerButtonClass('gitlab')}>
+              GitLab
+            </button>
+          </div>
+        </div>
+
+        {provider === 'github' ? (
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">Connection name</label>
+                <input
+                  type="text"
+                  value={githubDraft.integration_name}
+                  onChange={(event) => setGithubDraft((current) => ({ ...current, integration_name: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+                  placeholder="GitHub production"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">GitHub access token</label>
+                <input
+                  type="password"
+                  value={githubDraft.pat_token}
+                  onChange={(event) => setGithubDraft((current) => ({ ...current, pat_token: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+                  placeholder="ghp_..."
+                  autoComplete="new-password"
+                />
+                <p className="mt-1 text-xs text-tsushin-slate">Use the scopes needed by Code Repository skills and PR triggers.</p>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">Default owner <span className="text-xs text-tsushin-slate">(optional)</span></label>
+                <input
+                  type="text"
+                  value={githubDraft.default_owner}
+                  onChange={(event) => setGithubDraft((current) => ({ ...current, default_owner: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+                  placeholder="octo-org"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">Default repo <span className="text-xs text-tsushin-slate">(optional)</span></label>
+                <input
+                  type="text"
+                  value={githubDraft.default_repo}
+                  onChange={(event) => setGithubDraft((current) => ({ ...current, default_repo: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+                  placeholder="platform"
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={githubDraft.is_active}
+                onChange={(event) => setGithubDraft((current) => ({ ...current, is_active: event.target.checked }))}
+              />
+              <span className="text-sm text-gray-300">Enable this GitHub connection</span>
+            </label>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">Connection name</label>
+                <input
+                  type="text"
+                  value={gitlabDraft.integration_name}
+                  onChange={(event) => setGitlabDraft((current) => ({ ...current, integration_name: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+                  placeholder="GitLab production"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-300">GitLab access token</label>
+                <input
+                  type="password"
+                  value={gitlabDraft.pat_token}
+                  onChange={(event) => setGitlabDraft((current) => ({ ...current, pat_token: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+                  placeholder="glpat-..."
+                  autoComplete="new-password"
+                />
+                <p className="mt-1 text-xs text-tsushin-slate">Use a personal or project access token with repository read scopes.</p>
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-medium text-gray-300">Default project path <span className="text-xs text-tsushin-slate">(optional)</span></label>
+                <input
+                  type="text"
+                  value={gitlabDraft.default_project_path}
+                  onChange={(event) => setGitlabDraft((current) => ({ ...current, default_project_path: event.target.value }))}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+                  placeholder="group/subgroup/project"
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={gitlabDraft.is_active}
+                onChange={(event) => setGitlabDraft((current) => ({ ...current, is_active: event.target.checked }))}
+              />
+              <span className="text-sm text-gray-300">Enable this GitLab connection</span>
+            </label>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 function GitLabIntegrationsPanel({
   integrations,
   loading,
   canWriteHub,
-  onAdd,
   onEdit,
   onDelete,
   onAutomate,
@@ -1036,7 +1200,6 @@ function GitLabIntegrationsPanel({
   integrations: GitLabIntegration[]
   loading: boolean
   canWriteHub: boolean
-  onAdd: () => void
   onEdit: (integration: GitLabIntegration) => void
   onDelete: (integration: GitLabIntegration) => void
   onAutomate: (integration?: GitLabIntegration | null) => void
@@ -1058,22 +1221,13 @@ function GitLabIntegrationsPanel({
             {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
           </span>
           {canWriteHub && (
-            <>
-              <button
-                type="button"
-                onClick={() => onAutomate(null)}
-                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
-              >
-                Automate
-              </button>
-              <button
-                type="button"
-                onClick={onAdd}
-                className="rounded-lg bg-orange-500/20 px-3 py-1.5 text-xs font-medium text-orange-200 transition-colors hover:bg-orange-500/30 hover:text-white"
-              >
-                + Add
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => onAutomate(null)}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+            >
+              Automate
+            </button>
           )}
         </div>
       </div>
@@ -1083,7 +1237,7 @@ function GitLabIntegrationsPanel({
       ) : integrations.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-ink/30 p-5 text-center">
           <p className="text-sm text-tsushin-slate">
-            {canWriteHub ? 'No GitLab connections yet. Add one here, then attach it to agent skills or MR triggers.' : 'No GitLab connections configured.'}
+            {canWriteHub ? 'No GitLab connections yet. Use Add Repository Connection above, then attach it to agent skills or MR triggers.' : 'No GitLab connections configured.'}
           </p>
         </div>
       ) : (
@@ -1297,6 +1451,7 @@ export default function HubPage() {
   const [gitlabIntegrationsLoading, setGitlabIntegrationsLoading] = useState(false)
   const [editingGitlabIntegration, setEditingGitlabIntegration] = useState<GitLabIntegration | null>(null)
   const [showGitlabIntegrationModal, setShowGitlabIntegrationModal] = useState(false)
+  const [showRepositoryIntegrationModal, setShowRepositoryIntegrationModal] = useState(false)
   const [passwordVaultIntegrations, setPasswordVaultIntegrations] = useState<PasswordVaultIntegration[]>([])
   const [passwordVaultIntegrationsLoading, setPasswordVaultIntegrationsLoading] = useState(false)
   const [editingPasswordVaultIntegration, setEditingPasswordVaultIntegration] = useState<PasswordVaultIntegration | null>(null)
@@ -2989,9 +3144,10 @@ export default function HubPage() {
 
   // ---- v0.7.0: GitHub Hub Integration handlers (mirror Jira) ----
 
-  const openAddGitHubIntegrationModal = () => {
+  const openAddRepositoryIntegrationModal = () => {
     setEditingGithubIntegration(null)
-    setShowGithubIntegrationModal(true)
+    setEditingGitlabIntegration(null)
+    setShowRepositoryIntegrationModal(true)
   }
 
   const openEditGitHubIntegrationModal = (integration: GitHubIntegration) => {
@@ -3033,6 +3189,7 @@ export default function HubPage() {
       }
       await Promise.all([loadGitHubIntegrations(), loadBreadthTriggers()])
       setShowGithubIntegrationModal(false)
+      setShowRepositoryIntegrationModal(false)
       setEditingGithubIntegration(null)
       setSuccessMessage(editingGithubIntegration ? 'GitHub connection updated' : 'GitHub connection added')
       setTimeout(() => setSuccessMessage(null), 3000)
@@ -3057,11 +3214,6 @@ export default function HubPage() {
     } finally {
       setSaving(false)
     }
-  }
-
-  const openAddGitLabIntegrationModal = () => {
-    setEditingGitlabIntegration(null)
-    setShowGitlabIntegrationModal(true)
   }
 
   const openEditGitLabIntegrationModal = (integration: GitLabIntegration) => {
@@ -3099,6 +3251,7 @@ export default function HubPage() {
       }
       await Promise.all([loadGitLabIntegrations(), loadBreadthTriggers()])
       setShowGitlabIntegrationModal(false)
+      setShowRepositoryIntegrationModal(false)
       setEditingGitlabIntegration(null)
       setSuccessMessage(editingGitlabIntegration ? 'GitLab connection updated' : 'GitLab connection added')
       setTimeout(() => setSuccessMessage(null), 3000)
@@ -4458,7 +4611,7 @@ export default function HubPage() {
     { key: 'channels', label: 'Channels', Icon: MessageIcon, color: 'text-tsushin-accent', iconBg: 'bg-tsushin-accent/10' },
     { key: 'triggers', label: 'Triggers', Icon: WebhookIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'productivity', label: 'Productivity', Icon: ClipboardIcon, color: 'text-tsushin-warning', iconBg: 'bg-tsushin-warning/10' },
-    { key: 'developer', label: 'Repository Integrations', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
+    { key: 'developer', label: 'Developer Tools', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
     { key: 'tool-apis', label: 'Tool APIs', Icon: WrenchIcon, color: 'text-tsushin-success', iconBg: 'bg-tsushin-success/10' },
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
@@ -6448,31 +6601,21 @@ export default function HubPage() {
               )
             })()}
 
-            {/* ==================== REPOSITORY INTEGRATIONS TAB ==================== */}
+            {/* ==================== DEVELOPER TOOLS TAB ==================== */}
             {activeTab === 'developer' && (
               <div className="space-y-6 animate-fade-in">
-                {/* Repository integration launchers mirror the other Hub tabs
-                    while each provider panel still keeps its own "+ Add" affordance. */}
-                <div className="flex justify-between items-center gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">Repository Integrations</h2>
-                    <p className="text-sm text-tsushin-slate">GitHub and GitLab connections for repository skills, triggers, and DevOps tooling</p>
+                    <h2 className="text-lg font-display font-semibold text-white">Developer Tools</h2>
+                    <p className="text-sm text-tsushin-slate">Remote command tools, sandboxes, and repository connections for agents</p>
                   </div>
                   {canWriteHub && (
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        onClick={openAddGitHubIntegrationModal}
-                        className="btn-primary"
-                      >
-                        + Add GitHub Integration
-                      </button>
-                      <button
-                        onClick={openAddGitLabIntegrationModal}
-                        className="btn-primary"
-                      >
-                        + Add GitLab Integration
-                      </button>
-                    </div>
+                    <button
+                      onClick={openAddRepositoryIntegrationModal}
+                      className="btn-primary w-full sm:w-auto justify-center"
+                    >
+                      + Add Repository Connection
+                    </button>
                   )}
                 </div>
 
@@ -6631,7 +6774,6 @@ export default function HubPage() {
                   integrations={githubIntegrations}
                   loading={githubIntegrationsLoading}
                   canWriteHub={canWriteHub}
-                  onAdd={openAddGitHubIntegrationModal}
                   onEdit={openEditGitHubIntegrationModal}
                   onDelete={deleteGitHubIntegration}
                   onAutomate={openGitHubAutomationWizard}
@@ -6641,7 +6783,6 @@ export default function HubPage() {
                   integrations={gitlabIntegrations}
                   loading={gitlabIntegrationsLoading}
                   canWriteHub={canWriteHub}
-                  onAdd={openAddGitLabIntegrationModal}
                   onEdit={openEditGitLabIntegrationModal}
                   onDelete={deleteGitLabIntegration}
                   onAutomate={openGitLabAutomationWizard}
@@ -6650,12 +6791,12 @@ export default function HubPage() {
                 {/* Info Box */}
                 <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-blue-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-blue-300" /> Repository Integrations
+                    <LightbulbIcon size={16} className="text-blue-300" /> Developer Tools
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
-                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub and GitLab connections power
-                    the Code Repository skill and repository-trigger workflows.
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. Repository connections are added
+                    through the centralized button above, then reused by Code Repository skills and repository-trigger workflows.
                   </p>
                 </div>
               </div>
@@ -7293,6 +7434,17 @@ export default function HubPage() {
             setEditingJiraIntegration(null)
           }}
           onSave={saveJiraIntegration}
+        />
+      )}
+
+      {showRepositoryIntegrationModal && (
+        <RepositoryIntegrationCreateModal
+          key="repository-connection-create"
+          isOpen={showRepositoryIntegrationModal}
+          saving={saving}
+          onClose={() => setShowRepositoryIntegrationModal(false)}
+          onSaveGitHub={saveGitHubIntegration}
+          onSaveGitLab={saveGitLabIntegration}
         />
       )}
 

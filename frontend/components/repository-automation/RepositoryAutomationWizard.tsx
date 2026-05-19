@@ -394,7 +394,7 @@ function stepTitle(step: number): string {
 function stepDescription(step: number): string {
   if (step === 1) return 'The wizard coordinates existing Tsushin objects instead of hiding them.'
   if (step === 2) return 'Use a coordinated team for review depth, or a single agent for lightweight PR/MR feedback.'
-  if (step === 3) return 'Reuse active Repository Integrations and optional existing triggers. Missing integrations stay linked to Hub.'
+  if (step === 3) return 'Reuse active repository connections and optional existing triggers. Missing connections stay linked to Hub.'
   return 'Confirm exactly which objects will be created or reused before saving the automation.'
 }
 
@@ -509,12 +509,12 @@ function SourceStep({
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-semibold text-white">{providerLabel(draft.provider)} integration</div>
             <Link href="/hub?tab=developer" className="text-xs text-cyan-200 hover:text-white">
-              Repository Integrations
+              Developer Tools
             </Link>
           </div>
           {activeIntegrations.length === 0 ? (
             <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-              No active {providerLabel(draft.provider)} integration is available. Create or enable one in Repository Integrations, then return to select it here.
+              No active {providerLabel(draft.provider)} connection is available. Create or enable one in Hub Developer Tools, then return to select it here.
             </div>
           ) : (
             <select
