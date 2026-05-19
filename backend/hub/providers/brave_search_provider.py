@@ -55,7 +55,7 @@ class BraveSearchProvider(SearchProvider):
     def _load_api_key(self):
         """Load API key from database only (configured via Hub → API Keys)."""
         if self.db:
-            self._api_key = get_api_key('brave_search', self.db, tenant_id=self.tenant_id)
+            self._api_key = get_api_key('brave', self.db, tenant_id=self.tenant_id)
             if self._api_key:
                 self.logger.info(f"✓ Loaded Brave API key from database (tenant: {self.tenant_id or 'system'})")
 

@@ -23,6 +23,7 @@ from auth_dependencies import require_permission, get_tenant_context, TenantCont
 from hub.providers import FlightProviderRegistry
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_amadeus_encryption_key
+from services.provider_aliases import normalize_flight_provider_id
 
 
 logger = logging.getLogger(__name__)
@@ -173,9 +174,10 @@ def update_agent_flight_provider(
     Requires: agents.write permission
     """
     agent = verify_agent_access(agent_id, ctx, db)
+    provider_id = normalize_flight_provider_id(update.provider)
 
     # Validate provider exists
-    if not FlightProviderRegistry.is_provider_registered(update.provider):
+    if not FlightProviderRegistry.is_provider_registered(provider_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Provider '{update.provider}' is not registered"
@@ -183,11 +185,11 @@ def update_agent_flight_provider(
 
     # Check if the provider is configured for this tenant. Registry lookup also
     # performs the Google Flights SerpAPI -> HubIntegration sync when needed.
-    provider = FlightProviderRegistry.get_provider(update.provider, db, tenant_id=ctx.tenant_id)
+    provider = FlightProviderRegistry.get_provider(provider_id, db, tenant_id=ctx.tenant_id)
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Provider '{update.provider}' is not configured. Please configure it first."
+            detail=f"Provider '{provider_id}' is not configured. Please configure it first."
         )
 
     default_settings = {
@@ -204,7 +206,7 @@ def update_agent_flight_provider(
     existing_config = skill.config if skill and skill.config else {}
     skill_config = {
         **existing_config,
-        "provider": update.provider,
+        "provider": provider_id,
         "settings": settings,
         "execution_mode": existing_config.get("execution_mode", "tool"),
         "use_ai_fallback": existing_config.get("use_ai_fallback", True),
@@ -224,12 +226,12 @@ def update_agent_flight_provider(
     db.commit()
     db.refresh(skill)
 
-    logger.info(f"Agent {agent_id} flight provider updated to '{update.provider}' by user {current_user.id}")
+    logger.info(f"Agent {agent_id} flight provider updated to '{provider_id}' by user {current_user.id}")
 
     return {
         "success": True,
-        "message": f"Flight provider updated to '{update.provider}'",
-        "provider": update.provider,
+        "message": f"Flight provider updated to '{provider_id}'",
+        "provider": provider_id,
         "settings": settings,
         "skill_id": skill.id,
     }

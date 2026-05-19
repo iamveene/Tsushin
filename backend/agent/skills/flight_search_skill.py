@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .base import BaseSkill, InboundMessage, SkillResult
 from hub.providers import FlightProviderRegistry
 from hub.providers.flight_search_provider import FlightSearchRequest
+from services.provider_aliases import normalize_flight_provider_id
 
 
 logger = logging.getLogger(__name__)
@@ -424,6 +425,7 @@ Return JSON only:"""
         Returns:
             Provider instance or None
         """
+        provider_name = normalize_flight_provider_id(provider_name)
         tenant_id = self._get_tenant_id()
 
         if (

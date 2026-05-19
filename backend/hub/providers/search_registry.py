@@ -8,6 +8,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from .search_provider import SearchProvider, SearchProviderStatus
+from services.provider_aliases import normalize_search_provider_id
 
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class SearchProviderRegistry:
             if provider:
                 response = await provider.search(request)
         """
+        provider_name = normalize_search_provider_id(provider_name)
         # Check if provider is registered
         provider_class = cls._providers.get(provider_name)
         if not provider_class:
@@ -113,6 +115,7 @@ class SearchProviderRegistry:
         Returns:
             SearchProviderStatus with health information
         """
+        provider_name = normalize_search_provider_id(provider_name)
         if provider_name not in cls._providers:
             return SearchProviderStatus(
                 provider=provider_name,
@@ -188,7 +191,7 @@ class SearchProviderRegistry:
         Returns:
             True if provider is registered, False otherwise
         """
-        return provider_name in cls._providers
+        return normalize_search_provider_id(provider_name) in cls._providers
 
     @classmethod
     def get_registered_providers(cls) -> List[str]:
@@ -240,7 +243,7 @@ class SearchProviderRegistry:
         Returns:
             Provider configuration dict
         """
-        return cls._provider_configs.get(provider_name, {})
+        return cls._provider_configs.get(normalize_search_provider_id(provider_name), {})
 
     @classmethod
     def initialize_providers(cls):

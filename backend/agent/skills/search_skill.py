@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .base import BaseSkill, InboundMessage, SkillResult
 from hub.providers import SearchProviderRegistry, SearchRequest
 from hub.providers.search_provider import SearchResponse, SearchResult
+from services.provider_aliases import normalize_search_provider_id
 
 
 logger = logging.getLogger(__name__)
@@ -181,9 +182,7 @@ class SearchSkill(BaseSkill):
             # Get provider from config (default to brave)
             provider_name = config.get("provider", "brave").lower()
 
-            # BUG-341: Normalize provider alias — "serpapi" is served by the "google" registry key
-            PROVIDER_ALIASES = {"serpapi": "google"}
-            provider_name = PROVIDER_ALIASES.get(provider_name, provider_name)
+            provider_name = normalize_search_provider_id(provider_name)
 
             tenant_id = config.get("tenant_id")
 
@@ -685,9 +684,7 @@ Search query:"""
             # Get provider from config (default to brave)
             provider_name = config.get("provider", "brave").lower()
 
-            # BUG-341: Normalize provider alias — "serpapi" is served by the "google" registry key
-            PROVIDER_ALIASES = {"serpapi": "google"}
-            provider_name = PROVIDER_ALIASES.get(provider_name, provider_name)
+            provider_name = normalize_search_provider_id(provider_name)
 
             tenant_id = config.get("tenant_id")
 

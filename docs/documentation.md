@@ -1276,6 +1276,8 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `password_vault` | Password Vault | tool | Resolve explicit vault references for agents and flows without exposing raw secret values. v0.7.x ships 1Password service-account support through Hub → Tool APIs and returns redacted metadata plus short-lived secret handles for trusted executors | `password_vault_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
+Provider-backed skills resolve stored provider ids through `backend/services/provider_aliases.py` before checking credentials or creating runtime providers. This keeps the UI-facing provider names and the Tool APIs credential services aligned: `brave`/`brave_search`, `google`/`serpapi`, and `google_flights`/`serpapi` are accepted consistently by skill execution, Flow credential preflight, and Hub configured-state checks.
+
 Execution modes (Source: `backend/agent/skills/base.py:71-78`):
 - `legacy`/`programmatic` — keyword or slash command only (no LLM tool call).
 - `tool`/`agentic` — exposed as an LLM function-call tool.
@@ -3343,8 +3345,8 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 
 **Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/tavily_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
-- **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0).
-- **SerpAPI**: used for both generic web search and Google Flights. The Tool APIs wizard stores this as the tenant's `serpapi` key; Google Flights treats active `serpapi` or `google_flights` API keys as valid provider credentials, syncs them into the Google Flights Hub integration as needed, and still falls back to env vars `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY`.
+- **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0). The runtime accepts both the provider id `brave` and the Tool APIs credential service `brave_search`.
+- **SerpAPI**: used for both generic web search and Google Flights. The Tool APIs wizard stores this as the tenant's `serpapi` key; Google web search and Google Flights both resolve through the shared provider alias layer. Google Flights treats active `serpapi` or `google_flights` API keys as valid provider credentials, syncs them into the Google Flights Hub integration as needed, and still falls back to env vars `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY`.
 - **SearXNG (self-hosted, auto-provisioned)** — since v0.6.0-patch.6. Per-tenant
   `SearxngInstance` rows spawn a dedicated container in port range **6500–6599**
   via `services/searxng_container_manager.py`, mirroring the Kokoro TTS /

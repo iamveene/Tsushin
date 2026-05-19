@@ -12,11 +12,11 @@ from models import HubIntegration, ApiKey, GoogleFlightsIntegration
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_api_key_encryption_key
 from services.api_key_service import get_api_key as get_decrypted_api_key
+from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES, normalize_flight_provider_id
 
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_FLIGHTS_API_KEY_SERVICES = ("google_flights", "serpapi")
 GOOGLE_FLIGHTS_SERVICE_PRIORITY = {
     service: index for index, service in enumerate(GOOGLE_FLIGHTS_API_KEY_SERVICES)
 }
@@ -90,6 +90,7 @@ class FlightProviderRegistry:
             if provider:
                 response = await provider.search_flights(request)
         """
+        provider_name = normalize_flight_provider_id(provider_name)
         # Check if provider is registered
         provider_class = cls._providers.get(provider_name)
         if not provider_class:
@@ -277,7 +278,7 @@ class FlightProviderRegistry:
         Returns:
             True if provider is registered, False otherwise
         """
-        return provider_name in cls._providers
+        return normalize_flight_provider_id(provider_name) in cls._providers
 
     @classmethod
     def get_registered_providers(cls) -> List[str]:

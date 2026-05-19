@@ -7,9 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Fixed — Google Flights SerpAPI configuration wiring (2026-05-18)
+### Fixed — Provider credential alias wiring (2026-05-18)
 
-- Fixed Google Flights provider configuration so the unified SerpAPI key created by the Tool APIs wizard also satisfies the `google_flights` flight-search provider, including tenant-scoped provider listing and runtime lookup.
+- Fixed provider configuration so API-key service aliases are resolved through one shared backend map: `brave` accepts `brave_search`, Google web search accepts `serpapi`, and Google Flights accepts either `google_flights` or the unified SerpAPI key created by the Tool APIs wizard.
+- Applied the shared alias resolver to tenant-scoped provider listing, runtime API-key lookup, provider registries, Flow credential preflight, and skill provider normalization so configured Tool APIs do not appear missing under a different provider id.
 - Fixed the agent flight-provider link endpoint to update the agent's `flight_search` skill row instead of an obsolete agent config field, so assigning Google Flights to an agent persists and is used by Flow skill steps.
 
 ### Changed — PT-BR Speaches accuracy hardening (2026-05-18)
