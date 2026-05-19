@@ -3,8 +3,7 @@ Image Skill - Skills-as-Tools Architecture
 Generate new images or edit existing ones using Google Gemini or OpenAI.
 
 - Tool name: generate_image
-- Execution mode: tool by default; falls back to LLM-classified intent on raw text
-  in legacy/hybrid mode (no keyword lists).
+- Execution mode: tool by default; explicit /image command supported.
 - Edit mode is NOT exposed as a tool (requires image input that cannot pass
   through tool-call arguments).
 """
@@ -42,8 +41,7 @@ class ImageSkill(BaseSkill):
 
     Skills-as-Tools:
     - Tool name: generate_image
-    - Execution mode: tool (default) / legacy / hybrid — intent on raw text is
-      classified by an LLM, not keyword lists.
+    - Execution mode: tool (default) plus explicit /image slash command.
     - Edit mode is NOT exposed as tool (requires image input).
     """
 
@@ -235,23 +233,22 @@ class ImageSkill(BaseSkill):
             )
 
     # =========================================================================
-    # LEGACY MODE: CAN_HANDLE AND PROCESS
+    # SPECIAL MEDIA MODE: CAN_HANDLE AND PROCESS
     # =========================================================================
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Determine if this skill should handle the message.
+        Determine if this skill should handle an attached image edit request.
 
         Intent is classified by an LLM (AISkillClassifier) — no keyword lists.
         The classifier returns one of: "generate", "edit", "none".
 
         Routing:
-        - Image attached with caption: ask the classifier; if "edit" (or "generate" with
-          attached image meaning "regenerate-ish") we handle it. "none" defers (e.g. to
-          ImageAnalysisSkill or the agent's general-purpose reply).
+        - Image attached with caption: ask the classifier; if "edit" (or
+          "generate" with attached image meaning "regenerate-ish") we handle it.
+          "none" defers to ImageAnalysisSkill or the general-purpose reply.
         - Image attached without caption: cache for follow-up, defer.
-        - Text only: in legacy/hybrid mode, classify and handle "generate"; classify
-          "edit" only if we have a recent cached image to operate on.
+        - Text-only generation is explicit only: LLM tool call or /image.
         """
         config = getattr(self, '_config', {}) or self.get_default_config()
         has_input_image = bool(
@@ -272,22 +269,6 @@ class ImageSkill(BaseSkill):
             # Image without caption - cache for potential follow-up
             self._cache_recent_image(message)
             return False
-
-        # Case 2: Text-only
-        if message.body and not message.media_type:
-            if not self.is_legacy_enabled(config):
-                return False
-
-            has_cached_image = self._has_recent_image(message.chat_id)
-            intent = await self._classify_image_intent(
-                message, config, has_input_image=has_cached_image
-            )
-            if intent == "generate":
-                logger.info("ImageSkill: text-only classified as GENERATE")
-                return True
-            if intent == "edit" and has_cached_image:
-                logger.info("ImageSkill: text-only classified as EDIT with cached image")
-                return True
 
         return False
 
@@ -1040,7 +1021,6 @@ class ImageSkill(BaseSkill):
             "lookback_messages": 5,
             "processing_message": "Processing your image, please wait...",
             "enabled_channels": ["whatsapp", "playground", "telegram", "slack", "discord"],
-            "execution_mode": "tool"
         }
 
     @classmethod
@@ -1070,12 +1050,6 @@ class ImageSkill(BaseSkill):
                     "type": "array",
                     "items": {"type": "string", "enum": ["whatsapp", "playground", "telegram"]},
                     "description": "Channels where this skill is active"
-                },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (AI decides via tool call), legacy (LLM-classified intent on raw text), hybrid (both)",
-                    "default": "tool"
                 }
             },
             "required": ["model"]

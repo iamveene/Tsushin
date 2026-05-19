@@ -1,6 +1,6 @@
 """
 Phase 7.1.1.2: AI Skill Classifier
-Shared AI classification helper for all skills with configurable keywords.
+Shared AI helper for explicit skill command parsing and entity extraction.
 
 Provides intent classification and entity extraction using various LLM providers.
 

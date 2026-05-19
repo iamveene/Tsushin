@@ -41,13 +41,12 @@ class PasswordVaultSkill(BaseSkill):
         return SkillResult(
             success=False,
             output="Password Vault is tool-only. Use the Password Vault operation tool.",
-            metadata={"error": "legacy_disabled"},
+            metadata={"error": "raw_text_disabled"},
         )
 
     @classmethod
     def get_default_config(cls) -> Dict[str, Any]:
         return {
-            "execution_mode": "tool",
             "enabled": True,
             "provider": "onepassword",
             "integration_id": None,

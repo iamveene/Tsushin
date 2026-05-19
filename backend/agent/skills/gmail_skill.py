@@ -39,7 +39,7 @@ class GmailSkill(BaseSkill):
 
     Skills-as-Tools (Phase 3):
     - Tool name: gmail_operation
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     - Actions: list, search, read, send, reply, draft
 
     Example:
@@ -112,89 +112,9 @@ class GmailSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Determine if this message should be handled by Gmail skill.
-
-        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
+        Gmail is triggered by LLM tool calls and /email slash commands only.
         """
-        config = getattr(self, '_config', {}) or self.get_default_config()
-
-        # Skills-as-Tools: in tool-only mode, the agent's LLM picks via tool call instead.
-        if not self.is_legacy_enabled(config):
-            return False
-
-        # Check if skill is enabled
-        if not config.get('enabled', True):
-            return False
-
-        # Check if any capability is enabled (cheap structural guard before LLM call)
-        capabilities = config.get('capabilities', {})
-        has_enabled_capability = any(
-            cap.get('enabled', True) if isinstance(cap, dict) else True
-            for cap in capabilities.values()
-        ) if capabilities else True
-
-        if not has_enabled_capability:
-            logger.info("GmailSkill: All capabilities disabled")
-            return False
-
-        result = await self._ai_classify(message.body, config)
-        logger.info(f"GmailSkill: AI classification result={result}")
-        return result
-
-    async def _ai_classify(self, message: str, config: Dict[str, Any]) -> bool:
-        """
-        Override AI classification with Gmail-specific examples.
-
-        Provides specific examples for email operations to improve accuracy.
-        """
-        from agent.skills.ai_classifier import get_classifier
-
-        classifier = get_classifier()
-        ai_model = config.get("ai_model", "gemini-2.5-flash")
-
-        # Gmail-specific examples
-        custom_examples = {
-            "yes": [
-                "Show me my emails",
-                "List my inbox",
-                "Show recent emails",
-                "Check my email",
-                "What emails do I have?",
-                "Read my latest messages",
-                "Search emails from John",
-                "Find emails about meeting",
-                "Ver meus emails",
-                "Mostrar minha caixa de entrada",
-                "Listar emails recentes",
-                "Procurar emails sobre projeto",
-                "Ler minhas mensagens",
-                "Buscar emails do trabalho",
-                "Show me my latest emails in the inbox",
-                "What's in my inbox?",
-                "Any new emails?",
-                "Do I have new messages?",
-            ],
-            "no": [
-                "What is email?",
-                "How do I send an email?",
-                "Can you write an email for me?",
-                "Help me compose a message",
-                "Set a reminder",
-                "Schedule a meeting",
-                "What time is it?",
-                "Tell me about yourself",
-                "Create a task",
-            ]
-        }
-
-        return await classifier.classify_intent(
-            message=message,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=ai_model,
-            custom_examples=custom_examples,
-            db=self._db_session
-        )
+        return False
 
     async def _detect_gmail_intent(self, text: str) -> str:
         """
@@ -1547,9 +1467,7 @@ class GmailSkill(BaseSkill):
     def get_default_config(cls) -> Dict[str, Any]:
         """Get default configuration."""
         return {
-            "execution_mode": "tool",
             "enabled": True,
-            "ai_model": "gemini-2.5-flash",
             "integration_id": None,  # Must be configured per-agent
             "default_max_results": 10,
             "capabilities": {
@@ -1590,14 +1508,6 @@ class GmailSkill(BaseSkill):
     def get_config_schema(cls) -> Dict[str, Any]:
         """Get JSON schema for configuration UI."""
         base_schema = super().get_config_schema()
-
-        base_schema["properties"]["execution_mode"] = {
-            "type": "string",
-            "enum": ["tool", "legacy", "hybrid"],
-            "title": "Execution Mode",
-            "description": "Execution mode: tool (LLM decides), legacy (keywords), hybrid (both)",
-            "default": "tool"
-        }
 
         base_schema["properties"]["integration_id"] = {
             "type": ["integer", "null"],

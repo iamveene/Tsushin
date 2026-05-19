@@ -18,7 +18,7 @@
 
 ## Feature Highlights
 
-- **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), keyword triggers, and dynamic agent switching.
+- **Multi-agent orchestration** — per-agent personas, tone presets, memory modes (isolated / channel / shared), slash-command triggers, and dynamic agent switching.
 - **Agent Teams** — line and mesh topologies, hidden internal coordinator, Studio Team Wizard + full Team Builder, Sentinel team-profile override, Watcher Team Runs observability with live WebSocket updates.
 - **Continuous Agents** — wake on event/schedule, queue-driven runs, required Purpose + action_kind contract, and a Watcher run history that surfaces every wake event and outcome. Configure in **Studio → Continuous Agents**, monitor in **Watcher → Agents → Continuous Agents**.
 - **Channels + triggers** — conversational channels cover WhatsApp (WAHA), Telegram, Slack, Discord, and Playground under Hub → Channels; event triggers cover Email, Webhook, Jira, GitHub, and GitLab under Hub → Triggers; scheduled and recurring automation lives in Flows; GitHub/GitLab connections live under Hub → Repository Integrations; Jira/Password Vault/search credentials are managed under Hub → Tool APIs; auto-provisioned Whisper/Speaches/Kokoro/Ollama under Hub → Local Services.
@@ -28,7 +28,7 @@
 - **Vector stores** — Chroma (built-in), Qdrant (auto-provisioned during setup when available), Pinecone, or MongoDB Atlas, with **multi-index per surface** (Agent KB, Project KB, long-term memory) and pluggable embedding providers.
 - **22 built-in skills** — audio TTS/transcription, web search, image analysis + generation/editing, browser automation, Password Vault (1Password), Gmail (with granular send/reply/draft capabilities), Code Repository (GitHub/GitLab), Ticket Management (Jira), flight search, scheduler, flows, automation, knowledge sharing, OKG terms, agent switcher, A2A agent communication, sandboxed shell/network tools, and more.
 - **Custom skills** — Instruction, Script (Python/Bash/Node), and MCP-server skills, gated by a Sentinel scan at save-time.
-- **37 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
+- **38 slash commands** — agent management, email (Gmail), web search, shell, thread control, sandboxed tools, flows, scheduler, memory, project context, and system commands — all with per-contact access control.
 - **Sandboxed tools** — per-tenant Docker containers with `nmap`, `nuclei`, `dig`, `httpx`, `whois`, `katana`, `subfinder`, `sqlmap`, and a generic webhook tool. Invoked via `/tool <name> <cmd> param=value`.
 - **Flows** — 4 flow types (conversation, notification, workflow, task) with immediate, scheduled, recurring, keyword, or triggered execution. Triggered flows select an existing Hub trigger and get a locked Source step plus `flow_trigger_binding`; Source is not manually addable.
 - **Sentinel security** — AI-powered detection across 9 threat types: prompt injection, agent takeover, poisoning, shell malicious intent, memory poisoning (MemGuard), agent privilege escalation, browser SSRF, vector-store poisoning, and continuous-agent action approval. Per-tenant, per-agent, and per-team profiles with block / warn-only / detect-only / off modes; dynamic threat-type derivation from `DETECTION_REGISTRY`.

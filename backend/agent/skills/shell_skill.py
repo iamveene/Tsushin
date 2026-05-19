@@ -39,7 +39,7 @@ class ShellSkill(BaseSkill):
     skill_type = "shell"
     skill_name = "Shell Commands"
     skill_description = "Execute shell commands on registered remote hosts via secure beacon agents"
-    execution_mode = "hybrid"  # Supports both /shell command and AI tool calls
+    execution_mode = "tool"
     # Hidden from the agent creation wizard: requires a paired beacon (Settings → Shell).
     wizard_visible = False
 
@@ -76,14 +76,8 @@ class ShellSkill(BaseSkill):
             # Whether to wait for result by default
             "wait_for_result": True,
 
-            # Enable /shell slash command
+            # Slash command support is handled by SlashCommandService.
             "enable_slash_command": True,
-
-            # Keywords for AI detection (optional)
-            "keywords": [],
-
-            # AI classification fallback
-            "use_ai_fallback": False
         }
 
     @classmethod
@@ -120,17 +114,6 @@ class ShellSkill(BaseSkill):
                     "type": "boolean",
                     "description": "Enable /shell slash command",
                     "default": True
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Keywords that trigger shell skill detection",
-                    "default": []
-                },
-                "use_ai_fallback": {
-                    "type": "boolean",
-                    "description": "Use AI classification for intent detection",
-                    "default": False
                 }
             },
             "required": []
@@ -268,52 +251,13 @@ class ShellSkill(BaseSkill):
             }
         }
 
-    def is_tool_enabled(self, config: Optional[Dict[str, Any]] = None) -> bool:
-        """
-        Check if the run_shell_command tool should be exposed to the agent.
-
-        Returns:
-            True if tool should be available for AI/agentic use.
-            False if only /shell slash command should work (programmatic mode).
-        """
-        config = config or getattr(self, '_config', {}) or {}
-        execution_mode = config.get('execution_mode', self.execution_mode)
-
-        # Support both old and new terminology
-        # - "agentic" / "tool": Tool-only mode
-        # - "hybrid": Both tool and slash command
-        # - "programmatic" / "legacy": Slash command only
-        return execution_mode in ('agentic', 'tool', 'hybrid')
-
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Determine if this skill can handle the given message.
+        Shell no longer runs through direct message skill dispatch.
 
-        Handles:
-        - /shell slash command
-        - Keyword matches (if configured)
-        - AI classification (if enabled)
+        /shell is handled by SlashCommandService; natural language access is via
+        the run_shell_command tool.
         """
-        if not message.body:
-            return False
-
-        body = message.body.strip()
-        config = getattr(self, '_config', {}) or {}
-
-        # Check for /shell slash command
-        if config.get('enable_slash_command', True):
-            if self.SHELL_COMMAND_PATTERN.match(body):
-                logger.info("ShellSkill: Matched /shell slash command")
-                return True
-
-        # Check for keyword matches
-        keywords = config.get('keywords', [])
-        if keywords and self._keyword_matches(body, keywords):
-            # Optional: Use AI to confirm intent
-            if config.get('use_ai_fallback', False):
-                return await self._ai_classify(body, config)
-            return True
-
         return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:

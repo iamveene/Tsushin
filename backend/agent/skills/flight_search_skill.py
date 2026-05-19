@@ -4,7 +4,7 @@ Allows agents to search for flights using configured provider (Amadeus, Skyscann
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from .base import BaseSkill, InboundMessage, SkillResult
@@ -23,7 +23,7 @@ class FlightSearchSkill(BaseSkill):
 
     Skills-as-Tools (Phase 3):
     - Tool name: search_flights
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
 
     The provider is selected per-agent via agent configuration:
     agent.config = {
@@ -77,20 +77,9 @@ class FlightSearchSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Detect if message contains flight search intent.
-
-        Intent is decided entirely by AISkillClassifier — no keyword pre-filter.
+        Flight search is triggered by LLM tool calls and /flights slash commands only.
         """
-        config = getattr(self, '_config', {}) or self.get_default_config()
-        if not self.is_legacy_enabled(config):
-            return False
-
-        if not (message.body and message.body.strip()):
-            return False
-
-        result = await self._ai_classify(message.body, config)
-        logger.info(f"FlightSearchSkill: AI classification result={result}")
-        return result
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -679,8 +668,6 @@ Return JSON only:"""
             Default config dict
         """
         return {
-            "execution_mode": "tool",
-            "ai_model": "gemini-2.5-flash",
             "provider": "google_flights",  # Default provider - uses SerpApi
             "settings": {
                 "default_currency": "BRL",
@@ -700,16 +687,6 @@ Return JSON only:"""
         return {
             "type": "object",
             "properties": {
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["tool", "legacy", "hybrid"],
-                    "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
-                    "default": "tool"
-                },
-                "ai_model": {
-                    "type": "string",
-                    "description": "AI model for intent classification"
-                },
                 "provider": {
                     "type": "string",
                     "enum": ["amadeus", "skyscanner", "google_flights"],
@@ -736,78 +713,6 @@ Return JSON only:"""
                 }
             }
         }
-
-    async def _ai_classify(self, message: str, config: Dict[str, Any]) -> bool:
-        """
-        Use AI to classify message intent.
-
-        Phase 7.1: Helper method for AI-based intent detection.
-        Phase 7.4: Passes database session for API key loading.
-
-        Args:
-            message: Message text to classify
-            config: Skill configuration (must contain ai_model)
-
-        Returns:
-            True if AI classifies message as matching skill intent
-
-        Example:
-            config = {"ai_model": "gemini-2.5-flash"}
-            result = await self._ai_classify("Can you switch my agent?", config)
-        """
-        from agent.skills.ai_classifier import get_classifier
-
-        classifier = get_classifier()
-        ai_model = config.get("ai_model", "gemini-2.5-flash")
-
-        custom_examples = {
-            "yes": [
-                "Find flights from NYC to LON",
-                "Search for a flight to Paris",
-                "Preciso de passagem aérea para Miami",
-                "Ver preços de voos para Tokyo",
-                "Quero viajar de avião para Lisboa",
-                "Flight price from LAX to JFK",
-                "Check flights",
-                "Quanto custa ir de SP para Londres",
-                "Procure voos para mim"
-            ],
-            "no": [
-                "I want to switch agent",
-                "What is the weather?",
-                "Who are you?",
-                "Translate this text",
-                "Generate an image",
-                "Add to calendar",
-                "Schedule a meeting"
-            ]
-        }
-
-        return await classifier.classify_intent(
-            message=message,
-            skill_name=self.skill_name,
-            skill_description=self.skill_description,
-            model=ai_model,
-            custom_examples=custom_examples,
-            db=self._db_session  # Pass database session for API key loading
-        )
-
-    def _keyword_matches(self, message: str, keywords: List[str]) -> bool:
-        """
-        Check if message contains any of the specified keywords (case-insensitive).
-
-        Args:
-            message: Message text to check
-            keywords: List of keywords to match
-
-        Returns:
-            True if any keyword found in message
-        """
-        if not keywords:
-            return False
-
-        message_lower = message.lower()
-        return any(keyword.lower() in message_lower for keyword in keywords)
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} type={self.skill_type}>"

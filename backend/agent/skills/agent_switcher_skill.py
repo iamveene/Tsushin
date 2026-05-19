@@ -2,7 +2,7 @@
 Agent Switcher Skill - Allows users to switch their default agent for direct messages
 
 Enables users to dynamically change which agent handles their DM conversations
-by issuing natural language commands like "invoke agent <name>".
+    by issuing /invoke slash commands or LLM tool calls.
 
 Features:
 - Multilingual support (English, Portuguese, Spanish)
@@ -28,19 +28,15 @@ class AgentSwitcherSkill(BaseSkill):
     """
     Skill for switching the user's default agent in direct message conversations.
 
-    Trigger commands (natural language only, not slash commands):
-    - English: "invoke agent <name>", "invoke <name>"
-    - Portuguese: "invocar agente <nome>", "invocar <nome>"
-
     Skills-as-Tools (Phase 2):
     - Tool name: switch_agent
-    - Execution mode: hybrid (supports both tool and legacy keyword modes)
+    - Execution mode: tool
     """
 
     skill_type = "agent_switcher"
     skill_name = "Agent Switcher"
-    skill_description = "Allows users to switch their default agent for direct messages via natural language commands"
-    execution_mode = "hybrid"
+    skill_description = "Allows users to switch their default agent for direct messages via tool calls and /invoke commands"
+    execution_mode = "tool"
 
     def __init__(self):
         super().__init__()
@@ -55,40 +51,10 @@ class AgentSwitcherSkill(BaseSkill):
 
     async def can_handle(self, message: InboundMessage) -> bool:
         """
-        Check if this message is an agent switching request.
-
-        Phase 7.1.2: Uses configurable keywords + AI fallback approach.
-
-        Requirements:
-        1. Must be a direct message (not group)
-        2. Must NOT start with "/" (those are slash commands only)
-        3. Must contain configured keywords (pre-filter)
-        4. If AI fallback enabled, verify intent with AI
-
-        Args:
-            message: Inbound message to evaluate
-
-        Returns:
-            True if this is an agent switching request
+        Agent switching no longer runs from raw text. Use /invoke or the
+        switch_agent tool.
         """
-        # Skills-as-Tools: If in tool-only mode, don't handle via keywords
-        config = self._config or self.get_default_config()
-        if not self.is_legacy_enabled(config):
-            return False
-
-        # Only handle direct messages
-        if message.is_group:
-            logger.debug(f"AgentSwitcherSkill: Ignoring group message")
-            return False
-
-        # Don't handle slash commands - those are for the slash command system
-        if message.body.strip().startswith("/"):
-            logger.debug(f"AgentSwitcherSkill: Ignoring slash command")
-            return False
-
-        result = await self._ai_classify(message.body, config)
-        logger.info(f"AgentSwitcherSkill: AI classification result={result}")
-        return result
+        return False
 
     async def process(self, message: InboundMessage, config: Dict[str, Any]) -> SkillResult:
         """
@@ -466,25 +432,15 @@ class AgentSwitcherSkill(BaseSkill):
         """
         Get default configuration for Agent Switcher skill.
 
-        Intent is classified entirely by the LLM (AISkillClassifier) — no keyword
-        pre-filter — because phrasings like "invocar agente X" / "mudar para Y"
-        / audio-transcription artefacts vary widely.
+        No user-configurable options. Slash commands resolve the target name
+        directly; LLM tool calls provide structured ``agent_name``.
         """
-        return {
-            "ai_model": "gemini-2.5-flash-lite"
-        }
+        return {}
 
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
         """Get JSON schema for skill configuration."""
-        base_schema = super().get_config_schema()
-        base_schema["properties"]["execution_mode"] = {
-            "type": "string",
-            "enum": ["tool", "legacy", "hybrid"],
-            "description": "Execution mode: tool (LLM decides via tool call), legacy (LLM-classified raw text), hybrid (both)",
-            "default": "hybrid"
-        }
-        return base_schema
+        return super().get_config_schema()
 
     # =========================================================================
     # SKILLS-AS-TOOLS: MCP TOOL DEFINITION (Phase 2)
