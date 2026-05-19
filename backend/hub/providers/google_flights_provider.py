@@ -61,10 +61,15 @@ class GoogleFlightsProvider(FlightSearchProvider):
             try:
                 from services.api_key_service import get_api_key as get_decrypted_api_key
                 tenant_id = integration.tenant_id
-                self.api_key = get_decrypted_api_key('google_flights', db, tenant_id=tenant_id)
-                if self.api_key:
-                    logger.info(f"GoogleFlightsProvider: Got API key from ApiKey service (tenant: {tenant_id})")
-                else:
+                for service_name in ("google_flights", "serpapi"):
+                    self.api_key = get_decrypted_api_key(service_name, db, tenant_id=tenant_id)
+                    if self.api_key:
+                        logger.info(
+                            "GoogleFlightsProvider: Got API key from ApiKey service "
+                            f"service={service_name} (tenant: {tenant_id})"
+                        )
+                        break
+                if not self.api_key:
                     logger.warning("GoogleFlightsProvider: No API key found in ApiKey table")
             except Exception as fallback_error:
                 logger.error(f"GoogleFlightsProvider: Fallback API key lookup failed: {fallback_error}")
