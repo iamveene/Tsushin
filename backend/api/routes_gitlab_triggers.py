@@ -271,7 +271,7 @@ def _load_gitlab_integration(db: Session, tenant_id: str, integration_id: int) -
         GitLabIntegration.type == "gitlab",
     ).first()
     if integration is None:
-        raise HTTPException(status_code=404, detail="GitLab integration not found for this tenant. Create one under Hub -> Developer Tools first.")
+        raise HTTPException(status_code=404, detail="GitLab integration not found for this tenant. Create one under Hub -> Repository Integrations first.")
     return integration
 
 

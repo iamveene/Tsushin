@@ -1,8 +1,9 @@
 """Code Repository skill — repository provider dispatch.
 
-Lets agents search/read/act on repositories, pull requests, and issues in a
-connected code-repository service. The skill is provider-shaped so we can add
-Bitbucket / GitLab later without touching the dispatch contract.
+Lets agents search/read/act on repositories, pull requests or merge requests,
+and issues in a connected code-repository service. The skill is
+provider-shaped so GitHub and GitLab share one dispatch contract, with room
+for additional providers later.
 
 Capability gating happens at *tool-spec* time, not at execution time:
 ``get_per_agent_mcp_tool_definition()`` reads ``self._config['capabilities']``
@@ -1028,8 +1029,8 @@ class CodeRepositorySkill(BaseSkill):
         }
         base["properties"]["integration_id"] = {
             "type": ["integer", "null"],
-            "title": "GitHub Connection",
-            "description": "Select which GitHub connection (Hub > API and Tools) this agent uses.",
+            "title": "Repository Connection",
+            "description": "Select which GitHub or GitLab connection (Hub > Repository Integrations) this agent uses.",
             "default": None,
         }
         cap_props: Dict[str, Any] = {}

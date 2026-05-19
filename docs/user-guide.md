@@ -59,7 +59,7 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 
 During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI** and Sentinel LLM provider. If you skip provider keys during setup and later create the tenant's first LLM Provider Instance in Hub, Tsushin auto-attaches still-unbound System AI and Sentinel settings to that instance. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
 
-After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
+After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, GitHub/GitLab repository integrations, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
 
 ### Creating Your Organization
 
@@ -528,6 +528,8 @@ The `code_repository` skill lets agents read from GitHub or GitLab and, for prov
 
 **GitLab mapping.** GitLab read actions map pull-request language to merge requests: `pull_request` means merge request, and `pr_number` means MR IID. Missing provider config defaults to GitHub for existing agents.
 
+**GitLab token scopes.** Use a token that can read the target project through GitLab's API. Read flows need project API read access; project creation or provider-side webhook provisioning outside Tsushin requires broader GitLab `api` scope. In this release, Tsushin keeps GitLab repository write actions hidden and fail-closed.
+
 **Trigger pairing.** GitHub and GitLab repository triggers can pre-filter on push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events. The matched payload is delivered to the bound agent, team, or flow with normalized repository metadata and provider-specific object details.
 
 ### Ticket Management skill (Jira) — v0.7.0
@@ -654,7 +656,7 @@ The built-in web chat interface. No setup required -- always available in the si
 
 Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, a GitHub PR is opened, or a GitLab MR is updated) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
 
-All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor.
+All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Repository Integrations**, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows.
 
 ### The trigger kinds
 
