@@ -105,7 +105,7 @@ export function SubscriptionEditor({ agentId, readOnly = false }: Props) {
         </div>
       ) : subs.length === 0 ? (
         <div className="rounded-lg border border-dashed border-tsushin-border p-6 text-center text-sm text-tsushin-slate">
-          No watcher monitoring links yet. Create or edit an Email, Jira, GitHub, or Webhook trigger and choose this monitor.
+          No watcher monitoring links yet. Create or edit an Email, Jira, GitHub, GitLab, or Webhook trigger and choose this monitor.
         </div>
       ) : (
         <div className="overflow-x-auto">

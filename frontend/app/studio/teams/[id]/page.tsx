@@ -12,6 +12,7 @@ import {
   BotIcon,
   CheckCircleIcon,
   ClockIcon,
+  CodeIcon,
   GitHubIcon,
   MailIcon,
   PlayIcon,
@@ -29,6 +30,7 @@ import {
   type Agent,
   type EmailTrigger,
   type GitHubTrigger,
+  type GitLabTrigger,
   type JiraTrigger,
   type SentinelProfile,
   type TeamDetail,
@@ -142,6 +144,7 @@ function parseFilters(text: string) {
 function triggerKindLabel(kind: string) {
   if (kind === 'gmail') return 'Gmail'
   if (kind === 'github') return 'GitHub'
+  if (kind === 'gitlab') return 'GitLab'
   if (kind === 'jira') return 'Jira'
   if (kind === 'webhook') return 'Webhook'
   return formatLabel(kind)
@@ -150,12 +153,15 @@ function triggerKindLabel(kind: string) {
 function triggerKindIcon(kind: string, size = 16) {
   if (kind === 'gmail') return <MailIcon size={size} />
   if (kind === 'github') return <GitHubIcon size={size} />
+  if (kind === 'gitlab') return <CodeIcon size={size} />
+  if (kind === 'jira') return <CodeIcon size={size} />
   return <WebhookIcon size={size} />
 }
 
 function buildTriggerOptions(
   webhooks: WebhookIntegration[],
   github: GitHubTrigger[],
+  gitlab: GitLabTrigger[],
   jira: JiraTrigger[],
   email: EmailTrigger[],
 ): TriggerOption[] {
@@ -176,6 +182,14 @@ function buildTriggerOptions(
       label: item.integration_name || `GitHub #${item.id}`,
       detail: item.health_status_reason || item.health_status || 'GitHub trigger',
       defaultEvents: defaultTeamTriggerEvents('github', item),
+    })),
+    ...gitlab.filter(active).map((item) => ({
+      key: `gitlab:${item.id}`,
+      kind: 'gitlab' as const,
+      id: item.id,
+      label: item.integration_name || `GitLab #${item.id}`,
+      detail: item.project_path || item.health_status_reason || item.health_status || 'GitLab trigger',
+      defaultEvents: defaultTeamTriggerEvents('gitlab', item),
     })),
     ...jira.filter(active).map((item) => ({
       key: `jira:${item.id}`,
@@ -262,12 +276,13 @@ export default function StudioTeamDetailPage() {
     setLoading(true)
     setError(null)
     try {
-      const [teamRow, agentRows, sentinelRows, webhookRows, githubRows, jiraRows, emailRows, runRows] = await Promise.all([
+      const [teamRow, agentRows, sentinelRows, webhookRows, githubRows, gitlabRows, jiraRows, emailRows, runRows] = await Promise.all([
         api.getTeam(teamId),
         api.getAgents(true),
         api.getSentinelProfiles(true).catch(() => [] as SentinelProfile[]),
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
         api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
+        api.listGitLabTriggers().catch(() => [] as GitLabTrigger[]),
         api.listJiraTriggers().catch(() => [] as JiraTrigger[]),
         api.listEmailTriggers().catch(() => [] as EmailTrigger[]),
         api.getTeamRuns(teamId, { page: 1, pageSize: 20 }).catch(() => ({ items: [], total: 0, page: 1, page_size: 20 })),
@@ -275,7 +290,7 @@ export default function StudioTeamDetailPage() {
       setTeam(teamRow)
       setAgents(agentRows)
       setSentinelProfiles(sentinelRows.filter((profile) => profile.is_enabled))
-      setTriggerOptions(buildTriggerOptions(webhookRows, githubRows, jiraRows, emailRows))
+      setTriggerOptions(buildTriggerOptions(webhookRows, githubRows, gitlabRows, jiraRows, emailRows))
       setRuns(runRows.items)
       setSettingsForm({
         name: teamRow.name,
@@ -736,7 +751,7 @@ function TriggersTab({
     <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
       <section className="glass-card rounded-xl p-5">
         <h2 className="mb-1 text-lg font-display font-semibold text-white">Add Trigger Binding</h2>
-        <p className="mb-5 text-sm text-tsushin-slate">Attach an existing Webhook, GitHub, Jira, or Gmail trigger to this team.</p>
+        <p className="mb-5 text-sm text-tsushin-slate">Attach an existing Webhook, GitHub, GitLab, Jira, or Gmail trigger to this team.</p>
         <div className="space-y-4">
           <label className="block">
             <span className="mb-2 block text-xs font-medium uppercase text-tsushin-muted">Trigger</span>

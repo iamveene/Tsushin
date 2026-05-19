@@ -59,7 +59,7 @@ When you open Tsushin for the first time, you will be greeted by the **Setup Wiz
 
 During setup, Tsushin automatically creates provider instances for any supported API keys you enter and assigns the selected primary provider as the initial **System AI** and Sentinel LLM provider. If you skip provider keys during setup and later create the tenant's first LLM Provider Instance in Hub, Tsushin auto-attaches still-unbound System AI and Sentinel settings to that instance. The completion screen also reveals an auto-generated **global admin** email/password pair for system-level administration, so make sure to capture it before you leave the page.
 
-After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
+After first login, a getting-started onboarding tour auto-opens. It now walks through the v0.7.0 operating path: AI providers, channels vs triggers, GitHub/GitLab repository integrations, skills, memory and knowledge, Watcher, Studio, Hub, flows, Playground, optional voice setup, Sentinel, trigger readiness, and the final next step. Each setup-oriented step includes a direct action to open the relevant Hub, Studio, Flows, Playground, or wizard surface. You can minimize the tour at any time with the chevron icon — a "Continue tour" pill survives a full page reload — or dismiss it permanently with ×.
 
 ### Creating Your Organization
 
@@ -286,7 +286,7 @@ The legacy "wake mode" picker in the Agent Wizard still works: choosing **Contin
 |---|---|---|
 | **Purpose** | Yes | A 1-2 sentence statement of what the agent is supposed to accomplish per run. Surfaces in Watcher and in the trigger detail. |
 | **Action kind** | Yes | What the agent is allowed to do at the end of its run — `notify_only`, `reply`, `tool_use`, `flow_dispatch`. The runtime enforces this; an action_kind=`notify_only` agent cannot accidentally fire arbitrary tools. |
-| **Trigger subscriptions** | At least one | Bind the agent to one or more Email/Webhook/Jira/GitHub/Schedule triggers (or wake events) — the agent only runs when one of these fires. |
+| **Trigger subscriptions** | At least one | Bind the agent to one or more Email/Webhook/Jira/GitHub/GitLab triggers (or wake events). Scheduled and recurring work belongs in Flows. |
 | **Delivery + budget policy** | Optional | Per-run token / wall-clock / cost ceilings; aggregation rules if multiple wake events arrive close together. |
 
 **Watching Continuous Agent runs.** Open **Watcher → Agents → Continuous Agents** for the tenant-wide run history. Each row shows the wake event that triggered the run, the run status (`pending`, `running`, `completed`, `failed`, `sentinel_blocked`, `cancelled`), input summary, output, token + cost, and links to the originating trigger and dispatched flow (if any). The Watcher Agents tab nests five related run-time surfaces — Continuous Agents, Wake Events, Conversations, Team Runs, and A2A Comms — so you can move between agent inventory and recent activity without leaving the page.
@@ -358,7 +358,7 @@ From **Studio > Teams** click **+ New Team** to open the Team Wizard:
 2. **Basics** — name, description, topology (line vs mesh), `max_concurrent_runs`, `max_steps`, `max_total_tokens`, wall-clock timeout.
 3. **Topology** — confirm the topology; mesh teams render the hidden coordinator on the canvas with a lock icon.
 4. **Members** — drag agents from the global agent palette (internal coordinators are filtered out). For line teams set `execution_order`; for mesh set `is_required` per member.
-5. **Triggers** — bind active Webhook, GitHub, Jira, or Gmail trigger instances. (The Phase 6 restriction that excluded Gmail was lifted on 2026-05-07.)
+5. **Triggers** — bind active Webhook, GitHub, GitLab, Jira, or Gmail trigger instances. (The Phase 6 restriction that excluded Gmail was lifted on 2026-05-07.)
 6. **Review** — summary cards for every prior step.
 7. **Create** — persists the team, its members, and trigger bindings in one transaction. You land on the new Team Builder.
 
@@ -437,7 +437,7 @@ Tsushin ships with 22 built-in skills. Enable or disable them per agent from the
 | **Image Analysis** | Special | Interprets inbound images, answers questions about attached photos, and extracts visible text. |
 | **Image Generation & Editing** | Tool | Generates or edits images from text prompts (Gemini-backed across WhatsApp, Telegram, Playground). |
 | **Gmail** | Tool | Reads, searches, and (with capability gates) sends/replies/drafts on connected Gmail accounts. |
-| **Code Repository** *(v0.7.0)* | Tool | Search/read/act on GitHub. Read on by default; write actions (create_issue, merge_pull_request, etc.) off by default and filtered out of the LLM tool spec. |
+| **Code Repository** *(v0.7.x)* | Tool | Search/read repository data from GitHub or GitLab. Read on by default; write actions (create_issue, merge_pull_request, etc.) are off by default and filtered out of the LLM tool spec. GitLab writes currently fail closed until explicitly enabled in a future release. |
 | **Ticket Management** *(v0.7.0)* | Tool | Search/read/act on Jira tickets. Read on by default; write actions (update, add_comment, transition) off by default. |
 | **Automation** | Tool | Multi-step workflow automation. |
 | **Scheduler** | Tool | Schedules reminders and conversations via natural language. |
@@ -513,20 +513,43 @@ Security and utility tools running in isolated Docker containers. Invoke with:
 
 For full parameter details, see [documentation.md §9.4](documentation.md#94-sandboxed-tools).
 
-### Code Repository skill (GitHub) — v0.7.0
+### Code Repository skill (GitHub/GitLab) — v0.7.x
 
-The `code_repository` skill lets agents read from and (optionally) act on GitHub. It's backed by a tenant-scoped **GitHubIntegration** in **Hub > Tool APIs**.
+The `code_repository` skill lets agents read from GitHub or GitLab and, for providers that support it, optionally act on repository objects. It's backed by a tenant-scoped repository connection in **Hub > Repository Integrations**.
 
 **Setup:**
 
-1. Go to **Hub > Tool APIs > GitHub** and add an integration: paste the GitHub App / fine-grained PAT credentials, select the repositories the integration can see, and click **Test**.
-2. Open an agent's **Skills** tab, click **Add Skill**, pick **Code Repository**, and select the GitHub integration you just created.
-3. The capability matrix has 12 actions split into **read** (default ON) and **write** (default OFF) groups:
-   - **Read:** `list_repos`, `get_repo`, `list_pull_requests`, `get_pull_request`, `list_issues`, `get_issue`, `list_commits`, `read_file`.
-   - **Write:** `create_issue`, `comment_pull_request`, `create_pull_request`, `merge_pull_request`.
+1. Go to **Hub > Repository Integrations** and add either a GitHub or GitLab connection. GitLab asks for a GitLab.com personal/project access token and optional default project path; GitHub asks for the GitHub token/default owner/repo fields.
+2. Open an agent's **Skills** tab, click **Add Skill**, pick **Code Repository**, choose GitHub or GitLab, and select the connection you just created.
+3. The capability matrix is split into **read** (default ON) and **write** (default OFF) groups:
+   - **Read:** `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`.
+   - **Write:** `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`.
 4. Toggle write capabilities on only when you intend to grant them. The agent UI shows red **WRITE** badges next to active write capabilities; the `code_repository` tool spec the LLM sees never includes disabled actions, so the model cannot accidentally call something you've forbidden.
 
-**Trigger pairing.** A `pull_request` GitHub trigger can pre-filter on event types (`opened`, `reopened`, `closed`, `synchronize`), draft state, branch patterns, label patterns, and author patterns. The matched payload is delivered to the bound agent or flow with the full PR envelope so the `code_repository` skill can act on it.
+**GitLab mapping.** GitLab read actions map pull-request language to merge requests: `pull_request` means merge request, and `pr_number` means MR IID. Missing provider config defaults to GitHub for existing agents.
+
+**GitLab token scopes.** Use a token that can read the target project through GitLab's API. Read flows need project API read access; project creation or provider-side webhook provisioning outside Tsushin requires broader GitLab `api` scope. In this release, Tsushin keeps GitLab repository write actions hidden and fail-closed.
+
+**Trigger pairing.** GitHub and GitLab repository triggers can pre-filter on push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events. The matched payload is delivered to the bound agent, team, or flow with normalized repository metadata and provider-specific object details.
+
+### Repository Automation Wizard (GitHub/GitLab) — v0.7.x
+
+Use the **Repository Automation Wizard** as the recommended setup path for GitHub and GitLab repository automation. It keeps the primitives separate while wiring them together in one guided flow:
+
+| Primitive | Role |
+|---|---|
+| **Repository Integration** | Stores GitHub or GitLab credentials once for the tenant. |
+| **Trigger** | Listens for repository events, currently centered on PR/MR review criteria in the UI. |
+| **Flow** | Runs deterministic Source -> Gate -> Conversation/Skill -> Notification steps after a trigger fires. |
+| **Agent** | Acts with configured tools, including Code Repository and A2A when enabled. |
+| **Team** | Coordinates multiple actors through line or mesh topology. |
+
+The wizard offers two repository-review templates:
+
+- **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs.
+- **Standalone PR/MR reviewer agent** — creates or wires one reviewer agent with Code Repository access and **A2A enabled**, then leaves the generated Flow route active so the trigger runs through that agent.
+
+Repository criteria should be read as PR/MR-first where the current UI is PR/MR-centered. GitHub uses pull request language; GitLab maps the same review workflow to merge requests and MR IIDs.
 
 ### Ticket Management skill (Jira) — v0.7.0
 
@@ -650,16 +673,17 @@ The built-in web chat interface. No setup required -- always available in the si
 
 ## 6a. Setting Up Event Triggers (v0.7.0)
 
-Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, or a GitHub PR is opened) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
+Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, a GitHub PR is opened, or a GitLab MR is updated) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
 
-All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor.
+All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Repository Integrations**, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows. For repository-review automation, prefer the Repository Automation Wizard; it wraps this trigger setup together with the review Flow and Agent/Team template choices.
 
-### The 4 trigger kinds
+### The trigger kinds
 
 - **Email** -- a Gmail saved-query polled every minute. Filter by subject, sender, label, body. Operators paste a saved Gmail search query (e.g., `is:unread label:support has:attachment`); the trigger fires once per matching message and dedupes on the message id.
 - **Webhook** -- inbound HMAC-signed POST from any external system. The wizard generates a slug (auto or custom), an HMAC signing secret, and an inbound URL like `https://<your-host>/api/webhooks/<slug>/inbound` that you paste into the external system.
 - **Jira** -- live JQL polling against a Jira Cloud project. Connect your Jira account once via Hub > Tool APIs > Jira (with an API token); the wizard then asks for a JQL query and a poll interval. One notification per deduped issue.
-- **GitHub** -- pull-request events on a connected repo. Connect your GitHub account once via Hub > Tool APIs > GitHub; the wizard then asks for the events to listen to (`opened`, `reopened`, `closed`, etc.) and per-PR filters (branch, paths changed, author, draft state, title/body matchers).
+- **GitHub** -- repository events on a connected repo. Connect your GitHub account once via Hub > Repository Integrations; the wizard then asks for the events to listen to and repository filters (branch, paths changed, author, draft state, title/body matchers for PRs).
+- **GitLab** -- GitLab.com project webhook events on a connected project. Connect GitLab once via Hub > Repository Integrations; the wizard asks for the full project path, events such as push or merge request, and the same shared repository criteria model.
 
 ### What happens after you click "Create Trigger"
 
@@ -670,7 +694,7 @@ All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "
 
 ### Per-kind trigger-generated flow badges
 
-Auto-generated flows are visually distinct in the flows list and the Edit Flow modal header: each trigger kind has its own coloured "Trigger" pill (Jira blue, Email emerald, GitHub violet, Webhook cyan). The Delete button on auto-generated flows is disabled with a tooltip "Auto-generated from <kind> trigger -- delete the trigger to remove this flow."
+Auto-generated flows are visually distinct in the flows list and the Edit Flow modal header: each trigger kind has its own coloured "Trigger" pill (Jira blue, Email emerald, GitHub violet, GitLab orange, Webhook cyan). The Delete button on auto-generated flows is disabled with a tooltip "Auto-generated from <kind> trigger -- delete the trigger to remove this flow."
 
 ### Editing template variables in the auto-flow
 
@@ -695,8 +719,9 @@ v0.7.0 split the Hub into four roles so the right surface owns each concern:
 | Hub area | What lives there |
 |---|---|
 | **Hub > Channels** | WhatsApp / Telegram / Slack / Discord / Playground — bidirectional conversational transports. |
-| **Hub > Triggers** | Email / Webhook / Jira / GitHub trigger instances. |
-| **Hub > Tool APIs** | Programmatic credentials reused by triggers and skills: Jira API token, GitHub integration, Password Vault (1Password), Asana OAuth, etc. The Email trigger reuses the Hub > Google connection for Gmail. |
+| **Hub > Triggers** | Email / Webhook / Jira / GitHub / GitLab trigger instances. |
+| **Hub > Repository Integrations** | GitHub and GitLab connections reused by repository triggers and the Code Repository skill. |
+| **Hub > Tool APIs** | Programmatic credentials reused by triggers and skills: Jira API token, Password Vault (1Password), Asana OAuth, search/flight providers, etc. The Email trigger reuses the Hub > Google connection for Gmail. |
 | **Hub > Local Services** | Auto-provisioned containers — Whisper / Speaches (ASR), Kokoro (TTS), Ollama (LLM), Qdrant (vector store). Lifecycle controls (start/stop/restart/logs/status) live here. |
 
 **Wake Events** moved under **Watcher**. The standalone Schedule Trigger was retired; cron-based execution now lives only on the FlowDefinition (Flows > Create > Scheduled or Recurring).
@@ -706,7 +731,7 @@ v0.7.0 split the Hub into four roles so the right surface owns each concern:
 The trigger detail page lists every binding kind that can fan out from a single trigger event:
 
 - **Wired Flows** — every `flow_trigger_binding` for this trigger.
-- **Wired Teams** — every `agent_team_trigger` (Webhook/GitHub/Jira; Gmail since 2026-05-07).
+- **Wired Teams** — every `agent_team_trigger` (Webhook/GitHub/GitLab/Jira; Gmail since 2026-05-07).
 - **Wired Continuous Agents** — every `continuous_subscription`.
 
 Each card supports pause/resume and unbind, gated on `agents.write`. System-owned subscriptions render disabled controls with an explanatory tooltip. Use this page when you need to understand "what will fire when this trigger runs?" without reverse-engineering it from per-team or per-flow surfaces.
@@ -839,7 +864,7 @@ Flows let you build multi-step automated workflows.
 1. Navigate to **Studio > Flows** and click **Create Flow**.
 2. Name your flow and select the type.
 3. Choose an **execution mode**: Immediate, Scheduled (one-time), Recurring (cron-based), Keyword, or Triggered.
-4. For **Triggered**, select an existing Hub trigger (Email/Gmail, Jira, GitHub, or Webhook). Tsushin creates a locked Source step and the `flow_trigger_binding` automatically.
+4. For **Triggered**, select an existing Hub trigger (Email/Gmail, Jira, GitHub, GitLab, or Webhook). Tsushin creates a locked Source step and the `flow_trigger_binding` automatically.
 5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving.
 6. **Add steps** in sequence.
 
@@ -873,7 +898,7 @@ Financial templates should remain editable like any other Flow. Open a browser s
 When you create a Hub trigger, Tsushin auto-generates a four-step **system-managed flow** wired to that trigger via a `flow_trigger_binding`. The flow editor is intentionally tailored when you open a system-managed flow:
 
 - **Banner at the top of the Edit modal** reorients you: *edit the trigger to change what fires, edit the steps to change what happens after*. Includes a deep link back to the Hub trigger detail page.
-- **Source step** shows a read-only **Trigger configuration** card with kind-specific inputs — JQL + project key for Jira, inbox + search query for Email, repo + events + path/branch filters for GitHub — plus a `trigger_criteria.filters` JSON preview and an **Edit in Hub** deep link. Filters are managed on the trigger, not on the flow.
+- **Source step** shows a read-only **Trigger configuration** card with kind-specific inputs — JQL + project key for Jira, inbox + search query for Email, repo + events + path/branch filters for GitHub, project path + events + path/branch filters for GitLab — plus a `trigger_criteria.filters` JSON preview and an **Edit in Hub** deep link. Filters are managed on the trigger, not on the flow.
 - **Criteria gate** prepends an **upstream-filter callout** explaining the trigger's criteria already gated the event, so anything you add on the gate is a *secondary* filter. Empty gate is the canonical default.
 - **Default agent** step (a `conversation` step) hides the outbound-message fields (channel, recipient, initial prompt) and shows an **Inbound step** note instead — the conversation receives the trigger payload and the agent processes it according to the objective.
 - **Sample data preview** — every non-source step has a "Sample data this step receives" expander that fetches the most-recent wake event for the bound trigger and shows the JSON payload + a count badge of `{{source.payload.X}}` references in your step's config. Use this to author template references with confidence.
@@ -1013,7 +1038,7 @@ Includes **MemGuard** security validation to protect against memory poisoning.
 
 ### Trigger Case Memory v2 (experimental, default-off) — v0.7.0
 
-Trigger Case Memory is an opt-in long-term store that captures the recap of every trigger run (Email/Webhook/Jira/GitHub) so future runs can pull a short summary of similar past cases into the dispatched flow or continuous agent. See [§ 6a](#6a-setting-up-event-triggers-v070) for trigger-side configuration. Tenant-level toggles live in **Core > Organization > Case Memory**:
+Trigger Case Memory is an opt-in long-term store that captures the recap of every trigger run (Email/Webhook/Jira/GitHub/GitLab) so future runs can pull a short summary of similar past cases into the dispatched flow or continuous agent. See [§ 6a](#6a-setting-up-event-triggers-v070) for trigger-side configuration. Tenant-level toggles live in **Core > Organization > Case Memory**:
 
 - **Indexing enabled** — populates the case memory store. Requires the optional Gemini external embedder if you don't want to spend tokens on the default embedder.
 - **Recap injection enabled** — independently controls whether saved configs actually inject recap output into runs. Useful when you want to start indexing but defer recap injection until you've validated the recap quality.

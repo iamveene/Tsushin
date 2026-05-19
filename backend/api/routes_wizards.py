@@ -16,8 +16,20 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from api.schemas.repository_automation import (
+    RepositoryAutomationRequest,
+    RepositoryAutomationResponse,
+)
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
+from db import get_db
+from services.repository_automation_wizard_service import (
+    RepositoryAutomationWizardError,
+    RepositoryAutomationWizardService,
+)
 
 
 router = APIRouter(prefix="/api/wizards", tags=["Wizards"])
@@ -137,6 +149,15 @@ _WIZARD_MANIFESTS: List[WizardManifest] = [
                 dependency_create_endpoint="/api/hub/github-integrations",
                 request_field="github_integration_id",
             ),
+            WizardKindDependency(
+                kind="gitlab",
+                label="GitLab",
+                create_endpoint="/api/triggers/gitlab",
+                required_dependency="gitlab_integration",
+                dependency_endpoint="/api/hub/gitlab-integrations",
+                dependency_create_endpoint="/api/hub/gitlab-integrations",
+                request_field="gitlab_integration_id",
+            ),
         ],
     ),
     WizardManifest(
@@ -184,7 +205,7 @@ _WIZARD_MANIFESTS: List[WizardManifest] = [
                 required_dependency=None,
                 dependency_endpoint="/api/agents",
                 request_field="default_agent_id",
-                notes="Agent selection is optional; triggered flows bind to email/webhook/jira/github through /api/flow-trigger-bindings.",
+                notes="Agent selection is optional; triggered flows bind to email/webhook/jira/github/gitlab through /api/flow-trigger-bindings.",
             ),
         ],
     ),
@@ -228,3 +249,26 @@ def list_wizard_manifests() -> List[WizardManifest]:
 def get_wizard_manifests() -> List[WizardManifest]:
     """Module-level accessor used by the parity test."""
     return list(_WIZARD_MANIFESTS)
+
+
+@router.post(
+    "/repository-automation",
+    response_model=RepositoryAutomationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_repository_automation(
+    payload: RepositoryAutomationRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user=Depends(require_permission("agents.write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create or reuse a repository-review trigger and its executor wiring."""
+    tenant_id = getattr(ctx, "tenant_id", None)
+    try:
+        return RepositoryAutomationWizardService(
+            db,
+            tenant_id,
+            user_id=getattr(current_user, "id", None),
+        ).create(payload)
+    except RepositoryAutomationWizardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

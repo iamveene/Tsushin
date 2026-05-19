@@ -137,7 +137,7 @@ class FlowDefinitionResponse(BaseModel):
     is_system_owned: bool = False
     editable_by_tenant: bool = True
     deletable_by_tenant: bool = True
-    system_trigger_kind: Optional[str] = None  # 'jira'|'email'|'github'|'webhook'
+    system_trigger_kind: Optional[str] = None  # 'jira'|'email'|'github'|'gitlab'|'webhook'
 
     class Config:
         from_attributes = True
@@ -964,7 +964,7 @@ def get_run_nodes(
 
 VALID_FLOW_TYPES = {"notification", "conversation", "workflow", "task"}
 VALID_EXECUTION_METHODS = {"immediate", "scheduled", "recurring", "keyword", "triggered"}  # v0.7.0 Wave 2: added 'triggered' for source-step-driven flows
-VALID_SOURCE_TRIGGER_KINDS = {"email", "webhook", "jira", "github"}
+VALID_SOURCE_TRIGGER_KINDS = {"email", "webhook", "jira", "github", "gitlab"}
 
 
 def _validate_flow_create_execution_config(flow: FlowCreate) -> None:

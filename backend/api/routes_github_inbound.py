@@ -131,6 +131,7 @@ async def receive_github_webhook(
             "delivery_id": delivery_id,
             "wake_event_id": getattr(result, "wake_event_id", None),
             "continuous_run_ids": getattr(result, "continuous_run_ids", []),
+            "team_run_ids": getattr(result, "team_run_ids", []),
         }
     if status == "filtered":
         return {

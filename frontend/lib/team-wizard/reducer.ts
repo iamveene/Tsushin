@@ -7,10 +7,10 @@ export type TeamWizardStep =
   | 'review'
   | 'create'
 
-export type TeamTemplateId = 'custom' | 'incident_triage' | 'release_review' | 'research_synthesis'
+export type TeamTemplateId = 'custom' | 'incident_triage' | 'release_review' | 'research_synthesis' | 'repository_review_team'
 export type TeamTopologyDraft = 'line' | 'mesh'
 export type TeamStatusDraft = 'draft' | 'active' | 'paused'
-export type TeamTriggerDraftKind = 'webhook' | 'github' | 'jira' | 'gmail'
+export type TeamTriggerDraftKind = 'webhook' | 'github' | 'gitlab' | 'jira' | 'gmail'
 
 export interface TeamMemberDraft {
   agent_id: number
@@ -116,7 +116,7 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
       name: 'Release Review Team',
       description: 'Reviews implementation, bug signals, and release readiness.',
       goal_text: 'Review a release candidate, identify blocking risks, and summarize readiness with evidence.',
-      topology: 'mesh',
+      topology: 'line',
       status: 'active',
       max_steps: 12,
       max_concurrent_runs: 2,
@@ -134,6 +134,21 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
       topology: 'line',
       status: 'draft',
       max_steps: 10,
+      max_concurrent_runs: 1,
+    },
+  },
+  {
+    id: 'repository_review_team',
+    name: 'Repository review team',
+    description: 'Coordinator, reviewer, and merge-readiness actors for GitHub PRs or GitLab MRs.',
+    draft: {
+      template_id: 'repository_review_team',
+      name: 'Repository Review Team',
+      description: 'Coordinates repository review, evidence checks, and merge readiness.',
+      goal_text: 'Review pull or merge requests using read-only repository access, identify blocking risks, and produce a clear merge-readiness summary.',
+      topology: 'mesh',
+      status: 'active',
+      max_steps: 12,
       max_concurrent_runs: 1,
     },
   },
@@ -175,7 +190,7 @@ export function normalizeTeamDraft(draft: Partial<TeamWizardDraft> | null | unde
       ? draft.triggers
           .filter(
             (trigger) =>
-              ['webhook', 'github', 'jira', 'gmail'].includes(trigger.trigger_kind) &&
+              ['webhook', 'github', 'gitlab', 'jira', 'gmail'].includes(trigger.trigger_kind) &&
               Number.isFinite(Number(trigger.trigger_instance_id)) &&
               Number(trigger.trigger_instance_id) > 0,
           )

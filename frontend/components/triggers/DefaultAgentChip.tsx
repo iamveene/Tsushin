@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useToast } from '@/contexts/ToastContext'
 import { api, type Agent } from '@/lib/client'
 
-export type DefaultAgentChipKind = 'jira' | 'email' | 'github' | 'webhook'
+export type DefaultAgentChipKind = 'jira' | 'email' | 'github' | 'gitlab' | 'webhook'
 
 interface Props {
   triggerKind: DefaultAgentChipKind
@@ -114,6 +114,8 @@ export default function DefaultAgentChip({ triggerKind, triggerId, agent, canEdi
         return api.updateEmailTrigger(triggerId, data)
       case 'github':
         return api.updateGitHubTrigger(triggerId, data)
+      case 'gitlab':
+        return api.updateGitLabTrigger(triggerId, data)
       case 'webhook':
         return api.updateWebhookIntegration(triggerId, data)
     }
@@ -127,6 +129,8 @@ export default function DefaultAgentChip({ triggerKind, triggerId, agent, canEdi
         return api.getEmailTrigger(triggerId)
       case 'github':
         return api.getGitHubTrigger(triggerId)
+      case 'gitlab':
+        return api.getGitLabTrigger(triggerId)
       case 'webhook':
         return api.getWebhookIntegration(triggerId)
     }

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from channels.github.criteria import evaluate_pr_criteria, validate_pr_criteria
 from channels.github.trigger import (
+    build_dispatch_payload,
     encrypt_webhook_secret,
     generate_webhook_secret,
     normalize_github_events,
@@ -26,12 +27,14 @@ from channels.github.trigger import (
     normalize_repo_part,
     preview_secret,
 )
+from channels.repository.criteria import evaluate_repository_criteria, validate_repository_criteria
 from channels.trigger_criteria import validate_criteria
 from db import get_db
 from models import Agent, Contact, GitHubChannelInstance, GitHubIntegration
 from services.flow_binding_service import (
     delete_bindings_for_trigger,
     delete_system_owned_continuous_artifacts_for_trigger,
+    sync_system_managed_flow_default_agent,
 )
 from api.routes_trigger_recap import (
     TriggerRecapConfigRead,
@@ -119,11 +122,17 @@ class GitHubTriggerCreate(BaseModel):
             return None
         if not isinstance(value, dict):
             raise ValueError("trigger_criteria must be an object")
-        if str(value.get("event") or "").strip().lower() == "pull_request":
+        envelope_event = str(value.get("event") or "").strip().lower()
+        if envelope_event == "pull_request":
             try:
                 return validate_pr_criteria(value)
             except ValueError as exc:
                 raise ValueError(f"invalid_pr_criteria: {exc}") from exc
+        if envelope_event:
+            try:
+                return validate_repository_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_repository_criteria: {exc}") from exc
         try:
             return validate_criteria(value)
         except ValueError as exc:
@@ -198,11 +207,17 @@ class GitHubTriggerUpdate(BaseModel):
             return None
         if not isinstance(value, dict):
             raise ValueError("trigger_criteria must be an object")
-        if str(value.get("event") or "").strip().lower() == "pull_request":
+        envelope_event = str(value.get("event") or "").strip().lower()
+        if envelope_event == "pull_request":
             try:
                 return validate_pr_criteria(value)
             except ValueError as exc:
                 raise ValueError(f"invalid_pr_criteria: {exc}") from exc
+        if envelope_event:
+            try:
+                return validate_repository_criteria(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid_repository_criteria: {exc}") from exc
         try:
             return validate_criteria(value)
         except ValueError as exc:
@@ -255,6 +270,27 @@ class GitHubCriteriaPayloadRequest(BaseModel):
 class GitHubCriteriaTestResponse(BaseModel):
     matched: bool
     reason: str
+
+
+def _github_provider_event_for_criteria(criteria: dict[str, Any]) -> str:
+    event = str(criteria.get("event") or "").strip().lower()
+    return {
+        "issue": "issues",
+        "comment": "issue_comment",
+        "pipeline": "workflow_run",
+    }.get(event, event or "pull_request")
+
+
+def _github_repository_payload_for_criteria(payload: dict[str, Any], criteria: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("provider") == "github":
+        return payload
+    provider_event = _github_provider_event_for_criteria(criteria)
+    return build_dispatch_payload(
+        instance_id=0,
+        delivery_id="criteria-test",
+        event_type=provider_event,
+        payload=payload,
+    )
 
 
 def _can_access(ctx: TenantContext, tenant_id: Optional[str]) -> bool:
@@ -475,11 +511,26 @@ def dry_run_github_pr_criteria_unsaved(
     anything. Validation errors return a 400 with ``invalid_pr_criteria``.
     """
     del ctx, db
+    envelope_event = str(payload.criteria.get("event") or "").strip().lower()
     try:
-        validated = validate_pr_criteria(payload.criteria)
+        if envelope_event == "pull_request":
+            validated = validate_pr_criteria(payload.criteria)
+            matched, reason = evaluate_pr_criteria(payload.payload, validated)
+        elif envelope_event:
+            validated = validate_repository_criteria(payload.criteria)
+            matched, reason = evaluate_repository_criteria(
+                _github_repository_payload_for_criteria(payload.payload, validated),
+                validated,
+                provider="github",
+            )
+        else:
+            validated = validate_criteria(payload.criteria)
+            from channels.trigger_criteria import evaluate_payload_criteria
+
+            matched, reason = evaluate_payload_criteria(payload.payload, validated)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
-    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+        detail_prefix = "invalid_pr_criteria" if envelope_event == "pull_request" else "invalid_trigger_criteria"
+        raise HTTPException(status_code=400, detail=f"{detail_prefix}: {exc}") from exc
     return GitHubCriteriaTestResponse(matched=matched, reason=reason)
 
 
@@ -506,24 +557,25 @@ def dry_run_github_pr_criteria_saved(
             detail="trigger_criteria is not an object — cannot dry-run",
         )
     envelope_event = str(criteria.get("event") or "").strip().lower()
-    if not envelope_event:
-        raise HTTPException(
-            status_code=409,
-            detail="trigger_criteria has no 'event' field — only PR-shaped envelopes can be dry-run.",
-        )
-    if envelope_event != "pull_request":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"trigger_criteria.event='{envelope_event}' is not yet supported by the dry-run endpoint "
-                "(only 'pull_request' envelopes can be dry-run today)."
-            ),
-        )
     try:
-        validated = validate_pr_criteria(criteria)
+        if envelope_event == "pull_request":
+            validated = validate_pr_criteria(criteria)
+            matched, reason = evaluate_pr_criteria(payload.payload, validated)
+        elif envelope_event:
+            validated = validate_repository_criteria(criteria)
+            matched, reason = evaluate_repository_criteria(
+                _github_repository_payload_for_criteria(payload.payload, validated),
+                validated,
+                provider="github",
+            )
+        else:
+            validated = validate_criteria(criteria)
+            from channels.trigger_criteria import evaluate_payload_criteria
+
+            matched, reason = evaluate_payload_criteria(payload.payload, validated)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid_pr_criteria: {exc}") from exc
-    matched, reason = evaluate_pr_criteria(payload.payload, validated)
+        detail_prefix = "invalid_pr_criteria" if envelope_event == "pull_request" else "invalid_trigger_criteria"
+        raise HTTPException(status_code=400, detail=f"{detail_prefix}: {exc}") from exc
     return GitHubCriteriaTestResponse(matched=matched, reason=reason)
 
 
@@ -552,6 +604,13 @@ def update_github_trigger(
         if data["default_agent_id"] is not None:
             _load_active_agent(db, instance.tenant_id, data["default_agent_id"])
         instance.default_agent_id = data["default_agent_id"]
+        sync_system_managed_flow_default_agent(
+            db,
+            tenant_id=instance.tenant_id,
+            trigger_kind="github",
+            trigger_instance_id=instance.id,
+            default_agent_id=instance.default_agent_id,
+        )
 
     if "github_integration_id" in data and data["github_integration_id"] is not None:
         _load_github_integration(db, instance.tenant_id, data["github_integration_id"])

@@ -9,6 +9,7 @@ import {
   ArrowUpIcon,
   BotIcon,
   CheckCircleIcon,
+  CodeIcon,
   MailIcon,
   GitHubIcon,
   PlusIcon,
@@ -19,7 +20,7 @@ import {
 } from '@/components/ui/icons'
 import { useAgentWizard, useAgentWizardComplete } from '@/contexts/AgentWizardContext'
 import { useTeamWizard } from '@/contexts/TeamWizardContext'
-import { api, type Agent, type EmailTrigger, type GitHubTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
+import { api, type Agent, type EmailTrigger, type GitHubTrigger, type GitLabTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import { defaultTeamTriggerEvents, eventTypesFromInput } from '@/lib/team-trigger-defaults'
 import {
   TEAM_TEMPLATE_PRESETS,
@@ -59,7 +60,7 @@ const STEP_META: Record<TeamWizardStep, { label: string; description: string; ti
     label: 'Triggers',
     description: 'Bindings',
     title: 'Trigger bindings',
-    body: 'Bind existing active Webhook, GitHub, Jira, or Gmail triggers.',
+    body: 'Bind existing active Webhook, GitHub, GitLab, Jira, or Gmail triggers.',
   },
   review: {
     label: 'Review',
@@ -98,6 +99,7 @@ function agentLabel(agent: Agent | undefined, fallbackId: number) {
 function triggerKindLabel(kind: TeamTriggerDraftKind) {
   if (kind === 'gmail') return 'Gmail'
   if (kind === 'github') return 'GitHub'
+  if (kind === 'gitlab') return 'GitLab'
   if (kind === 'jira') return 'Jira'
   return 'Webhook'
 }
@@ -105,6 +107,8 @@ function triggerKindLabel(kind: TeamTriggerDraftKind) {
 function triggerKindIcon(kind: TeamTriggerDraftKind) {
   if (kind === 'gmail') return <MailIcon size={18} />
   if (kind === 'github') return <GitHubIcon size={18} />
+  if (kind === 'gitlab') return <CodeIcon size={18} />
+  if (kind === 'jira') return <CodeIcon size={18} />
   return <WebhookIcon size={18} />
 }
 
@@ -155,6 +159,18 @@ function activeGitHubOptions(items: GitHubTrigger[]): TriggerOption[] {
       label: item.integration_name || `${item.repo_owner}/${item.repo_name}`,
       detail: `${item.repo_owner}/${item.repo_name}`,
       defaultEvents: defaultTeamTriggerEvents('github', item),
+    }))
+}
+
+function activeGitLabOptions(items: GitLabTrigger[]): TriggerOption[] {
+  return items
+    .filter((item) => item.is_active && item.status === 'active')
+    .map((item) => ({
+      kind: 'gitlab' as const,
+      id: item.id,
+      label: item.integration_name || item.project_path,
+      detail: item.project_path,
+      defaultEvents: defaultTeamTriggerEvents('gitlab', item),
     }))
 }
 
@@ -235,15 +251,17 @@ export default function TeamWizard() {
       const agentRows = await api.getAgents(true)
       setAgents(agentRows)
 
-      const [webhookRows, githubRows, jiraRows, emailRows] = await Promise.all([
+      const [webhookRows, githubRows, gitlabRows, jiraRows, emailRows] = await Promise.all([
         api.listWebhookIntegrations().catch(() => [] as WebhookIntegration[]),
         api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
+        api.listGitLabTriggers().catch(() => [] as GitLabTrigger[]),
         api.listJiraTriggers().catch(() => [] as JiraTrigger[]),
         api.listEmailTriggers().catch(() => [] as EmailTrigger[]),
       ])
       setTriggerOptions([
         ...activeWebhookOptions(webhookRows),
         ...activeGitHubOptions(githubRows),
+        ...activeGitLabOptions(gitlabRows),
         ...activeJiraOptions(jiraRows),
         ...activeEmailOptions(emailRows),
       ])
@@ -874,7 +892,7 @@ function TriggersStep({
                     value={trigger.event_types.join(', ')}
                     onChange={(event) => patchTrigger(trigger.uid, { event_types: eventTypesFromInput(event.target.value) })}
                     className={`${inputClass} min-h-[72px] resize-y`}
-                    placeholder="message.created, github.pull_request, jira.issue.detected, email.message.received"
+                    placeholder="message.created, github.pull_request, gitlab.merge_request, jira.issue.detected, email.message.received"
                   />
                 </label>
                 <label className="space-y-2">

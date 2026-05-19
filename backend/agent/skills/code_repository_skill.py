@@ -1,8 +1,9 @@
-"""Code Repository skill — GitHub provider.
+"""Code Repository skill — repository provider dispatch.
 
-Lets agents search/read/act on repositories, pull requests, and issues in a
-connected code-repository service. The skill is provider-shaped so we can add
-Bitbucket / GitLab later without touching the dispatch contract.
+Lets agents search/read/act on repositories, pull requests or merge requests,
+and issues in a connected code-repository service. The skill is
+provider-shaped so GitHub and GitLab share one dispatch contract, with room
+for additional providers later.
 
 Capability gating happens at *tool-spec* time, not at execution time:
 ``get_per_agent_mcp_tool_definition()`` reads ``self._config['capabilities']``
@@ -23,6 +24,7 @@ from hub.github.github_repository_service import (
     GitHubRepositoryError,
     GitHubRepositoryService,
 )
+from hub.gitlab.gitlab_repository_service import GitLabRepositoryError, GitLabRepositoryService
 
 
 logger = logging.getLogger(__name__)
@@ -80,7 +82,7 @@ _WRITE_ACTIONS = {
 
 
 class CodeRepositorySkill(BaseSkill):
-    """Code Repository skill — GitHub provider.
+    """Code Repository skill — GitHub/GitLab provider dispatch.
 
     Single tool ``repository_operation`` whose ``action`` enum is filtered
     per agent based on enabled capabilities. Implementation supports seven
@@ -91,7 +93,7 @@ class CodeRepositorySkill(BaseSkill):
     skill_name = "Code Repository"
     skill_description = (
         "Search repos, read pull requests and issues, and (when enabled) post "
-        "comments / create issues. Today: GitHub via REST API."
+        "comments / create issues through a connected repository provider."
     )
     execution_mode = "tool"
     # Tool-only — no keyword/legacy path. Wizard-visible so it appears in the
@@ -100,8 +102,9 @@ class CodeRepositorySkill(BaseSkill):
 
     def __init__(self) -> None:
         super().__init__()
-        self._repo_service: Optional[GitHubRepositoryService] = None
+        self._repo_service: Optional[Any] = None
         self._integration_id: Optional[int] = None
+        self._provider: str = "github"
 
     def set_db_session(self, db) -> None:  # noqa: ANN001 — match BaseSkill
         super().set_db_session(db)
@@ -140,18 +143,19 @@ class CodeRepositorySkill(BaseSkill):
 
     def _get_repo_service(
         self, config: Optional[Dict[str, Any]] = None
-    ) -> GitHubRepositoryService:
+    ) -> Any:
         if self._repo_service is not None:
             return self._repo_service
+        config = config or getattr(self, "_config", {}) or {}
         integration_id = self._resolve_integration_id(config)
         if not integration_id:
             raise GitHubRepositoryError(
-                "GitHub integration not configured. Open the agent's Skills tab and "
-                "select a GitHub connection for Code Repository."
+                "Code Repository integration not configured. Open the agent's Skills tab and "
+                "select a repository connection."
             )
         if not self._db_session:
             raise GitHubRepositoryError("Database session unavailable for code_repository skill.")
-        from models import Agent
+        from models import Agent, HubIntegration
 
         agent_id = getattr(self, "_agent_id", None)
         if not agent_id:
@@ -159,18 +163,44 @@ class CodeRepositorySkill(BaseSkill):
         agent = self._db_session.query(Agent).filter(Agent.id == agent_id).first()
         if agent is None:
             raise GitHubRepositoryError(f"Agent {agent_id} not found.")
-        self._repo_service = GitHubRepositoryService(
-            self._db_session, tenant_id=agent.tenant_id, integration_id=integration_id
+        hub = (
+            self._db_session.query(HubIntegration)
+            .filter(HubIntegration.id == integration_id, HubIntegration.tenant_id == agent.tenant_id)
+            .first()
         )
+        if hub is None:
+            raise GitHubRepositoryError("Repository integration not found for this tenant.")
+        provider = str(config.get("provider") or hub.type or "github").strip().lower()
+        if provider == "github_app":
+            provider = "github"
+        if hub.type in {"github", "gitlab"} and provider != hub.type:
+            raise GitHubRepositoryError(
+                f"Code Repository provider mismatch: config selects {provider}, "
+                f"but integration {integration_id} is {hub.type}."
+            )
+        if provider == "gitlab":
+            self._repo_service = GitLabRepositoryService(
+                self._db_session, tenant_id=agent.tenant_id, integration_id=integration_id
+            )
+        elif provider == "github":
+            self._repo_service = GitHubRepositoryService(
+                self._db_session, tenant_id=agent.tenant_id, integration_id=integration_id
+            )
+        else:
+            raise GitHubRepositoryError(f"Unsupported Code Repository provider '{provider}'.")
         self._integration_id = integration_id
+        self._provider = provider
         return self._repo_service
 
     def _enabled_actions(self, config: Optional[Dict[str, Any]] = None) -> List[str]:
         config = config or getattr(self, "_config", {}) or {}
+        provider = str(config.get("provider") or self._provider or "github").strip().lower()
         defaults = self.get_default_config().get("capabilities", {})
         capabilities = config.get("capabilities", {}) or {}
         enabled: List[str] = []
         for action in _ACTION_ORDER:
+            if provider == "gitlab" and action in _WRITE_ACTIONS:
+                continue
             cap_key = _ACTION_TO_CAPABILITY[action]
             default_entry = defaults.get(cap_key, {}) or {}
             override_entry = capabilities.get(cap_key, {}) or {}
@@ -252,7 +282,7 @@ class CodeRepositorySkill(BaseSkill):
                 "description": (
                     "Free-text query for 'search_repos'. Examples: "
                     "'tsushin org:my-org', 'language:python stars:>100', "
-                    "'topic:agent-framework'. Uses GitHub's repo search syntax."
+                    "'topic:agent-framework'. Provider-specific search syntax is accepted."
                 ),
             },
             "owner": {
@@ -262,6 +292,10 @@ class CodeRepositorySkill(BaseSkill):
             "repo": {
                 "type": "string",
                 "description": "Repository name. Required for repo-scoped actions.",
+            },
+            "project_path": {
+                "type": "string",
+                "description": "GitLab full project path, e.g. group/subgroup/project. Optional shorthand for owner/repo.",
             },
             "pr_number": {
                 "type": "integer",
@@ -331,7 +365,7 @@ class CodeRepositorySkill(BaseSkill):
             "name": "repository_operation",
             "title": "Code Repository",
             "description": (
-                "Interact with the connected code-repository service (GitHub). "
+                "Interact with the connected code-repository service. "
                 "Use this tool when the user asks about repositories, pull "
                 "requests, or issues — to search repos, list/read PRs and "
                 "issues, and (when enabled) post comments or open issues."
@@ -405,7 +439,7 @@ class CodeRepositorySkill(BaseSkill):
 
         try:
             repo = self._get_repo_service(config)
-        except GitHubRepositoryError as e:
+        except (GitHubRepositoryError, GitLabRepositoryError) as e:
             return SkillResult(
                 success=False,
                 output=str(e),
@@ -437,14 +471,15 @@ class CodeRepositorySkill(BaseSkill):
                 return await self._action_close_pull_request(repo, arguments)
             if action == "close_issue":
                 return await self._action_close_issue(repo, arguments)
-        except GitHubRepositoryError as e:
+        except (GitHubRepositoryError, GitLabRepositoryError) as e:
             logger.info("CodeRepositorySkill action=%s failed: %s", action, e)
             return SkillResult(
                 success=False,
                 output=str(e),
                 metadata={
-                    "error": "github_error",
-                    "status_code": e.status_code,
+                    "error": "repository_provider_error",
+                    "provider": self._provider,
+                    "status_code": getattr(e, "status_code", None),
                     "action": action,
                 },
             )
@@ -474,6 +509,10 @@ class CodeRepositorySkill(BaseSkill):
         repo_service: GitHubRepositoryService,
         arguments: Dict[str, Any],
     ) -> tuple[Optional[str], Optional[str]]:
+        project_path = (arguments.get("project_path") or "").strip()
+        if project_path and "/" in project_path:
+            owner, repo = project_path.rsplit("/", 1)
+            return owner, repo
         owner = (arguments.get("owner") or "").strip() or repo_service.default_owner
         repo = (arguments.get("repo") or "").strip() or repo_service.default_repo
         return owner, repo
@@ -913,12 +952,13 @@ class CodeRepositorySkill(BaseSkill):
         return {
             "execution_mode": "tool",
             "enabled": True,
+            "provider": "github",
             "integration_id": None,
             "capabilities": {
                 "search_repos": {
                     "enabled": True,
                     "label": "Search repositories (read)",
-                    "description": "Free-text search across GitHub repositories",
+                    "description": "Free-text search across connected repositories",
                 },
                 "list_pull_requests": {
                     "enabled": True,
@@ -989,8 +1029,8 @@ class CodeRepositorySkill(BaseSkill):
         }
         base["properties"]["integration_id"] = {
             "type": ["integer", "null"],
-            "title": "GitHub Connection",
-            "description": "Select which GitHub connection (Hub > API and Tools) this agent uses.",
+            "title": "Repository Connection",
+            "description": "Select which GitHub or GitLab connection (Hub > Repository Integrations) this agent uses.",
             "default": None,
         }
         cap_props: Dict[str, Any] = {}

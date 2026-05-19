@@ -97,6 +97,14 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         setup_hint="Create a GitHub trigger under Hub → Triggers.",
         icon_hint="github",
     ),
+    EntryPointInfo(
+        id="gitlab",
+        display_name="GitLab",
+        description="Receive token-gated repository events and wake agents from matching activity.",
+        requires_setup=True,
+        setup_hint="Create a GitLab trigger under Hub → Triggers.",
+        icon_hint="gitlab",
+    ),
 ]
 
 

@@ -36,6 +36,7 @@ from models import (
     EmailChannelInstance,
     FlowTriggerBinding,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     SentinelConfig,
     TeamRunStatus,
@@ -137,6 +138,7 @@ class TriggerDispatchService:
         "email": EmailChannelInstance,
         "jira": JiraChannelInstance,
         "github": GitHubChannelInstance,
+        "gitlab": GitLabChannelInstance,
     }
     _ACTIVE_STATUS = "active"
     _WAKE_PENDING = "pending"
@@ -535,7 +537,7 @@ class TriggerDispatchService:
         config_json.trigger_instance_id that matches the dispatch instance.
         Optional event_types and filters then narrow the match.
         """
-        if trigger_type not in {"webhook", "github", "jira", "email"}:
+        if trigger_type not in {"webhook", "github", "gitlab", "jira", "email"}:
             return [], []
 
         # AgentTeamTrigger.trigger_kind stores "gmail" for the Gmail/email
@@ -1072,21 +1074,17 @@ class TriggerDispatchService:
         # ships the PR-submitted envelope, but this keeps newer envelopes
         # forward-compatible without a dispatcher rev.
         trigger_type = (event.trigger_type or "").strip().lower()
-        if trigger_type == "github" and isinstance(criteria, dict):
+        if trigger_type in {"github", "gitlab"} and isinstance(criteria, dict):
             envelope_event = str(criteria.get("event") or "").strip().lower()
-            if envelope_event == "pull_request":
+            if trigger_type == "github" and envelope_event == "pull_request":
                 return self._github_pr_criteria_reason(event.payload, criteria)
-            if envelope_event and envelope_event != "pull_request":
-                # Reserved for future envelope shapes; fall through to the
-                # shared evaluator (or no-op if the envelope is unstructured).
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "GitHub trigger criteria event=%r not yet implemented; falling back to legacy filters",
-                    envelope_event,
+            if envelope_event:
+                return self._repository_criteria_reason(
+                    event.payload,
+                    criteria,
+                    provider=trigger_type,
+                    provider_event=event.payload.get("provider_event") if isinstance(event.payload, dict) else None,
                 )
-                return None
-
         try:
             matched, reason = evaluate_payload_criteria(event.payload, criteria)
         except ValueError as exc:
@@ -1094,6 +1092,29 @@ class TriggerDispatchService:
         if matched:
             return None
         return f"criteria_no_match:{reason or 'payload'}"
+
+    def _repository_criteria_reason(
+        self,
+        payload: dict[str, Any],
+        criteria: dict[str, Any],
+        *,
+        provider: str,
+        provider_event: Optional[str] = None,
+    ) -> Optional[str]:
+        try:
+            from channels.repository.criteria import evaluate_repository_criteria
+
+            matched, reason = evaluate_repository_criteria(
+                payload,
+                criteria,
+                provider=provider,
+                provider_event=provider_event,
+            )
+        except ValueError as exc:
+            return f"invalid_trigger_criteria:{exc}"
+        if matched:
+            return None
+        return f"criteria_no_match:{reason}"
 
     def _github_pr_criteria_reason(
         self,

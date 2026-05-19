@@ -6,9 +6,9 @@
  * Manages all integrations organized by category:
  * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
  * - Channels: WhatsApp, Telegram, Discord, and Slack
- * - Triggers: Email, Webhook, Jira, and GitHub
+ * - Triggers: Email, Webhook, Jira, GitHub, and GitLab
  * - Productivity: Asana, Google Calendar
- * - Developer Tools: Shell, Sandboxed Tools
+ * - Repository Integrations: GitHub, GitLab, Shell, Sandboxed Tools
  * - Tool APIs: Brave Search, Tavily, Amadeus
  */
 
@@ -44,7 +44,7 @@ const TriggerCreationWizard = dynamic(
 import type { ChannelId } from '@/components/integrations/ChannelsWizard'
 import type { TriggerId } from '@/components/triggers/TriggerCreationWizard'
 import { useToast } from '@/contexts/ToastContext'
-import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration, ASRInstance, PasswordVaultIntegration, BrowserSessionProfile, BrowserSessionProfileTestResponse } from '@/lib/client'
+import { api, authenticatedFetch, WhatsAppMCPInstance, MCPHealthStatus, QRCodeResponse, TelegramBotInstance, TelegramHealthStatus, SlackIntegration, SlackIntegrationCreate, DiscordIntegration, DiscordIntegrationCreate, WebhookIntegration, Config, ProviderInstance, VectorStoreInstance, TesterMCPStatus, PublicIngressInfo, TTSInstance, SearxngInstance, EmailTrigger, JiraTrigger, JiraIntegration, GitHubTrigger, GitHubIntegration, GitLabTrigger, GitLabIntegration, ASRInstance, PasswordVaultIntegration, BrowserSessionProfile, BrowserSessionProfileTestResponse } from '@/lib/client'
 import { OLLAMA_CURATED_MODEL_IDS } from '@/lib/ollama-curated-models'
 import Modal from '@/components/ui/Modal'
 import TelegramBotModal from '@/components/TelegramBotModal'
@@ -76,6 +76,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 import { useProviderWizard, useProviderWizardComplete } from '@/contexts/ProviderWizardContext'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -632,7 +633,7 @@ function JiraIntegrationsPanel({
 // v0.7.0: GitHub Integration (Hub-side, mirrors Jira pair).
 // Shared GitHub connection + default owner/repo so both the GitHub trigger and
 // the generic `code_repository` skill can reuse one connection per tenant.
-// Mounted under the Developer Tools tab.
+// Mounted under the Repository Integrations tab.
 // =============================================================================
 
 type GitHubIntegrationDraft = {
@@ -786,6 +787,7 @@ function GitHubIntegrationsPanel({
   onAdd,
   onEdit,
   onDelete,
+  onAutomate,
 }: {
   integrations: GitHubIntegration[]
   loading: boolean
@@ -793,6 +795,7 @@ function GitHubIntegrationsPanel({
   onAdd: () => void
   onEdit: (integration: GitHubIntegration) => void
   onDelete: (integration: GitHubIntegration) => void
+  onAutomate: (integration?: GitHubIntegration | null) => void
 }) {
   return (
     <div className="card p-5 hover-glow group border-violet-700/30">
@@ -811,13 +814,22 @@ function GitHubIntegrationsPanel({
             {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
           </span>
           {canWriteHub && (
-            <button
-              type="button"
-              onClick={onAdd}
-              className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
-            >
-              + Add
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => onAutomate(null)}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+              >
+                Automate
+              </button>
+              <button
+                type="button"
+                onClick={onAdd}
+                className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
+              >
+                + Add
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -858,6 +870,254 @@ function GitHubIntegrationsPanel({
                   </div>
                   {canWriteHub && (
                     <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onAutomate(integration)}
+                        className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
+                      >
+                        Automate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onEdit(integration)}
+                        className="rounded-lg border border-tsushin-border px-3 py-1.5 text-xs text-tsushin-slate hover:text-white"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(integration)}
+                        className="rounded-lg border border-tsushin-vermilion/30 bg-tsushin-vermilion/10 px-3 py-1.5 text-xs text-tsushin-vermilion hover:bg-tsushin-vermilion/20"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type GitLabIntegrationDraft = {
+  integration_name: string
+  pat_token: string
+  default_project_path: string
+  is_active: boolean
+}
+
+function gitlabIntegrationName(integration: GitLabIntegration): string {
+  return integration.integration_name || integration.name || `GitLab connection #${integration.id}`
+}
+
+function gitlabIntegrationDraftFromTarget(target: GitLabIntegration | null): GitLabIntegrationDraft {
+  return {
+    integration_name: target ? gitlabIntegrationName(target) : 'GitLab',
+    pat_token: '',
+    default_project_path: target?.default_project_path || '',
+    is_active: target?.is_active ?? true,
+  }
+}
+
+function GitLabIntegrationModal({
+  isOpen,
+  target,
+  saving,
+  onClose,
+  onSave,
+}: {
+  isOpen: boolean
+  target: GitLabIntegration | null
+  saving: boolean
+  onClose: () => void
+  onSave: (draft: GitLabIntegrationDraft) => void
+}) {
+  const [draft, setDraft] = useState<GitLabIntegrationDraft>(() => gitlabIntegrationDraftFromTarget(target))
+  const canSave = Boolean(
+    draft.integration_name.trim()
+      && (target || draft.pat_token.trim())
+      && !saving
+  )
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={target ? 'Edit GitLab Connection' : 'Add GitLab Connection'}
+      footer={(
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-tsushin-border px-4 py-2 text-sm text-tsushin-slate hover:text-white disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(draft)}
+            disabled={!canSave}
+            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Connection name</label>
+            <input
+              type="text"
+              value={draft.integration_name}
+              onChange={(event) => setDraft((current) => ({ ...current, integration_name: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-white"
+              placeholder="GitLab production"
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">
+              GitLab access token {target ? <span className="text-xs text-tsushin-slate">(leave blank to keep current)</span> : null}
+            </label>
+            <input
+              type="password"
+              value={draft.pat_token}
+              onChange={(event) => setDraft((current) => ({ ...current, pat_token: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+              placeholder={target ? 'Enter a replacement token' : 'glpat-...'}
+              autoComplete="new-password"
+            />
+            <p className="mt-1 text-xs text-tsushin-slate">
+              Use a GitLab personal or project access token with the repository scopes your agents need.
+            </p>
+          </div>
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm font-medium text-gray-300">Default project path <span className="text-xs text-tsushin-slate">(optional)</span></label>
+            <input
+              type="text"
+              value={draft.default_project_path}
+              onChange={(event) => setDraft((current) => ({ ...current, default_project_path: event.target.value }))}
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-white"
+              placeholder="group/subgroup/project"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-tsushin-slate">
+          Default project path is used by the Code Repository skill when the LLM does not specify a target project.
+        </p>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.is_active}
+            onChange={(event) => setDraft((current) => ({ ...current, is_active: event.target.checked }))}
+          />
+          <span className="text-sm text-gray-300">Enable this GitLab connection</span>
+        </label>
+      </div>
+    </Modal>
+  )
+}
+
+function GitLabIntegrationsPanel({
+  integrations,
+  loading,
+  canWriteHub,
+  onAdd,
+  onEdit,
+  onDelete,
+  onAutomate,
+}: {
+  integrations: GitLabIntegration[]
+  loading: boolean
+  canWriteHub: boolean
+  onAdd: () => void
+  onEdit: (integration: GitLabIntegration) => void
+  onDelete: (integration: GitLabIntegration) => void
+  onAutomate: (integration?: GitLabIntegration | null) => void
+}) {
+  return (
+    <div className="card p-5 hover-glow group border-orange-700/30">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/10 text-orange-300 transition-transform group-hover:scale-110">
+            <CodeIcon size={20} />
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">GitLab</h3>
+            <p className="text-xs text-tsushin-slate">Shared GitLab connection for the Code Repository skill and MR triggers</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={integrations.some((item) => item.is_active) ? 'badge badge-success' : 'badge badge-neutral'}>
+            {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
+          </span>
+          {canWriteHub && (
+            <>
+              <button
+                type="button"
+                onClick={() => onAutomate(null)}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+              >
+                Automate
+              </button>
+              <button
+                type="button"
+                onClick={onAdd}
+                className="rounded-lg bg-orange-500/20 px-3 py-1.5 text-xs font-medium text-orange-200 transition-colors hover:bg-orange-500/30 hover:text-white"
+              >
+                + Add
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4 text-center text-xs text-tsushin-slate">Loading GitLab connections...</div>
+      ) : integrations.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-tsushin-border bg-tsushin-ink/30 p-5 text-center">
+          <p className="text-sm text-tsushin-slate">
+            {canWriteHub ? 'No GitLab connections yet. Add one here, then attach it to agent skills or MR triggers.' : 'No GitLab connections configured.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {integrations.map((integration) => {
+            const status = integration.health_status || integration.last_test_status || (integration.is_active ? 'active' : 'inactive')
+            return (
+              <div key={integration.id} className="rounded-lg border border-white/5 bg-tsushin-ink/40 p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-sm font-medium text-white">{gitlabIntegrationName(integration)}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${githubStatusClasses(status)}`}>{status}</span>
+                    </div>
+                    <div className="grid gap-2 text-xs text-tsushin-slate sm:grid-cols-2">
+                      <span className="min-w-0 truncate font-mono text-tsushin-accent">{integration.default_project_path || 'No default project'}</span>
+                      <span className="min-w-0">
+                        Triggers: {integration.trigger_count ?? 0} · Skills: {integration.skill_attached_count ?? 0}
+                      </span>
+                      <span>{integration.last_tested_at || integration.last_health_check ? `Checked ${new Date(integration.last_tested_at || integration.last_health_check || '').toLocaleString()}` : 'Not tested yet'}</span>
+                    </div>
+                    {integration.health_status_reason && (
+                      <p className="text-xs text-yellow-200">{integration.health_status_reason}</p>
+                    )}
+                  </div>
+                  {canWriteHub && (
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onAutomate(integration)}
+                        className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
+                      >
+                        Automate
+                      </button>
                       <button
                         type="button"
                         onClick={() => onEdit(integration)}
@@ -904,6 +1164,7 @@ export default function HubPage() {
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const { openWizard: openGoogleWizard } = useGoogleWizard()
   const { openWizard: openProviderWizard } = useProviderWizard()
+  const { openWizard: openRepositoryAutomationWizard } = useRepositoryAutomationWizard()
   // loadHubIntegrations is defined later in the component; keep a ref so we can
   // invoke the latest version from the wizard-complete callback without
   // dancing around declaration order.
@@ -1025,12 +1286,17 @@ export default function HubPage() {
   const [jiraIntegrationTestingId, setJiraIntegrationTestingId] = useState<number | null>(null)
   const [jiraIntegrationTestResults, setJiraIntegrationTestResults] = useState<Record<number, { success: boolean; message: string }>>({})
   const [githubTriggers, setGithubTriggers] = useState<GitHubTrigger[]>([])
+  const [gitlabTriggers, setGitlabTriggers] = useState<GitLabTrigger[]>([])
   // v0.7.0: GitHub Hub Integrations (mirrors Jira state above) — used by both
   // the Code Repository skill and PR Submitted triggers.
   const [githubIntegrations, setGithubIntegrations] = useState<GitHubIntegration[]>([])
   const [githubIntegrationsLoading, setGithubIntegrationsLoading] = useState(false)
   const [editingGithubIntegration, setEditingGithubIntegration] = useState<GitHubIntegration | null>(null)
   const [showGithubIntegrationModal, setShowGithubIntegrationModal] = useState(false)
+  const [gitlabIntegrations, setGitlabIntegrations] = useState<GitLabIntegration[]>([])
+  const [gitlabIntegrationsLoading, setGitlabIntegrationsLoading] = useState(false)
+  const [editingGitlabIntegration, setEditingGitlabIntegration] = useState<GitLabIntegration | null>(null)
+  const [showGitlabIntegrationModal, setShowGitlabIntegrationModal] = useState(false)
   const [passwordVaultIntegrations, setPasswordVaultIntegrations] = useState<PasswordVaultIntegration[]>([])
   const [passwordVaultIntegrationsLoading, setPasswordVaultIntegrationsLoading] = useState(false)
   const [editingPasswordVaultIntegration, setEditingPasswordVaultIntegration] = useState<PasswordVaultIntegration | null>(null)
@@ -1313,6 +1579,18 @@ export default function HubPage() {
     }
   }
 
+  async function loadGitLabIntegrations() {
+    setGitlabIntegrationsLoading(true)
+    try {
+      const data = await api.listGitLabIntegrations()
+      setGitlabIntegrations(data)
+    } catch (err) {
+      console.error('Failed to load GitLab integrations:', err)
+    } finally {
+      setGitlabIntegrationsLoading(false)
+    }
+  }
+
   async function loadPasswordVaultIntegrations() {
     setPasswordVaultIntegrationsLoading(true)
     try {
@@ -1348,10 +1626,22 @@ export default function HubPage() {
     }
   }
 
+  async function loadGitLabTriggers() {
+    try {
+      const data = await api.listGitLabTriggers()
+      setGitlabTriggers(data)
+      markTriggerLoadError('GitLab', false)
+    } catch (err) {
+      console.error('Failed to load GitLab triggers:', err)
+      markTriggerLoadError('GitLab', true)
+    }
+  }
+
   async function loadBreadthTriggers() {
     await Promise.all([
       loadJiraTriggers(),
       loadGitHubTriggers(),
+      loadGitLabTriggers(),
     ])
   }
 
@@ -1385,6 +1675,7 @@ export default function HubPage() {
         }
         if (activeTab === 'developer') {
           loadGitHubIntegrations()
+          loadGitLabIntegrations()
         }
         if (activeTab === 'mcp-servers') {
           loadMcpServers()  // Phase 26
@@ -1576,6 +1867,7 @@ export default function HubPage() {
         loadPasswordVaultIntegrations(),
         loadBrowserSessionProfiles(),
         loadGitHubIntegrations(),  // v0.7.0: GitHub Hub integrations
+        loadGitLabIntegrations(),  // GitLab Hub integrations
         loadWebhookIntegrations(),  // v0.6.0: Webhook-as-Channel
         loadBreadthTriggers(),  // v0.7.0: Jira and GitHub triggers
         loadPublicIngress(),  // v0.6.1: resolver-backed inbound URL
@@ -2707,6 +2999,17 @@ export default function HubPage() {
     setShowGithubIntegrationModal(true)
   }
 
+  const openGitHubAutomationWizard = (integration?: GitHubIntegration | null) => {
+    openRepositoryAutomationWizard({
+      provider: 'github',
+      integrationId: integration?.id ?? null,
+      repositoryLabel: integration?.default_owner && integration?.default_repo
+        ? `${integration.default_owner}/${integration.default_repo}`
+        : integration?.default_owner || null,
+      source: 'hub',
+    })
+  }
+
   const saveGitHubIntegration = async (draft: GitHubIntegrationDraft) => {
     setSaving(true)
     setError(null)
@@ -2751,6 +3054,72 @@ export default function HubPage() {
       setTimeout(() => setSuccessMessage(null), 3000)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to remove GitHub connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openAddGitLabIntegrationModal = () => {
+    setEditingGitlabIntegration(null)
+    setShowGitlabIntegrationModal(true)
+  }
+
+  const openEditGitLabIntegrationModal = (integration: GitLabIntegration) => {
+    setEditingGitlabIntegration(integration)
+    setShowGitlabIntegrationModal(true)
+  }
+
+  const openGitLabAutomationWizard = (integration?: GitLabIntegration | null) => {
+    openRepositoryAutomationWizard({
+      provider: 'gitlab',
+      integrationId: integration?.id ?? null,
+      repositoryLabel: integration?.default_project_path || null,
+      source: 'hub',
+    })
+  }
+
+  const saveGitLabIntegration = async (draft: GitLabIntegrationDraft) => {
+    setSaving(true)
+    setError(null)
+    try {
+      if (editingGitlabIntegration) {
+        await api.updateGitLabIntegration(editingGitlabIntegration.id, {
+          integration_name: draft.integration_name.trim(),
+          pat_token: draft.pat_token.trim() || undefined,
+          default_project_path: draft.default_project_path.trim() || null,
+          is_active: draft.is_active,
+        })
+      } else {
+        await api.createGitLabIntegration({
+          integration_name: draft.integration_name.trim(),
+          pat_token: draft.pat_token.trim(),
+          default_project_path: draft.default_project_path.trim() || null,
+          is_active: draft.is_active,
+        })
+      }
+      await Promise.all([loadGitLabIntegrations(), loadBreadthTriggers()])
+      setShowGitlabIntegrationModal(false)
+      setEditingGitlabIntegration(null)
+      setSuccessMessage(editingGitlabIntegration ? 'GitLab connection updated' : 'GitLab connection added')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save GitLab connection')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteGitLabIntegration = async (integration: GitLabIntegration) => {
+    if (!confirm(`Remove GitLab connection "${gitlabIntegrationName(integration)}"? Skills and triggers attached to it may need another connection before they can run.`)) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.deleteGitLabIntegration(integration.id)
+      await Promise.all([loadGitLabIntegrations(), loadBreadthTriggers()])
+      setSuccessMessage('GitLab connection removed')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to remove GitLab connection')
     } finally {
       setSaving(false)
     }
@@ -4089,7 +4458,7 @@ export default function HubPage() {
     { key: 'channels', label: 'Channels', Icon: MessageIcon, color: 'text-tsushin-accent', iconBg: 'bg-tsushin-accent/10' },
     { key: 'triggers', label: 'Triggers', Icon: WebhookIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'productivity', label: 'Productivity', Icon: ClipboardIcon, color: 'text-tsushin-warning', iconBg: 'bg-tsushin-warning/10' },
-    { key: 'developer', label: 'Developer Tools', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
+    { key: 'developer', label: 'Repository Integrations', Icon: TerminalIcon, color: 'text-purple-400', iconBg: 'bg-purple-400/10' },
     { key: 'tool-apis', label: 'Tool APIs', Icon: WrenchIcon, color: 'text-tsushin-success', iconBg: 'bg-tsushin-success/10' },
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
@@ -5742,7 +6111,7 @@ export default function HubPage() {
                 <div className="flex justify-between items-center">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">Triggers</h2>
-                    <p className="text-sm text-tsushin-slate">Event-driven entry points that wake agents from inbox activity or signed external events (Email, Jira, GitHub, Webhook).</p>
+                    <p className="text-sm text-tsushin-slate">Event-driven entry points that wake agents from inbox activity or signed external events (Email, Jira, GitHub, GitLab, Webhook).</p>
                   </div>
                   {canWriteHub && (
                     <button
@@ -5769,11 +6138,11 @@ export default function HubPage() {
                     </div>
                   )}
 
-                  {triggerLoadErrors.length === 0 && emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && (
+                  {triggerLoadErrors.length === 0 && emailTriggers.length === 0 && webhookIntegrations.length === 0 && jiraTriggers.length === 0 && githubTriggers.length === 0 && gitlabTriggers.length === 0 && (
                     <div className="card p-6 border-dashed border-tsushin-border/60">
                       <h4 className="text-white font-semibold mb-1">No triggers configured yet</h4>
                       <p className="text-sm text-tsushin-slate mb-4">
-                        Create an Email, Webhook, Jira, or GitHub trigger to wake agents from external events.
+                        Create an Email, Webhook, Jira, GitHub, or GitLab trigger to wake agents from external events.
                       </p>
                       {canWriteHub && (
                         <button onClick={() => openTriggerWizard()} className="btn-primary px-4 py-2 text-sm">
@@ -5789,6 +6158,7 @@ export default function HubPage() {
                   webhookTriggers={webhookIntegrations}
                   jiraTriggers={jiraTriggers}
                   githubTriggers={githubTriggers}
+                  gitlabTriggers={gitlabTriggers}
                   canWrite={canWriteHub}
                   onChanged={async () => {
                     await Promise.all([loadEmailTriggers(), loadWebhookIntegrations(), loadBreadthTriggers()])
@@ -6078,27 +6448,31 @@ export default function HubPage() {
               )
             })()}
 
-            {/* ==================== DEVELOPER TOOLS TAB ==================== */}
+            {/* ==================== REPOSITORY INTEGRATIONS TAB ==================== */}
             {activeTab === 'developer' && (
               <div className="space-y-6 animate-fade-in">
-                {/* v0.7.0-fix Phase 9.8: section header gains a centralized
-                    "+ Add GitHub Integration" launcher to match the pattern
-                    used by every other Hub tab (AI Providers / Channels /
-                    Triggers / Productivity / Tool APIs / MCP Servers /
-                    Vector Stores). It opens the same modal that the per-
-                    GitHub-section "+ Add" button opens further down. */}
-                <div className="flex justify-between items-center">
+                {/* Repository integration launchers mirror the other Hub tabs
+                    while each provider panel still keeps its own "+ Add" affordance. */}
+                <div className="flex justify-between items-center gap-3">
                   <div>
-                    <h2 className="text-lg font-display font-semibold text-white">Developer Tools</h2>
-                    <p className="text-sm text-tsushin-slate">Shell execution, sandboxed tools, and DevOps integrations</p>
+                    <h2 className="text-lg font-display font-semibold text-white">Repository Integrations</h2>
+                    <p className="text-sm text-tsushin-slate">GitHub and GitLab connections for repository skills, triggers, and DevOps tooling</p>
                   </div>
                   {canWriteHub && (
-                    <button
-                      onClick={openAddGitHubIntegrationModal}
-                      className="btn-primary"
-                    >
-                      + Add GitHub Integration
-                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        onClick={openAddGitHubIntegrationModal}
+                        className="btn-primary"
+                      >
+                        + Add GitHub Integration
+                      </button>
+                      <button
+                        onClick={openAddGitLabIntegrationModal}
+                        className="btn-primary"
+                      >
+                        + Add GitLab Integration
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -6260,17 +6634,28 @@ export default function HubPage() {
                   onAdd={openAddGitHubIntegrationModal}
                   onEdit={openEditGitHubIntegrationModal}
                   onDelete={deleteGitHubIntegration}
+                  onAutomate={openGitHubAutomationWizard}
+                />
+
+                <GitLabIntegrationsPanel
+                  integrations={gitlabIntegrations}
+                  loading={gitlabIntegrationsLoading}
+                  canWriteHub={canWriteHub}
+                  onAdd={openAddGitLabIntegrationModal}
+                  onEdit={openEditGitLabIntegrationModal}
+                  onDelete={deleteGitLabIntegration}
+                  onAutomate={openGitLabAutomationWizard}
                 />
 
                 {/* Info Box */}
                 <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-semibold text-blue-300 mb-2 flex items-center gap-2">
-                    <LightbulbIcon size={16} className="text-blue-300" /> Developer Integrations
+                    <LightbulbIcon size={16} className="text-blue-300" /> Repository Integrations
                   </h3>
                   <p className="text-xs text-tsushin-slate">
                     The Shell Command Center enables remote command execution with security approval workflows. Sandboxed Tools provide
-                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub connections power
-                    the Code Repository skill (PR/issue read/write) and the PR Submitted trigger.
+                    per-tenant isolated containers for network scans, vulnerability assessments, and custom scripts. GitHub and GitLab connections power
+                    the Code Repository skill and repository-trigger workflows.
                   </p>
                 </div>
               </div>
@@ -6922,6 +7307,20 @@ export default function HubPage() {
             setEditingGithubIntegration(null)
           }}
           onSave={saveGitHubIntegration}
+        />
+      )}
+
+      {showGitlabIntegrationModal && (
+        <GitLabIntegrationModal
+          key={editingGitlabIntegration?.id ?? 'new'}
+          isOpen={showGitlabIntegrationModal}
+          target={editingGitlabIntegration}
+          saving={saving}
+          onClose={() => {
+            setShowGitlabIntegrationModal(false)
+            setEditingGitlabIntegration(null)
+          }}
+          onSave={saveGitLabIntegration}
         />
       )}
 

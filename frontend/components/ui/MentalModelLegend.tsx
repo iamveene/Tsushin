@@ -36,7 +36,7 @@ const SECTIONS: Section[] = [
     label: 'Hub',
     tagline: 'Where you wire external services.',
     description:
-      'Connect AI providers, channels (WhatsApp / Slack / Discord / Email), triggers (Jira / GitHub / Webhook), tool APIs (1Password, GitHub credentials, etc.), and self-hosted local services (Whisper / Ollama). Anything that lives outside Tsushin and your agents need to talk to lives here.',
+      'Connect AI providers, channels (WhatsApp / Slack / Discord / Email), triggers (Jira / GitHub / GitLab / Webhook), repository integrations (GitHub / GitLab), tool APIs (1Password, Jira credentials, etc.), and self-hosted local services (Whisper / Ollama). Anything that lives outside Tsushin and your agents need to talk to lives here.',
     Icon: PlugIcon,
     iconClass: 'text-cyan-300',
     borderClass: 'border-cyan-500/30 bg-cyan-500/5',

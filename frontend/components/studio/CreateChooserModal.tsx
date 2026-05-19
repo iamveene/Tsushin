@@ -159,7 +159,7 @@ export default function CreateChooserModal({ open, onClose, onSelect }: Props) {
             badge="Always-on"
             tagline="Wraps an existing Agent so it wakes on a trigger event with daily budget caps."
             bullets={[
-              'Reacts to inbound events (email, Jira, GitHub, webhook).',
+              'Reacts to inbound events (email, Jira, GitHub, GitLab, webhook).',
               'Daily budget enforcement (runs/tokens/tool-calls).',
               'Optional notify-only mode — record wakes without running the agent.',
               'Persistent run history per wake event.',

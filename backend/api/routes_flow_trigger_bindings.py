@@ -32,6 +32,7 @@ from models import (
     FlowRun,
     FlowTriggerBinding,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     WebhookIntegration,
 )
@@ -42,11 +43,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/flow-trigger-bindings", tags=["flow-trigger-bindings"])
 
 
-_VALID_KINDS = {"jira", "email", "github", "webhook"}
+_VALID_KINDS = {"jira", "email", "github", "gitlab", "webhook"}
 _TRIGGER_MODELS = {
     "email": EmailChannelInstance,
     "jira": JiraChannelInstance,
     "github": GitHubChannelInstance,
+    "gitlab": GitLabChannelInstance,
     "webhook": WebhookIntegration,
 }
 
@@ -70,7 +72,7 @@ class FlowTriggerBindingRead(BaseModel):
 
 class FlowTriggerBindingCreate(BaseModel):
     flow_definition_id: int
-    trigger_kind: str = Field(pattern="^(jira|email|github|webhook)$")
+    trigger_kind: str = Field(pattern="^(jira|email|github|gitlab|webhook)$")
     trigger_instance_id: int = Field(ge=1)
     suppress_default_agent: bool = True
     source_node_id: Optional[int] = None

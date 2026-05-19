@@ -37,6 +37,8 @@ from models import (  # noqa: E402
     FlowTriggerBinding,
     GitHubChannelInstance,
     GitHubIntegration,
+    GitLabChannelInstance,
+    GitLabIntegration,
     GmailIntegration,
     HubIntegration,
     JiraChannelInstance,
@@ -73,9 +75,11 @@ def db_session():
             GmailIntegration.__table__,
             JiraIntegration.__table__,
             GitHubIntegration.__table__,
+            GitLabIntegration.__table__,
             EmailChannelInstance.__table__,
             JiraChannelInstance.__table__,
             GitHubChannelInstance.__table__,
+            GitLabChannelInstance.__table__,
             SentinelConfig.__table__,
             SentinelProfile.__table__,
             DeliveryPolicy.__table__,
@@ -210,6 +214,34 @@ def _seed_github(db, *, instance_id: int, tenant_id: str, created_by: int, defau
             github_integration_id=integration.id,
             repo_owner="octo",
             repo_name="repo",
+            default_agent_id=default_agent_id,
+            created_by=created_by,
+            is_active=True,
+            status="active",
+        )
+    )
+
+
+def _seed_gitlab(db, *, instance_id: int, tenant_id: str, created_by: int, default_agent_id: int | None):
+    integration = GitLabIntegration(
+        id=instance_id,
+        type="gitlab",
+        name=f"GitLab Hub {tenant_id}",
+        tenant_id=tenant_id,
+        is_active=True,
+        provider="gitlab",
+        auth_method="pat",
+        provider_mode="programmatic",
+    )
+    db.add(integration)
+    db.flush()
+    db.add(
+        GitLabChannelInstance(
+            id=instance_id,
+            tenant_id=tenant_id,
+            integration_name=f"GitLab {tenant_id}",
+            gitlab_integration_id=integration.id,
+            project_path="group/project",
             default_agent_id=default_agent_id,
             created_by=created_by,
             is_active=True,
@@ -567,6 +599,7 @@ def test_dispatch_creates_redacted_payload_ref_for_email_instance(db_session, tm
     [
         ("jira", 701, "jira.issue.detected", _seed_jira),
         ("github", 901, "github.pull_request", _seed_github),
+        ("gitlab", 902, "gitlab.merge_request", _seed_gitlab),
     ],
 )
 def test_dispatch_supports_track_b_trigger_instances(
@@ -757,9 +790,17 @@ def test_dispatch_rolls_back_partial_team_run_queue_insert_failure(
             {"jsonpath_matchers": [{"path": "$.raw_event.action", "operator": "equals", "value": "opened"}]},
             {"raw_event": {"action": "opened"}},
         ),
+        (
+            "gitlab",
+            902,
+            "gitlab.merge_request",
+            _seed_gitlab,
+            {"jsonpath_matchers": [{"path": "$.raw_event.action", "operator": "equals", "value": "open"}]},
+            {"raw_event": {"action": "open"}},
+        ),
     ],
 )
-def test_dispatch_matches_team_triggers_for_webhook_github_jira(
+def test_dispatch_matches_team_triggers_for_webhook_repository_and_jira(
     db_session,
     tmp_path,
     trigger_type,
@@ -1056,6 +1097,54 @@ def test_dispatch_accepts_webhook_payload_when_trigger_criteria_matches(db_sessi
 
     result = _service(db_session, tmp_path).dispatch(
         _input(payload={"raw_event": {"event_type": "approved"}})
+    )
+
+    assert result.status == "dispatched"
+    assert db_session.query(WakeEvent).count() == 1
+    assert db_session.query(ContinuousRun).count() == 1
+
+
+def test_dispatch_applies_gitlab_repository_criteria(db_session, tmp_path):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_gitlab(db_session, instance_id=902, tenant_id="tenant-a", created_by=1, default_agent_id=201)
+    gitlab = db_session.query(GitLabChannelInstance).filter(GitLabChannelInstance.id == 902).one()
+    gitlab.trigger_criteria = {
+        "criteria_version": 1,
+        "event": "pull_request",
+        "actions": ["open"],
+        "filters": {
+            "target_branch_filter": "main",
+            "author_filter": "alice",
+            "title_contains": "billing",
+        },
+    }
+    _seed_continuous_agent(db_session, continuous_agent_id=301, tenant_id="tenant-a", agent_id=201)
+    _seed_subscription(
+        db_session,
+        subscription_id=501,
+        tenant_id="tenant-a",
+        continuous_agent_id=301,
+        channel_type="gitlab",
+        instance_id=902,
+        event_type="gitlab.merge_request",
+    )
+    db_session.commit()
+
+    result = _service(db_session, tmp_path).dispatch(
+        _input(
+            trigger_type="gitlab",
+            instance_id=902,
+            event_type="gitlab.merge_request",
+            dedupe_key="gitlab-criteria-match",
+            payload={
+                "provider": "gitlab",
+                "provider_event": "merge_request",
+                "action": "open",
+                "target_branch": "main",
+                "actor": {"username": "alice"},
+                "object": {"title": "Add billing export"},
+            },
+        )
     )
 
     assert result.status == "dispatched"

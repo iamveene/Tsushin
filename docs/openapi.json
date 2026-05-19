@@ -1403,7 +1403,7 @@
           "flight_providers"
         ],
         "summary": "Get Agent Flight Provider",
-        "description": "Get current flight provider configuration for an agent.\n\nReturns the selected provider and settings from agent.config JSON.\n\nRequires: agents.read permission",
+        "description": "Get current flight provider configuration for an agent.\n\nReturns the selected provider and settings from the AgentSkill row.\n\nRequires: agents.read permission",
         "operationId": "get_agent_flight_provider_api_flight_providers_agents__agent_id__provider_get",
         "security": [
           {
@@ -6734,6 +6734,86 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/continuous-subscriptions": {
+      "get": {
+        "tags": [
+          "Continuous Agents"
+        ],
+        "summary": "List Continuous Subscriptions By Instance",
+        "description": "List every continuous subscription wired to one channel instance.\n\nUsed by the trigger detail page (``/hub/triggers/{kind}/{id}``) to render\nthe \"Wired Continuous Agents\" card alongside flow and team bindings.\nMutations stay on the per-agent CRUD routes; this endpoint is read-only.",
+        "operationId": "list_continuous_subscriptions_by_instance_api_continuous_subscriptions_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "title": "Channel Type"
+            }
+          },
+          {
+            "name": "channel_instance_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Channel Instance Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContinuousSubscriptionWithAgentRead"
+                  },
+                  "title": "Response List Continuous Subscriptions By Instance Api Continuous Subscriptions Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -14799,7 +14879,7 @@
           "authentication"
         ],
         "summary": "Login",
-        "description": "Login endpoint\n\nAuthenticates user with email and password, returns JWT access token.\nRate limit is configurable via TSN_AUTH_RATE_LIMIT and can be temporarily\ndisabled for QA/dev with TSN_DISABLE_AUTH_RATE_LIMIT=true.",
+        "description": "Login endpoint\n\nAuthenticates user with email and password, returns JWT access token.\nRate limit is configurable via TSN_AUTH_RATE_LIMIT.",
         "operationId": "login_api_auth_login_post",
         "requestBody": {
           "content": {
@@ -23715,6 +23795,46 @@
         }
       }
     },
+    "/api/teams/{team_id}/permanent": {
+      "delete": {
+        "tags": [
+          "agent-teams"
+        ],
+        "summary": "Delete Team Permanently",
+        "operationId": "delete_team_permanently_api_teams__team_id__permanent_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/teams/{team_id}/members": {
       "post": {
         "tags": [
@@ -24322,6 +24442,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TeamRunDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/team-triggers": {
+      "get": {
+        "tags": [
+          "agent-team-triggers"
+        ],
+        "summary": "List Team Triggers By Instance",
+        "description": "List every Agent Team trigger wired to one trigger instance.\n\nBoth ``trigger_kind`` and ``trigger_instance_id`` are required and\nfail-closed — the trigger-detail page only ever queries with both.\nTenant scoping is enforced through :class:`TenantContext`.",
+        "operationId": "list_team_triggers_by_instance_api_team_triggers_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trigger Kind"
+            }
+          },
+          {
+            "name": "trigger_instance_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Trigger Instance Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeamTriggerWithTeamRead"
+                  },
+                  "title": "Response List Team Triggers By Instance Api Team Triggers Get"
                 }
               }
             }
@@ -29727,6 +29909,520 @@
         }
       }
     },
+    "/api/triggers/gitlab": {
+      "get": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "List Gitlab Triggers",
+        "operationId": "list_gitlab_triggers_api_triggers_gitlab_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitLabTriggerRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Gitlab Triggers Api Triggers Gitlab Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Create Gitlab Trigger",
+        "operationId": "create_gitlab_trigger_api_triggers_gitlab_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabTriggerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabTriggerRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/triggers/gitlab/test-criteria": {
+      "post": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Dry Run Gitlab Criteria Unsaved",
+        "operationId": "dry_run_gitlab_criteria_unsaved_api_triggers_gitlab_test_criteria_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabCriteriaTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabCriteriaTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/triggers/gitlab/{trigger_id}/test-criteria": {
+      "post": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Dry Run Gitlab Criteria Saved",
+        "operationId": "dry_run_gitlab_criteria_saved_api_triggers_gitlab__trigger_id__test_criteria_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabCriteriaPayloadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabCriteriaTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/gitlab/{trigger_id}": {
+      "get": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Get Gitlab Trigger",
+        "operationId": "get_gitlab_trigger_api_triggers_gitlab__trigger_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabTriggerRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Update Gitlab Trigger",
+        "operationId": "update_gitlab_trigger_api_triggers_gitlab__trigger_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabTriggerUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabTriggerRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Delete Gitlab Trigger",
+        "operationId": "delete_gitlab_trigger_api_triggers_gitlab__trigger_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/gitlab/{trigger_id}/recap-config": {
+      "get": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Get Gitlab Trigger Recap Config",
+        "operationId": "get_gitlab_trigger_recap_config_api_triggers_gitlab__trigger_id__recap_config_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRecapConfigRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Put Gitlab Trigger Recap Config",
+        "operationId": "put_gitlab_trigger_recap_config_api_triggers_gitlab__trigger_id__recap_config_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRecapConfigWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRecapConfigRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Delete Gitlab Trigger Recap Config",
+        "operationId": "delete_gitlab_trigger_recap_config_api_triggers_gitlab__trigger_id__recap_config_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/gitlab/{trigger_id}/test-recap": {
+      "post": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Test Gitlab Trigger Recap",
+        "operationId": "test_gitlab_trigger_recap_api_triggers_gitlab__trigger_id__test_recap_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRecapTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRecapTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wizards/manifests": {
       "get": {
         "tags": [
@@ -29817,6 +30513,94 @@
                 }
               ],
               "title": "X-Github-Delivery"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/gitlab/{trigger_id}/inbound": {
+      "post": {
+        "tags": [
+          "gitlab-inbound"
+        ],
+        "summary": "Receive Gitlab Webhook",
+        "operationId": "receive_gitlab_webhook_api_triggers_gitlab__trigger_id__inbound_post",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          },
+          {
+            "name": "X-Gitlab-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gitlab-Token"
+            }
+          },
+          {
+            "name": "X-Gitlab-Event",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gitlab-Event"
+            }
+          },
+          {
+            "name": "X-Gitlab-Event-UUID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gitlab-Event-Uuid"
             }
           }
         ],
@@ -30142,6 +30926,1175 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GitHubTestConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/gitlab-integrations": {
+      "get": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "List Gitlab Integrations",
+        "operationId": "list_gitlab_integrations_api_hub_gitlab_integrations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GitLabIntegrationRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Gitlab Integrations Api Hub Gitlab Integrations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Create Gitlab Integration",
+        "operationId": "create_gitlab_integration_api_hub_gitlab_integrations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabIntegrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabIntegrationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/hub/gitlab-integrations/{integration_id}": {
+      "get": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Get Gitlab Integration",
+        "operationId": "get_gitlab_integration_api_hub_gitlab_integrations__integration_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabIntegrationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Update Gitlab Integration",
+        "operationId": "update_gitlab_integration_api_hub_gitlab_integrations__integration_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabIntegrationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabIntegrationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Delete Gitlab Integration",
+        "operationId": "delete_gitlab_integration_api_hub_gitlab_integrations__integration_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/gitlab-integrations/test-connection": {
+      "post": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Test Gitlab Connection",
+        "operationId": "test_gitlab_connection_api_hub_gitlab_integrations_test_connection_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabTestConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabTestConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/hub/gitlab-integrations/{integration_id}/test-connection": {
+      "post": {
+        "tags": [
+          "GitLab Integrations"
+        ],
+        "summary": "Test Saved Gitlab Connection",
+        "operationId": "test_saved_gitlab_connection_api_hub_gitlab_integrations__integration_id__test_connection_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitLabTestConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabTestConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations": {
+      "get": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "List Password Vault Integrations",
+        "operationId": "list_password_vault_integrations_api_hub_password_vault_integrations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PasswordVaultIntegrationRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Password Vault Integrations Api Hub Password Vault Integrations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Create Password Vault Integration",
+        "operationId": "create_password_vault_integration_api_hub_password_vault_integrations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVaultIntegrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordVaultIntegrationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}": {
+      "patch": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Update Password Vault Integration",
+        "operationId": "update_password_vault_integration_api_hub_password_vault_integrations__integration_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVaultIntegrationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordVaultIntegrationRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Delete Password Vault Integration",
+        "operationId": "delete_password_vault_integration_api_hub_password_vault_integrations__integration_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/test": {
+      "post": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Test Password Vault Integration",
+        "operationId": "test_password_vault_integration_api_hub_password_vault_integrations__integration_id__test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Password Vault Integration Api Hub Password Vault Integrations  Integration Id  Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/vaults": {
+      "get": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "List Password Vaults",
+        "operationId": "list_password_vaults_api_hub_password_vault_integrations__integration_id__vaults_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Password Vaults Api Hub Password Vault Integrations  Integration Id  Vaults Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/items": {
+      "get": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "List Password Vault Items",
+        "operationId": "list_password_vault_items_api_hub_password_vault_integrations__integration_id__items_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          },
+          {
+            "name": "vault",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vault"
+            }
+          },
+          {
+            "name": "vault_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vault Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Password Vault Items Api Hub Password Vault Integrations  Integration Id  Items Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/secret-overrides": {
+      "get": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "List Password Vault Secret Overrides",
+        "operationId": "list_password_vault_secret_overrides_api_hub_password_vault_integrations__integration_id__secret_overrides_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PasswordVaultSecretOverrideRead"
+                  },
+                  "title": "Response List Password Vault Secret Overrides Api Hub Password Vault Integrations  Integration Id  Secret Overrides Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Upsert Password Vault Secret Override",
+        "operationId": "upsert_password_vault_secret_override_api_hub_password_vault_integrations__integration_id__secret_overrides_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVaultSecretOverrideRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordVaultSecretOverrideRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/secret-overrides/{secret_id}": {
+      "patch": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Update Password Vault Secret Override",
+        "operationId": "update_password_vault_secret_override_api_hub_password_vault_integrations__integration_id__secret_overrides__secret_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          },
+          {
+            "name": "secret_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Secret Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVaultSecretOverrideUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordVaultSecretOverrideRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Delete Password Vault Secret Override",
+        "operationId": "delete_password_vault_secret_override_api_hub_password_vault_integrations__integration_id__secret_overrides__secret_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          },
+          {
+            "name": "secret_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Secret Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/password-vault-integrations/{integration_id}/item-test": {
+      "post": {
+        "tags": [
+          "Password Vault Integrations"
+        ],
+        "summary": "Test Password Vault Item",
+        "operationId": "test_password_vault_item_api_hub_password_vault_integrations__integration_id__item_test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "integration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Integration Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordVaultItemTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Password Vault Item Api Hub Password Vault Integrations  Integration Id  Item Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/browser-session-profiles": {
+      "get": {
+        "tags": [
+          "Browser Session Profiles"
+        ],
+        "summary": "List Browser Session Profiles",
+        "operationId": "list_browser_session_profiles_api_hub_browser_session_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrowserSessionProfileRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Browser Session Profiles Api Hub Browser Session Profiles Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Browser Session Profiles"
+        ],
+        "summary": "Create Browser Session Profile",
+        "operationId": "create_browser_session_profile_api_hub_browser_session_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserSessionProfileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionProfileRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/hub/browser-session-profiles/{profile_id}": {
+      "patch": {
+        "tags": [
+          "Browser Session Profiles"
+        ],
+        "summary": "Update Browser Session Profile",
+        "operationId": "update_browser_session_profile_api_hub_browser_session_profiles__profile_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserSessionProfileUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionProfileRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Browser Session Profiles"
+        ],
+        "summary": "Delete Browser Session Profile",
+        "operationId": "delete_browser_session_profile_api_hub_browser_session_profiles__profile_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hub/browser-session-profiles/{profile_id}/test": {
+      "post": {
+        "tags": [
+          "Browser Session Profiles"
+        ],
+        "summary": "Test Browser Session Profile",
+        "operationId": "test_browser_session_profile_api_hub_browser_session_profiles__profile_id__test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserSessionProfileTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionProfileTestResponse"
                 }
               }
             }
@@ -32826,7 +34779,7 @@
           "Provider Instances"
         ],
         "summary": "Delete Provider Instance",
-        "description": "Soft-delete a provider instance.\n\nv0.7.0 cascade-aware behavior:\n  - If the instance has no dependent agents, deletes immediately (no body).\n  - If it has dependents, the body MUST set either ``reassign_to_instance_id``\n    or ``unassign=true``. Without one of these the request fails with 409\n    and the UI is expected to show the pre-delete reassign modal.",
+        "description": "Soft-delete a provider instance.\n\nv0.7.0 cascade-aware behavior:\n  - If the instance has no dependents, deletes immediately (no body).\n  - If it has dependents, the body MUST set either ``reassign_to_instance_id``\n    or ``unassign=true``. Without one of these the request fails with 409\n    and the UI is expected to show the pre-delete reassign modal.",
         "operationId": "delete_provider_instance_api_provider_instances__instance_id__delete",
         "security": [
           {
@@ -32891,7 +34844,7 @@
           "Provider Instances"
         ],
         "summary": "Get Provider Instance Usage",
-        "description": "v0.7.0: dependent-agent dry-run for the cascade-aware delete UI.\n\nReturns the list of agents currently bound to this instance so the\noperator can pick a reassignment target (or accept unassigning) before\nconfirming the delete. Tenant-scoped.",
+        "description": "v0.7.0: dependent-setting dry-run for the cascade-aware delete UI.\n\nReturns the agents and Sentinel settings currently bound to this instance\nso the operator can pick a reassignment target (or accept unassigning)\nbefore confirming the delete. Tenant-scoped.",
         "operationId": "get_provider_instance_usage_api_provider_instances__instance_id__usage_get",
         "security": [
           {
@@ -43224,6 +45177,82 @@
         }
       }
     },
+    "/api/v1/teams/{team_id}/permanent": {
+      "delete": {
+        "tags": [
+          "Public API v1",
+          "Teams API"
+        ],
+        "summary": "Delete Team Permanently",
+        "operationId": "delete_team_permanently_api_v1_teams__team_id__permanent_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required — missing or invalid token/API key"
+          },
+          "403": {
+            "description": "Insufficient permissions for this operation"
+          },
+          "429": {
+            "description": "Rate limit exceeded — check X-RateLimit-Limit header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teams/{team_id}/members": {
       "post": {
         "tags": [
@@ -49267,6 +51296,479 @@
         ],
         "title": "Body_upload_project_document_api_projects__project_id__knowledge_upload_post"
       },
+      "BrowserSessionProfileCreate": {
+        "properties": {
+          "integration_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Integration Name"
+          },
+          "profile_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Profile Name"
+          },
+          "provider_type": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Provider Type",
+            "default": "playwright"
+          },
+          "mode": {
+            "type": "string",
+            "maxLength": 20,
+            "title": "Mode",
+            "default": "container"
+          },
+          "browser_type": {
+            "type": "string",
+            "maxLength": 20,
+            "title": "Browser Type",
+            "default": "chromium"
+          },
+          "headless": {
+            "type": "boolean",
+            "title": "Headless",
+            "default": true
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "maximum": 180.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "default": 45
+          },
+          "viewport_width": {
+            "type": "integer",
+            "maximum": 3840.0,
+            "minimum": 320.0,
+            "title": "Viewport Width",
+            "default": 1280
+          },
+          "viewport_height": {
+            "type": "integer",
+            "maximum": 2160.0,
+            "minimum": 240.0,
+            "title": "Viewport Height",
+            "default": 720
+          },
+          "session_ttl_seconds": {
+            "type": "integer",
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Session Ttl Seconds",
+            "default": 900
+          },
+          "cdp_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cdp Url"
+          },
+          "storage_state_json": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage State Json"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "integration_name",
+          "profile_name"
+        ],
+        "title": "BrowserSessionProfileCreate"
+      },
+      "BrowserSessionProfileRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "integration_name": {
+            "type": "string",
+            "title": "Integration Name"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "profile_name": {
+            "type": "string",
+            "title": "Profile Name"
+          },
+          "provider_type": {
+            "type": "string",
+            "title": "Provider Type"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "browser_type": {
+            "type": "string",
+            "title": "Browser Type"
+          },
+          "headless": {
+            "type": "boolean",
+            "title": "Headless"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "title": "Timeout Seconds"
+          },
+          "viewport_width": {
+            "type": "integer",
+            "title": "Viewport Width"
+          },
+          "viewport_height": {
+            "type": "integer",
+            "title": "Viewport Height"
+          },
+          "session_persistence": {
+            "type": "boolean",
+            "title": "Session Persistence"
+          },
+          "session_ttl_seconds": {
+            "type": "integer",
+            "title": "Session Ttl Seconds"
+          },
+          "cdp_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cdp Url"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          },
+          "health_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status Reason"
+          },
+          "has_storage_state": {
+            "type": "boolean",
+            "title": "Has Storage State"
+          },
+          "storage_state_imported_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage State Imported At"
+          },
+          "storage_state_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Storage State Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "integration_name",
+          "name",
+          "profile_name",
+          "provider_type",
+          "mode",
+          "browser_type",
+          "headless",
+          "timeout_seconds",
+          "viewport_width",
+          "viewport_height",
+          "session_persistence",
+          "session_ttl_seconds",
+          "is_active",
+          "has_storage_state",
+          "storage_state_summary",
+          "created_at"
+        ],
+        "title": "BrowserSessionProfileRead"
+      },
+      "BrowserSessionProfileTestRequest": {
+        "properties": {
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "title": "BrowserSessionProfileTestRequest"
+      },
+      "BrowserSessionProfileTestResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "status",
+          "details"
+        ],
+        "title": "BrowserSessionProfileTestResponse"
+      },
+      "BrowserSessionProfileUpdate": {
+        "properties": {
+          "integration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Name"
+          },
+          "profile_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Name"
+          },
+          "provider_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Type"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "browser_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Type"
+          },
+          "headless": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headless"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 180.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          },
+          "viewport_width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3840.0,
+                "minimum": 320.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewport Width"
+          },
+          "viewport_height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2160.0,
+                "minimum": 240.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewport Height"
+          },
+          "session_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 86400.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Ttl Seconds"
+          },
+          "cdp_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cdp Url"
+          },
+          "storage_state_json": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage State Json"
+          },
+          "clear_storage_state": {
+            "type": "boolean",
+            "title": "Clear Storage State",
+            "default": false
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "BrowserSessionProfileUpdate"
+      },
       "BuilderAgentDetail": {
         "properties": {
           "id": {
@@ -53538,6 +56040,122 @@
         },
         "type": "object",
         "title": "ContinuousSubscriptionUpdate"
+      },
+      "ContinuousSubscriptionWithAgentRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "continuous_agent_id": {
+            "type": "integer",
+            "title": "Continuous Agent Id"
+          },
+          "channel_type": {
+            "type": "string",
+            "title": "Channel Type"
+          },
+          "channel_instance_id": {
+            "type": "integer",
+            "title": "Channel Instance Id"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "delivery_policy_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Policy Id"
+          },
+          "action_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Config"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "is_system_owned": {
+            "type": "boolean",
+            "title": "Is System Owned"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "continuous_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continuous Agent Name"
+          },
+          "continuous_agent_status": {
+            "type": "string",
+            "title": "Continuous Agent Status"
+          },
+          "continuous_agent_is_system_owned": {
+            "type": "boolean",
+            "title": "Continuous Agent Is System Owned"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "continuous_agent_id",
+          "channel_type",
+          "channel_instance_id",
+          "status",
+          "is_system_owned",
+          "created_at",
+          "continuous_agent_status",
+          "continuous_agent_is_system_owned"
+        ],
+        "title": "ContinuousSubscriptionWithAgentRead"
       },
       "ConversationCreate": {
         "properties": {
@@ -57881,6 +60499,39 @@
             "title": "Max Retries",
             "default": 0
           },
+          "retry_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Delay Seconds"
+          },
+          "on_success": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Success"
+          },
+          "on_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Failure"
+          },
           "allow_multi_turn": {
             "type": "boolean",
             "title": "Allow Multi Turn",
@@ -58004,6 +60655,39 @@
             "type": "integer",
             "title": "Max Retries",
             "default": 0
+          },
+          "retry_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Delay Seconds"
+          },
+          "on_success": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Success"
+          },
+          "on_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Failure"
           },
           "allow_multi_turn": {
             "type": "boolean",
@@ -58317,6 +61001,39 @@
             ],
             "title": "Max Retries"
           },
+          "retry_delay_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Delay Seconds"
+          },
+          "on_success": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Success"
+          },
+          "on_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Failure"
+          },
           "allow_multi_turn": {
             "anyOf": [
               {
@@ -58388,6 +61105,30 @@
             "title": "Flow Definition Id",
             "description": "Flow definition ID"
           },
+          "flow_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Name",
+            "description": "Flow display name"
+          },
+          "flow_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Display Name",
+            "description": "Name to show in operator UIs"
+          },
           "status": {
             "type": "string",
             "title": "Status",
@@ -58416,6 +61157,30 @@
             ],
             "title": "Completed At",
             "description": "Completion timestamp"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms",
+            "description": "Run duration in milliseconds when known"
+          },
+          "duration_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Label",
+            "description": "Human-readable run duration when known"
           },
           "initiator": {
             "anyOf": [
@@ -58564,6 +61329,34 @@
             ],
             "title": "Message Template"
           },
+          "message_templates_by_state": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Templates By State"
+          },
+          "notification_templates_by_state": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notification Templates By State"
+          },
           "content": {
             "anyOf": [
               {
@@ -58631,6 +61424,1197 @@
               }
             ],
             "title": "Parameters"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "integration_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Id"
+          },
+          "vault": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault"
+          },
+          "item_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Ref"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "field_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Name"
+          },
+          "username_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username Handle"
+          },
+          "password_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Handle"
+          },
+          "scheme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheme"
+          },
+          "password_vault_integration_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Integration Id"
+          },
+          "password_vault_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Provider"
+          },
+          "password_vault_vault_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Vault Id"
+          },
+          "password_vault_vault_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Vault Name"
+          },
+          "password_vault_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Item Id"
+          },
+          "password_vault_item_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Item Title"
+          },
+          "password_vault_field_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Field Name"
+          },
+          "password_vault_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Vault Reference"
+          },
+          "financial_automation_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Automation Template"
+          },
+          "financial_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Provider"
+          },
+          "financial_unit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Unit Id"
+          },
+          "financial_asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Asset"
+          },
+          "financial_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Address"
+          },
+          "financial_customer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Customer Code"
+          },
+          "financial_delivery_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Delivery Location"
+          },
+          "financial_username_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Username Field"
+          },
+          "financial_password_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Field"
+          },
+          "financial_browser_timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Browser Timeout Ms"
+          },
+          "financial_notification_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Notification Enabled"
+          },
+          "financial_notification_recipient": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Notification Recipient"
+          },
+          "financial_notification_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Notification Agent Id"
+          },
+          "financial_password_vault_integration_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Integration Id"
+          },
+          "financial_password_vault_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Provider"
+          },
+          "financial_password_vault_vault_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Vault Id"
+          },
+          "financial_password_vault_vault_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Vault Name"
+          },
+          "financial_password_vault_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Item Id"
+          },
+          "financial_password_vault_item_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Item Title"
+          },
+          "financial_password_vault_field_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Field Name"
+          },
+          "financial_password_vault_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Password Vault Reference"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "provider_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Type"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          },
+          "use_tool_mode": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Tool Mode"
+          },
+          "tool_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Action"
+          },
+          "tool_arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Arguments"
+          },
+          "selectors": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selectors"
+          },
+          "browser_secret_references": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Secret References"
+          },
+          "session_persistence": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Persistence"
+          },
+          "session_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Ttl Seconds"
+          },
+          "browser_session_profile_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Session Profile Name"
+          },
+          "browser_session_integration_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Session Integration Id"
+          },
+          "optional": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optional"
+          },
+          "treat_failure_as_skipped": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Treat Failure As Skipped"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "headers": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headers"
+          },
+          "query": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "params": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "body": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "form": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form"
+          },
+          "secret_references": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret References"
+          },
+          "http_secret_references": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Secret References"
+          },
+          "fail_on_http_error": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail On Http Error"
+          },
+          "http_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Method"
+          },
+          "http_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Url"
+          },
+          "http_headers": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Headers"
+          },
+          "http_query": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Query"
+          },
+          "http_body": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Body"
+          },
+          "http_json": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Json"
+          },
+          "http_form": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Form"
+          },
+          "http_timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Timeout Seconds"
+          },
+          "http_capture_raw_response": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Capture Raw Response"
+          },
+          "http_query_params": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Query Params"
+          },
+          "http_body_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Body Type"
+          },
+          "http_json_body": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Json Body"
+          },
+          "http_form_fields": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Form Fields"
+          },
+          "http_raw_body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Raw Body"
+          },
+          "http_follow_redirects": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Follow Redirects"
+          },
+          "http_raw_response_handle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Raw Response Handle"
+          },
+          "transform_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transform Mode"
+          },
+          "parser_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parser Mode"
+          },
+          "source_steps": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Steps"
+          },
+          "source_handle_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Handle Path"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
+          },
+          "raw_response_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Response Handle"
+          },
+          "raw_response_handles": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Response Handles"
+          },
+          "json_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Path"
+          },
+          "extraction_rules": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Rules"
+          },
+          "parser_rules": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parser Rules"
+          },
+          "record_mapping": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Mapping"
+          },
+          "issue_record_handle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue Record Handle"
+          },
+          "financial_parser_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Parser Mode"
+          },
+          "emit_raw_bill_handle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emit Raw Bill Handle"
+          },
+          "emit_financial_record_handle": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emit Financial Record Handle"
+          },
+          "record_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Kind"
+          },
+          "financial_record_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Kind"
+          },
+          "financial_automation_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Automation Key"
+          },
+          "financial_subject_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Subject Key"
+          },
+          "financial_record": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record"
+          },
+          "financial_record_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Handle"
+          },
+          "financial_record_handle_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Handle Path"
+          },
+          "financial_record_source_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Source Step"
+          },
+          "financial_record_dedupe_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Dedupe Key"
+          },
+          "financial_record_key_fields": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Key Fields"
+          },
+          "financial_record_payload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Record Payload"
+          },
+          "financial_source_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Source Step"
+          },
+          "financial_dedupe_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Dedupe Key"
+          },
+          "financial_notify_on_update": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Notify On Update"
+          },
+          "financial_bill_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Bill Handle"
+          },
+          "financial_bill_source_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Bill Source Step"
+          },
+          "financial_bill_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Bill Source"
+          },
+          "financial_bill": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Bill"
           },
           "objective": {
             "anyOf": [
@@ -59289,7 +63273,7 @@
           },
           "trigger_kind": {
             "type": "string",
-            "pattern": "^(jira|email|github|webhook)$",
+            "pattern": "^(jira|email|github|gitlab|webhook)$",
             "title": "Trigger Kind"
           },
           "trigger_instance_id": {
@@ -60663,6 +64647,1075 @@
         "type": "object",
         "title": "GitHubTriggerUpdate"
       },
+      "GitLabCriteriaPayloadRequest": {
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "provider_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Event"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload"
+        ],
+        "title": "GitLabCriteriaPayloadRequest"
+      },
+      "GitLabCriteriaTestRequest": {
+        "properties": {
+          "criteria": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Criteria"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "provider_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Event"
+          }
+        },
+        "type": "object",
+        "required": [
+          "criteria",
+          "payload"
+        ],
+        "title": "GitLabCriteriaTestRequest"
+      },
+      "GitLabCriteriaTestResponse": {
+        "properties": {
+          "matched": {
+            "type": "boolean",
+            "title": "Matched"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matched",
+          "reason"
+        ],
+        "title": "GitLabCriteriaTestResponse"
+      },
+      "GitLabIntegrationCreate": {
+        "properties": {
+          "integration_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Integration Name"
+          },
+          "pat_token": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Pat Token"
+          },
+          "default_namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Namespace"
+          },
+          "default_project": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project"
+          },
+          "default_project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project Path"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "provider_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Mode",
+            "default": "programmatic"
+          }
+        },
+        "type": "object",
+        "required": [
+          "integration_name",
+          "pat_token"
+        ],
+        "title": "GitLabIntegrationCreate"
+      },
+      "GitLabIntegrationRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "integration_name": {
+            "type": "string",
+            "title": "Integration Name"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "default": "gitlab"
+          },
+          "auth_method": {
+            "type": "string",
+            "title": "Auth Method",
+            "default": "pat"
+          },
+          "pat_token_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pat Token Preview"
+          },
+          "default_namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Namespace"
+          },
+          "default_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project"
+          },
+          "default_project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project Path"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "provider_mode": {
+            "type": "string",
+            "title": "Provider Mode",
+            "default": "programmatic"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          },
+          "health_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status Reason"
+          },
+          "last_health_check": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Health Check"
+          },
+          "last_test_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test Status"
+          },
+          "last_tested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tested At"
+          },
+          "trigger_count": {
+            "type": "integer",
+            "title": "Trigger Count",
+            "default": 0
+          },
+          "skill_attached_count": {
+            "type": "integer",
+            "title": "Skill Attached Count",
+            "default": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "integration_name",
+          "name",
+          "is_active",
+          "created_at"
+        ],
+        "title": "GitLabIntegrationRead"
+      },
+      "GitLabIntegrationUpdate": {
+        "properties": {
+          "integration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Name"
+          },
+          "pat_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pat Token"
+          },
+          "default_namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Namespace"
+          },
+          "default_project": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project"
+          },
+          "default_project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Project Path"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "provider_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Mode"
+          }
+        },
+        "type": "object",
+        "title": "GitLabIntegrationUpdate"
+      },
+      "GitLabTestConnectionRequest": {
+        "properties": {
+          "gitlab_integration_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gitlab Integration Id"
+          },
+          "pat_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pat Token"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          }
+        },
+        "type": "object",
+        "title": "GitLabTestConnectionRequest"
+      },
+      "GitLabTestConnectionResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "project_web_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Web Url"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "success",
+          "message"
+        ],
+        "title": "GitLabTestConnectionResponse"
+      },
+      "GitLabTriggerCreate": {
+        "properties": {
+          "integration_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Integration Name"
+          },
+          "gitlab_integration_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Gitlab Integration Id"
+          },
+          "project_path": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Project Path"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events"
+          },
+          "branch_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Filter"
+          },
+          "path_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Filters"
+          },
+          "author_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Filter"
+          },
+          "trigger_criteria": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Criteria"
+          },
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "notification_recipient": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notification Recipient"
+          },
+          "notification_enabled": {
+            "type": "boolean",
+            "title": "Notification Enabled",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "integration_name",
+          "gitlab_integration_id",
+          "project_path"
+        ],
+        "title": "GitLabTriggerCreate"
+      },
+      "GitLabTriggerRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "integration_name": {
+            "type": "string",
+            "title": "Integration Name"
+          },
+          "gitlab_integration_id": {
+            "type": "integer",
+            "title": "Gitlab Integration Id"
+          },
+          "gitlab_integration_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gitlab Integration Name"
+          },
+          "project_path": {
+            "type": "string",
+            "title": "Project Path"
+          },
+          "webhook_secret_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret Preview"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "branch_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Filter"
+          },
+          "path_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Filters"
+          },
+          "author_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Filter"
+          },
+          "trigger_criteria": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Criteria"
+          },
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
+          "default_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "health_status": {
+            "type": "string",
+            "title": "Health Status"
+          },
+          "health_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status Reason"
+          },
+          "last_health_check": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Health Check"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "last_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cursor"
+          },
+          "last_delivery_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Delivery Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "inbound_url": {
+            "type": "string",
+            "title": "Inbound Url"
+          },
+          "auto_flow_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Flow Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "integration_name",
+          "gitlab_integration_id",
+          "project_path",
+          "events",
+          "is_active",
+          "status",
+          "health_status",
+          "created_at",
+          "inbound_url"
+        ],
+        "title": "GitLabTriggerRead"
+      },
+      "GitLabTriggerUpdate": {
+        "properties": {
+          "integration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Name"
+          },
+          "gitlab_integration_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gitlab Integration Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events"
+          },
+          "branch_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Filter"
+          },
+          "path_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Filters"
+          },
+          "author_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Filter"
+          },
+          "trigger_criteria": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Criteria"
+          },
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "GitLabTriggerUpdate"
+      },
       "GlobalSSOConfigResponse": {
         "properties": {
           "id": {
@@ -61375,6 +66428,22 @@
             "title": "Agents",
             "default": []
           },
+          "sentinel_configs": {
+            "items": {
+              "$ref": "#/components/schemas/InstanceUsageSentinelConfig"
+            },
+            "type": "array",
+            "title": "Sentinel Configs",
+            "default": []
+          },
+          "sentinel_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/InstanceUsageSentinelProfile"
+            },
+            "type": "array",
+            "title": "Sentinel Profiles",
+            "default": []
+          },
           "dependent_count": {
             "type": "integer",
             "title": "Dependent Count",
@@ -61388,6 +66457,77 @@
           "instance_name"
         ],
         "title": "InstanceUsageResponse"
+      },
+      "InstanceUsageSentinelConfig": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "llm_provider": {
+            "type": "string",
+            "title": "Llm Provider"
+          },
+          "llm_model": {
+            "type": "string",
+            "title": "Llm Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "llm_provider",
+          "llm_model"
+        ],
+        "title": "InstanceUsageSentinelConfig"
+      },
+      "InstanceUsageSentinelProfile": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "llm_provider": {
+            "type": "string",
+            "title": "Llm Provider"
+          },
+          "llm_model": {
+            "type": "string",
+            "title": "Llm Model"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "llm_provider",
+          "llm_model",
+          "is_default",
+          "is_enabled"
+        ],
+        "title": "InstanceUsageSentinelProfile"
       },
       "IntegrationListResponse": {
         "properties": {
@@ -63526,19 +68666,40 @@
       "LLMTestRequest": {
         "properties": {
           "provider": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Provider"
           },
           "model": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model"
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           }
         },
         "type": "object",
-        "required": [
-          "provider",
-          "model"
-        ],
         "title": "LLMTestRequest",
         "description": "Request model for testing LLM connection."
       },
@@ -63594,6 +68755,50 @@
           "flow_definition_id": {
             "type": "integer",
             "title": "Flow Definition Id"
+          },
+          "flow_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Name"
+          },
+          "flow_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Display Name"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "duration_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Label"
           },
           "status": {
             "type": "string",
@@ -65295,6 +70500,851 @@
           "email"
         ],
         "title": "PasswordResetRequest"
+      },
+      "PasswordVaultIntegrationCreate": {
+        "properties": {
+          "integration_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Integration Name"
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Provider",
+            "default": "onepassword"
+          },
+          "auth_method": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Auth Method",
+            "default": "service_account"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "service_account_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Token"
+          },
+          "account_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Url"
+          },
+          "account_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Email"
+          },
+          "default_vault": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault"
+          },
+          "default_vault_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Name"
+          },
+          "default_vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Id"
+          },
+          "allowed_items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Items"
+          },
+          "allowed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Fields"
+          },
+          "allow_secret_read": {
+            "type": "boolean",
+            "title": "Allow Secret Read",
+            "default": false
+          },
+          "allow_totp_read": {
+            "type": "boolean",
+            "title": "Allow Totp Read",
+            "default": false
+          },
+          "allow_metadata_read": {
+            "type": "boolean",
+            "title": "Allow Metadata Read",
+            "default": true
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "integration_name"
+        ],
+        "title": "PasswordVaultIntegrationCreate"
+      },
+      "PasswordVaultIntegrationRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "integration_name": {
+            "type": "string",
+            "title": "Integration Name"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "provider_label": {
+            "type": "string",
+            "title": "Provider Label"
+          },
+          "auth_method": {
+            "type": "string",
+            "title": "Auth Method"
+          },
+          "account_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Url"
+          },
+          "account_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Email"
+          },
+          "default_vault": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault"
+          },
+          "default_vault_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Id"
+          },
+          "token_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Preview"
+          },
+          "service_account_token_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Token Preview"
+          },
+          "default_vault_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Name"
+          },
+          "allowed_items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Items"
+          },
+          "allowed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Fields"
+          },
+          "allow_secret_read": {
+            "type": "boolean",
+            "title": "Allow Secret Read"
+          },
+          "allow_totp_read": {
+            "type": "boolean",
+            "title": "Allow Totp Read"
+          },
+          "allow_metadata_read": {
+            "type": "boolean",
+            "title": "Allow Metadata Read"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          },
+          "health_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status Reason"
+          },
+          "last_health_check": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Health Check"
+          },
+          "linked_agent_count": {
+            "type": "integer",
+            "title": "Linked Agent Count",
+            "default": 0
+          },
+          "skill_attached_count": {
+            "type": "integer",
+            "title": "Skill Attached Count",
+            "default": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "integration_name",
+          "name",
+          "provider",
+          "provider_label",
+          "auth_method",
+          "allowed_items",
+          "allowed_fields",
+          "allow_secret_read",
+          "allow_totp_read",
+          "allow_metadata_read",
+          "is_active",
+          "created_at"
+        ],
+        "title": "PasswordVaultIntegrationRead"
+      },
+      "PasswordVaultIntegrationUpdate": {
+        "properties": {
+          "integration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Name"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "service_account_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Token"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "auth_method": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Method"
+          },
+          "account_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Url"
+          },
+          "account_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Email"
+          },
+          "default_vault": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault"
+          },
+          "default_vault_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Name"
+          },
+          "default_vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Vault Id"
+          },
+          "allowed_items": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Items"
+          },
+          "allowed_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Fields"
+          },
+          "allow_secret_read": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Secret Read"
+          },
+          "allow_totp_read": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Totp Read"
+          },
+          "allow_metadata_read": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Metadata Read"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "PasswordVaultIntegrationUpdate"
+      },
+      "PasswordVaultItemTestRequest": {
+        "properties": {
+          "item_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Ref"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "field_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Name"
+          },
+          "vault": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault"
+          },
+          "vault_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Id"
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^(metadata|field|totp)$",
+            "title": "Mode",
+            "default": "metadata"
+          }
+        },
+        "type": "object",
+        "title": "PasswordVaultItemTestRequest"
+      },
+      "PasswordVaultSecretOverrideRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "integration_id": {
+            "type": "integer",
+            "title": "Integration Id"
+          },
+          "vault": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault"
+          },
+          "item_ref": {
+            "type": "string",
+            "title": "Item Ref"
+          },
+          "field_name": {
+            "type": "string",
+            "title": "Field Name"
+          },
+          "field_type": {
+            "type": "string",
+            "title": "Field Type"
+          },
+          "value_preview": {
+            "type": "string",
+            "title": "Value Preview"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "integration_id",
+          "item_ref",
+          "field_name",
+          "field_type",
+          "value_preview"
+        ],
+        "title": "PasswordVaultSecretOverrideRead"
+      },
+      "PasswordVaultSecretOverrideRequest": {
+        "properties": {
+          "vault": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault"
+          },
+          "item_ref": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Item Ref"
+          },
+          "field_name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Field Name"
+          },
+          "field_type": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Field Type",
+            "default": "CONCEALED"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_ref",
+          "field_name",
+          "value"
+        ],
+        "title": "PasswordVaultSecretOverrideRequest"
+      },
+      "PasswordVaultSecretOverrideUpdate": {
+        "properties": {
+          "vault": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault"
+          },
+          "item_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Ref"
+          },
+          "field_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Name"
+          },
+          "field_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Type"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "title": "PasswordVaultSecretOverrideUpdate"
       },
       "PatternTestRequest": {
         "properties": {
@@ -72134,6 +78184,17 @@
             "type": "integer",
             "title": "Aggressiveness Level"
           },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
+          },
           "llm_provider": {
             "type": "string",
             "title": "Llm Provider"
@@ -72422,6 +78483,17 @@
             ],
             "title": "Aggressiveness Level"
           },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
+          },
           "llm_provider": {
             "anyOf": [
               {
@@ -72657,6 +78729,17 @@
           "enable_slash_command_analysis": {
             "type": "boolean",
             "title": "Enable Slash Command Analysis"
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           },
           "llm_provider": {
             "type": "string",
@@ -72968,6 +79051,22 @@
             ],
             "title": "Agent Id"
           },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_deleted": {
+            "type": "boolean",
+            "title": "Agent Deleted",
+            "default": false
+          },
           "skill_type": {
             "anyOf": [
               {
@@ -73130,6 +79229,17 @@
             "type": "boolean",
             "title": "Enable Slash Command Analysis",
             "default": true
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           },
           "llm_provider": {
             "type": "string",
@@ -73312,6 +79422,17 @@
           "enable_slash_command_analysis": {
             "type": "boolean",
             "title": "Enable Slash Command Analysis"
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           },
           "llm_provider": {
             "type": "string",
@@ -73542,6 +79663,17 @@
           "enable_slash_command_analysis": {
             "type": "boolean",
             "title": "Enable Slash Command Analysis"
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           },
           "llm_provider": {
             "type": "string",
@@ -73819,6 +79951,17 @@
               }
             ],
             "title": "Enable Slash Command Analysis"
+          },
+          "provider_instance_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Instance Id"
           },
           "llm_provider": {
             "anyOf": [
@@ -76955,6 +83098,11 @@
           "gate",
           "custom_skill",
           "browser_automation",
+          "password_vault",
+          "http_request",
+          "data_transform",
+          "financial_bill_store",
+          "financial_record_store",
           "source"
         ],
         "title": "StepType"
@@ -78714,9 +84862,6 @@
             ],
             "title": "Sentinel Profile Id"
           },
-          "tools": {
-            "$ref": "#/components/schemas/TeamToolPool"
-          },
           "members": {
             "items": {
               "$ref": "#/components/schemas/TeamMemberCreate"
@@ -78827,9 +84972,6 @@
           "max_concurrent_runs": {
             "type": "integer",
             "title": "Max Concurrent Runs"
-          },
-          "tools": {
-            "$ref": "#/components/schemas/TeamToolPool"
           },
           "created_at": {
             "anyOf": [
@@ -78987,9 +85129,6 @@
           "max_concurrent_runs": {
             "type": "integer",
             "title": "Max Concurrent Runs"
-          },
-          "tools": {
-            "$ref": "#/components/schemas/TeamToolPool"
           },
           "created_at": {
             "anyOf": [
@@ -79743,19 +85882,6 @@
         ],
         "title": "TeamRunStartResponse"
       },
-      "TeamToolPool": {
-        "properties": {
-          "sandboxed_tool_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "type": "array",
-            "title": "Sandboxed Tool Ids"
-          }
-        },
-        "type": "object",
-        "title": "TeamToolPool"
-      },
       "TeamTriggerCreate": {
         "properties": {
           "trigger_kind": {
@@ -79923,6 +86049,107 @@
         "type": "object",
         "title": "TeamTriggerUpdate"
       },
+      "TeamTriggerWithTeamRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "trigger_kind": {
+            "type": "string",
+            "title": "Trigger Kind"
+          },
+          "trigger_instance_id": {
+            "type": "integer",
+            "title": "Trigger Instance Id"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Types"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters"
+          },
+          "config_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Json"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "team_id": {
+            "type": "integer",
+            "title": "Team Id"
+          },
+          "team_name": {
+            "type": "string",
+            "title": "Team Name"
+          },
+          "team_status": {
+            "type": "string",
+            "title": "Team Status"
+          },
+          "team_topology": {
+            "type": "string",
+            "title": "Team Topology"
+          },
+          "member_count": {
+            "type": "integer",
+            "title": "Member Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "trigger_kind",
+          "trigger_instance_id",
+          "is_enabled",
+          "team_id",
+          "team_name",
+          "team_status",
+          "team_topology",
+          "member_count"
+        ],
+        "title": "TeamTriggerWithTeamRead"
+      },
       "TeamUpdate": {
         "properties": {
           "name": {
@@ -80031,16 +86258,6 @@
               }
             ],
             "title": "Sentinel Profile Id"
-          },
-          "tools": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TeamToolPool"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "type": "object",
@@ -82878,6 +89095,50 @@
           "owner_id": {
             "type": "integer",
             "title": "Owner Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "collection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Name"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "index_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Name"
           },
           "embedding_provider_instance_id": {
             "anyOf": [
