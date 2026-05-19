@@ -1,10 +1,11 @@
-import type { EmailTrigger, GitHubTrigger, JiraTrigger, TeamTriggerBindingKind, WebhookIntegration } from '@/lib/client'
+import type { EmailTrigger, GitHubTrigger, GitLabTrigger, JiraTrigger, TeamTriggerBindingKind, WebhookIntegration } from '@/lib/client'
 
-export type TeamTriggerSource = WebhookIntegration | GitHubTrigger | JiraTrigger | EmailTrigger | null | undefined
+export type TeamTriggerSource = WebhookIntegration | GitHubTrigger | GitLabTrigger | JiraTrigger | EmailTrigger | null | undefined
 
 export const TEAM_TRIGGER_DEFAULT_EVENTS: Record<TeamTriggerBindingKind, string[]> = {
   webhook: ['message.created'],
   github: ['github.pull_request'],
+  gitlab: ['gitlab.merge_request'],
   jira: ['jira.issue.detected'],
   gmail: ['email.message.received'],
 }
@@ -12,6 +13,10 @@ export const TEAM_TRIGGER_DEFAULT_EVENTS: Record<TeamTriggerBindingKind, string[
 export function defaultTeamTriggerEvents(kind: TeamTriggerBindingKind, source?: TeamTriggerSource): string[] {
   if (kind === 'github') {
     const events = (source as GitHubTrigger | null | undefined)?.events
+    if (Array.isArray(events) && events.length > 0) return dedupeEventTypes(events)
+  }
+  if (kind === 'gitlab') {
+    const events = (source as GitLabTrigger | null | undefined)?.events
     if (Array.isArray(events) && events.length > 0) return dedupeEventTypes(events)
   }
   return [...TEAM_TRIGGER_DEFAULT_EVENTS[kind]]

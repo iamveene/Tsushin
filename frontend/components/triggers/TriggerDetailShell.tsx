@@ -15,6 +15,7 @@ import {
   type EmailTestQueryResponse,
   type EmailTrigger,
   type GitHubTrigger,
+  type GitLabTrigger,
   type JiraIssuePreview,
   type JiraPollNowResponse,
   type JiraTrigger,
@@ -58,8 +59,8 @@ import type { EmailGmailIntegrationSummary } from '@/components/triggers/section
 // Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
 // handles `email` and `webhook` kinds. The standalone fork pages are
 // reduced to one-line wrappers around `<TriggerDetailShell kind=...>`.
-type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'github' | 'email' | 'webhook'>
-type BreadthTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type BreadthTriggerKind = Extract<TriggerKind, 'jira' | 'github' | 'gitlab' | 'email' | 'webhook'>
+type BreadthTrigger = JiraTrigger | GitHubTrigger | GitLabTrigger | EmailTrigger | WebhookIntegration
 type TabId = 'overview' | 'criteria' | 'events' | 'danger'
 
 interface Props {
@@ -86,6 +87,13 @@ const KIND_CONFIG: Record<BreadthTriggerKind, {
     Icon: GitHubIcon,
     iconClass: 'text-violet-300',
     accentClass: 'border-violet-500/30 bg-violet-500/10 text-violet-100',
+  },
+  gitlab: {
+    label: 'GitLab Trigger',
+    description: 'Project event source for engineering activity.',
+    Icon: CodeIcon,
+    iconClass: 'text-orange-300',
+    accentClass: 'border-orange-500/30 bg-orange-500/10 text-orange-100',
   },
   email: {
     label: 'Email Trigger',
@@ -239,13 +247,13 @@ function sourceFromTrigger(kind: BreadthTriggerKind, trigger: BreadthTrigger): C
       jiraProjectKey: jira.project_key || '',
     }
   }
-  if (kind === 'github') {
-    const github = trigger as GitHubTrigger
+  if (kind === 'github' || kind === 'gitlab') {
+    const repository = trigger as GitHubTrigger | GitLabTrigger
     return {
-      githubEventsText: (github.events || []).join(', '),
-      githubBranchFilter: github.branch_filter || '',
-      githubPathFiltersText: (github.path_filters || []).join('\n'),
-      githubAuthorFilter: github.author_filter || '',
+      githubEventsText: (repository.events || []).join(', '),
+      githubBranchFilter: repository.branch_filter || '',
+      githubPathFiltersText: (repository.path_filters || []).join('\n'),
+      githubAuthorFilter: repository.author_filter || '',
     }
   }
   if (kind === 'email') {
@@ -382,6 +390,7 @@ export default function TriggerDetailShell({ kind }: Props) {
       let updated: BreadthTrigger
       if (kind === 'jira') updated = await api.updateJiraTrigger(trigger.id, { is_active: next })
       else if (kind === 'github') updated = await api.updateGitHubTrigger(trigger.id, { is_active: next })
+      else if (kind === 'gitlab') updated = await api.updateGitLabTrigger(trigger.id, { is_active: next })
       else if (kind === 'email') updated = await api.updateEmailTrigger(trigger.id, { is_active: next })
       else updated = await api.updateWebhookIntegration(trigger.id, { is_active: next })
       setTrigger(updated)
@@ -590,14 +599,17 @@ export default function TriggerDetailShell({ kind }: Props) {
           project_key: sourceDraft.jiraProjectKey?.trim() || null,
           jql: sourceDraft.jiraJql?.trim() || (trigger as JiraTrigger).jql,
         })
-      } else if (kind === 'github') {
-        updated = await api.updateGitHubTrigger(trigger.id, {
+      } else if (kind === 'github' || kind === 'gitlab') {
+        const data = {
           trigger_criteria: triggerCriteria,
           events: splitList(sourceDraft.githubEventsText),
           branch_filter: sourceDraft.githubBranchFilter?.trim() || null,
           path_filters: splitList(sourceDraft.githubPathFiltersText),
           author_filter: sourceDraft.githubAuthorFilter?.trim() || null,
-        })
+        }
+        updated = kind === 'gitlab'
+          ? await api.updateGitLabTrigger(trigger.id, data)
+          : await api.updateGitHubTrigger(trigger.id, data)
       } else if (kind === 'email') {
         const nextSearchQuery = buildEmailSearchQuery(sourceDraft) || null
         updated = await api.updateEmailTrigger(trigger.id, {
@@ -631,6 +643,8 @@ export default function TriggerDetailShell({ kind }: Props) {
         await api.deleteJiraTrigger(trigger.id)
       } else if (kind === 'github') {
         await api.deleteGitHubTrigger(trigger.id)
+      } else if (kind === 'gitlab') {
+        await api.deleteGitLabTrigger(trigger.id)
       } else if (kind === 'email') {
         await api.deleteEmailTrigger(trigger.id)
       } else {
@@ -730,7 +744,7 @@ export default function TriggerDetailShell({ kind }: Props) {
 
   const renderCriteriaTab = () => {
     if (!trigger) return null
-    const showSidePanel = kind === 'jira' || kind === 'github'
+    const showSidePanel = kind === 'jira' || kind === 'github' || kind === 'gitlab'
     const webhookId = trigger.id
     return (
       <div className={showSidePanel ? 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]' : 'space-y-3'}>
@@ -834,11 +848,11 @@ export default function TriggerDetailShell({ kind }: Props) {
                   />
                 </>
               )}
-              {kind === 'github' && (
+              {(kind === 'github' || kind === 'gitlab') && (
                 <>
-                  <DetailRow label="Events">{((trigger as GitHubTrigger).events || []).join(', ') || 'Default events'}</DetailRow>
-                  <DetailRow label="Path filters">{((trigger as GitHubTrigger).path_filters || []).join(', ') || 'Any path'}</DetailRow>
-                  <DetailRow label="Author">{(trigger as GitHubTrigger).author_filter || 'Any author'}</DetailRow>
+                  <DetailRow label="Events">{((trigger as GitHubTrigger | GitLabTrigger).events || []).join(', ') || 'Default events'}</DetailRow>
+                  <DetailRow label="Path filters">{((trigger as GitHubTrigger | GitLabTrigger).path_filters || []).join(', ') || 'Any path'}</DetailRow>
+                  <DetailRow label="Author">{(trigger as GitHubTrigger | GitLabTrigger).author_filter || 'Any author'}</DetailRow>
                 </>
               )}
             </div>

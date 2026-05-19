@@ -15,6 +15,7 @@ from db import get_db
 from models import (
     EmailChannelInstance,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     WebhookIntegration,
 )
@@ -51,6 +52,10 @@ def _tenant_has_configured(trigger_id: str, tenant_id: str, db: Session) -> bool
         if trigger_id == "github":
             return db.query(GitHubChannelInstance.id).filter(
                 GitHubChannelInstance.tenant_id == tenant_id
+            ).first() is not None
+        if trigger_id == "gitlab":
+            return db.query(GitLabChannelInstance.id).filter(
+                GitLabChannelInstance.tenant_id == tenant_id
             ).first() is not None
     except Exception as exc:
         logger.warning(

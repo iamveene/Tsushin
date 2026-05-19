@@ -6,7 +6,7 @@ import { ArrayConfigInput } from './ArrayConfigInput'
 import {
   PlugIcon, SettingsIcon, MicrophoneIcon, SpeakerIcon, TerminalIcon, BotIcon,
   WrenchIcon, ClockIcon, RocketIcon, RadioIcon, CalendarIcon, MailIcon,
-  SearchIcon, AlertTriangleIcon, CheckIcon, GitHubIcon,
+  SearchIcon, AlertTriangleIcon, CheckIcon, CodeIcon,
   LockIcon,
   IconProps,
 } from '@/components/ui/icons'
@@ -54,20 +54,27 @@ const EMAIL_CAPABILITY_LABELS: Record<string, { label: string; description: stri
 
 // Code Repository capability labels — mirrors backend CodeRepositorySkill
 // default_config. Read defaults ON, write defaults OFF (same safety stance as
-// Ticket Management / Email). Provider today: GitHub via REST.
+// Ticket Management / Email). Providers: GitHub and GitLab via REST.
 const CODE_REPOSITORY_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
   search_repos: { label: 'Search repositories', description: 'Search across the connected account’s repositories (read)', defaultEnabled: true },
-  list_pull_requests: { label: 'List pull requests', description: 'List PRs on a repository, filterable by state (read)', defaultEnabled: true },
-  read_pull_request: { label: 'Read pull request', description: 'Fetch one PR’s metadata, files, and reviews (read)', defaultEnabled: true },
+  list_pull_requests: { label: 'List pull/merge requests', description: 'List review requests on a repository, filterable by state (read)', defaultEnabled: true },
+  read_pull_request: { label: 'Read pull/merge request', description: 'Fetch one review request’s metadata, files, and reviews (read)', defaultEnabled: true },
   list_issues: { label: 'List issues', description: 'List issues on a repository (read)', defaultEnabled: true },
   read_issue: { label: 'Read issue', description: 'Fetch one issue’s metadata and comments (read)', defaultEnabled: true },
   create_issue: { label: 'Create issue', description: 'Open a new issue on a repository (write — off by default)', defaultEnabled: false },
-  add_pr_comment: { label: 'Add PR comment', description: 'Post a comment on an existing pull request (write — off by default)', defaultEnabled: false },
-  approve_pull_request: { label: 'Approve pull request', description: 'Submit an APPROVE review on a PR (write — off by default)', defaultEnabled: false },
-  request_changes: { label: 'Request changes on PR', description: 'Submit a REQUEST_CHANGES review on a PR (write — off by default)', defaultEnabled: false },
-  merge_pull_request: { label: 'Merge pull request', description: 'Merge a PR via merge/squash/rebase (write — off by default)', defaultEnabled: false },
-  close_pull_request: { label: 'Close pull request', description: 'Close a PR without merging (write — off by default)', defaultEnabled: false },
+  add_pr_comment: { label: 'Add review comment', description: 'Post a comment on an existing pull/merge request (write — off by default)', defaultEnabled: false },
+  approve_pull_request: { label: 'Approve review request', description: 'Submit an approval review on a pull/merge request (write — off by default)', defaultEnabled: false },
+  request_changes: { label: 'Request changes', description: 'Submit a changes-requested review on a pull/merge request (write — off by default)', defaultEnabled: false },
+  merge_pull_request: { label: 'Merge review request', description: 'Merge a pull/merge request via the provider (write — off by default)', defaultEnabled: false },
+  close_pull_request: { label: 'Close review request', description: 'Close a pull/merge request without merging (write — off by default)', defaultEnabled: false },
   close_issue: { label: 'Close issue', description: 'Close an issue (write — off by default)', defaultEnabled: false },
+}
+
+function repositoryProviderLabel(provider?: string | null): string {
+  const normalized = String(provider || '').toLowerCase()
+  if (normalized === 'gitlab') return 'GitLab'
+  if (normalized === 'github_app') return 'GitHub App'
+  return 'GitHub'
 }
 
 const PASSWORD_VAULT_CAPABILITY_LABELS: Record<string, { label: string; description: string; defaultEnabled: boolean }> = {
@@ -469,7 +476,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   )
 
-  // Code Repository (GitHub) capability toggles — read defaults ON, write OFF.
+  // Code Repository capability toggles — read defaults ON, write OFF.
   const [codeRepositoryCapabilities, setCodeRepositoryCapabilities] = useState<Record<string, boolean>>(
     Object.fromEntries(
       Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([k, v]) => [k, v.defaultEnabled])
@@ -789,10 +796,16 @@ export default function AgentSkillsManager({ agentId }: Props) {
           : 'brave')
 
       if (integration) {
-        setSelectedProvider(
+        const skillConfig = getSkillConfig(skillType)
+        const integrationConfig = integration.config || {}
+        const configuredProvider =
           providerKey === 'web_search'
-            ? (getSkillConfig(skillType).provider || defaultProvider)
-            : (integration.scheduler_provider || defaultProvider)
+            ? skillConfig.provider
+            : providerKey === 'code_repository'
+              ? (skillConfig.provider || integrationConfig.provider || integration.scheduler_provider)
+              : integration.scheduler_provider
+        setSelectedProvider(
+          String(configuredProvider || defaultProvider)
         )
         setSelectedIntegration(integration.integration_id)
 
@@ -810,7 +823,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
             setSelectedIntegration(defaultProviderEntry.available_integrations[0].integration_id)
           }
         }
-        // Same auto-select-only-integration UX for code_repository (GitHub).
+        // Same auto-select-only-integration UX for code_repository providers.
         if (providerKey === 'code_repository') {
           const defaultProviderEntry = providers.find(p => p.provider_type === defaultProvider)
           if (defaultProviderEntry?.available_integrations?.length === 1) {
@@ -851,7 +864,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         setEmailCapabilities(next)
       }
 
-      // Load code_repository capability toggles (GitHub provider).
+      // Load code_repository capability toggles.
       if (providerKey === 'code_repository') {
         const skillCfg = getSkillConfig(skillType)
         const cfgCaps = (skillCfg?.capabilities as Record<string, { enabled?: boolean } | undefined>) || {}
@@ -970,16 +983,18 @@ export default function AgentSkillsManager({ agentId }: Props) {
           }),
         ])
       } else if (configuringProvider === 'code_repository') {
-        // Code Repository (GitHub today): same atomic Promise.all pattern as
+        // Code Repository: same atomic Promise.all pattern as
         // ticket_management/email — keep AgentSkill.config and the
         // AgentSkillIntegration link in sync so the LLM tool spec and the
         // integration link can never disagree about which connection or
-        // which capabilities are active.
+        // which provider/capabilities are active.
         const currentConfig = getSkillConfig(skillType)
         const capabilities: Record<string, { enabled: boolean; label?: string; description?: string }> = {}
         for (const [capKey, meta] of Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)) {
           capabilities[capKey] = {
-            enabled: codeRepositoryCapabilities[capKey] ?? meta.defaultEnabled,
+            enabled: selectedProvider === 'gitlab' && !meta.defaultEnabled
+              ? false
+              : codeRepositoryCapabilities[capKey] ?? meta.defaultEnabled,
             label: meta.label,
             description: meta.description,
           }
@@ -988,6 +1003,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           ...currentConfig,
           execution_mode: 'tool',
           integration_id: selectedIntegration,
+          provider: selectedProvider,
           capabilities,
         }
         await Promise.all([
@@ -998,7 +1014,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           api.updateSkillIntegration(agentId, skillType, {
             scheduler_provider: null,
             integration_id: selectedIntegration,
-            config: undefined,
+            config: { provider: selectedProvider },
           }),
         ])
       } else if (configuringProvider === 'password_vault') {
@@ -1388,7 +1404,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
     )
   }
 
-  // Render provider-based skill card (Scheduler, Email, Web Search, Ticket Management)
+  // Render provider-based skill card (Scheduler, Email, Web Search, Ticket Management, Code Repository)
   const renderProviderSkillCard = (
     displayName: string,
     providerKey: ProviderKey,
@@ -1435,7 +1451,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
         providerDisplay = 'Atlassian Jira'
         integrationDisplay = integration.integration_name || ''
       } else if (providerKey === 'code_repository') {
-        providerDisplay = 'GitHub'
+        const provider = String(config.provider || integration.config?.provider || integration.scheduler_provider || '')
+        providerDisplay = repositoryProviderLabel(provider)
         integrationDisplay = integration.integration_name || ''
       } else if (providerKey === 'password_vault') {
         providerDisplay = '1Password'
@@ -1487,8 +1504,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
           <div className="mt-4 pt-4 border-t border-teal-200 dark:border-teal-700">
             {needsIntegration && (
               <div className="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
-                Attach a Hub Tool API connection before this skill can run. {providerKey === 'password_vault' ? (
+                Attach a Hub connection before this skill can run. {providerKey === 'password_vault' ? (
                   <a href="/hub?tab=tool-apis" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Tool APIs</a>
+                ) : providerKey === 'code_repository' ? (
+                  <a href="/hub?tab=developer" className="font-medium text-yellow-50 underline decoration-dotted underline-offset-2">Open Hub Repository Integrations</a>
                 ) : 'Open the Hub and create the required provider connection.'}
               </div>
             )}
@@ -1945,7 +1964,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
       { providerKey: 'email', displayName: 'Email', skillType: 'gmail', icon: MailIcon, description: 'Read, search, send, reply to, and draft emails. Connect your Gmail account to enable email access.' },
       { providerKey: 'web_search', displayName: 'Web Search', skillType: 'web_search', icon: SearchIcon, description: 'Search the web for information. Choose between Brave Search, SearXNG, or Google Search (via SerpAPI).' },
       { providerKey: 'ticket_management', displayName: 'Ticket Management', skillType: 'ticket_management', icon: WrenchIcon, description: 'Search, read, and (when enabled) act on tickets in a connected ticketing system. Today: Atlassian Jira via REST API.' },
-      { providerKey: 'code_repository', displayName: 'Code Repository', skillType: 'code_repository', icon: GitHubIcon, description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Today: GitHub via REST API.' },
+      { providerKey: 'code_repository', displayName: 'Code Repository', skillType: 'code_repository', icon: CodeIcon, description: 'Search repositories, list pull/merge requests and issues, read request details, and (when enabled) open issues or comment on review requests. Supports GitHub and GitLab.' },
       { providerKey: 'password_vault', displayName: 'Password Vault', skillType: 'password_vault', icon: LockIcon, description: 'Resolve explicit password vault references for agents. Today: 1Password via a Hub Tool API connection.' },
     ]
     for (const entry of providerEntries) {
@@ -2136,6 +2155,8 @@ export default function AgentSkillsManager({ agentId }: Props) {
                               <AlertTriangleIcon size={14} /> No accounts connected.{' '}
                               {configuringProvider === 'password_vault' ? (
                                 <a href="/hub?tab=tool-apis" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Tool APIs.</a>
+                              ) : configuringProvider === 'code_repository' ? (
+                                <a href="/hub?tab=developer" className="font-medium underline decoration-dotted underline-offset-2">Open Hub Repository Integrations.</a>
                               ) : (
                                 <span>Visit the Hub to connect one.</span>
                               )}
@@ -2357,21 +2378,25 @@ export default function AgentSkillsManager({ agentId }: Props) {
                     </div>
                   )}
 
-                  {/* Capability toggles — Code Repository (GitHub) */}
+                  {/* Capability toggles — Code Repository */}
                   {configuringProvider === 'code_repository' && !providerLoading && (
                     <div className="border-t pt-6 border-tsushin-border">
                       <label className="block text-sm font-medium mb-3">
                         Capabilities
                       </label>
-                      <p className="text-xs text-tsushin-muted mb-3">
-                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
-                        Read actions are on by default; write actions are off by default for safety.
-                      </p>
-                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
-                        {Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS).map(([capKey, meta]) => (
-                          <div key={capKey} className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
+	                      <p className="text-xs text-tsushin-muted mb-3">
+	                        Disabled actions are removed from the agent&apos;s tool spec — the LLM never even sees them.
+	                        {selectedProvider === 'gitlab'
+	                          ? ' GitLab is read-only in this release; write actions are hidden and saved as disabled.'
+	                          : ' Read actions are on by default; write actions are off by default for safety.'}
+	                      </p>
+	                      <div className="space-y-3 bg-tsushin-ink p-4 rounded-lg">
+	                        {Object.entries(CODE_REPOSITORY_CAPABILITY_LABELS)
+	                          .filter(([, meta]) => !(selectedProvider === 'gitlab' && !meta.defaultEnabled))
+	                          .map(([capKey, meta]) => (
+	                          <div key={capKey} className="flex items-start gap-3">
+	                            <input
+	                              type="checkbox"
                               id={`coderepo-cap-${capKey}`}
                               checked={!!codeRepositoryCapabilities[capKey]}
                               onChange={(e) =>
@@ -2386,10 +2411,10 @@ export default function AgentSkillsManager({ agentId }: Props) {
                                   <span className="ml-2 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-yellow-300">write</span>
                                 )}
                               </label>
-                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
-                            </div>
-                          </div>
-                        ))}
+	                              <p className="text-xs text-tsushin-muted mt-1">{meta.description}</p>
+	                            </div>
+	                          </div>
+	                        ))}
                         {!Object.values(codeRepositoryCapabilities).some(Boolean) && (
                           <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 flex items-center gap-1.5">
                             <AlertTriangleIcon size={12} /> At least one capability must be enabled

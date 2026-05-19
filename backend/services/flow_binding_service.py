@@ -45,6 +45,7 @@ _KIND_NAME_FIELDS: dict[str, str] = {
     "jira": "integration_name",
     "email": "integration_name",
     "github": "integration_name",
+    "gitlab": "integration_name",
     "webhook": "integration_name",
 }
 
@@ -53,6 +54,7 @@ _KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
     "jira": "Process the inbound Jira event and surface the actionable insight.",
     "email": "Process the inbound email and surface the actionable insight.",
     "github": "Process the inbound GitHub event and surface the actionable insight.",
+    "gitlab": "Process the inbound GitLab event and surface the actionable insight.",
     "webhook": "Process the inbound webhook payload and surface the actionable insight.",
 }
 
@@ -67,6 +69,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
     from models import (
         EmailChannelInstance,
         GitHubChannelInstance,
+        GitLabChannelInstance,
         JiraChannelInstance,
         WebhookIntegration,
     )
@@ -75,6 +78,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         "jira": JiraChannelInstance,
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
+        "gitlab": GitLabChannelInstance,
         "webhook": WebhookIntegration,
     }.get(trigger_kind)
     if table is None:

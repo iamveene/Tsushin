@@ -18,6 +18,8 @@ import {
   type EmailTrigger,
   type GitHubIntegration,
   type GitHubTrigger,
+  type GitLabIntegration,
+  type GitLabTrigger,
   type JiraIntegration,
   type JiraIssuePreview,
   type JiraTrigger,
@@ -52,12 +54,13 @@ import {
   type IconProps,
 } from '@/components/ui/icons'
 
-export type TriggerId = 'email' | 'webhook' | 'jira' | 'github'
+export type TriggerId = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab'
 
 export type SavedTriggerAny =
   | EmailTrigger
   | JiraTrigger
   | GitHubTrigger
+  | GitLabTrigger
   | WebhookIntegration
 
 interface Props {
@@ -140,6 +143,15 @@ const KIND_CATALOG: KindEntry[] = [
     iconClass: 'text-violet-300',
     iconBg: 'bg-violet-500/10',
   },
+  {
+    id: 'gitlab',
+    display_name: 'GitLab',
+    description: 'Receive signed project events and wake agents from matching activity.',
+    setup_hint: 'Select a Hub GitLab connection, then wire the webhook secret shown after save.',
+    Icon: CodeIcon,
+    iconClass: 'text-orange-300',
+    iconBg: 'bg-orange-500/10',
+  },
 ]
 
 type WizardTone = 'default' | 'gmail' | 'whatsapp' | 'mcp'
@@ -148,6 +160,7 @@ const KIND_TONE: Record<TriggerId, WizardTone> = {
   webhook: 'default',
   jira: 'default',
   github: 'default',
+  gitlab: 'default',
 }
 
 const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
@@ -155,6 +168,7 @@ const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
   webhook: 'bg-cyan-600 hover:bg-cyan-500 text-white',
   jira: 'bg-blue-600 hover:bg-blue-500 text-white',
   github: 'bg-violet-600 hover:bg-violet-500 text-white',
+  gitlab: 'bg-orange-600 hover:bg-orange-500 text-white',
 }
 
 const getErrorMessage = (error: unknown, fallback: string) =>
@@ -182,6 +196,14 @@ const PR_SUBMITTED_ACTION_OPTIONS: { value: PRSubmittedAction; label: string; de
   { value: 'ready_for_review', label: 'ready_for_review', description: 'Draft promoted to ready' },
 ]
 
+const MR_SUBMITTED_ACTION_OPTIONS: { value: PRSubmittedAction; label: string; description: string }[] = [
+  { value: 'open', label: 'open', description: 'New merge request raised' },
+  { value: 'reopen', label: 'reopen', description: 'Closed merge request re-opened' },
+  { value: 'update', label: 'update', description: 'Merge request title, body, or commits updated' },
+  { value: 'merge', label: 'merge', description: 'Merge request merged' },
+  { value: 'approved', label: 'approved', description: 'Merge request approved' },
+]
+
 const DEFAULT_PR_SAMPLE_PAYLOAD = JSON.stringify({
   action: 'opened',
   pull_request: {
@@ -195,7 +217,25 @@ const DEFAULT_PR_SAMPLE_PAYLOAD = JSON.stringify({
   },
 }, null, 2)
 
+const DEFAULT_MR_SAMPLE_PAYLOAD = JSON.stringify({
+  object_kind: 'merge_request',
+  event_type: 'merge_request',
+  user: { username: 'gitlab-user', name: 'GitLab User' },
+  project: { path_with_namespace: 'group/platform' },
+  object_attributes: {
+    iid: 42,
+    action: 'open',
+    title: 'Add code_repository skill',
+    description: 'Adds a generic Code Repository skill backed by GitLab.',
+    draft: false,
+    target_branch: 'main',
+    source_branch: 'feature/code-repo-skill',
+    author: { username: 'gitlab-user' },
+  },
+}, null, 2)
+
 const GITHUB_EVENT_OPTIONS = ['push', 'pull_request', 'issues', 'issue_comment', 'release', 'workflow_run']
+const GITLAB_EVENT_OPTIONS = ['push', 'merge_request', 'issue', 'note', 'tag_push', 'pipeline']
 
 type ReadinessTone = 'ready' | 'required' | 'warning' | 'optional' | 'info'
 
@@ -268,7 +308,7 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
     headline: 'GitHub webhook path',
     summary: 'Use this when repository events should wake an agent.',
     prerequisites: [
-      'A Hub GitHub connection under Developer Tools.',
+      'A Hub GitHub connection under Repository Integrations.',
       'Repository owner/name, selected webhook events, optional webhook secret, and optional default agent.',
     ],
     criteria: [
@@ -278,6 +318,22 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
     afterSave: [
       'Use the saved inbound URL and secret when configuring the GitHub repository webhook.',
       'The trigger only wakes agents for selected events and matching PR criteria.',
+    ],
+  },
+  gitlab: {
+    headline: 'GitLab webhook path',
+    summary: 'Use this when GitLab project events should wake an agent.',
+    prerequisites: [
+      'A Hub GitLab connection under Repository Integrations.',
+      'A full project path, selected webhook events, optional webhook secret, and optional default agent.',
+    ],
+    criteria: [
+      'Merge request actions are required for the MR Submitted envelope.',
+      'Branch, path, author, title, body, non-draft, and sample payload tests refine the match.',
+    ],
+    afterSave: [
+      'Use the saved inbound URL and secret when configuring the GitLab project webhook.',
+      'The trigger only wakes agents for selected events and matching MR criteria.',
     ],
   },
 }
@@ -386,6 +442,13 @@ export default function TriggerCreationWizard({
   const [repoName, setRepoName] = useState('')
   const [githubWebhookSecret, setGithubWebhookSecret] = useState('')
   const [githubEvents, setGithubEvents] = useState<string[]>(['push', 'pull_request'])
+  const [gitlabIntegrationName, setGitlabIntegrationName] = useState('GitLab project events')
+  const [gitlabIntegrations, setGitlabIntegrations] = useState<GitLabIntegration[]>([])
+  const [gitlabIntegrationsLoading, setGitlabIntegrationsLoading] = useState(false)
+  const [selectedGitlabIntegrationId, setSelectedGitlabIntegrationId] = useState<number | null>(null)
+  const [gitlabProjectPath, setGitlabProjectPath] = useState('')
+  const [gitlabWebhookSecret, setGitlabWebhookSecret] = useState('')
+  const [gitlabEvents, setGitlabEvents] = useState<string[]>(['push', 'merge_request'])
   const [branchFilter, setBranchFilter] = useState('')
   const [pathFiltersText, setPathFiltersText] = useState('')
   const [authorFilter, setAuthorFilter] = useState('')
@@ -442,10 +505,15 @@ export default function TriggerCreationWizard({
     setRepoName('')
     setGithubWebhookSecret('')
     setGithubEvents(['push', 'pull_request'])
+    setGitlabIntegrationName('GitLab project events')
+    setSelectedGitlabIntegrationId(null)
+    setGitlabProjectPath('')
+    setGitlabWebhookSecret('')
+    setGitlabEvents(['push', 'merge_request'])
     setBranchFilter('')
     setPathFiltersText('')
     setAuthorFilter('')
-    setPrSelectedActions(['opened', 'reopened'])
+    setPrSelectedActions(initialKind === 'gitlab' ? ['open', 'reopen'] : ['opened', 'reopened'])
     setPrDraftOnly(false)
     setPrTitleContains('')
     setPrBodyContains('')
@@ -619,6 +687,40 @@ export default function TriggerCreationWizard({
     }
   }, [githubIntegrationsFetched, isOpen, kind, step])
 
+  const [gitlabIntegrationsFetched, setGitlabIntegrationsFetched] = useState(false)
+  useEffect(() => {
+    if (!isOpen) {
+      setGitlabIntegrationsFetched(false)
+      return
+    }
+    if (kind !== 'gitlab' || step < 2 || gitlabIntegrationsFetched) return
+    let cancelled = false
+    setGitlabIntegrationsLoading(true)
+    api.listGitLabIntegrations()
+      .then((list) => {
+        if (cancelled) return
+        setGitlabIntegrations(list)
+        const firstActive = list.find((item) => item.is_active) || list[0]
+        if (firstActive) {
+          setSelectedGitlabIntegrationId((current) => current ?? firstActive.id)
+          if (firstActive.default_project_path) setGitlabProjectPath((current) => current || firstActive.default_project_path || '')
+        }
+        setGitlabIntegrationsFetched(true)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGitlabIntegrations([])
+          setGitlabIntegrationsFetched(true)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGitlabIntegrationsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [gitlabIntegrationsFetched, isOpen, kind, step])
+
   const tone: WizardTone = kind ? KIND_TONE[kind] : 'default'
   const accentButtonClass = kind
     ? KIND_ACCENT_BUTTON[kind]
@@ -702,6 +804,14 @@ export default function TriggerCreationWizard({
           githubEvents.length > 0,
       )
     }
+    if (kind === 'gitlab') {
+      return Boolean(
+        selectedGitlabIntegrationId &&
+          gitlabIntegrationName.trim() &&
+          gitlabProjectPath.trim() &&
+          gitlabEvents.length > 0,
+      )
+    }
     return false
   }, [
     emailCredentialsOk,
@@ -710,6 +820,9 @@ export default function TriggerCreationWizard({
     emailPollIntervalValid,
     githubEvents.length,
     githubIntegrationName,
+    gitlabEvents.length,
+    gitlabIntegrationName,
+    gitlabProjectPath,
     jiraIntegrationId,
     jiraIntegrationName,
     jiraJql,
@@ -718,6 +831,7 @@ export default function TriggerCreationWizard({
     repoName,
     repoOwner,
     selectedGithubIntegrationId,
+    selectedGitlabIntegrationId,
     webhookCallbackReady,
     webhookName,
     webhookRateLimitValid,
@@ -734,7 +848,7 @@ export default function TriggerCreationWizard({
     if (kind === 'jira') {
       return !jiraCriteriaJsonError
     }
-    if (kind === 'github') {
+    if (kind === 'github' || kind === 'gitlab') {
       return prSelectedActions.length > 0
     }
     return true
@@ -747,6 +861,10 @@ export default function TriggerCreationWizard({
   const selectedGithubIntegration = useMemo(
     () => githubIntegrations.find((entry) => entry.id === selectedGithubIntegrationId) || null,
     [githubIntegrations, selectedGithubIntegrationId],
+  )
+  const selectedGitlabIntegration = useMemo(
+    () => gitlabIntegrations.find((entry) => entry.id === selectedGitlabIntegrationId) || null,
+    [gitlabIntegrations, selectedGitlabIntegrationId],
   )
   const defaultAgentLabel = useMemo(
     () => agents.find((agent) => agent.id === defaultAgentId)?.contact_name || null,
@@ -881,6 +999,52 @@ export default function TriggerCreationWizard({
       ]
     }
 
+    if (kind === 'gitlab') {
+      return [
+        {
+          title: 'Hub GitLab connection',
+          detail: selectedGitlabIntegration
+            ? selectedGitlabIntegration.integration_name || selectedGitlabIntegration.name || `GitLab connection #${selectedGitlabIntegration.id}`
+            : gitlabIntegrationsLoading
+              ? 'Loading available GitLab connections.'
+              : 'Required. Use Open Repository Integrations below if no GitLab connection appears.',
+          tone: selectedGitlabIntegration ? 'ready' : 'required',
+          action: selectedGitlabIntegration ? null : (
+            <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
+              Open Repository Integrations
+            </a>
+          ),
+        },
+        {
+          title: 'Trigger name',
+          detail: gitlabIntegrationName.trim() ? gitlabIntegrationName.trim() : 'Required label shown in Triggers and Hub.',
+          tone: gitlabIntegrationName.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Project',
+          detail: gitlabProjectPath.trim()
+            ? gitlabProjectPath.trim()
+            : 'Required. Enter the full GitLab project path that will send webhooks.',
+          tone: gitlabProjectPath.trim() ? 'ready' : 'required',
+        },
+        {
+          title: 'Webhook events',
+          detail: gitlabEvents.length > 0
+            ? gitlabEvents.map((eventName) => eventName.replace('_', ' ')).join(', ')
+            : 'Required. Pick at least one GitLab event.',
+          tone: gitlabEvents.length > 0 ? 'ready' : 'required',
+        },
+        {
+          title: 'Webhook secret',
+          detail: gitlabWebhookSecret.trim()
+            ? 'The GitLab project webhook must use this exact secret.'
+            : 'Optional. Leave blank to let Tsushin generate one after save.',
+          tone: gitlabWebhookSecret.trim() ? 'ready' : 'optional',
+        },
+        agentItem,
+      ]
+    }
+
     return [
       {
         title: 'Hub GitHub connection',
@@ -888,11 +1052,11 @@ export default function TriggerCreationWizard({
           ? selectedGithubIntegration.integration_name || selectedGithubIntegration.name || `GitHub connection #${selectedGithubIntegration.id}`
           : githubIntegrationsLoading
             ? 'Loading available GitHub connections.'
-            : 'Required. Use Open Developer Tools below if no GitHub connection appears.',
+            : 'Required. Use Open Repository Integrations below if no GitHub connection appears.',
         tone: selectedGithubIntegration ? 'ready' : 'required',
         action: selectedGithubIntegration ? null : (
           <a href="/hub?tab=developer" target="_blank" rel="noopener noreferrer">
-            Open Developer Tools
+            Open Repository Integrations
           </a>
         ),
       },
@@ -934,6 +1098,11 @@ export default function TriggerCreationWizard({
     githubIntegrationName,
     githubIntegrationsLoading,
     githubWebhookSecret,
+    gitlabEvents,
+    gitlabIntegrationName,
+    gitlabIntegrationsLoading,
+    gitlabProjectPath,
+    gitlabWebhookSecret,
     jiraIntegrationName,
     jiraIntegrationsLoading,
     jiraJql,
@@ -944,6 +1113,7 @@ export default function TriggerCreationWizard({
     repoName,
     repoOwner,
     selectedGithubIntegration,
+    selectedGitlabIntegration,
     selectedGmailAccount,
     selectedJiraIntegration,
     webhookCallbackEnabled,
@@ -1040,7 +1210,9 @@ export default function TriggerCreationWizard({
       ]
     }
 
-    const optionalGithubFilters = [
+    const isGitLabCriteria = kind === 'gitlab'
+    const reviewLabel = isGitLabCriteria ? 'MR' : 'PR'
+    const optionalRepositoryFilters = [
       branchFilter,
       pathFiltersText,
       authorFilter,
@@ -1049,29 +1221,29 @@ export default function TriggerCreationWizard({
     ].filter((value) => value.trim()).length
     return [
       {
-        title: 'Pull request actions',
+        title: isGitLabCriteria ? 'Merge request actions' : 'Pull request actions',
         detail: prSelectedActions.length > 0
           ? prSelectedActions.join(', ')
-          : 'Required. Pick at least one PR action that should wake an agent.',
+          : `Required. Pick at least one ${reviewLabel} action that should wake an agent.`,
         tone: prSelectedActions.length > 0 ? 'ready' : 'required',
       },
       {
         title: 'Draft handling',
-        detail: prDraftOnly ? 'Draft PRs are rejected.' : 'Draft PRs are allowed when the action matches.',
+        detail: prDraftOnly ? `Draft ${reviewLabel}s are rejected.` : `Draft ${reviewLabel}s are allowed when the action matches.`,
         tone: prDraftOnly ? 'ready' : 'optional',
       },
       {
         title: 'Branch, path, author, and text filters',
-        detail: optionalGithubFilters > 0
-          ? `${optionalGithubFilters} optional filter(s) configured.`
+        detail: optionalRepositoryFilters > 0
+          ? `${optionalRepositoryFilters} optional filter(s) configured.`
           : 'Optional. Use these only when the repository event stream needs narrower routing.',
-        tone: optionalGithubFilters > 0 ? 'ready' : 'optional',
+        tone: optionalRepositoryFilters > 0 ? 'ready' : 'optional',
       },
       {
         title: 'Sample payload test',
         detail: prCriteriaResult
           ? prCriteriaResult.message
-          : 'Recommended. Paste a real GitHub webhook payload to verify the criteria before save.',
+          : `Recommended. Paste a real ${isGitLabCriteria ? 'GitLab' : 'GitHub'} webhook payload to verify the criteria before save.`,
         tone: prCriteriaResult?.matched ? 'ready' : 'warning',
       },
     ]
@@ -1156,7 +1328,7 @@ export default function TriggerCreationWizard({
 
   const buildPRSubmittedCriteria = useCallback((): PRSubmittedCriteria => ({
     criteria_version: 1,
-    event: 'pull_request',
+    event: kind === 'gitlab' ? 'merge_request' : 'pull_request',
     actions: [...prSelectedActions],
     filters: {
       branch_filter: branchFilter.trim() || null,
@@ -1167,7 +1339,7 @@ export default function TriggerCreationWizard({
       body_contains: prBodyContains.trim() || null,
     },
     ordering: 'oldest_first',
-  }), [authorFilter, branchFilter, pathFiltersText, prBodyContains, prDraftOnly, prSelectedActions, prTitleContains])
+  }), [authorFilter, branchFilter, kind, pathFiltersText, prBodyContains, prDraftOnly, prSelectedActions, prTitleContains])
 
   const handleTestPRSubmittedCriteria = useCallback(async () => {
     setPrCriteriaResult(null)
@@ -1186,7 +1358,9 @@ export default function TriggerCreationWizard({
           throw new Error(`Sample payload is not valid JSON: ${getErrorMessage(error, 'parse error')}`)
         }
       }
-      const result = await api.testGitHubPRCriteria(buildPRSubmittedCriteria(), samplePayload)
+      const result = kind === 'gitlab'
+        ? await api.testGitLabMRCriteria(buildPRSubmittedCriteria(), samplePayload)
+        : await api.testGitHubPRCriteria(buildPRSubmittedCriteria(), samplePayload)
       setPrCriteriaResult({
         matched: result.matched,
         message: result.matched
@@ -1194,11 +1368,11 @@ export default function TriggerCreationWizard({
           : result.reason || result.message || result.error || 'Sample payload was rejected.',
       })
     } catch (error: unknown) {
-      setPrCriteriaResult({ matched: false, message: getErrorMessage(error, 'Failed to test PR criteria') })
+      setPrCriteriaResult({ matched: false, message: getErrorMessage(error, kind === 'gitlab' ? 'Failed to test MR criteria' : 'Failed to test PR criteria') })
     } finally {
       setPrCriteriaTesting(false)
     }
-  }, [buildPRSubmittedCriteria, prSamplePayloadText])
+  }, [buildPRSubmittedCriteria, kind, prSamplePayloadText])
 
   const handleSave = useCallback(async () => {
     if (!kind) return
@@ -1210,7 +1384,7 @@ export default function TriggerCreationWizard({
     // the error via `saveError` after the success status flip so the operator
     // sees both signals (trigger created, recap save failed).
     const persistRecapIfNeeded = async (
-      kindForRecap: 'email' | 'webhook' | 'jira' | 'github',
+      kindForRecap: 'email' | 'webhook' | 'jira' | 'github' | 'gitlab',
       triggerId: number,
     ): Promise<string | null> => {
       if (!recapConfig.enabled) return null
@@ -1390,6 +1564,46 @@ export default function TriggerCreationWizard({
           onCreated?.('github', result.id, flowId)
           return
         }
+
+        case 'gitlab': {
+          if (!gitlabIntegrationName.trim()) {
+            throw new Error('Trigger name is required.')
+          }
+          if (!selectedGitlabIntegrationId) {
+            throw new Error('Pick a Hub GitLab integration to link this trigger to.')
+          }
+          if (!gitlabProjectPath.trim()) {
+            throw new Error('GitLab project path is required.')
+          }
+          if (gitlabEvents.length === 0) {
+            throw new Error('Pick at least one GitLab event.')
+          }
+          if (prSelectedActions.length === 0) {
+            throw new Error('Pick at least one MR Submitted action.')
+          }
+          const criteria = buildPRSubmittedCriteria() as unknown as TriggerCriteria
+          const result = await api.createGitLabTrigger({
+            integration_name: gitlabIntegrationName.trim(),
+            gitlab_integration_id: selectedGitlabIntegrationId,
+            project_path: gitlabProjectPath.trim(),
+            webhook_secret: gitlabWebhookSecret.trim() || null,
+            events: gitlabEvents,
+            branch_filter: branchFilter.trim() || null,
+            path_filters: splitList(pathFiltersText),
+            author_filter: authorFilter.trim() || null,
+            trigger_criteria: criteria,
+            default_agent_id: defaultAgentId,
+            is_active: isActive,
+          })
+          const flowId = result.auto_flow_id ?? null
+          const recapErr = await persistRecapIfNeeded('gitlab', result.id)
+          setSavedTrigger(result)
+          setAutoFlowId(flowId)
+          setSaveState('success')
+          if (recapErr) setSaveError(`Trigger created, but Memory Recap save failed: ${recapErr}`)
+          onCreated?.('gitlab', result.id, flowId)
+          return
+        }
       }
     } catch (error: unknown) {
       setSaveState('idle')
@@ -1409,6 +1623,10 @@ export default function TriggerCreationWizard({
     githubEvents,
     githubIntegrationName,
     githubWebhookSecret,
+    gitlabEvents,
+    gitlabIntegrationName,
+    gitlabProjectPath,
+    gitlabWebhookSecret,
     isActive,
     jiraCriteriaText,
     jiraIntegrationId,
@@ -1426,6 +1644,7 @@ export default function TriggerCreationWizard({
     repoOwner,
     resolvedEmailSearchQuery,
     selectedGithubIntegrationId,
+    selectedGitlabIntegrationId,
     webhookCallbackReady,
     webhookCallbackEnabled,
     webhookCallbackUrl,
@@ -1490,7 +1709,15 @@ export default function TriggerCreationWizard({
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  onClick={() => setKind(entry.id)}
+                  onClick={() => {
+                    setKind(entry.id)
+                    if (entry.id === 'gitlab') {
+                      setPrSelectedActions(['open', 'reopen'])
+                    } else if (entry.id === 'github') {
+                      setPrSelectedActions(['opened', 'reopened'])
+                    }
+                    setPrCriteriaResult(null)
+                  }}
                   className={`rounded-2xl border p-4 text-left transition-all ${
                     selected
                       ? 'border-tsushin-accent/50 bg-tsushin-accent/10'
@@ -1674,6 +1901,40 @@ export default function TriggerCreationWizard({
               onIsActiveChange={setIsActive}
             />
           )}
+
+          {kind === 'gitlab' && (
+            <GitLabSourceBody
+              integrationName={gitlabIntegrationName}
+              onIntegrationNameChange={setGitlabIntegrationName}
+              integrations={gitlabIntegrations}
+              integrationsLoading={gitlabIntegrationsLoading}
+              selectedIntegrationId={selectedGitlabIntegrationId}
+              onIntegrationSelect={(next) => {
+                setSelectedGitlabIntegrationId(next)
+                if (next) {
+                  const match = gitlabIntegrations.find((item) => item.id === next)
+                  if (match?.default_project_path) {
+                    setGitlabProjectPath((current) => current || match.default_project_path || '')
+                  }
+                }
+              }}
+              projectPath={gitlabProjectPath}
+              onProjectPathChange={setGitlabProjectPath}
+              webhookSecret={gitlabWebhookSecret}
+              onWebhookSecretChange={setGitlabWebhookSecret}
+              events={gitlabEvents}
+              onToggleEvent={(eventName) => setGitlabEvents((current) => (
+                current.includes(eventName)
+                  ? current.filter((item) => item !== eventName)
+                  : [...current, eventName]
+              ))}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+            />
+          )}
         </div>
       </Wizard>
     )
@@ -1766,8 +2027,13 @@ export default function TriggerCreationWizard({
             />
           )}
 
-          {kind === 'github' && (
+          {(kind === 'github' || kind === 'gitlab') && (
             <GitHubCriteriaBody
+              providerLabel={kind === 'gitlab' ? 'GitLab' : 'GitHub'}
+              reviewRequestLabel={kind === 'gitlab' ? 'MR' : 'PR'}
+              eventDisplayName={kind === 'gitlab' ? 'Merge Request' : 'Pull Request'}
+              actionOptions={kind === 'gitlab' ? MR_SUBMITTED_ACTION_OPTIONS : PR_SUBMITTED_ACTION_OPTIONS}
+              samplePayloadExample={kind === 'gitlab' ? DEFAULT_MR_SAMPLE_PAYLOAD : DEFAULT_PR_SAMPLE_PAYLOAD}
               prSelectedActions={prSelectedActions}
               onTogglePRAction={(action) => setPrSelectedActions((current) => (
                 current.includes(action)
@@ -2007,6 +2273,13 @@ export default function TriggerCreationWizard({
               events: githubEvents,
               prActions: prSelectedActions,
             }}
+            gitlab={{
+              integrationName: gitlabIntegrationName,
+              integrationId: selectedGitlabIntegrationId,
+              projectPath: gitlabProjectPath,
+              events: gitlabEvents,
+              mrActions: prSelectedActions,
+            }}
           />
         </div>
       </Wizard>
@@ -2031,6 +2304,8 @@ function sourceStepTitle(kind: TriggerId): string {
       return 'Connect a Jira workspace and pick a JQL'
     case 'github':
       return 'Connect a GitHub repository to watch'
+    case 'gitlab':
+      return 'Connect a GitLab project to watch'
   }
 }
 
@@ -2044,10 +2319,14 @@ function sourceStepDescription(kind: TriggerId): string {
       return 'Pick a configured Jira connection and the JQL the trigger should poll.'
     case 'github':
       return 'Pick a Hub GitHub integration, then wire a webhook so repository events fire this trigger.'
+    case 'gitlab':
+      return 'Pick a Hub GitLab integration, then wire a webhook so project events fire this trigger.'
   }
 }
 
 function displayKind(kind: TriggerId): string {
+  if (kind === 'gitlab') return 'GitLab'
+  if (kind === 'github') return 'GitHub'
   return kind.charAt(0).toUpperCase() + kind.slice(1)
 }
 
@@ -3030,7 +3309,7 @@ function GitHubSourceBody({
           </select>
           <p className="text-xs text-tsushin-slate">
             Triggers reuse Hub-side GitHub integrations. Create one under{' '}
-            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-violet-300 hover:text-white">Hub → Developer Tools</a>{' '}
+            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-violet-300 hover:text-white">Hub → Repository Integrations</a>{' '}
             if none exist yet.
           </p>
         </div>
@@ -3039,7 +3318,7 @@ function GitHubSourceBody({
           <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 md:col-span-2">
             <div className="text-sm font-medium text-white">No GitHub connections yet</div>
             <p className="mt-1 text-xs text-tsushin-slate">
-              GitHub triggers require a Hub GitHub connection. Create one in Developer Tools, then return here and select it before continuing.
+              GitHub triggers require a Hub GitHub connection. Create one in Repository Integrations, then return here and select it before continuing.
             </p>
             <a
               href="/hub?tab=developer"
@@ -3153,7 +3432,206 @@ function GitHubSourceBody({
   )
 }
 
+interface GitLabSourceBodyProps {
+  integrationName: string
+  onIntegrationNameChange: (value: string) => void
+  integrations: GitLabIntegration[]
+  integrationsLoading: boolean
+  selectedIntegrationId: number | null
+  onIntegrationSelect: (id: number | null) => void
+  projectPath: string
+  onProjectPathChange: (value: string) => void
+  webhookSecret: string
+  onWebhookSecretChange: (value: string) => void
+  events: string[]
+  onToggleEvent: (eventName: string) => void
+  agents: Agent[]
+  defaultAgentId: number | null
+  onDefaultAgentChange: (id: number | null) => void
+  isActive: boolean
+  onIsActiveChange: (value: boolean) => void
+}
+
+function GitLabSourceBody({
+  integrationName,
+  onIntegrationNameChange,
+  integrations,
+  integrationsLoading,
+  selectedIntegrationId,
+  onIntegrationSelect,
+  projectPath,
+  onProjectPathChange,
+  webhookSecret,
+  onWebhookSecretChange,
+  events,
+  onToggleEvent,
+  agents,
+  defaultAgentId,
+  onDefaultAgentChange,
+  isActive,
+  onIsActiveChange,
+}: GitLabSourceBodyProps) {
+  const idPrefix = useId()
+  const integrationNameId = `${idPrefix}-name`
+  const connectionId = `${idPrefix}-conn`
+  const projectPathId = `${idPrefix}-project`
+  const webhookSecretId = `${idPrefix}-secret`
+  const eventsLegendId = `${idPrefix}-events`
+  const defaultAgentSelectId = `${idPrefix}-agent`
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <label htmlFor={integrationNameId} className="block text-sm font-medium text-white">
+            Trigger Name <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={integrationNameId}
+            type="text"
+            value={integrationName}
+            onChange={(event) => onIntegrationNameChange(event.target.value)}
+            placeholder="GitLab project events"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={connectionId} className="block text-sm font-medium text-white">
+            GitLab Connection <span className="text-red-400">*</span>
+          </label>
+          <select
+            id={connectionId}
+            value={selectedIntegrationId ?? ''}
+            onChange={(event) => onIntegrationSelect(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+          >
+            <option value="">
+              {integrationsLoading ? 'Loading GitLab connections...' : 'Pick a Hub GitLab integration...'}
+            </option>
+            {integrations.map((integration) => (
+              <option key={integration.id} value={integration.id}>
+                {integration.integration_name || integration.name || `GitLab connection #${integration.id}`}
+                {integration.default_project_path ? ` - ${integration.default_project_path}` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-tsushin-slate">
+            Triggers reuse Hub-side GitLab integrations. Create one under{' '}
+            <a href="/hub?tab=developer" target="_blank" rel="noopener" className="text-orange-300 hover:text-white">Hub - Repository Integrations</a>{' '}
+            if none exist yet.
+          </p>
+        </div>
+
+        {!integrationsLoading && integrations.length === 0 && (
+          <div className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4 md:col-span-2">
+            <div className="text-sm font-medium text-white">No GitLab connections yet</div>
+            <p className="mt-1 text-xs text-tsushin-slate">
+              GitLab triggers require a Hub GitLab connection. Create one in Repository Integrations, then return here and select it before continuing.
+            </p>
+            <a
+              href="/hub?tab=developer"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex rounded-lg border border-orange-400/40 bg-orange-500/10 px-3 py-1.5 text-xs text-orange-100 hover:text-white"
+            >
+              Create GitLab connection
+            </a>
+          </div>
+        )}
+
+        <div className="space-y-2 md:col-span-2">
+          <label htmlFor={projectPathId} className="block text-sm font-medium text-white">
+            Project Path <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={projectPathId}
+            type="text"
+            value={projectPath}
+            onChange={(event) => onProjectPathChange(event.target.value)}
+            placeholder="group/subgroup/project"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">Use GitLab&apos;s full path, including group and subgroup when present.</p>
+        </div>
+
+        <div className="space-y-2 md:col-span-2" role="group" aria-labelledby={eventsLegendId}>
+          <div id={eventsLegendId} className="block text-sm font-medium text-white">
+            Events <span className="text-red-400">*</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {GITLAB_EVENT_OPTIONS.map((eventName) => {
+              const isSelected = events.includes(eventName)
+              return (
+                <button
+                  key={eventName}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onToggleEvent(eventName)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                    isSelected
+                      ? 'border-orange-500/50 bg-orange-500/10 text-orange-200'
+                      : 'border-tsushin-border text-tsushin-slate hover:text-white'
+                  }`}
+                >
+                  {eventName.replace('_', ' ')}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={webhookSecretId} className="block text-sm font-medium text-white">Webhook Secret</label>
+          <input
+            id={webhookSecretId}
+            type="password"
+            value={webhookSecret}
+            onChange={(event) => onWebhookSecretChange(event.target.value)}
+            placeholder="Leave blank to auto-generate"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={defaultAgentSelectId} className="block text-sm font-medium text-white">Default agent</label>
+          <select
+            id={defaultAgentSelectId}
+            value={defaultAgentId ?? ''}
+            onChange={(event) => onDefaultAgentChange(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+          >
+            <option value="">No default agent</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.contact_name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label className="flex items-center gap-3 rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4 md:col-span-2">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(event) => onIsActiveChange(event.target.checked)}
+            className="h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-orange-500 focus:ring-orange-500"
+          />
+          <div>
+            <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
+            <p className="mt-1 text-xs text-tsushin-slate">Paused triggers reject inbound GitLab webhooks until resumed.</p>
+          </div>
+        </label>
+      </div>
+    </div>
+  )
+}
+
 interface GitHubCriteriaBodyProps {
+  providerLabel?: string
+  reviewRequestLabel?: string
+  eventDisplayName?: string
+  actionOptions?: { value: PRSubmittedAction; label: string; description: string }[]
+  samplePayloadExample?: string
   prSelectedActions: PRSubmittedAction[]
   onTogglePRAction: (action: PRSubmittedAction) => void
   prDraftOnly: boolean
@@ -3176,6 +3654,11 @@ interface GitHubCriteriaBodyProps {
 }
 
 function GitHubCriteriaBody({
+  providerLabel = 'GitHub',
+  reviewRequestLabel = 'PR',
+  eventDisplayName = 'Pull Request',
+  actionOptions = PR_SUBMITTED_ACTION_OPTIONS,
+  samplePayloadExample = DEFAULT_PR_SAMPLE_PAYLOAD,
   prSelectedActions,
   onTogglePRAction,
   prDraftOnly,
@@ -3210,9 +3693,9 @@ function GitHubCriteriaBody({
       <div className="space-y-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white">PR Submitted criteria</div>
+            <div className="text-sm font-semibold text-white">{reviewRequestLabel} Submitted criteria</div>
             <p className="mt-1 text-xs text-tsushin-slate">
-              The structured envelope the dispatcher matches incoming GitHub webhooks against.
+              The structured envelope the dispatcher matches incoming {providerLabel} webhooks against.
             </p>
           </div>
           <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-violet-200">
@@ -3226,7 +3709,7 @@ function GitHubCriteriaBody({
             <input
               id={eventInputId}
               type="text"
-              value="Pull Request"
+              value={eventDisplayName}
               readOnly
               disabled
               className="w-full cursor-not-allowed rounded-lg border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-tsushin-slate"
@@ -3242,10 +3725,10 @@ function GitHubCriteriaBody({
                 className="mt-0.5 h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-violet-500 focus:ring-violet-500"
               />
               <span>
-                Only non-draft PRs
+                Only non-draft {reviewRequestLabel}s
                 <br />
                 <span className="font-normal text-[11px] text-tsushin-slate">
-                  When checked, draft PRs are rejected even if the action matches.
+                  When checked, draft {reviewRequestLabel}s are rejected even if the action matches.
                 </span>
               </span>
             </label>
@@ -3255,7 +3738,7 @@ function GitHubCriteriaBody({
         <div className="space-y-1" role="group" aria-labelledby={actionsLegendId}>
           <div id={actionsLegendId} className="block text-xs font-medium text-tsushin-slate">Actions *</div>
           <div className="flex flex-wrap gap-2">
-            {PR_SUBMITTED_ACTION_OPTIONS.map((option) => {
+            {actionOptions.map((option) => {
               const isSelected = prSelectedActions.includes(option.value)
               return (
                 <button
@@ -3276,7 +3759,7 @@ function GitHubCriteriaBody({
             })}
           </div>
           {prSelectedActions.length === 0 && (
-            <p className="text-[11px] text-amber-300">Pick at least one PR action.</p>
+            <p className="text-[11px] text-amber-300">Pick at least one {reviewRequestLabel} action.</p>
           )}
         </div>
 
@@ -3310,7 +3793,7 @@ function GitHubCriteriaBody({
             <label htmlFor={samplePayloadId} className="block text-xs font-medium text-tsushin-slate">Sample payload (optional)</label>
             <button
               type="button"
-              onClick={() => onPrSamplePayloadChange(DEFAULT_PR_SAMPLE_PAYLOAD)}
+              onClick={() => onPrSamplePayloadChange(samplePayloadExample)}
               className="text-[11px] text-violet-300 hover:text-white"
             >
               Insert example
@@ -3321,7 +3804,7 @@ function GitHubCriteriaBody({
             value={prSamplePayloadText}
             onChange={(event) => onPrSamplePayloadChange(event.target.value)}
             rows={5}
-            placeholder="Paste a real GitHub webhook payload here, or click Insert example."
+            placeholder={`Paste a real ${providerLabel} webhook payload here, or click Insert example.`}
             className="w-full rounded-lg border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 font-mono text-xs text-white placeholder:text-tsushin-slate focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
           />
         </div>
@@ -3430,6 +3913,13 @@ interface PreSaveSummaryProps {
     events: string[]
     prActions: PRSubmittedAction[]
   }
+  gitlab: {
+    integrationName: string
+    integrationId: number | null
+    projectPath: string
+    events: string[]
+    mrActions: PRSubmittedAction[]
+  }
 }
 
 function PreSaveSummary({
@@ -3441,6 +3931,7 @@ function PreSaveSummary({
   webhook,
   jira,
   github,
+  gitlab,
 }: PreSaveSummaryProps) {
   const agentLabel = agents.find((agent) => agent.id === defaultAgentId)?.contact_name || 'No default agent'
   const cells: Array<[string, string]> = []
@@ -3474,6 +3965,12 @@ function PreSaveSummary({
     cells.push(['Hub integration', github.integrationId ? `#${github.integrationId}` : '— (required)'])
     cells.push(['Events', github.events.length > 0 ? github.events.join(', ') : '—'])
     cells.push(['PR actions', github.prActions.length > 0 ? github.prActions.join(', ') : '—'])
+  } else if (kind === 'gitlab') {
+    cells.push(['Trigger name', gitlab.integrationName || '—'])
+    cells.push(['Project', gitlab.projectPath.trim() || '—'])
+    cells.push(['Hub integration', gitlab.integrationId ? `#${gitlab.integrationId}` : '— (required)'])
+    cells.push(['Events', gitlab.events.length > 0 ? gitlab.events.join(', ') : '—'])
+    cells.push(['MR actions', gitlab.mrActions.length > 0 ? gitlab.mrActions.join(', ') : '—'])
   }
 
   return (
@@ -3530,6 +4027,12 @@ function PostSaveSummary({
     summaryRows.push(['Hub integration', github.github_integration_name || `#${github.github_integration_id}`])
     summaryRows.push(['Events', (github.events || []).join(', ') || '—'])
     if (github.inbound_url) summaryRows.push(['Inbound URL', github.inbound_url])
+  } else if (kind === 'gitlab') {
+    const gitlab = savedTrigger as GitLabTrigger
+    summaryRows.push(['Project', gitlab.project_path])
+    summaryRows.push(['Hub integration', gitlab.gitlab_integration_name || `#${gitlab.gitlab_integration_id}`])
+    summaryRows.push(['Events', (gitlab.events || []).join(', ') || '—'])
+    if (gitlab.inbound_url) summaryRows.push(['Inbound URL', gitlab.inbound_url])
   }
   return (
     <div className="space-y-4">

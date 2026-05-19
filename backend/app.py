@@ -114,9 +114,12 @@ from api.routes_email_triggers import router as email_triggers_router
 from api.routes_jira_integrations import router as jira_integrations_router
 from api.routes_jira_triggers import router as jira_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
+from api.routes_gitlab_triggers import router as gitlab_triggers_router
 from api.routes_wizards import router as wizards_router
 from api.routes_github_inbound import router as github_inbound_router
+from api.routes_gitlab_inbound import router as gitlab_inbound_router
 from api.routes_github_integrations import router as github_integrations_router
+from api.routes_gitlab_integrations import router as gitlab_integrations_router
 from api.routes_password_vault_integrations import router as password_vault_integrations_router
 from api.routes_browser_session_profiles import router as browser_session_profiles_router
 # Playground Feature
@@ -1454,9 +1457,12 @@ app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/e
 app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
 app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(gitlab_triggers_router)  # GitLab trigger CRUD (/api/triggers/gitlab/*)
 app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
+app.include_router(gitlab_inbound_router)  # GitLab trigger inbound webhooks (/api/triggers/gitlab/*/inbound)
 app.include_router(github_integrations_router)  # GitHub Hub integrations (/api/hub/github-integrations/*)
+app.include_router(gitlab_integrations_router)  # GitLab Hub integrations (/api/hub/gitlab-integrations/*)
 app.include_router(password_vault_integrations_router)  # Password Vault providers (/api/hub/password-vault-integrations/*)
 app.include_router(browser_session_profiles_router)  # Browser session profiles (/api/hub/browser-session-profiles/*)
 # v0.6.0 Item 38: Channel Health Monitor

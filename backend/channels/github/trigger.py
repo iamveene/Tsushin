@@ -2,81 +2,61 @@
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import hmac
 import logging
-import re
-import secrets
 from datetime import datetime
 from typing import Any, ClassVar, Optional
 
 from sqlalchemy.orm import Session
 
+from channels.repository.events import canonical_event, event_class
+from channels.repository.trigger import (
+    author_matches as repository_author_matches,
+    branch_matches as repository_branch_matches,
+    generate_webhook_secret as generate_repository_webhook_secret,
+    normalize_path_filters as normalize_repository_path_filters,
+    normalize_repo_segment,
+    normalize_repository_events,
+    path_matches as repository_path_matches,
+    preview_secret as repository_preview_secret,
+    repository_event_allowed,
+    split_filter_patterns,
+)
 from channels.trigger import Trigger
 from channels.types import TriggerEvent
 
 
 DEFAULT_GITHUB_EVENTS = ("push", "pull_request")
-_EVENT_RE = re.compile(r"^[a-z0-9_.-]+$")
 
 
 def normalize_github_events(events: Optional[list[str]]) -> list[str]:
     """Return normalized GitHub event names, preserving caller order."""
-    source = list(events or DEFAULT_GITHUB_EVENTS)
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in source:
-        event = str(item or "").strip().lower()
-        if not event:
-            continue
-        if event != "*" and not _EVENT_RE.match(event):
-            raise ValueError("GitHub event names may only contain letters, digits, dots, underscores, or hyphens")
-        if event not in seen:
-            normalized.append(event)
-            seen.add(event)
-    if not normalized:
-        raise ValueError("At least one GitHub event is required")
-    return normalized
+    return normalize_repository_events(
+        events,
+        defaults=DEFAULT_GITHUB_EVENTS,
+        provider_name="GitHub",
+    )
 
 
 def normalize_path_filters(path_filters: Optional[list[str]]) -> Optional[list[str]]:
     """Trim and de-duplicate GitHub path glob filters."""
-    if path_filters is None:
-        return None
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in path_filters:
-        value = str(item or "").strip()
-        if not value:
-            continue
-        if value not in seen:
-            normalized.append(value)
-            seen.add(value)
-    return normalized or None
+    return normalize_repository_path_filters(path_filters)
 
 
 def normalize_repo_part(value: str, field_name: str) -> str:
     """Normalize a GitHub owner/repository segment without changing case."""
-    normalized = str(value or "").strip().strip("/")
-    if not normalized:
-        raise ValueError(f"{field_name} is required")
-    if "/" in normalized:
-        raise ValueError(f"{field_name} must not contain '/'")
-    return normalized
+    return normalize_repo_segment(value, field_name)
 
 
 def preview_secret(secret: str) -> str:
     """Return a stable preview for sensitive token fields."""
-    value = str(secret or "")
-    if len(value) <= 8:
-        return "***"
-    return f"{value[:4]}...{value[-4:]}"
+    return repository_preview_secret(secret)
 
 
 def generate_webhook_secret() -> str:
     """Generate a GitHub webhook shared secret."""
-    return "ghwhsec_" + secrets.token_urlsafe(32)
+    return generate_repository_webhook_secret("ghwhsec_")
 
 
 def encrypt_pat_token(db: Session, tenant_id: str, plaintext: str) -> str:
@@ -137,11 +117,12 @@ def verify_github_signature(raw_body: bytes, signature_header: Optional[str], se
 
 def github_event_allowed(configured_events: Optional[list[str]], event_type: str) -> bool:
     """Return whether a GitHub delivery event is enabled for an instance."""
-    normalized_event = str(event_type or "").strip().lower()
-    if not normalized_event:
-        return False
-    events = normalize_github_events(configured_events)
-    return "*" in events or normalized_event in events
+    return repository_event_allowed(
+        configured_events,
+        event_type,
+        defaults=DEFAULT_GITHUB_EVENTS,
+        provider_name="GitHub",
+    )
 
 
 def extract_repository(payload: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
@@ -194,13 +175,7 @@ def extract_branch(event_type: str, payload: dict[str, Any]) -> Optional[str]:
 
 def branch_matches(branch_filter: Optional[str], event_type: str, payload: dict[str, Any]) -> bool:
     """Return whether the event branch matches a comma-separated glob filter."""
-    patterns = _split_filter_patterns(branch_filter)
-    if not patterns:
-        return True
-    branch = extract_branch(event_type, payload)
-    if not branch:
-        return False
-    return any(fnmatch.fnmatchcase(branch, pattern) for pattern in patterns)
+    return repository_branch_matches(branch_filter, extract_branch(event_type, payload))
 
 
 def extract_changed_paths(payload: dict[str, Any]) -> list[str]:
@@ -237,22 +212,12 @@ def extract_changed_paths(payload: dict[str, Any]) -> list[str]:
 
 def path_matches(path_filters: Optional[list[str]], payload: dict[str, Any]) -> bool:
     """Return whether changed paths match any configured glob."""
-    filters = normalize_path_filters(path_filters)
-    if not filters:
-        return True
-    paths = extract_changed_paths(payload)
-    if not paths:
-        return False
-    return any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in filters)
+    return repository_path_matches(path_filters, extract_changed_paths(payload))
 
 
 def author_matches(author_filter: Optional[str], payload: dict[str, Any]) -> bool:
     """Return whether sender/pusher/commit author fields match a glob filter."""
-    patterns = _split_filter_patterns(author_filter)
-    if not patterns:
-        return True
-    candidates = _author_candidates(payload)
-    return any(fnmatch.fnmatchcase(candidate, pattern) for candidate in candidates for pattern in patterns)
+    return repository_author_matches(author_filter, _author_candidates(payload))
 
 
 def github_filters_match(instance: Any, event_type: str, payload: dict[str, Any]) -> tuple[bool, str | None]:
@@ -280,9 +245,18 @@ def build_dispatch_payload(
     """Build the payload persisted by TriggerDispatchService."""
     owner, name = extract_repository(payload)
     branch = extract_branch(event_type, payload)
+    event = str(event_type or "").strip().lower()
+    pull_request = payload.get("pull_request") if isinstance(payload.get("pull_request"), dict) else {}
+    base = pull_request.get("base") if isinstance(pull_request.get("base"), dict) else {}
+    head = pull_request.get("head") if isinstance(pull_request.get("head"), dict) else {}
     return {
+        "repository_trigger_id": instance_id,
         "github_trigger_id": instance_id,
-        "github_event": event_type,
+        "provider": "github",
+        "provider_event": event,
+        "canonical_event": canonical_event("github", event),
+        "event_class": event_class("github", event),
+        "github_event": event,
         "delivery_id": delivery_id,
         "repository": {
             "owner": owner,
@@ -290,11 +264,125 @@ def build_dispatch_payload(
             "full_name": f"{owner}/{name}" if owner and name else None,
         },
         "action": payload.get("action"),
+        "ref": payload.get("ref"),
         "branch": branch,
+        "source_branch": head.get("ref"),
+        "target_branch": base.get("ref"),
+        "tag": _github_tag(event, payload),
         "changed_paths": extract_changed_paths(payload),
+        "commit_count": len(payload.get("commits") or []) if isinstance(payload.get("commits"), list) else None,
+        "message": _commit_message(payload),
+        "actor": _actor_payload(payload),
+        "object": _object_payload(event, payload),
         "sender": payload.get("sender"),
         "raw_event": payload,
     }
+
+
+def _github_tag(event_type: str, payload: dict[str, Any]) -> Optional[str]:
+    if event_type == "release":
+        release = payload.get("release")
+        if isinstance(release, dict):
+            return release.get("tag_name")
+    ref = payload.get("ref")
+    if isinstance(ref, str) and ref.startswith("refs/tags/"):
+        return ref.removeprefix("refs/tags/")
+    return None
+
+
+def _commit_message(payload: dict[str, Any]) -> Optional[str]:
+    head_commit = payload.get("head_commit")
+    if isinstance(head_commit, dict) and head_commit.get("message"):
+        return str(head_commit["message"])
+    commits = payload.get("commits")
+    if isinstance(commits, list) and commits:
+        last = commits[-1]
+        if isinstance(last, dict) and last.get("message"):
+            return str(last["message"])
+    return None
+
+
+def _actor_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+    pusher = payload.get("pusher") if isinstance(payload.get("pusher"), dict) else {}
+    return {
+        "id": sender.get("id"),
+        "username": sender.get("login") or pusher.get("name"),
+        "name": sender.get("name") or pusher.get("name"),
+        "email": sender.get("email") or pusher.get("email"),
+        "login": sender.get("login"),
+        "url": sender.get("html_url") or sender.get("url"),
+    }
+
+
+def _object_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if event_type == "pull_request":
+        pr = payload.get("pull_request") if isinstance(payload.get("pull_request"), dict) else {}
+        return {
+            "type": "pull_request",
+            "number": pr.get("number"),
+            "title": pr.get("title"),
+            "body": pr.get("body"),
+            "url": pr.get("html_url") or pr.get("url"),
+            "state": pr.get("state"),
+            "draft": bool(pr.get("draft")),
+            "labels": _label_names(pr.get("labels")),
+        }
+    if event_type in {"issues", "issue"}:
+        issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+        return {
+            "type": "issue",
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "body": issue.get("body"),
+            "url": issue.get("html_url") or issue.get("url"),
+            "state": issue.get("state"),
+            "labels": _label_names(issue.get("labels")),
+        }
+    if event_type == "issue_comment":
+        comment = payload.get("comment") if isinstance(payload.get("comment"), dict) else {}
+        issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+        return {
+            "type": "comment",
+            "number": comment.get("id"),
+            "body": comment.get("body"),
+            "url": comment.get("html_url") or comment.get("url"),
+            "target_type": "pull_request" if issue.get("pull_request") else "issue",
+            "target_title": issue.get("title"),
+            "target_number": issue.get("number"),
+        }
+    if event_type == "release":
+        release = payload.get("release") if isinstance(payload.get("release"), dict) else {}
+        return {
+            "type": "release",
+            "number": release.get("id"),
+            "title": release.get("name") or release.get("tag_name"),
+            "body": release.get("body"),
+            "url": release.get("html_url") or release.get("url"),
+            "state": "published" if not release.get("draft") else "draft",
+            "draft": bool(release.get("draft")),
+        }
+    if event_type == "workflow_run":
+        run = payload.get("workflow_run") if isinstance(payload.get("workflow_run"), dict) else {}
+        return {
+            "type": "pipeline",
+            "number": run.get("run_number") or run.get("id"),
+            "title": run.get("name") or run.get("display_title"),
+            "url": run.get("html_url") or run.get("url"),
+            "status": run.get("status") or run.get("conclusion"),
+        }
+    return {"type": event_type or "unknown"}
+
+
+def _label_names(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    labels: list[str] = []
+    for item in raw:
+        value = item.get("name") if isinstance(item, dict) else item
+        if value is not None:
+            labels.append(str(value))
+    return labels
 
 
 def sender_key_for_payload(instance_id: int, payload: dict[str, Any]) -> str:
@@ -326,9 +414,7 @@ def occurred_at_for_payload(payload: dict[str, Any]) -> datetime:
 
 
 def _split_filter_patterns(value: Optional[str]) -> list[str]:
-    if not value:
-        return []
-    return [part.strip() for part in str(value).split(",") if part.strip()]
+    return split_filter_patterns(value)
 
 
 def _author_candidates(payload: dict[str, Any]) -> list[str]:

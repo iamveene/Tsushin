@@ -16,7 +16,7 @@
 import { useCallback, useState } from 'react'
 import { api, type TriggerRecapConfig, type TriggerRecapTestResult } from '@/lib/client'
 
-export type RecapTriggerKind = 'jira' | 'email' | 'github' | 'webhook'
+export type RecapTriggerKind = 'jira' | 'email' | 'github' | 'gitlab' | 'webhook'
 
 interface MemoryRecapStepProps {
   triggerKind: RecapTriggerKind
@@ -43,6 +43,7 @@ const KIND_DEFAULT_QUERY: Record<RecapTriggerKind, string> = {
   jira: '{{ summary }} {{ description }}',
   email: '{{ subject }} {{ body_preview }}',
   github: '{{ pull_request.title }} {{ pull_request.body }}',
+  gitlab: '{{ merge_request.title }} {{ merge_request.description }}',
   webhook: '',
 }
 

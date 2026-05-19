@@ -43,6 +43,7 @@ class TeamMemberRunStatus(str, Enum):
 
 class TeamTriggerKind(str, Enum):
     GITHUB = "github"
+    GITLAB = "gitlab"
     JIRA = "jira"
     WEBHOOK = "webhook"
     GMAIL = "gmail"
@@ -2364,6 +2365,31 @@ class GitHubIntegration(HubIntegration):
     )
 
 
+class GitLabIntegration(HubIntegration):
+    """GitLab.com Hub Integration for the Code Repository skill and triggers."""
+
+    __tablename__ = "gitlab_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    provider = Column(String(32), nullable=False, server_default="gitlab")
+    auth_method = Column(String(20), nullable=False, server_default="pat")
+    pat_token_encrypted = Column(Text, nullable=True)
+    pat_token_preview = Column(String(32), nullable=True)
+    default_namespace = Column(String(255), nullable=True)
+    default_project = Column(String(255), nullable=True)
+    default_project_path = Column(String(500), nullable=True)
+    provider_mode = Column(String(16), nullable=False, server_default="programmatic")
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'gitlab',
+    }
+
+    __table_args__ = (
+        Index("idx_gitlab_integration_provider", "provider"),
+        Index("idx_gitlab_integration_default_project_path", "default_project_path"),
+    )
+
+
 class PasswordVaultIntegration(HubIntegration):
     """
     Password Vault provider integration.
@@ -3776,6 +3802,50 @@ class GitHubChannelInstance(Base):
         Index("idx_github_channel_instance_status", "status"),
         Index("idx_github_channel_instance_repo", "tenant_id", "repo_owner", "repo_name"),
         Index("idx_github_channel_instance_default_agent_id", "default_agent_id"),
+    )
+
+
+class GitLabChannelInstance(Base):
+    """Persisted GitLab repository trigger configuration for token-gated webhooks."""
+
+    __tablename__ = "gitlab_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    gitlab_integration_id = Column(
+        Integer,
+        ForeignKey("gitlab_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    project_path = Column(String(500), nullable=False)
+    webhook_secret_encrypted = Column(Text, nullable=True)
+    webhook_secret_preview = Column(String(32), nullable=True)
+    events = Column(JSON, nullable=True)
+    branch_filter = Column(String(255), nullable=True)
+    path_filters = Column(JSON, nullable=True)
+    author_filter = Column(String(255), nullable=True)
+    trigger_criteria = Column(JSON, nullable=True)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    last_cursor = Column(String(255), nullable=True)
+    last_delivery_id = Column(String(128), nullable=True)
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_gitlab_channel_instance_tenant", "tenant_id"),
+        Index("idx_gitlab_channel_instance_status", "status"),
+        Index("idx_gitlab_channel_instance_project", "tenant_id", "project_path"),
+        Index("idx_gitlab_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_gitlab_channel_instance_gitlab_integration_id", "gitlab_integration_id"),
     )
 
 

@@ -1,7 +1,7 @@
 import {
   CalendarIcon, MailIcon, SearchIcon, MicrophoneIcon, TerminalIcon,
   WrenchIcon, BotIcon, FileTextIcon, RocketIcon, PlugIcon,
-  GlobeIcon, BrainIcon, GitHubIcon, LockIcon,
+  GlobeIcon, BrainIcon, CodeIcon, LockIcon,
   IconProps,
 } from '@/components/ui/icons'
 
@@ -163,10 +163,10 @@ export const SKILL_DISPLAY_INFO: Record<string, SkillDisplayInfo> = {
   },
   code_repository: {
     displayName: 'Code Repository',
-    description: 'Search repos, list pull requests and issues, read PR details, and (when enabled) open issues or comment on PRs. Currently supports GitHub.',
+    description: 'Search repositories, list pull/merge requests and issues, read request details, and (when enabled) open issues or comment on review requests. Supports GitHub and GitLab.',
     category: 'automation_tools',
     configType: 'provider',
-    icon: GitHubIcon,
+    icon: CodeIcon,
     providerKey: 'code_repository',
   },
   password_vault: {

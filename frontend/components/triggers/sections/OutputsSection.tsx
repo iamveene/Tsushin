@@ -3,13 +3,13 @@
 /**
  * OutputsSection
  *
- * Vertical stack of per-kind output cards. Supports jira / github / email /
- * webhook (schedule retired in v0.7.0-fix Phase 2).
+ * Vertical stack of per-kind output cards. Supports jira / github / gitlab /
+ * email / webhook (schedule retired in v0.7.0-fix Phase 2).
  * Every kind also renders the shared `WiredFlowsCard` listing live
  * Flow bindings and the Create-from-this-trigger deep link.
  *
  * Jira renders the Manual Poll card. Email renders Manual Poll plus Managed
- * Triage. github / webhook render the WiredFlowsCard (which carries
+ * Triage. repository triggers / webhook render the WiredFlowsCard (which carries
  * empty-state messaging when no flows are bound).
  */
 
@@ -19,6 +19,7 @@ import type {
   EmailTrigger,
   FlowTriggerBinding,
   GitHubTrigger,
+  GitLabTrigger,
   JiraPollNowResponse,
   JiraTrigger,
   WebhookIntegration,
@@ -33,7 +34,7 @@ import WiredTeamsCard, {
 import WiredContinuousCard from '@/components/triggers/sections/WiredContinuousCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
 
-type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
+type OutputsKind = 'jira' | 'github' | 'gitlab' | 'email' | 'webhook'
 
 // AgentTeamTrigger.trigger_kind validates jira/github/webhook/gmail. Email
 // triggers persist as kind='gmail' (see _validate_team_trigger_instance and
@@ -42,6 +43,7 @@ type OutputsKind = 'jira' | 'github' | 'email' | 'webhook'
 const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
   jira: 'jira',
   github: 'github',
+  gitlab: 'gitlab',
   webhook: 'webhook',
   email: 'gmail',
 }
@@ -52,7 +54,7 @@ const TEAM_KIND_BY_OUTPUT: Record<OutputsKind, WiredTeamsTriggerKind | null> = {
 function continuousChannelType(kind: OutputsKind): string {
   return kind === 'email' ? 'gmail' : kind
 }
-type OutputsTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type OutputsTrigger = JiraTrigger | GitHubTrigger | GitLabTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: OutputsKind
@@ -157,7 +159,7 @@ export default function OutputsSection({
     )
   }
 
-  // github + webhook: no managed outputs — Wired Flows IS the
+  // repository triggers + webhook: no managed outputs — Wired Flows IS the
   // outputs surface. The card carries its own empty-state copy.
   const generic = trigger as { id: number }
   const teamKind = TEAM_KIND_BY_OUTPUT[kind]

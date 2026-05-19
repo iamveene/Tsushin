@@ -119,6 +119,7 @@ _TRIGGER_KIND_TO_CHANNEL = {
     "jira": "jira",
     "email": "email",
     "github": "github",
+    "gitlab": "gitlab",
     "webhook": "webhook",
 }
 
@@ -172,6 +173,7 @@ def _resolve_default_agent_id(
     from models import (
         EmailChannelInstance,
         GitHubChannelInstance,
+        GitLabChannelInstance,
         JiraChannelInstance,
         WebhookIntegration,
     )
@@ -180,6 +182,7 @@ def _resolve_default_agent_id(
         "jira": JiraChannelInstance,
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
+        "gitlab": GitLabChannelInstance,
         "webhook": WebhookIntegration,
     }
     model = model_by_kind.get(trigger_kind)

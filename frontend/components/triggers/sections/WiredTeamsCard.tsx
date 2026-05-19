@@ -14,7 +14,7 @@
  *   - mutate (pause/unbind): `agents.write`
  *
  * Rendered on every trigger kind supported by AgentTeamTrigger.trigger_kind:
- * jira / github / webhook / gmail. Email triggers persist with kind='gmail'.
+ * jira / github / gitlab / webhook / gmail. Email triggers persist with kind='gmail'.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -35,7 +35,7 @@ import {
   UsersIcon,
 } from '@/components/ui/icons'
 
-export type WiredTeamsTriggerKind = 'jira' | 'github' | 'webhook' | 'gmail'
+export type WiredTeamsTriggerKind = 'jira' | 'github' | 'gitlab' | 'webhook' | 'gmail'
 
 interface Props {
   triggerKind: WiredTeamsTriggerKind

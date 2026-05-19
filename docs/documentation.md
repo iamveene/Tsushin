@@ -1,6 +1,6 @@
 # Tsushin — Comprehensive Documentation
 
-**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, self-hostable agentic messaging platform that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, Webhook, Jira, GitHub), Tool-API credentials (Jira, GitHub, 1Password Password Vault), local services (Whisper/Speaches, Kokoro, Ollama), Agent Teams (line + mesh), Continuous Agents, multi-layer semantic memory, workflow automation (Flows), AI-powered security (Sentinel), and observability.
+**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, self-hostable agentic messaging platform that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, Webhook, Jira, GitHub, GitLab), Tool-API credentials and repository integrations (Jira, GitHub, GitLab, 1Password Password Vault), local services (Whisper/Speaches, Kokoro, Ollama), Agent Teams (line + mesh), Continuous Agents, multi-layer semantic memory, workflow automation (Flows), AI-powered security (Sentinel), and observability.
 
 This document is the exhaustive reference for configuring, deploying, operating, and using every feature of the platform. For a condensed overview, see the root [README](../README.md).
 
@@ -47,7 +47,7 @@ This document is the exhaustive reference for configuring, deploying, operating,
 
 ## 1. Introduction & Audience
 
-**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, agentic messaging framework that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, HTTP Webhook, Jira, GitHub), Tool-API credentials (Jira, GitHub, 1Password Password Vault), local-service containers (Whisper/Speaches, Kokoro, Ollama), Agent Teams, Continuous Agents, a multi-layer semantic memory system, workflow automation ("Flows"), AI-powered security (Sentinel), and observability under a single self-hostable platform.
+**Tsushin** (通信 — Japanese for "Communication") is a multi-tenant, agentic messaging framework that unifies AI agent orchestration, conversational channels (WhatsApp, Telegram, Slack, Discord, Playground), event triggers (Email/Gmail, HTTP Webhook, Jira, GitHub, GitLab), Tool-API credentials and repository integrations (Jira, GitHub, GitLab, 1Password Password Vault), local-service containers (Whisper/Speaches, Kokoro, Ollama), Agent Teams, Continuous Agents, a multi-layer semantic memory system, workflow automation ("Flows"), AI-powered security (Sentinel), and observability under a single self-hostable platform.
 
 Source: `README.md`, `backend/settings.py`, and the README version badge.
 
@@ -119,7 +119,7 @@ Frontend (Next.js)  <--REST/WebSocket-->  Backend (FastAPI + PG 16)  <-->  RBAC 
                                                        Billing)
 
               SANDBOXED TOOLS (per-tenant Docker)  |  CHANNELS (WA/TG/Slack/Discord/Playground)
-              TRIGGERS (Email, Webhook, Jira, GitHub)  |  TOOL APIs (Jira, GitHub, 1Password)
+              TRIGGERS (Email, Webhook, Jira, GitHub, GitLab)  |  TOOL APIs / REPOSITORY INTEGRATIONS (Jira, GitHub, GitLab, 1Password)
               LOCAL SERVICES (Whisper/Speaches, Kokoro, Ollama)
 ```
 
@@ -204,7 +204,7 @@ The live dev smoke skeleton is `backend/dev_tests/test_teams_api_e2e.py`. It req
 
 Phase 6 is a backend-only trigger execution layer for Agent Teams. The session-authenticated Studio API and public v1 API now expose trigger binding CRUD at `/api/teams/{team_id}/triggers` and `/api/v1/teams/{team_id}/triggers`. These endpoints reuse `agents.write`.
 
-Each binding stores a canonical config in `agent_team_trigger.config_json`: `trigger_instance_id`, `event_types`, `filters`, and `is_enabled`. The API validates that the trigger instance is active, belongs to the same tenant, and is one of Webhook, GitHub, or Jira. Gmail team triggers remain out of scope for v0.7.0 and are rejected.
+Each binding stores a canonical config in `agent_team_trigger.config_json`: `trigger_instance_id`, `event_types`, `filters`, and `is_enabled`. The API validates that the trigger instance is active, belongs to the same tenant, and is one of Webhook, GitHub, GitLab, or Jira. Gmail team triggers remain out of scope for v0.7.0 and are rejected.
 
 `0084_agent_team_trigger_queue.py` extends `message_queue` for team-run work. Rows with `message_type='team_run'` are team-owned instead of agent-owned: `agent_id` is null, `team_id` and `team_run_id` are set, and tenant-composite FKs keep queued rows aligned with the team and run they execute. Existing agent queue rows remain unchanged.
 
@@ -230,7 +230,7 @@ Phase 8 turns the `/studio/teams?new=1` hook into a full creation workflow. A gl
 
 The wizard includes Custom/Template, Basics, Topology, Members, Tools, Triggers, Review, and Create steps. Templates are local presets only: they prefill the draft but do not create persistent seeded template records or clone from a template endpoint. Members are selected from active agents that are not already assigned to another team; line-topology ordering can be adjusted before creation. The tool pool binds enabled sandboxed tools through `tools.sandboxed_tool_ids`.
 
-Trigger bindings in the wizard attach existing active Webhook, GitHub, or Jira trigger instances through `/api/teams/{team_id}/triggers`. Each binding sends `trigger_kind`, `trigger_instance_id`, optional `event_types`, JSON object filters, and `is_enabled`. Gmail remains unavailable for Agent Teams in v0.7.0.
+Trigger bindings in the wizard attach existing active Webhook, GitHub, GitLab, or Jira trigger instances through `/api/teams/{team_id}/triggers`. Each binding sends `trigger_kind`, `trigger_instance_id`, optional `event_types`, JSON object filters, and `is_enabled`. Gmail remains unavailable for Agent Teams in v0.7.0.
 
 Creation posts to `/api/teams`, then posts any trigger bindings, clears the persisted draft, and redirects to `/studio/teams/{id}`. Phase 8 includes a minimal team detail landing for created teams with goal, member, tool, trigger, and last-run summaries; visual builder/canvas editing stays deferred to Phase 9.
 
@@ -242,7 +242,7 @@ Phase 9 replaces the minimal `/studio/teams/{id}` landing with the operational T
 
 The Topology tab renders a React Flow `TeamCanvas`. Line teams show ordered member nodes with sequential handoff edges; mesh teams show the hidden coordinator plus member spokes. Active non-team-member agents can be dragged from the sidebar onto the canvas to add them to the team, line teams can be reordered through `/members/order`, and member node drag-stop persists `position_x`/`position_y` through `PATCH /api/teams/{team_id}/members/{agent_id}`. The same member PATCH contract also updates `is_required` and optional order metadata, and the public v1 API mirrors the route.
 
-Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, and Jira trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
+Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, GitLab, and Jira trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
 
 The Sentinel tab adds a nullable `agent_team.sentinel_profile_id` override via migration `0085_agent_team_sentinel_profile.py`. When set, team-run start and handoff Sentinel checks resolve that team profile before member or tenant defaults. Clearing the field returns the team to the existing inherited Sentinel profile hierarchy.
 
@@ -397,7 +397,7 @@ After v0.7.0 shipped, an audit on the running instance surfaced structural UX is
 * **GitHub trigger linkage forced** ([`49ee2f3`](https://github.com/iamveene/Tsushin/commit/49ee2f3)) — alembic 0072 adds `github_channel_instance.github_integration_id` (NOT NULL, ON DELETE RESTRICT) and drops `auth_method`/`installation_id`/`pat_token_encrypted`/`pat_token_preview`. The `/test-connection` endpoints (unsaved + saved) are deleted; connectivity is verified at integration creation. The wizard requires a Hub GitHub integration before the user can proceed.
 * **Jira tightened + legacy notification card retired** ([`0b8f92c`](https://github.com/iamveene/Tsushin/commit/0b8f92c)) — `JiraTriggerCreate.jira_integration_id` is required; `auth_email`/`api_token`/`site_url` no longer accepted on the API (Site URL is read from the linked integration). Legacy notification fields are stripped from `JiraTriggerRead` and `EmailTriggerRead`; output config now lives on the auto-flow's Notification node.
 * **Continuous Agents revamp** ([`c7a04a3`](https://github.com/iamveene/Tsushin/commit/c7a04a3)) — alembic 0073 adds `ContinuousAgent.purpose` (Text) and `ContinuousAgent.action_kind` (`tool_run | send_message | conditional_branch | react_only`). API requires both on create (`purpose ≥ 30 chars`). Frontend `ApiError` class enriched with `status` + structured `detail` + `code` so callers branch on `error.code === 'agent_has_pending_wake_events'` instead of regex-matching the human-readable message — closes the user's "Conflict: This resource already exists or cannot be modified" complaint with a "N pending events. Force-delete?" prompt that uses `?force=true`. The Setup modal exposes Purpose textarea + Action kind grid with one-line explainers.
-* **Agent vs Flow explainer** ([`e28e87c`](https://github.com/iamveene/Tsushin/commit/e28e87c)) — `frontend/lib/copy/agent-vs-flow-explainer.tsx` remains on the Continuous Agent setup surface, but is no longer rendered inside Flow creation. Flow creation offers immediate / scheduled / recurring / keyword / triggered methods. Triggered creation selects an existing Hub trigger (Email/Gmail, Jira, GitHub, or Webhook), then wires the locked Source step and `flow_trigger_binding` row together.
+* **Agent vs Flow explainer** ([`e28e87c`](https://github.com/iamveene/Tsushin/commit/e28e87c)) — `frontend/lib/copy/agent-vs-flow-explainer.tsx` remains on the Continuous Agent setup surface, but is no longer rendered inside Flow creation. Flow creation offers immediate / scheduled / recurring / keyword / triggered methods. Triggered creation selects an existing Hub trigger (Email/Gmail, Jira, GitHub, GitLab, or Webhook), then wires the locked Source step and `flow_trigger_binding` row together.
 * **UI consistency pass — 11 items** ([`47696ff`](https://github.com/iamveene/Tsushin/commit/47696ff)) — addresses the user's "UI needs consistency" feedback. (1) `bg-tsushin-bg` ghost token swapped to `bg-tsushin-ink` (8 white-input dark-mode glitches gone). (2) Per-section "+ Create X Trigger" buttons retired; single top-of-tab `+ Add Trigger` is the only entry. (3) Meta "Triggers inside Triggers" sub-section dropped. (4) Trigger render order unified to Email→Webhook→Jira→GitHub on both Hub tab and `/hub/triggers` registry. (5) Productivity `+ Add Gmail Account` swapped from red (Disconnect color) to teal. (6) Watcher's two boxed nav strips folded into one 10-tab strip. (7) `/hub/triggers` registry gained `+ Add Trigger`. (8) Hub > Developer Tools gained centralized `+ Add GitHub Integration` (it was the only Hub tab missing one). (9) Hub stat strip dropped (it ignored 5 of 8 tabs and the "Webhooks" count was misleading on Triggers). (10) Continuous Agents row buttons unified — `View detail`/`Edit`/`Delete` all bordered. (11) Wake Events filter rows gained `Status:` / `Kind:` labels.
 * **Wizard manifest API** ([`3538225`](https://github.com/iamveene/Tsushin/commit/3538225)) — `GET /api/wizards/manifests` returns the 5-entry wizard registry (productivity / channels / triggers / tool-apis / provider) with `id` + `label` + `component_path` + `catalog_endpoint` + `catalog_module` + `dispatches_to` + optional `integration_required`. Lifts the existing `frontend/lib/wizard-registry.ts` server-side so external SDKs can discover wizards over HTTP.
 * **Studio kind selector** ([`3343071`](https://github.com/iamveene/Tsushin/commit/3343071)) — Studio Create New Agent modal gains a Wake mode 2-card picker (Conversational vs Continuous) with one-line explainers. Picking Continuous + Save handoffs to `/continuous-agents?new=1&agent_id=N` which auto-opens the Continuous Agent setup modal so the user lands directly on the purpose / action_kind step.
@@ -411,7 +411,7 @@ Fifth and final merge wave of the cross-cutting Triggers↔Flows Unification. La
 * **Alembic 0069 backfill migration** (`backend/alembic/versions/0069_backfill_managed_notifications.py`) — historical migration that converted old system-owned notification subscriptions into equivalent system-managed `FlowDefinition` rows (Source / Gate / Conversation / Notification) plus `flow_trigger_binding`. v0.7.0-fix cleanup disables the retired subscription path; notification delivery now belongs to the Flow Notification node.
 * **Webhook payload capture write-through** — `backend/api/routes_webhook_inbound.py` now inserts a `WebhookPayloadCapture` row right before dispatching to the trigger service. Payload truncated to ~64KB, headers redacted (auth/cookie/X-Tsushin-Signature stripped) and capped at ~8KB. After insert, the table is pruned to keep only the 5 most recent rows per `(tenant, webhook_id)`. Best-effort — failure NEVER aborts dispatch.
 * **`GET /api/webhook-integrations/{id}/payload-captures`** — permission-gated on `integrations.webhook.read`. Returns the last 5 captures sorted desc by `captured_at`. Consumed by the Flow editor's SourceStepConfig autocomplete.
-* **Reconcile script** (`backend/scripts/reconcile_system_flows.py`) — sweeper that walks every existing Email/Webhook/Jira/GitHub trigger and ensures each has a matching system-managed binding via `ensure_system_managed_flow_for_trigger` (idempotent). Run it after a deploy where Wave 4's auto-gen gate was off when triggers were created, or to rebuild bindings after a manual deletion.
+* **Reconcile script** (`backend/scripts/reconcile_system_flows.py`) — sweeper that walks every existing Email/Webhook/Jira/GitHub/GitLab trigger and ensures each has a matching system-managed binding via `ensure_system_managed_flow_for_trigger` (idempotent). Run it after a deploy where Wave 4's auto-gen gate was off when triggers were created, or to rebuild bindings after a manual deletion.
 * **Rollback script** (`backend/scripts/rollback_managed_flow_backfill.py`) — surgical undo for the 0069 backfill. Deletes only flows whose `initiator_metadata.reason='wave5_backfill'` and their CASCADEd nodes + bindings. The original ContinuousAgent + ContinuousSubscription rows are NEVER touched (the backfill migration runs in parallel mode by default and never deletes them). Re-running is a no-op.
 * **SourceStepConfig autocomplete completion** — webhook branch in `frontend/components/flows/SourceStepConfig.tsx` finished. With captures present: auto-expands the most-recent capture, renders a chip panel of inferred JSON paths via recursive descent (max depth 4, max 50 paths, array indices collapsed so `items[0].name` becomes `items.name`), each chip click copies `{{source.payload.<path>}}` to the clipboard with a toast; below the chips: the full list of 5 captures, each row showing `#id · relative-time · dedupe_key`, expandable to a pretty-printed JSON pre block. Without captures: keeps the existing "Send a test event" copy plus a "How to test" toggle that shows the inbound URL + secret preview + a copy-pasteable curl example. Non-webhook kinds unchanged (still uses `getWakeEvents` + `getWakeEventPayload`).
 
@@ -426,7 +426,7 @@ Post-0.7.0 IA + UX cleanup driven by feedback that the agent-runtime surfaces we
 * **3-way kind chooser (`frontend/components/studio/CreateChooserModal.tsx`)** — "What do you want to build?" — Agent / Continuous Agent / Team side-by-side cards with one-paragraph orientation, three-to-four bullets, an example use case, and a routing CTA. Opens from a "Compare options" link on the Studio Agents page next to the existing SplitButton, which now also includes the **Continuous Agent** dropdown option (previously hidden — operators had to navigate to Watcher to discover CA existed). Default routing for Continuous Agent is `/studio/continuous-agents?new=1`, which the existing `?new=1` deep-link plumbing on the CA page picks up to auto-open the setup modal.
 * **Auto-flow editor reframing (`frontend/app/flows/page.tsx`, `frontend/components/flows/SourceStepConfig.tsx`, `frontend/components/flows/StepSamplePreview.tsx`)** — five fixes that make system-managed flows readable instead of opaque:
   * `EditFlowModal` prepends a system-managed banner with a deep link back to the Hub trigger detail page (link reconstructed from the source step's `config_json.trigger_instance_id` since `FlowDefinition` doesn't surface it directly).
-  * `SourceStepConfig` adds a kind-specific Trigger Configuration card showing JQL/project_key (Jira), inbox/search_query (Email), repo/events/branch/path/author filters (GitHub), plus a `trigger_criteria.filters` JSON preview and an "Edit in Hub" deep link.
+  * `SourceStepConfig` adds a kind-specific Trigger Configuration card showing JQL/project_key (Jira), inbox/search_query (Email), repo/events/branch/path/author filters (GitHub), project_path/events/branch/path/author filters (GitLab), plus a `trigger_criteria.filters` JSON preview and an "Edit in Hub" deep link.
   * Gate step on system-managed flows prepends an upstream-filter callout explaining the trigger's criteria already gated the event upstream — anything added on the gate is a *secondary* filter and an empty gate is the canonical default.
   * Default-agent conversation step hides outbound-message fields (channel, recipient, initial prompt) when `flowIsSystemOwned` is true, replacing them with a one-line "Inbound step" note. Conversation Objective + Max Turns + Timeout + Output Alias + Agent picker stay (they apply to inbound).
   * New `StepSamplePreview` component renders an expandable "Sample data this step receives" panel on every non-source step in system-managed flows. Fetches the most-recent wake event for the bound trigger (via `getWakeEvents` + `getWakeEventPayload`) and shows the raw JSON payload + a count badge of `{{source.payload.X}}` references already in the step's config. Walks the step's `config_json` recursively to extract those refs (regex `/\{\{\s*source\.payload\.([^}\s]+)\s*\}\}/g`).
@@ -476,7 +476,7 @@ Second merge wave. Lands the canonical `source` step type, the `triggered` execu
 
 * **`source` step type** (`backend/flows/flow_engine.py`) — new `SourceStepHandler` class registered alongside `TriggerNodeHandler`. Runtime behavior is a no-op: dispatch (Wave 3) injects the wake event payload + metadata under `trigger_context["source"]`, `_build_step_context` re-merges that at the context root, and downstream Conversation / Gate / Notification steps reference variables like `{{source.payload.issue.key}}` / `{{source.trigger_kind}}` / `{{source.event_type}}` / `{{source.dedupe_key}}` / `{{source.occurred_at}}` / `{{source.wake_event_id}}` directly. The handler also echoes the lightweight identifiers as its own `output_json` so authors who prefer the `{{step_1.trigger_kind}}` style work too.
 * **Position invariants enforced server-side** — `validate_flow_structure` rejects: (a) more than one Source step in a flow, (b) Source step at position ≠ 1, (c) flows with `execution_method='triggered'` that don't declare a Source step.
-* **`'triggered'` execution method** — added to `VALID_EXECUTION_METHODS` in `backend/api/routes_flows.py:874`. The Flow create UI exposes it as an execution method that first selects an existing Email/Gmail, Jira, GitHub, or Webhook Hub trigger, then writes both the Source-step config and `flow_trigger_binding`.
+* **`'triggered'` execution method** — added to `VALID_EXECUTION_METHODS` in `backend/api/routes_flows.py:874`. The Flow create UI exposes it as an execution method that first selects an existing Email/Gmail, Jira, GitHub, GitLab, or Webhook Hub trigger, then writes both the Source-step config and `flow_trigger_binding`.
 * **Flow protection enforcement** — `editable_by_tenant` and `deletable_by_tenant` columns existed on `FlowDefinition` but were not honored by any API handler. Wave 2 adds `_ensure_flow_editable` / `_ensure_flow_deletable` helpers and wires them into all 5 mutation sites (`update_flow`, `patch_flow`, `delete_flow`, `update_step`, `delete_step`). System-owned flows that ship with `editable_by_tenant=False` (or `deletable_by_tenant=False`) now reject mutations with `403 System-owned flow is not editable/deletable by tenant`. This is what makes Phase A's auto-Flow protection real — without it any tenant admin could rip out the Notification node of an auto-flow and silently break the binding.
 * **Source-step delete protection** — `delete_step` blocks removal of any node with `type ∈ {'source', 'Source'}` with `400 Cannot delete the Source step. Delete the trigger binding or the entire flow instead.` `update_step` blocks changing a Source's type or moving it off position 1.
 * **`run_flow` correlation** — signature gains optional `trigger_event_id` (FK to `wake_event` for cross-system correlation) and `binding_id` (audit-only) params. When supplied, `trigger_event_id` is persisted on the new FlowRun row.
@@ -1272,7 +1272,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `agent_switcher` | Agent Switcher | tool | Switch user's default DM agent via natural language | `agent_switcher_skill.py:39-42` |
 | `agent_communication` | Agent Communication | tool | Ask other agents questions, delegate tasks, discover agents | `agent_communication_skill.py:28-31` |
 | `ticket_management` | Ticket Management | tool | Search/read/act on tickets in a connected ticketing system. v0.7.0 ships Atlassian Jira (programmatic). `update`/`add_comment`/`transition` are off by default and filtered out of the per-agent tool spec | `jira_skill.py` |
-| `code_repository` | Code Repository | tool | Search/read/act on a connected source-control system. v0.7.0 ships GitHub (programmatic). 12 actions; read on by default (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`); write off by default (`create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`) — same capability-gating contract as `ticket_management` and the v0.7.0 granular Gmail send/reply/draft | `code_repository_skill.py` |
+| `code_repository` | Code Repository | tool | Search/read/act on a connected source-control system. v0.7.x supports GitHub and GitLab repository providers. Missing `provider` config defaults to GitHub for existing agents. Read actions are on by default (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`); write actions are off by default (`create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue`). GitLab write actions currently fail closed until explicitly enabled by a future provider release | `code_repository_skill.py` |
 | `password_vault` | Password Vault | tool | Resolve explicit vault references for agents and flows without exposing raw secret values. v0.7.x ships 1Password service-account support through Hub → Tool APIs and returns redacted metadata plus short-lived secret handles for trusted executors | `password_vault_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
@@ -1308,7 +1308,7 @@ The Skills tab on the agent detail page (`frontend/app/agents/[id]/page.tsx:218-
 
 #### 9.2.1 Capability-Gated Skills (v0.7.0)
 
-Four v0.7.x skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub), `password_vault` (1Password), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
+Four v0.7.x skills follow a shared **capability-gating** contract — `ticket_management` (Jira), `code_repository` (GitHub/GitLab), `password_vault` (1Password), and `gmail` with its v0.7.0 granular send/reply/draft capabilities. They share four design properties:
 
 1. **Single-tool, multi-action.** Each skill exposes ONE MCP/LLM tool (`ticket_operation`, `repository_operation`, `gmail_operation`) whose first argument is an `action` enum. Read actions are on by default; write actions ship implemented but disabled by default per agent.
 2. **Tool-spec gating, not runtime gating.** Disabled actions are filtered out of the per-agent OpenAI / Anthropic tool schema sent to the LLM. The LLM literally cannot propose a disabled action — it doesn't appear in its tool list. A defense-in-depth check inside `execute_tool` remains as a fallback for direct API callers.
@@ -1318,7 +1318,7 @@ Four v0.7.x skills follow a shared **capability-gating** contract — `ticket_ma
 | skill_type | Read capabilities (default ON) | Write capabilities (default OFF) | Source |
 |---|---|---|---|
 | `ticket_management` (Jira) | `search`, `read`, `read_comments` | `update`, `add_comment`, `transition` | `jira_skill.py` |
-| `code_repository` (GitHub) | `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue` | `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue` | `code_repository_skill.py` |
+| `code_repository` (GitHub/GitLab) | `search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue` | `create_issue`, `add_pr_comment`, `approve_pull_request`, `request_changes`, `merge_pull_request`, `close_pull_request`, `close_issue` | `code_repository_skill.py` |
 | `password_vault` (1Password) | `list_items`, `read_item`, `compose_basic_auth`, `test_connection` | `read_totp` sensitive read is off by default; `create_item`, `update_item`, and `delete_item` are reserved/off | `password_vault_skill.py` |
 | `gmail` | `search`, `read_message` | `send`, `reply`, `draft` (`draft` additionally requires the Gmail token's OAuth scope to include `gmail.compose`, `gmail.modify`, or `mail.google.com/`) | `gmail_skill.py` |
 
@@ -1718,7 +1718,7 @@ The `case_index` handler calls `case_memory_service.index_case`, which is idempo
 - `GET  /api/case-memory/{case_id}`.
 - `POST /api/case-memory/search` — body: `query`, `scope`, `k`, `min_similarity`, `vector` (`problem | action | outcome | any`), `trigger_kind`, `include_failed`, optional `agent_id`.
 
-**Per-trigger Memory Recap.** Each Email, Jira, GitHub, and Webhook trigger can carry a `trigger_recap_config` row exposed at `/api/triggers/{kind}/{id}/recap-config`, with a matching `/test-recap` preview endpoint. The trigger wizard includes a Memory Recap step whenever `case_memory_enabled=true`; trigger detail pages render a Memory Recap section for editing, disabling, and previewing saved configs. Dispatch injects recap output into both the default-agent continuous-task path and bound Flow `trigger_context.source.memory_recap`.
+**Per-trigger Memory Recap.** Each Email, Jira, GitHub, GitLab, and Webhook trigger can carry a `trigger_recap_config` row exposed at `/api/triggers/{kind}/{id}/recap-config`, with a matching `/test-recap` preview endpoint. The trigger wizard includes a Memory Recap step whenever `case_memory_enabled=true`; trigger detail pages render a Memory Recap section for editing, disabling, and previewing saved configs. Dispatch injects recap output into both the default-agent continuous-task path and bound Flow `trigger_context.source.memory_recap`.
 
 **Embedding contract.** Default: `local / all-MiniLM-L6-v2 / 384 / cosine`. When the selected/default `VectorStoreInstance` carries `extra_config.embedding_*`, those values are treated as the default for future case-memory writes. Each write resolves a `VectorStoreIndex`; changing the default contract later creates/uses a new index inside the same vector-store connection while old cases remain searchable through their snapshotted index/contract.
 
@@ -1997,7 +1997,7 @@ Built-in helpers (Source: `template_parser.py:69-82`): `truncate`, `upper`, `low
 
 #### Variable Reference panel (UI helper)
 
-The flow editor surfaces a collapsible **Variable Reference** panel under every templatable step-config field. It auto-populates with the output variables of every preceding step in the flow, plus per-trigger-kind deep payload paths when the source is a Jira/Email/GitHub/Webhook trigger.
+The flow editor surfaces a collapsible **Variable Reference** panel under every templatable step-config field. It auto-populates with the output variables of every preceding step in the flow, plus per-trigger-kind deep payload paths when the source is a Jira/Email/GitHub/GitLab/Webhook trigger.
 
 - **Click any chip** to insert `{{step_N.<field>}}` at the cursor.
 - **Drag any chip** onto the textarea/input to insert at the drop point.
@@ -2064,7 +2064,7 @@ New-user runbook:
 
 #### Trigger-generated flow badge
 
-Flows minted by `ensure_system_managed_flow_for_trigger()` (4-node Source/Gate/Conversation/Notification chain, `is_system_owned=true`) display a per-kind pill in the flows list and editor header — "Jira Trigger" (blue), "Email Trigger" (emerald), "GitHub Trigger" (violet), and "Webhook Trigger" (cyan). The badge tooltip explains: *"Auto-generated from <kind> trigger — editable, but not deletable. Delete the trigger to remove this flow."* The Delete button on the row is disabled to match. User-authored flows show no badge.
+Flows minted by `ensure_system_managed_flow_for_trigger()` (4-node Source/Gate/Conversation/Notification chain, `is_system_owned=true`) display a per-kind pill in the flows list and editor header — "Jira Trigger" (blue), "Email Trigger" (emerald), "GitHub Trigger" (violet), "GitLab Trigger" (orange), and "Webhook Trigger" (cyan). The badge tooltip explains: *"Auto-generated from <kind> trigger — editable, but not deletable. Delete the trigger to remove this flow."* The Delete button on the row is disabled to match. User-authored flows show no badge.
 
 The `FlowDefinitionResponse` (`backend/api/routes_flows.py:111+`) exposes the underlying flags so the UI can render correctly:
 
@@ -2152,7 +2152,7 @@ Provider selection is factory-driven: `backend/agent/skills/scheduler/factory.py
 
 **Source:** `frontend/components/triggers/TriggerCreationWizard.tsx` (~3,300 lines), `frontend/components/triggers/TriggerBreadthCards.tsx`, `frontend/app/flows/page.tsx`.
 
-A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It replaces the legacy trigger setup entry-points so operators see the same flow regardless of which trigger they're creating. The wizard is reachable from:
+A single wizard creates event triggers for Email, Webhook, Jira, GitHub, and GitLab. It replaces the legacy trigger setup entry-points so operators see the same flow regardless of which trigger they're creating. The wizard is reachable from:
 
 - Hub > Triggers > "+ Add Trigger" (kind picker shown).
 - `/hub/triggers` index "+ New Trigger" button (kind picker shown).
@@ -2161,9 +2161,9 @@ A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It 
 
 | # | Step | Universal? | What it does |
 |---|---|---|---|
-| 1 | **Kind** | yes | 4-tile `role="radiogroup"` (Email / Webhook / Jira / GitHub) with `role="radio"` + `aria-checked`. Skipped when an entry-point passes `initialKind`. |
-| 2 | **Source** | per-kind | Per-kind input grid: Jira (linked Hub Tool API connection + project key + JQL + poll interval + default agent + name), GitHub (linked Hub Tool API integration + owner + repo + events checklist + default agent + name), Email (Gmail account + saved query / label / from-address filters + default agent + name), Webhook (name + slug mode + callback URL + IP allowlist + rate limit). All inputs have `htmlFor`/`id` associations. Continue is gated on per-kind required fields. |
-| 3 | **Criteria** | per-kind | Jira: read-only JQL preview + "Test Query" button. GitHub: full event/action/filters builder via `CriteriaBuilder` with raw envelope JSON preview + "Test against sample payload" dry-run. Email: saved-query test against the connected mailbox. Webhook: JSONPath payload criteria tester. |
+| 1 | **Kind** | yes | 5-tile `role="radiogroup"` (Email / Webhook / Jira / GitHub / GitLab) with `role="radio"` + `aria-checked`. Skipped when an entry-point passes `initialKind`. |
+| 2 | **Source** | per-kind | Per-kind input grid: Jira (linked Hub Tool API connection + project key + JQL + poll interval + default agent + name), GitHub (linked Hub repository connection + owner + repo + events checklist + default agent + name), GitLab (linked Hub repository connection + full project path + events checklist + default agent + name), Email (Gmail account + saved query / label / from-address filters + default agent + name), Webhook (name + slug mode + callback URL + IP allowlist + rate limit). All inputs have `htmlFor`/`id` associations. Continue is gated on per-kind required fields. |
+| 3 | **Criteria** | per-kind | Jira: read-only JQL preview + "Test Query" button. GitHub/GitLab: full repository event/action/filter builder via `CriteriaBuilder` with raw envelope JSON preview + "Test against sample payload" dry-run. Email: saved-query test against the connected mailbox. Webhook: JSONPath payload criteria tester. |
 | 4 | **Memory Recap** | conditional | Rendered only when `/api/feature-flags.case_memory_enabled=true`. Configures recap enablement, query template, scope, k, similarity floor, vector kind, failed-case inclusion, injection position, and max recap length. Skipped entirely when case memory is disabled for the tenant. |
 | 5 | **Confirmation** | yes | Pre-save: summary cards (Kind / Default Agent / Status on Save / Trigger Name / per-kind specifics). Post-save: "Trigger created" panel + saved trigger card + **Wired Flow card** (auto-flow ID + status + "Open Flow Editor" CTA) when an auto-flow was minted. The CTA links to `/flows?edit=<auto_flow_id>`. |
 
@@ -2171,23 +2171,23 @@ A single wizard creates event triggers for Email, Webhook, Jira, and GitHub. It 
 
 When `TSN_FLOWS_AUTO_GENERATION_ENABLED=true`, the trigger CREATE endpoints call `flow_binding_service.ensure_system_managed_flow_for_trigger(...)` in the same transaction as the trigger row, minting a 4-node Source -> Gate -> Conversation -> Notification auto-flow with `is_system_owned=true, editable_by_tenant=true, deletable_by_tenant=false`. Output configuration writes through to that flow's Notification node via `flow_binding_service.update_auto_flow_notification(...)`, setting the engine-correct `recipient` field (older code wrote `recipient_phone`, which the engine ignored; see §13.4).
 
-The auto-flow ID is surfaced on every trigger Read schema (`JiraTriggerRead.auto_flow_id`, `EmailTriggerRead.auto_flow_id`, `GitHubTriggerRead.auto_flow_id`, `WebhookTriggerRead.auto_flow_id`). The Confirmation step reads it and renders the Wired Flow card; if no auto-flow was generated (older trigger, or feature flag off), the card falls back to a "Wire a custom Flow" CTA that deep-links to `/flows?source_trigger_kind=<kind>&source_trigger_id=<id>` (the Wave 4 deep-link prefill path).
+The auto-flow ID is surfaced on every trigger Read schema (`JiraTriggerRead.auto_flow_id`, `EmailTriggerRead.auto_flow_id`, `GitHubTriggerRead.auto_flow_id`, `GitLabTriggerRead.auto_flow_id`, `WebhookTriggerRead.auto_flow_id`). The Confirmation step reads it and renders the Wired Flow card; if no auto-flow was generated (older trigger, or feature flag off), the card falls back to a "Wire a custom Flow" CTA that deep-links to `/flows?source_trigger_kind=<kind>&source_trigger_id=<id>` (the Wave 4 deep-link prefill path).
 
-Trigger default-agent edits keep the generated system-managed Flow aligned: the trigger `default_agent_id`, the FlowDefinition default agent, and the generated Conversation node's `agent_id` are synchronized for Email and Jira updates.
+Trigger default-agent edits keep the generated system-managed Flow aligned: the trigger `default_agent_id`, the FlowDefinition default agent, and the generated Conversation node's `agent_id` are synchronized for Email, Jira, GitHub, GitLab, and Webhook updates.
 
 **Retired components:**
 
 - `TriggerSetupModal.tsx` — was used for Jira / GitHub creation before the unified trigger wizard.
 - `TriggerWizard.tsx` — was the productivity-style picker shell that dispatched to per-kind sub-wizards.
-- `EmailTriggerWizard.tsx` — was the standalone email-only create/edit wizard. Email trigger editing now happens on `/hub/triggers/email/{id}` through the shared `TriggerDetailShell`, matching Webhook, Jira, and GitHub.
+- `EmailTriggerWizard.tsx` — was the standalone email-only create/edit wizard. Email trigger editing now happens on `/hub/triggers/email/{id}` through the shared `TriggerDetailShell`, matching Webhook, Jira, GitHub, and GitLab.
 
-**A11y:** wizard inputs use `htmlFor`/`id` associations. Kind-picker tiles in step 1 are a `role="radiogroup"`. GitHub event/action chips are in `role="group"` + `aria-pressed`.
+**A11y:** wizard inputs use `htmlFor`/`id` associations. Kind-picker tiles in step 1 are a `role="radiogroup"`. GitHub/GitLab event/action chips are in `role="group"` + `aria-pressed`.
 
 **Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted at the top of the list, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround: user clicks the highlighted flow row's Edit button.
 
 ### 14.3.1 Trigger detail aggregates all binding kinds (2026-05-07)
 
-The trigger detail page previously only listed `flow_trigger_binding` rows even though Jira/GitHub/Email/Webhook events also fan out to `agent_team_trigger` and `continuous_subscription` rows at runtime. Two new reverse-lookup endpoints + UI cards close the gap so a single page faithfully represents what a trigger actually does end-to-end.
+The trigger detail page previously only listed `flow_trigger_binding` rows even though Jira/GitHub/GitLab/Email/Webhook events also fan out to `agent_team_trigger` and `continuous_subscription` rows at runtime. Two new reverse-lookup endpoints + UI cards close the gap so a single page faithfully represents what a trigger actually does end-to-end.
 
 - `GET /api/team-triggers?trigger_kind=&trigger_instance_id=` reads `agent_team_trigger` by JSON config; mutations reuse the existing per-team `PUT/DELETE` so the response carries `team_id`.
 - `GET /api/continuous-subscriptions?channel_type=&channel_instance_id=` leans on the existing `(tenant_id, channel_type, channel_instance_id)` composite index; mutations reuse the per-agent CRUD.
@@ -2198,7 +2198,7 @@ The change also fixes a class of bogus auto-flow run failures that surfaced on t
 
 ### 14.4 Triggered Flow Creation from Flows
 
-`/flows` > Create New Flow supports Triggered as a first-class execution method. The Triggered path asks the operator to select an existing Hub trigger: Email/Gmail, Jira, GitHub, or Webhook. Schedule is not a Hub trigger kind, and Continuous Agents are not selectable as a Flow builder source.
+`/flows` > Create New Flow supports Triggered as a first-class execution method. The Triggered path asks the operator to select an existing Hub trigger: Email/Gmail, Jira, GitHub, GitLab, or Webhook. Schedule is not a Hub trigger kind, and Continuous Agents are not selectable as a Flow builder source.
 
 After a trigger is selected, the Flow builder creates the Source step automatically at position 1 with `trigger_kind` and `trigger_instance_id`, locks it in place, and creates the `flow_trigger_binding` row when the flow is saved. Source is not shown in the manual step palette because an unwired Source step cannot fire.
 
@@ -2665,6 +2665,23 @@ GitHub triggers receive signed repository webhook deliveries and dispatch matchi
 **Stored config:** linked `github_integration_id`, repository owner/name, encrypted webhook-secret preview, event filters, branch/path/author filters, trigger criteria, default agent, and delivery/activity cursors. Credential tests happen on the Hub integration surface.
 
 **Inbound contract:** GitHub sends `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery`. The route validates HMAC using the stored webhook secret, applies repo/event/branch/path/author filters, dedupes on delivery id, and dispatches via `TriggerDispatchService`.
+
+#### GitLab triggers
+
+**Source:** `backend/api/routes_gitlab_triggers.py`, `backend/api/routes_gitlab_inbound.py`, `backend/channels/gitlab/trigger.py`
+
+GitLab triggers receive token-gated GitLab.com project webhook deliveries and dispatch matching events to continuous-agent wakeups, bound Flows, and Agent Teams. They select a tenant-owned Hub GitLab integration; trigger-local GitLab PATs are not accepted.
+
+**API surface:**
+- `GET/POST /api/triggers/gitlab`
+- `GET/PATCH/DELETE /api/triggers/gitlab/{id}`
+- `POST /api/triggers/gitlab/{id}/inbound`
+- `POST /api/triggers/gitlab/test-criteria`
+- `POST /api/triggers/gitlab/{id}/test-criteria`
+
+**Stored config:** linked `gitlab_integration_id`, full GitLab project path (`group/subgroup/project`), encrypted webhook-secret preview, event filters, branch/path/author filters, trigger criteria, default agent, and delivery/activity cursors. Credential tests happen on the Hub repository integration surface.
+
+**Inbound contract:** GitLab sends `X-Gitlab-Token`, `X-Gitlab-Event`, and usually `X-Gitlab-Event-UUID`. The route validates the token against the encrypted trigger secret, applies project/event/branch/path/author filters, dedupes on the UUID or a body hash fallback, and dispatches a normalized repository payload via `TriggerDispatchService`.
 
 ### 15.6 Playground
 
@@ -3442,7 +3459,7 @@ Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool sc
 
 GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongside the `code_repository` skill (§9.1) and the GitHub trigger criteria envelope (§14.3 wizard step 3). One integration row provides credentials for both the agent-facing skill and the trigger pipeline.
 
-**Hub UI:** Hub → Tool APIs → Developer Tools → GitHub. The modal asks for:
+**Hub UI:** Hub → Repository Integrations → GitHub. The modal asks for:
 
 | Field | Required | Notes |
 |---|---|---|
@@ -3483,7 +3500,36 @@ Same tool-spec gating contract as `ticket_management` and the v0.7.0 granular Gm
 
 **Trigger criteria envelope** (used by the GitHub trigger wizard, §14.3): `{criteria_version: 1, event: 'pull_request', actions: ['opened', 'reopened', ...], filters: {branch_filter, path_filters, author_filter, exclude_drafts, title_contains, body_contains}, ordering: 'oldest_first'}`. The evaluator at `backend/channels/github/criteria.py` returns `(matched, reason)` for every rejection path so the dry-run "Test against sample payload" surface in the wizard's Criteria step (and on the existing trigger detail Criteria tab) can show why a sample PR was filtered out.
 
-### 20.4.3 Password Vault (1Password provider)
+### 20.4.3 GitLab (GitLab.com + code_repository skill)
+
+**Sources:** `backend/services/gitlab_integration_service.py`, `backend/api/routes_gitlab_integrations.py`, `backend/hub/gitlab/gitlab_repository_service.py`, `backend/api/routes_gitlab_triggers.py`, `backend/channels/gitlab/trigger.py`, `frontend/app/hub/page.tsx` (GitLabIntegrationModal).
+
+GitLab is a polymorphic subclass of `HubIntegration` that provides GitLab.com repository access for the `code_repository` skill and GitLab repository triggers. v1 targets `https://gitlab.com/api/v4`; self-managed GitLab and OAuth are out of scope.
+
+**Hub UI:** Hub → Repository Integrations → GitLab. The modal asks for:
+
+| Field | Required | Notes |
+|---|---|---|
+| Personal/project access token | yes | Stored encrypted with the API-key encryption key. Preview shown as `<first 4>...<last 4>` only. |
+| Default project path | optional | Full path such as `group/subgroup/project`; used when a read action omits the project. |
+| Enabled | yes | Pauses or enables use of this shared connection. |
+
+**Routes:**
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/hub/gitlab-integrations` | Create. Normalizes default project paths and stores encrypted token material. |
+| `GET /api/hub/gitlab-integrations` | List for the tenant; PAT preview masked. |
+| `PATCH /api/hub/gitlab-integrations/{id}` | Update name / token / default project path / active state. A blank token leaves the stored token unchanged. |
+| `DELETE /api/hub/gitlab-integrations/{id}` | Returns `409` when referenced by any `AgentSkillIntegration(skill_type='code_repository')` or FK-linked `GitLabChannelInstance`. |
+| `POST /api/hub/gitlab-integrations/test-connection` | Raw-creds dry-run. Uses GET-only GitLab.com calls and returns connection status. |
+| `POST /api/hub/gitlab-integrations/{id}/test-connection` | Saved-creds dry-run for already-stored integrations. |
+
+**Code Repository skill:** the same `repository_operation` tool chooses GitLab when the agent skill config stores `provider: "gitlab"`. GitLab maps `pull_request` actions to merge requests and `pr_number` to MR IID. Read actions (`search_repos`, `list_pull_requests`, `read_pull_request`, `list_issues`, `read_issue`) use URL-encoded nested project paths. GitLab write actions remain fail-closed and are not enabled by default.
+
+**Trigger criteria envelope:** GitLab uses the shared repository criteria model. Merge request webhook events normalize to canonical `pull_request` criteria for backward compatibility while provider-prefixed dispatch payloads retain GitLab-specific names such as `gitlab.merge_request`, `gitlab.push`, `gitlab.issue`, `gitlab.note`, `gitlab.tag`, and `gitlab.pipeline`.
+
+### 20.4.4 Password Vault (1Password provider)
 
 **Sources:** `backend/api/routes_password_vault_integrations.py`, `backend/services/password_vault_service.py`, `backend/agent/skills/password_vault_skill.py`, `backend/flows/flow_engine.py`, `frontend/components/password-vault/*`, `frontend/app/hub/page.tsx`.
 
@@ -5077,7 +5123,7 @@ Role mapping summary (`add_rbac_tables.py:422-495`):
 | **Tenant** | An isolated organization — owns users, agents, flows, memory, knowledge, integrations. Represented by `tenant` table; id is a string like `tenant_20251202232822`. |
 | **Agent** | A configurable AI persona (provider + model + persona + skills + tools + security profile + channels + knowledge). Scoped to one tenant. |
 | **Flow** | A multi-step automated workflow. Types: Conversation, Notification, Workflow, Task. 15+ step types: Source (trigger-owned entry, locked at position 1), Notification, Message, Tool, Conversation, Slash Command, Skill, Custom Skill, Summarization, Gate (`all`/`any`/programmatic + `in`/`not_in`), Browser Automation, Password Vault, HTTP Request, Data Transform, Financial Record Store, Financial Bill Store. Plus legacy aliases (`Trigger`, `Subflow`, `AgentNode`). |
-| **Skill** | A built-in agent capability (22 shipped: Audio TTS, Audio Transcription, Web Search, Image Analysis, Image Gen/Edit, Browser Automation, Password Vault, Gmail, Code Repository (GitHub), Ticket Management (Jira), Automation, Scheduler, Flows, Flight Search, Shell, Sandboxed Tools, Knowledge Sharing, Adaptive Personality, OKG Term Memory, Agent Switcher, Agent Communication, Custom adapter). |
+| **Skill** | A built-in agent capability (22 shipped: Audio TTS, Audio Transcription, Web Search, Image Analysis, Image Gen/Edit, Browser Automation, Password Vault, Gmail, Code Repository (GitHub/GitLab), Ticket Management (Jira), Automation, Scheduler, Flows, Flight Search, Shell, Sandboxed Tools, Knowledge Sharing, Adaptive Personality, OKG Term Memory, Agent Switcher, Agent Communication, Custom adapter). |
 | **Custom Skill** | Tenant-authored skill — Instruction (prompt injection), Script (Python/Bash/Node in sandbox), or MCP-Server (external MCP connection). |
 | **Tool (Sandboxed)** | A security/utility binary (nmap, dig, nuclei, httpx, subfinder, katana, sqlmap, webhook, whois) executed in a per-tenant Docker container. |
 | **Persona** | A reusable personality template — role, tone preset, personality traits, per-persona skills/tools/knowledge, guardrails. |
@@ -5090,12 +5136,12 @@ Role mapping summary (`add_rbac_tables.py:422-495`):
 | **WAHA / whatsmeow** | Underlying WhatsApp Web automation libraries used by the WhatsApp MCP containers (see `tester-mcp` running Go 1.24 + whatsmeow). |
 | **OKG** | Own (Ontology) Knowledge Graph — multi-tool registration `okg_store` / `okg_recall` / `okg_forget` shipped in v0.6.0. |
 | **Vector Store** | External vector DB integrations (e.g., Pinecone, Qdrant, MongoDB Atlas, local Chroma) registered under `/api/vector-stores`. v0.7.0 separates connection lifecycle from physical indexes via `VectorStoreIndex`, so a single connection can host many indexes per surface (Agent KB, Project KB, long-term memory) with independent embedding contracts. |
-| **Hub** | Tenant-facing integration marketplace, split in v0.7.0 into four roles: **Channels** (WhatsApp/Telegram/Slack/Discord/Playground), **Triggers** (Email/Webhook/Jira/GitHub), **Tool APIs** (Jira, GitHub, 1Password Password Vault), and **Local Services** (auto-provisioned Whisper/Speaches, Kokoro, Ollama). |
+| **Hub** | Tenant-facing integration marketplace, split into roles: **Channels** (WhatsApp/Telegram/Slack/Discord/Playground), **Triggers** (Email/Webhook/Jira/GitHub/GitLab), **Repository Integrations** (GitHub/GitLab plus developer tooling), **Tool APIs** (Jira, 1Password Password Vault, search/flight providers), and **Local Services** (auto-provisioned Whisper/Speaches, Kokoro, Ollama). |
 | **Studio** | The configuration surface — Agents, Continuous Agents, Teams, Personas, Contacts, Projects, Tone Presets, Knowledge Bases, Custom Skills, A2A Communications, Sentinel profiles. |
 | **Watcher** | The observability surface (7 top-level tabs after the v0.7.x IA reshape) — Dashboard · Graph View · Agents (5 sub-tabs: Continuous Agents, Wake Events, Conversations, Team Runs, A2A Comms) · Flows · Security · Channel Health · Billing. |
 | **Continuous Agent** | An always-on agent that wakes on a trigger event with daily budget caps and a required Purpose + `action_kind` (`notify_only` / `reply` / `tool_use` / `flow_dispatch`). UI rename of the legacy "Watcher Monitor" surface; backend `ContinuousAgent` model unchanged. |
 | **Agent Team** | A line- or mesh-topology group of agents that work together on one goal under a hidden internal coordinator (mesh) or a fixed `execution_order` (line). Has its own Sentinel profile override and Watcher Team Runs observability. |
-| **Trigger** | A non-conversational event source (Email/Gmail, Webhook, Jira, GitHub) that fans wake events out to bound flows, continuous-agent subscriptions, and matching agent-team triggers in parallel. Each trigger mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification) on creation. |
+| **Trigger** | A non-conversational event source (Email/Gmail, Webhook, Jira, GitHub, GitLab) that fans wake events out to bound flows, continuous-agent subscriptions, and matching agent-team triggers in parallel. Each trigger mints a system-managed FlowDefinition (Source → Gate → Conversation → Notification) on creation. |
 | **Playground** | Interactive in-browser chat for development and testing — threads, documents, slash commands, streaming. |
 | **Beacon** | Installable endpoint agent for Shell skill (WebSocket C2). Separate from Beacon here meaning the GKE/K8s concept. |
 | **Toolbox** | Per-tenant Docker container hosting sandboxed tools. Managed by `ToolboxContainerService`. |

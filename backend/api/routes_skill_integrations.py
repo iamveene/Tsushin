@@ -25,6 +25,7 @@ from models import (
     GoogleFlightsIntegration,
     JiraIntegration,
     GitHubIntegration,
+    GitLabIntegration,
     PasswordVaultIntegration,
     Agent,
 )
@@ -353,6 +354,15 @@ async def update_skill_integration(
                     status_code=404,
                     detail=f"Integration {request.integration_id} not found"
                 )
+            if skill_type == "code_repository":
+                provider = str((request.config or {}).get("provider") or hub.type or "github").strip().lower()
+                if provider == "github_app":
+                    provider = "github"
+                if hub.type not in {"github", "gitlab"} or provider != hub.type:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Code Repository provider {provider} cannot use integration type {hub.type}",
+                    )
 
         # Check if integration already exists
         existing = db.query(AgentSkillIntegration)\
@@ -703,7 +713,7 @@ async def get_available_providers(
             }
 
         elif skill_type == 'code_repository':
-            # Code Repository providers — GitHub today; Bitbucket/GitLab later.
+            # Code Repository providers — GitHub and GitLab programmatic REST.
             providers = []
 
             # GitHub (programmatic mode only — agentic surfaces as "coming soon"
@@ -734,6 +744,35 @@ async def get_available_providers(
                 "requires_integration": True,
                 "available_integrations": github_integrations,
                 "is_default": True,
+            })
+
+            gitlab_list = db.query(GitLabIntegration)\
+                .join(HubIntegration, HubIntegration.id == GitLabIntegration.id)\
+                .filter(GitLabIntegration.is_active == True)\
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)\
+                .all()
+
+            gitlab_integrations = [
+                {
+                    "integration_id": gl.id,
+                    "name": gl.name or gl.display_name or f"GitLab #{gl.id}",
+                    "default_namespace": gl.default_namespace,
+                    "default_project": gl.default_project,
+                    "default_project_path": gl.default_project_path,
+                    "provider_mode": getattr(gl, "provider_mode", None) or "programmatic",
+                    "health_status": gl.health_status,
+                }
+                for gl in gitlab_list
+                if (getattr(gl, "provider_mode", None) or "programmatic") == "programmatic"
+            ]
+
+            providers.append({
+                "provider_type": "gitlab",
+                "provider_name": "GitLab",
+                "description": "Search projects, read merge requests and issues, and (when enabled) act through GitLab.com REST API",
+                "requires_integration": True,
+                "available_integrations": gitlab_integrations,
+                "is_default": False,
             })
 
             # Placeholder for a future GitHub App / MCP transport — surface but

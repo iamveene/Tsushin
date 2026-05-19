@@ -34,6 +34,7 @@ from models import (
     DeliveryPolicy,
     EmailChannelInstance,
     GitHubChannelInstance,
+    GitLabChannelInstance,
     JiraChannelInstance,
     SentinelProfile,
     WakeEvent,
@@ -158,6 +159,7 @@ _CHANNEL_INSTANCE_MODELS: dict[str, Type] = {
     "email": EmailChannelInstance,
     "jira": JiraChannelInstance,
     "github": GitHubChannelInstance,
+    "gitlab": GitLabChannelInstance,
     "webhook": WebhookIntegration,
     "whatsapp": WhatsAppMCPInstance,
 }

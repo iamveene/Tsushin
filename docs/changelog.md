@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — GitLab repository integration foundation (2026-05-19)
+
+- Added GitLab.com as a first-class repository provider alongside GitHub: tenant-scoped Hub connections, encrypted PAT storage with preview-only reads, `/api/hub/gitlab-integrations`, `/api/triggers/gitlab`, criteria dry-runs, inbound webhook ingestion, generated system-flow support, default-agent sync, and Team trigger bindings.
+- Extended the Code Repository skill to select `provider=github|gitlab`; existing configs without a provider continue to resolve as GitHub. GitLab read actions use GitLab REST API project paths and MR/issue semantics, while GitLab write actions remain fail-closed/unsupported unless a future release explicitly enables them.
+- Promoted repository trigger criteria to shared GitHub/GitLab event constants for push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events, preserving legacy GitHub PR criteria and top-level filters.
+- Updated Hub Repository Integrations, Agent Skills, Trigger Wizard/detail/index, Team Wizard/detail bindings, Flow Source rendering, documentation, and the generated OpenAPI artifact for GitHub/GitLab repository parity.
+
 ### Fixed — Empty skill configuration modals (2026-05-19)
 
 - Removed dead **Configure** and **Edit Options** affordances from standard skill cards when the only remaining schema fields are retired legacy/hybrid/keyword-trigger controls or other non-configurable runtime plumbing.

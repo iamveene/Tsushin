@@ -66,7 +66,7 @@ export default function AgentVsFlowExplainer({ kind, className }: Props) {
           title="Continuous Agent"
           tagline="Always-on wrapper around an existing agent that wakes on external events."
           bullets={[
-            'Reacts to inbound events (email, Jira, GitHub, webhook).',
+            'Reacts to inbound events (email, Jira, GitHub, GitLab, webhook).',
             'Daily budget enforcement (runs/tokens/tool-calls) + persistent run history.',
             'Configure in Studio → Continuous Agents · monitor in Watcher → Agents.',
           ]}

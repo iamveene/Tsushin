@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/team-triggers", tags=["agent-team-triggers"])
 
 
-_SUPPORTED_KINDS = {"jira", "github", "webhook", "gmail"}
+_SUPPORTED_KINDS = {"jira", "github", "gitlab", "webhook", "gmail"}
 
 
 def _serialize(
