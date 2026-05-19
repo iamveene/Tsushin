@@ -802,7 +802,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
           providerKey === 'web_search'
             ? skillConfig.provider
             : providerKey === 'code_repository'
-              ? (skillConfig.provider || integrationConfig.provider || integration.scheduler_provider)
+              ? (integrationConfig.provider || skillConfig.provider || integration.scheduler_provider)
               : integration.scheduler_provider
         setSelectedProvider(
           String(configuredProvider || defaultProvider)
@@ -1451,7 +1451,7 @@ export default function AgentSkillsManager({ agentId }: Props) {
         providerDisplay = 'Atlassian Jira'
         integrationDisplay = integration.integration_name || ''
       } else if (providerKey === 'code_repository') {
-        const provider = String(config.provider || integration.config?.provider || integration.scheduler_provider || '')
+        const provider = String(integration.config?.provider || config.provider || integration.scheduler_provider || '')
         providerDisplay = repositoryProviderLabel(provider)
         integrationDisplay = integration.integration_name || ''
       } else if (providerKey === 'password_vault') {

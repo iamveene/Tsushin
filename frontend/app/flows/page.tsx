@@ -17,6 +17,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useToast } from '@/contexts/ToastContext'
 import { useAuth } from '@/contexts/AuthContext'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import {
   api,
   type FlowDefinition,
@@ -3090,6 +3091,7 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
   prefillTriggerName?: string
 }) {
   const toast = useToast()
+  const repositoryAutomationWizard = useRepositoryAutomationWizard()
   const [step, setStep] = useState<'config' | 'steps'>('config')
   const hasTriggerPrefill = Boolean(prefillTriggerKind && prefillTriggerId > 0)
   const initialTriggerKind = prefillTriggerKind || 'email'
@@ -3497,9 +3499,27 @@ function CreateFlowModal({ agents, contacts, personas, customTools, customSkills
                   <div>
                     <div className="flex items-center justify-between gap-3 mb-2">
                       <label className="block text-sm font-medium text-cyan-50">Existing trigger</label>
-                      <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
-                        Manage triggers
-                      </a>
+                      <div className="flex items-center gap-3">
+                        {(selectedTriggerKind === 'github' || selectedTriggerKind === 'gitlab') && (
+                          <button
+                            type="button"
+                            onClick={() => repositoryAutomationWizard.openWizard({
+                              provider: selectedTriggerKind,
+                              templateId: 'repository_review_team',
+                              triggerKind: selectedTriggerKind,
+                              triggerId: selectedTriggerId > 0 ? selectedTriggerId : null,
+                              triggerName: selectedTrigger?.label || null,
+                              source: 'flow_setup',
+                            })}
+                            className="text-xs text-cyan-200 hover:text-white"
+                          >
+                            Repository wizard
+                          </button>
+                        )}
+                        <a href="/hub?tab=triggers" className="text-xs text-cyan-200 hover:text-white">
+                          Manage triggers
+                        </a>
+                      </div>
                     </div>
 
                     {triggerOptionsLoading && (
@@ -7110,8 +7130,8 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                   </Link>
                   . To change <span className="text-white">what happens after</span>, edit the
                   steps below — the Source step shows the trigger config, the Gate runs
-                  secondary filtering, the Default agent processes the event, and the
-                  Notification fires once enabled.
+                  secondary filtering, the Default agent step runs only when an agent is
+                  assigned, and the Notification fires once enabled.
                 </p>
               </div>
             )

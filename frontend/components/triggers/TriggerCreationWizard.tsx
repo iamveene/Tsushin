@@ -42,6 +42,7 @@ import {
 import CriteriaBuilder from '@/components/triggers/CriteriaBuilder'
 import JiraIssuePreviewList from '@/components/triggers/JiraIssuePreviewList'
 import useGmailOAuthPoller from '@/hooks/useGmailOAuthPoller'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import {
   AlertTriangleIcon,
   CheckCircleIcon,
@@ -372,6 +373,7 @@ export default function TriggerCreationWizard({
   initialKind = null,
 }: Props) {
   const router = useRouter()
+  const repositoryAutomationWizard = useRepositoryAutomationWizard()
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [kind, setKind] = useState<TriggerId | null>(initialKind)
@@ -1291,6 +1293,22 @@ export default function TriggerCreationWizard({
     router.push(`/hub/triggers/${kind}/${triggerId}`)
   }, [kind, savedTrigger, onClose, router])
 
+  const handleOpenRepositoryAutomation = useCallback(() => {
+    if (!savedTrigger || (kind !== 'github' && kind !== 'gitlab')) return
+    const repositoryLabel = kind === 'gitlab'
+      ? (savedTrigger as GitLabTrigger).project_path
+      : `${(savedTrigger as GitHubTrigger).repo_owner}/${(savedTrigger as GitHubTrigger).repo_name}`
+    repositoryAutomationWizard.openWizard({
+      provider: kind,
+      triggerKind: kind,
+      triggerId: (savedTrigger as GitHubTrigger | GitLabTrigger).id,
+      triggerName: triggerLabel(savedTrigger),
+      repositoryLabel,
+      source: 'trigger_success',
+    })
+    onClose()
+  }, [kind, onClose, repositoryAutomationWizard, savedTrigger])
+
   const handleCopySecret = useCallback(async () => {
     if (!webhookSecret) return
     try {
@@ -2169,6 +2187,15 @@ export default function TriggerCreationWizard({
                 <span className="rounded-lg border border-tsushin-border/30 bg-tsushin-slate/5 px-4 py-2 text-xs text-tsushin-slate/60">
                   Wired flow not generated (flows feature flag disabled)
                 </span>
+              )}
+              {(kind === 'github' || kind === 'gitlab') && (
+                <button
+                  type="button"
+                  onClick={handleOpenRepositoryAutomation}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-opacity ${accentButtonClass}`}
+                >
+                  Create Review Automation
+                </button>
               )}
             </div>
           </>,

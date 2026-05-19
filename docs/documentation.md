@@ -242,7 +242,7 @@ Phase 9 replaces the minimal `/studio/teams/{id}` landing with the operational T
 
 The Topology tab renders a React Flow `TeamCanvas`. Line teams show ordered member nodes with sequential handoff edges; mesh teams show the hidden coordinator plus member spokes. Active non-team-member agents can be dragged from the sidebar onto the canvas to add them to the team, line teams can be reordered through `/members/order`, and member node drag-stop persists `position_x`/`position_y` through `PATCH /api/teams/{team_id}/members/{agent_id}`. The same member PATCH contract also updates `is_required` and optional order metadata, and the public v1 API mirrors the route.
 
-Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, GitLab, and Jira trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
+Editing is locked while a `pending` or `running` team run exists, and archived teams stay read-only. The Triggers tab can recover partial Phase 8 wizard creation by adding, editing, enabling, disabling, or removing Webhook, GitHub, GitLab, Jira, and Gmail trigger bindings after the team already exists. The Settings tab edits name, description, goal, lifecycle status, run limits, shared sandboxed tools, and archive.
 
 The Sentinel tab adds a nullable `agent_team.sentinel_profile_id` override via migration `0085_agent_team_sentinel_profile.py`. When set, team-run start and handoff Sentinel checks resolve that team profile before member or tenant defaults. Clearing the field returns the team to the existing inherited Sentinel profile hierarchy.
 
@@ -2073,7 +2073,7 @@ The `FlowDefinitionResponse` (`backend/api/routes_flows.py:111+`) exposes the un
 | `is_system_owned` | True if the flow was minted by a trigger wizard. |
 | `editable_by_tenant` | True if step config can be edited by the tenant (auto-flows ship with True so the casual-user "Enable Notification" toggle works). |
 | `deletable_by_tenant` | False on auto-flows — they live and die with the trigger. |
-| `system_trigger_kind` | The trigger kind that minted the flow (`jira` / `email` / `github` / `webhook`), or `null` for user-authored flows. |
+| `system_trigger_kind` | The trigger kind that minted the flow (`jira` / `email` / `github` / `gitlab` / `webhook`), or `null` for user-authored flows. |
 
 ### 13.5 Flow Execution Status Lifecycle
 
@@ -2185,14 +2185,35 @@ Trigger default-agent edits keep the generated system-managed Flow aligned: the 
 
 **Known polish gap (filed as v0.7.x ticket, non-blocking):** clicking "Open Flow Editor" from the wizard's Confirmation step lands on `/flows` with the new flow highlighted at the top of the list, but the EditFlowModal does not auto-open on the same-app `router.push`. Direct navigation to `/flows?edit=<id>` works correctly. Workaround: user clicks the highlighted flow row's Edit button.
 
-### 14.3.1 Trigger detail aggregates all binding kinds (2026-05-07)
+### 14.3.1 Repository Automation Wizard (GitHub/GitLab)
+
+The Repository Automation Wizard is the recommended path for GitHub/GitLab repository automation. It composes existing primitives instead of inventing a parallel runtime:
+
+| Primitive | Contract |
+|---|---|
+| Repository Integration | Credential and provider target. Stores tenant-scoped GitHub/GitLab PAT configuration once. |
+| Trigger | Listener. Receives repository webhooks and applies repository criteria before fan-out. |
+| Flow | Deterministic steps. Runs the generated Source, criteria Gate, review/skill/conversation, and Notification path. |
+| Agent | Actor with tools. Uses Code Repository and optional A2A capability according to its skill configuration. |
+| Team | Coordinated actors. Runs line or mesh collaboration with member agents and team-scoped audit. |
+
+The wizard ships two repository-review templates:
+
+- **Review team:** creates a Team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The active Team trigger binding is the primary executor; the generated Flow is still created and linked as the editable deterministic output surface, but its trigger binding stays inactive so the same PR/MR is not reviewed twice.
+- **Standalone PR/MR reviewer agent:** creates or selects one reviewer agent, enables Code Repository access for the selected provider, enables A2A, and leaves the generated Flow binding active so the Flow routes to that reviewer.
+
+Repository criteria remain PR/MR-first where the current UI is still review-centered. GitHub copy should say pull request; GitLab copy should say merge request while preserving the normalized `pull_request` / `pr_number` API aliases used by the shared Code Repository skill.
+
+The backend entrypoint is `POST /api/wizards/repository-automation`. It accepts `provider`, `integration_id`, provider-specific repository target (`repo_owner` + `repo_name` or `project_path`), `template_id`, optional `existing_trigger_id`, repository events and filters, criteria, names, and routing preferences. The response returns created/reused `integration`, `trigger`, `flow`, optional `team`, `agents[]`, `bindings[]`, `links`, and `routing_mode`.
+
+### 14.3.2 Trigger detail aggregates all binding kinds (2026-05-07)
 
 The trigger detail page previously only listed `flow_trigger_binding` rows even though Jira/GitHub/GitLab/Email/Webhook events also fan out to `agent_team_trigger` and `continuous_subscription` rows at runtime. Two new reverse-lookup endpoints + UI cards close the gap so a single page faithfully represents what a trigger actually does end-to-end.
 
 - `GET /api/team-triggers?trigger_kind=&trigger_instance_id=` reads `agent_team_trigger` by JSON config; mutations reuse the existing per-team `PUT/DELETE` so the response carries `team_id`.
 - `GET /api/continuous-subscriptions?channel_type=&channel_instance_id=` leans on the existing `(tenant_id, channel_type, channel_instance_id)` composite index; mutations reuse the per-agent CRUD.
 - `WiredTeamsCard` and `WiredContinuousCard` mirror `WiredFlowsCard` in `OutputsSection` with pause / resume / unbind actions, gated on `agents.read` / `agents.write`. System-owned continuous subscriptions render disabled controls with an explanatory tooltip.
-- Email triggers translate `channel_type → 'gmail'` to match the dispatcher's storage. The teams card hides on email triggers because team Gmail bindings flow through their own surface (see §2.4.6 update).
+- Email triggers translate `channel_type → 'gmail'` to match the dispatcher's storage. Team bindings are supported for Gmail-backed Email triggers, so trigger detail and Team surfaces should describe Gmail alongside Webhook/GitHub/GitLab/Jira when presenting team fan-out.
 
 The change also fixes a class of bogus auto-flow run failures that surfaced on the trigger detail page when the originating wake event lacked a recipient — the auto-generated Notification step now resolves recipients consistently with manual flows.
 

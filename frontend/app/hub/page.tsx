@@ -76,6 +76,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import { useWhatsAppWizard } from '@/contexts/WhatsAppWizardContext'
 import { useGoogleWizard, useGoogleWizardComplete } from '@/contexts/GoogleWizardContext'
 import { useProviderWizard, useProviderWizardComplete } from '@/contexts/ProviderWizardContext'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import IntegrationSummary from '@/components/hub/IntegrationSummary'
 import {
   GeminiIcon,
@@ -786,6 +787,7 @@ function GitHubIntegrationsPanel({
   onAdd,
   onEdit,
   onDelete,
+  onAutomate,
 }: {
   integrations: GitHubIntegration[]
   loading: boolean
@@ -793,6 +795,7 @@ function GitHubIntegrationsPanel({
   onAdd: () => void
   onEdit: (integration: GitHubIntegration) => void
   onDelete: (integration: GitHubIntegration) => void
+  onAutomate: (integration?: GitHubIntegration | null) => void
 }) {
   return (
     <div className="card p-5 hover-glow group border-violet-700/30">
@@ -811,13 +814,22 @@ function GitHubIntegrationsPanel({
             {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
           </span>
           {canWriteHub && (
-            <button
-              type="button"
-              onClick={onAdd}
-              className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
-            >
-              + Add
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => onAutomate(null)}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+              >
+                Automate
+              </button>
+              <button
+                type="button"
+                onClick={onAdd}
+                className="rounded-lg bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-200 transition-colors hover:bg-violet-500/30 hover:text-white"
+              >
+                + Add
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -858,6 +870,13 @@ function GitHubIntegrationsPanel({
                   </div>
                   {canWriteHub && (
                     <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onAutomate(integration)}
+                        className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
+                      >
+                        Automate
+                      </button>
                       <button
                         type="button"
                         onClick={() => onEdit(integration)}
@@ -1012,6 +1031,7 @@ function GitLabIntegrationsPanel({
   onAdd,
   onEdit,
   onDelete,
+  onAutomate,
 }: {
   integrations: GitLabIntegration[]
   loading: boolean
@@ -1019,6 +1039,7 @@ function GitLabIntegrationsPanel({
   onAdd: () => void
   onEdit: (integration: GitLabIntegration) => void
   onDelete: (integration: GitLabIntegration) => void
+  onAutomate: (integration?: GitLabIntegration | null) => void
 }) {
   return (
     <div className="card p-5 hover-glow group border-orange-700/30">
@@ -1037,13 +1058,22 @@ function GitLabIntegrationsPanel({
             {integrations.length > 0 ? `${integrations.length} configured` : 'Not configured'}
           </span>
           {canWriteHub && (
-            <button
-              type="button"
-              onClick={onAdd}
-              className="rounded-lg bg-orange-500/20 px-3 py-1.5 text-xs font-medium text-orange-200 transition-colors hover:bg-orange-500/30 hover:text-white"
-            >
-              + Add
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => onAutomate(null)}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
+              >
+                Automate
+              </button>
+              <button
+                type="button"
+                onClick={onAdd}
+                className="rounded-lg bg-orange-500/20 px-3 py-1.5 text-xs font-medium text-orange-200 transition-colors hover:bg-orange-500/30 hover:text-white"
+              >
+                + Add
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1081,6 +1111,13 @@ function GitLabIntegrationsPanel({
                   </div>
                   {canWriteHub && (
                     <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onAutomate(integration)}
+                        className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
+                      >
+                        Automate
+                      </button>
                       <button
                         type="button"
                         onClick={() => onEdit(integration)}
@@ -1127,6 +1164,7 @@ export default function HubPage() {
   const { forceOpenWizard: openWhatsAppWizard } = useWhatsAppWizard()
   const { openWizard: openGoogleWizard } = useGoogleWizard()
   const { openWizard: openProviderWizard } = useProviderWizard()
+  const { openWizard: openRepositoryAutomationWizard } = useRepositoryAutomationWizard()
   // loadHubIntegrations is defined later in the component; keep a ref so we can
   // invoke the latest version from the wizard-complete callback without
   // dancing around declaration order.
@@ -2961,6 +2999,17 @@ export default function HubPage() {
     setShowGithubIntegrationModal(true)
   }
 
+  const openGitHubAutomationWizard = (integration?: GitHubIntegration | null) => {
+    openRepositoryAutomationWizard({
+      provider: 'github',
+      integrationId: integration?.id ?? null,
+      repositoryLabel: integration?.default_owner && integration?.default_repo
+        ? `${integration.default_owner}/${integration.default_repo}`
+        : integration?.default_owner || null,
+      source: 'hub',
+    })
+  }
+
   const saveGitHubIntegration = async (draft: GitHubIntegrationDraft) => {
     setSaving(true)
     setError(null)
@@ -3018,6 +3067,15 @@ export default function HubPage() {
   const openEditGitLabIntegrationModal = (integration: GitLabIntegration) => {
     setEditingGitlabIntegration(integration)
     setShowGitlabIntegrationModal(true)
+  }
+
+  const openGitLabAutomationWizard = (integration?: GitLabIntegration | null) => {
+    openRepositoryAutomationWizard({
+      provider: 'gitlab',
+      integrationId: integration?.id ?? null,
+      repositoryLabel: integration?.default_project_path || null,
+      source: 'hub',
+    })
   }
 
   const saveGitLabIntegration = async (draft: GitLabIntegrationDraft) => {
@@ -6576,6 +6634,7 @@ export default function HubPage() {
                   onAdd={openAddGitHubIntegrationModal}
                   onEdit={openEditGitHubIntegrationModal}
                   onDelete={deleteGitHubIntegration}
+                  onAutomate={openGitHubAutomationWizard}
                 />
 
                 <GitLabIntegrationsPanel
@@ -6585,6 +6644,7 @@ export default function HubPage() {
                   onAdd={openAddGitLabIntegrationModal}
                   onEdit={openEditGitLabIntegrationModal}
                   onDelete={deleteGitLabIntegration}
+                  onAutomate={openGitLabAutomationWizard}
                 />
 
                 {/* Info Box */}

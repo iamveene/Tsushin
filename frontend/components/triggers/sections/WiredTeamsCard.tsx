@@ -26,6 +26,7 @@ import {
 } from '@/lib/client'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
+import { useRepositoryAutomationWizard } from '@/contexts/RepositoryAutomationWizardContext'
 import {
   ExternalLinkIcon,
   PauseIcon,
@@ -66,6 +67,7 @@ function topologyBadge(t: string): { label: string; tone: string } {
 export default function WiredTeamsCard({ triggerKind, triggerId, onBindingsChange }: Props) {
   const { hasPermission } = useAuth()
   const toast = useToast()
+  const repositoryAutomationWizard = useRepositoryAutomationWizard()
   const canRead = hasPermission('agents.read')
   const canWrite = hasPermission('agents.write')
 
@@ -194,12 +196,29 @@ export default function WiredTeamsCard({ triggerKind, triggerId, onBindingsChang
             <p className="text-sm text-tsushin-slate">
               No agent teams are wired to this trigger yet.
             </p>
-            <Link
-              href={teamsBrowseHref}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
-            >
-              <ExternalLinkIcon size={14} /> Browse Agent Teams
-            </Link>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              {(triggerKind === 'github' || triggerKind === 'gitlab') && canWrite && (
+                <button
+                  type="button"
+                  onClick={() => repositoryAutomationWizard.openWizard({
+                    provider: triggerKind,
+                    templateId: 'repository_review_team',
+                    triggerKind,
+                    triggerId,
+                    source: 'trigger_detail',
+                  })}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
+                >
+                  <UsersIcon size={14} /> Create Review Team
+                </button>
+              )}
+              <Link
+                href={teamsBrowseHref}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-tsushin-border bg-tsushin-surface/70 px-3 py-1.5 text-xs text-tsushin-fog hover:text-white"
+              >
+                <ExternalLinkIcon size={14} /> Browse Agent Teams
+              </Link>
+            </div>
           </div>
         )}
 

@@ -15,10 +15,10 @@
  */
 
 import DefaultAgentChip from '@/components/triggers/DefaultAgentChip'
-import type { EmailTrigger, GitHubTrigger, JiraTrigger, WebhookIntegration } from '@/lib/client'
+import type { EmailTrigger, GitHubTrigger, GitLabTrigger, JiraTrigger, WebhookIntegration } from '@/lib/client'
 
-type RoutingKind = 'jira' | 'github' | 'email' | 'webhook'
-type RoutingTrigger = JiraTrigger | GitHubTrigger | EmailTrigger | WebhookIntegration
+type RoutingKind = 'jira' | 'github' | 'gitlab' | 'email' | 'webhook'
+type RoutingTrigger = JiraTrigger | GitHubTrigger | GitLabTrigger | EmailTrigger | WebhookIntegration
 
 interface Props {
   kind: RoutingKind

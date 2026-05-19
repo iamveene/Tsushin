@@ -2127,6 +2127,83 @@ export interface GitLabIntegrationUpdateRequest {
   is_active?: boolean
 }
 
+export type RepositoryAutomationProvider = 'github' | 'gitlab'
+export type RepositoryAutomationTemplateId = 'repository_review_team' | 'repository_pr_agent'
+export type RepositoryAutomationRoutingMode = 'team_primary' | 'agent_flow'
+
+export interface RepositoryAutomationRequest {
+  provider: RepositoryAutomationProvider
+  integration_id: number
+  template_id: RepositoryAutomationTemplateId
+  repo_owner?: string | null
+  repo_name?: string | null
+  project_path?: string | null
+  target?: Record<string, unknown>
+  existing_trigger_id?: number | null
+  events?: string[]
+  branch_filter?: string | null
+  path_filters?: string[] | null
+  author_filter?: string | null
+  trigger_criteria?: TriggerCriteria | null
+  integration_name?: string | null
+  trigger_name?: string | null
+  agent_name?: string | null
+  team_name?: string | null
+  flow_name?: string | null
+  routing_mode?: RepositoryAutomationRoutingMode | null
+}
+
+export interface RepositoryAutomationResponse {
+  integration: {
+    id: number
+    provider: RepositoryAutomationProvider
+    name: string
+    reused: boolean
+  }
+  trigger: {
+    id: number
+    provider: RepositoryAutomationProvider
+    name: string
+    events: string[]
+    canonical_events: string[]
+    reused: boolean
+    is_active: boolean
+    inbound_url: string
+  }
+  flow: {
+    id: number
+    name: string
+    default_agent_id?: number | null
+    is_active: boolean
+    created: boolean
+  }
+  team?: {
+    id: number
+    name: string
+    status: string
+    member_count: number
+  } | null
+  agents: Array<{
+    id: number
+    name: string
+    skills: string[]
+  }>
+  bindings: Array<{
+    id: number
+    kind: string
+    trigger_kind: string
+    trigger_instance_id: number
+    event_types: string[]
+    is_active: boolean
+    flow_definition_id?: number | null
+    team_id?: number | null
+    suppress_default_agent?: boolean | null
+  }>
+  links: Record<string, string>
+  routing_mode: RepositoryAutomationRoutingMode
+  created_at: string
+}
+
 export type PasswordVaultProviderType = 'onepassword'
 
 export interface PasswordVaultIntegration {
@@ -5841,6 +5918,16 @@ export const api = {
   async getWizardManifests(): Promise<WizardManifest[]> {
     const res = await authenticatedFetch(`${API_URL}/api/wizards/manifests`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch wizard manifests')
+    return res.json()
+  },
+
+  async createRepositoryAutomation(data: RepositoryAutomationRequest): Promise<RepositoryAutomationResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/wizards/repository-automation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create repository automation')
     return res.json()
   },
 

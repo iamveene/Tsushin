@@ -286,7 +286,7 @@ The legacy "wake mode" picker in the Agent Wizard still works: choosing **Contin
 |---|---|---|
 | **Purpose** | Yes | A 1-2 sentence statement of what the agent is supposed to accomplish per run. Surfaces in Watcher and in the trigger detail. |
 | **Action kind** | Yes | What the agent is allowed to do at the end of its run — `notify_only`, `reply`, `tool_use`, `flow_dispatch`. The runtime enforces this; an action_kind=`notify_only` agent cannot accidentally fire arbitrary tools. |
-| **Trigger subscriptions** | At least one | Bind the agent to one or more Email/Webhook/Jira/GitHub/GitLab/Schedule triggers (or wake events) — the agent only runs when one of these fires. |
+| **Trigger subscriptions** | At least one | Bind the agent to one or more Email/Webhook/Jira/GitHub/GitLab triggers (or wake events). Scheduled and recurring work belongs in Flows. |
 | **Delivery + budget policy** | Optional | Per-run token / wall-clock / cost ceilings; aggregation rules if multiple wake events arrive close together. |
 
 **Watching Continuous Agent runs.** Open **Watcher → Agents → Continuous Agents** for the tenant-wide run history. Each row shows the wake event that triggered the run, the run status (`pending`, `running`, `completed`, `failed`, `sentinel_blocked`, `cancelled`), input summary, output, token + cost, and links to the originating trigger and dispatched flow (if any). The Watcher Agents tab nests five related run-time surfaces — Continuous Agents, Wake Events, Conversations, Team Runs, and A2A Comms — so you can move between agent inventory and recent activity without leaving the page.
@@ -532,6 +532,25 @@ The `code_repository` skill lets agents read from GitHub or GitLab and, for prov
 
 **Trigger pairing.** GitHub and GitLab repository triggers can pre-filter on push, PR/MR, issue, comment/note, release/tag, and workflow/pipeline events. The matched payload is delivered to the bound agent, team, or flow with normalized repository metadata and provider-specific object details.
 
+### Repository Automation Wizard (GitHub/GitLab) — v0.7.x
+
+Use the **Repository Automation Wizard** as the recommended setup path for GitHub and GitLab repository automation. It keeps the primitives separate while wiring them together in one guided flow:
+
+| Primitive | Role |
+|---|---|
+| **Repository Integration** | Stores GitHub or GitLab credentials once for the tenant. |
+| **Trigger** | Listens for repository events, currently centered on PR/MR review criteria in the UI. |
+| **Flow** | Runs deterministic Source -> Gate -> Conversation/Skill -> Notification steps after a trigger fires. |
+| **Agent** | Acts with configured tools, including Code Repository and A2A when enabled. |
+| **Team** | Coordinates multiple actors through line or mesh topology. |
+
+The wizard offers two repository-review templates:
+
+- **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs.
+- **Standalone PR/MR reviewer agent** — creates or wires one reviewer agent with Code Repository access and **A2A enabled**, then leaves the generated Flow route active so the trigger runs through that agent.
+
+Repository criteria should be read as PR/MR-first where the current UI is PR/MR-centered. GitHub uses pull request language; GitLab maps the same review workflow to merge requests and MR IIDs.
+
 ### Ticket Management skill (Jira) — v0.7.0
 
 The `ticket_management` skill exposes Jira through the `ticket_operation` tool with the same capability-gating contract as `code_repository`.
@@ -656,7 +675,7 @@ The built-in web chat interface. No setup required -- always available in the si
 
 Triggers are the event-side counterpart to channels. They wake an agent on external events (a Jira issue is created, a webhook is called, an email matching a saved query arrives, a GitHub PR is opened, or a GitLab MR is updated) instead of on a human DM. Scheduled and recurring work is created in Flows, not as a trigger.
 
-All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Repository Integrations**, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows.
+All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "+ Add Trigger"). The wizard selects the source, criteria, and linked Hub integration where needed, then creates or wires a Flow so outputs are edited in the Flow editor. Repository triggers reuse **Hub > Repository Integrations**, so a single GitHub or GitLab connection can power both repository triggers and the Code Repository skill without storing PATs on individual trigger rows. For repository-review automation, prefer the Repository Automation Wizard; it wraps this trigger setup together with the review Flow and Agent/Team template choices.
 
 ### The trigger kinds
 

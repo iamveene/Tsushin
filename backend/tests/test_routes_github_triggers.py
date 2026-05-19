@@ -479,6 +479,7 @@ def test_signed_github_inbound_filters_and_dispatches(db_session, monkeypatch):
         "delivery_id": "delivery-1",
         "wake_event_id": 77,
         "continuous_run_ids": [88],
+        "team_run_ids": [],
     }
     assert event.trigger_type == "github"
     assert event.instance_id == trigger.id

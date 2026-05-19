@@ -110,6 +110,7 @@ export default function SourceSection({
     ? (repository as GitLabTrigger).gitlab_integration_id
     : (repository as GitHubTrigger).github_integration_id
   const providerLabel = isGitLab ? 'GitLab' : 'GitHub'
+  const integrationLinkClass = isGitLab ? 'text-orange-200 hover:text-white' : 'text-violet-200 hover:text-white'
   const reviewLabel = isGitLab ? 'MR' : 'PR'
   const reviewEvent = isGitLab ? 'merge_request' : 'pull_request'
   // v0.7.0: When the saved criteria envelope is a PR Submitted envelope,
@@ -143,8 +144,8 @@ export default function SourceSection({
         <Field
           label="Hub integration"
           value={integrationName
-            ? <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{integrationName}</Link>
-            : <Link href="/hub?tab=developer" className="text-violet-200 hover:text-white">{`${providerLabel} integration #${integrationId}`}</Link>}
+            ? <Link href="/hub?tab=developer" className={integrationLinkClass}>{integrationName}</Link>
+            : <Link href="/hub?tab=developer" className={integrationLinkClass}>{`${providerLabel} integration #${integrationId}`}</Link>}
         />
         <Field label="Events" value={(repository.events || []).length > 0 ? repository.events!.join(', ') : 'Default'} />
         <Field label="Branch" value={repository.branch_filter || 'Any branch'} />
