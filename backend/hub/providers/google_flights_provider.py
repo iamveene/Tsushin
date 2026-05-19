@@ -17,7 +17,7 @@ from .flight_search_provider import (
     FlightOffer,
     FlightSegment
 )
-from models import GoogleFlightsIntegration, ApiKey
+from models import GoogleFlightsIntegration
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_api_key_encryption_key
 
@@ -61,14 +61,12 @@ class GoogleFlightsProvider(FlightSearchProvider):
             try:
                 from services.api_key_service import get_api_key as get_decrypted_api_key
                 tenant_id = integration.tenant_id
-                for service_name in ("google_flights", "serpapi"):
-                    self.api_key = get_decrypted_api_key(service_name, db, tenant_id=tenant_id)
-                    if self.api_key:
-                        logger.info(
-                            "GoogleFlightsProvider: Got API key from ApiKey service "
-                            f"service={service_name} (tenant: {tenant_id})"
-                        )
-                        break
+                self.api_key = get_decrypted_api_key("google_flights", db, tenant_id=tenant_id)
+                if self.api_key:
+                    logger.info(
+                        "GoogleFlightsProvider: Got API key from alias-aware ApiKey service "
+                        f"(tenant: {tenant_id})"
+                    )
                 if not self.api_key:
                     logger.warning("GoogleFlightsProvider: No API key found in ApiKey table")
             except Exception as fallback_error:

@@ -27,6 +27,7 @@ from auth_dependencies import (
 )
 from hub.security import TokenEncryption
 from services.encryption_key_service import get_api_key_encryption_key
+from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,6 @@ SUPPORTED_SERVICES = {
     'vertex_ai_sa_email': 'Vertex AI Service Account Email',
     'tavily': 'Tavily (Web Search)',
 }
-
-GOOGLE_FLIGHTS_API_KEY_SERVICES = {"google_flights", "serpapi"}
-
 
 # BUG-666: minimum shape checks per service so the Tool-API card cannot be
 # "activated" with a 1-character placeholder. These are intentionally loose —

@@ -1441,8 +1441,11 @@ def _check_required_credentials(
                 missing.append(service)
             continue
 
+        from services.provider_aliases import get_api_key_service_candidates
+
+        credential_services = get_api_key_service_candidates(service)
         row = db.query(ApiKey.id).filter(
-            ApiKey.service == service,
+            ApiKey.service.in_(credential_services),
             ApiKey.is_active == True,  # noqa: E712
             (ApiKey.tenant_id == tenant_id) | (ApiKey.tenant_id.is_(None)),
         ).first()
