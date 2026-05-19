@@ -455,6 +455,8 @@ Tsushin ships with 22 built-in skills. Enable or disable them per agent from the
 | **Agent Communication (A2A)** | Tool | Enables inter-agent questions and task delegation, gated by `agent_communication_permission` rules. |
 | **Custom Skill (Adapter)** | Tool | Runtime adapter for tenant-authored custom skills (Instruction / Script / MCP Server). |
 
+For Google Flights, configure the shared SerpAPI key in **Hub > Tool APIs**. Agents that use the **Flight Search** skill can then select Google Flights as their provider.
+
 **Execution modes:** `Tool` (LLM decides when to invoke), `Passive` (runs automatically after every response), `Hybrid` (both), `Special` (media-triggered), `Legacy` (keywords/commands only).
 
 ### Custom Skills

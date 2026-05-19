@@ -3344,7 +3344,7 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 **Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/tavily_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
 - **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0).
-- **SerpAPI**: used for both generic web search and Google Flights (Google Flights falls back to env var `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY` — `google_flights_provider.py:71-74`).
+- **SerpAPI**: used for both generic web search and Google Flights. The Tool APIs wizard stores this as the tenant's `serpapi` key; Google Flights treats active `serpapi` or `google_flights` API keys as valid provider credentials, syncs them into the Google Flights Hub integration as needed, and still falls back to env vars `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY`.
 - **SearXNG (self-hosted, auto-provisioned)** — since v0.6.0-patch.6. Per-tenant
   `SearxngInstance` rows spawn a dedicated container in port range **6500–6599**
   via `services/searxng_container_manager.py`, mirroring the Kokoro TTS /
