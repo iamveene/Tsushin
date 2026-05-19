@@ -18,8 +18,13 @@ def test_tool_slash_routes_explicit_browser_and_flights_commands(monkeypatch):
         calls.append(("flights", args, agent_id, sender_key, tenant_id))
         return {"status": "success", "message": "flights ok"}
 
+    async def fake_search(query, tenant_id):
+        calls.append(("search", query, tenant_id))
+        return {"status": "success", "message": "search ok"}
+
     monkeypatch.setattr(service, "_execute_browser_tool", fake_browser)
     monkeypatch.setattr(service, "_execute_flights_tool", fake_flights)
+    monkeypatch.setattr(service, "_execute_search_tool", fake_search)
 
     browser_result = asyncio.run(
         service._handle_tool_command(
@@ -41,12 +46,24 @@ def test_tool_slash_routes_explicit_browser_and_flights_commands(monkeypatch):
             "sender-a",
         )
     )
+    search_result = asyncio.run(
+        service._handle_tool_command(
+            {"command_name": "search"},
+            ("OpenAI official site",),
+            "",
+            "tenant-a",
+            7,
+            "sender-a",
+        )
+    )
 
     assert browser_result["message"] == "browser ok"
     assert flights_result["message"] == "flights ok"
+    assert search_result["message"] == "search ok"
     assert calls == [
         ("browser", "navigate to https://example.com", 7, "sender-a", "tenant-a"),
         ("flights", "GRU to FCO on 2026-05-21", 7, "sender-a", "tenant-a"),
+        ("search", "OpenAI official site", "tenant-a"),
     ]
 
 
