@@ -195,7 +195,8 @@ def list_tts_providers(
 async def get_provider_status(
     provider_name: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("hub.read"))
+    current_user: User = Depends(require_permission("hub.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Get health status for a specific TTS provider.
@@ -205,7 +206,11 @@ async def get_provider_status(
     Requires: hub.read permission
     """
     try:
-        status_result = await TTSProviderRegistry.get_provider_status(provider_name, db)
+        status_result = await TTSProviderRegistry.get_provider_status(
+            provider_name,
+            db,
+            tenant_id=ctx.tenant_id,
+        )
 
         return ProviderStatusResponse(
             provider=status_result.provider,
@@ -448,7 +453,8 @@ def update_agent_tts_provider(
 @router.get("/kokoro/status", response_model=ProviderStatusResponse)
 async def get_kokoro_status(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("hub.read"))
+    current_user: User = Depends(require_permission("hub.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
     """
     Get Kokoro TTS service status.
@@ -458,7 +464,7 @@ async def get_kokoro_status(
 
     Requires: hub.read permission
     """
-    return await get_provider_status("kokoro", db, current_user)
+    return await get_provider_status("kokoro", db, current_user, ctx)
 
 
 @router.get("/kokoro/voices", response_model=List[VoiceInfoResponse])
