@@ -35,10 +35,22 @@ class SearXNGSearchProvider(SearchProvider):
     The stored secret for service `searxng` is treated as the instance base URL.
     """
 
-    def __init__(self, db: Optional[Session] = None, token_tracker=None, tenant_id: str = None):
-        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        token_tracker=None,
+        tenant_id: str = None,
+        load_credentials: bool = True,
+    ):
+        super().__init__(
+            db=db,
+            token_tracker=token_tracker,
+            tenant_id=tenant_id,
+            load_credentials=load_credentials,
+        )
         self._base_url: Optional[str] = None
-        self._load_base_url()
+        if load_credentials:
+            self._load_base_url()
 
     def _load_base_url(self):
         """Load SearXNG base URL from the active SearxngInstance row for this tenant.

@@ -92,7 +92,12 @@ class SearchProviderRegistry:
 
         # Instantiate provider
         try:
-            provider = provider_class(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+            provider = provider_class(
+                db=db,
+                token_tracker=token_tracker,
+                tenant_id=tenant_id,
+                load_credentials=True,
+            )
             logger.debug(f"Instantiated Search provider: {provider_name} (tenant: {tenant_id})")
             return provider
         except Exception as e:
@@ -103,7 +108,8 @@ class SearchProviderRegistry:
     async def get_provider_status(
         cls,
         provider_name: str,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        tenant_id: str = None,
     ) -> SearchProviderStatus:
         """
         Get health status for a specific provider.
@@ -124,7 +130,7 @@ class SearchProviderRegistry:
                 available=False
             )
 
-        provider = cls.get_provider(provider_name, db)
+        provider = cls.get_provider(provider_name, db, tenant_id=tenant_id)
         if not provider:
             return SearchProviderStatus(
                 provider=provider_name,
@@ -136,7 +142,12 @@ class SearchProviderRegistry:
         return await provider.health_check()
 
     @classmethod
-    def list_providers(cls, db: Optional[Session] = None, include_health: bool = False) -> List[Dict]:
+    def list_providers(
+        cls,
+        db: Optional[Session] = None,
+        include_health: bool = False,
+        tenant_id: str = None,
+    ) -> List[Dict]:
         """
         List all registered Search providers with metadata.
 
@@ -154,7 +165,12 @@ class SearchProviderRegistry:
 
             # Create temporary provider instance for metadata
             try:
-                temp_provider = provider_class(db=db, token_tracker=None)
+                temp_provider = provider_class(
+                    db=db,
+                    token_tracker=None,
+                    tenant_id=tenant_id,
+                    load_credentials=False,
+                )
                 provider_info = temp_provider.get_provider_info()
                 pricing = temp_provider.get_pricing_info()
             except Exception as e:

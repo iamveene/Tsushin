@@ -27,6 +27,7 @@ from models import (
     GitHubIntegration,
     GitLabIntegration,
     PasswordVaultIntegration,
+    SearchProviderIntegration,
     Agent,
 )
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
@@ -832,23 +833,48 @@ async def get_available_providers(
             }
 
         elif skill_type == 'web_search':
-            # Web Search providers
+            # Web Search providers — tenant-scoped typed integrations.
             from hub.providers import SearchProviderRegistry
 
             # Initialize providers if not already done
             SearchProviderRegistry.initialize_providers()
 
             # Get all registered providers
-            providers_list = SearchProviderRegistry.list_providers(db=db)
+            providers_list = SearchProviderRegistry.list_providers(
+                db=db,
+                tenant_id=ctx.tenant_id,
+            )
+            search_integrations = (
+                db.query(SearchProviderIntegration)
+                .join(HubIntegration, HubIntegration.id == SearchProviderIntegration.id)
+                .filter(SearchProviderIntegration.is_active == True)  # noqa: E712
+                .filter(HubIntegration.tenant_id == ctx.tenant_id)
+                .all()
+            )
+            search_by_provider = {item.provider_id: item for item in search_integrations}
 
             providers = []
             for prov in providers_list:
+                integration = search_by_provider.get(prov["id"])
+                available_integrations = []
+                if integration:
+                    available_integrations.append({
+                        "integration_id": integration.id,
+                        "name": integration.name or integration.display_name or prov["name"],
+                        "provider": integration.provider_id,
+                        "provider_mode": "programmatic",
+                        "api_key_preview": integration.api_key_preview,
+                        "default_country": integration.default_country,
+                        "default_language": integration.default_language,
+                        "health_status": integration.health_status,
+                    })
+
                 providers.append({
                     "provider_type": prov["id"],
                     "provider_name": prov["name"],
                     "description": prov.get("pricing", {}).get("description", f"Web search via {prov['name']}"),
-                    "requires_integration": False,  # Web search uses API keys, not integrations
-                    "available_integrations": [],
+                    "requires_integration": bool(prov.get("requires_api_key", True)),
+                    "available_integrations": available_integrations,
                     "is_default": prov.get("is_default", False),
                     "pricing": prov.get("pricing", {})
                 })

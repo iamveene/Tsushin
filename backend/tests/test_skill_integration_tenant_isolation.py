@@ -6,7 +6,7 @@ Regression tests for two pre-existing cross-tenant bugs in
 the Gmail/Calendar setup wizards:
 
 - **Bug 0.1** - ``GET /api/skill-providers/{skill_type}`` previously listed
-  every tenant's Gmail / Calendar / Asana / Google Flights / Amadeus
+  every tenant's Gmail / Calendar / Asana / Google Flights / Amadeus / Web Search
   integration because the query only filtered by ``is_active == True``.
 - **Bug 0.2** - ``PUT /api/agents/{agent_id}/skill-integrations/{skill_type}``
   accepted any ``integration_id`` without verifying that the integration
@@ -34,6 +34,7 @@ from models import (  # noqa: E402
     AsanaIntegration,
     GoogleFlightsIntegration,
     AmadeusIntegration,
+    SearchProviderIntegration,
 )
 # Register the User / Tenant mappers so relationships elsewhere in
 # ``models.py`` can resolve the ``'User'`` / ``'Tenant'`` names during
@@ -84,8 +85,9 @@ class TestSkillProviderQueriesIncludeTenantFilter:
             AsanaIntegration,
             GoogleFlightsIntegration,
             AmadeusIntegration,
+            SearchProviderIntegration,
         ],
-        ids=["gmail", "calendar", "asana", "google_flights", "amadeus"],
+        ids=["gmail", "calendar", "asana", "google_flights", "amadeus", "web_search"],
     )
     def test_query_includes_tenant_filter(self, db_session_noop, subclass):
         sql = _compile(_make_provider_query(db_session_noop, subclass))

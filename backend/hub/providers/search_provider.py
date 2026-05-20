@@ -139,7 +139,13 @@ class SearchProvider(ABC):
     between different providers without code changes.
     """
 
-    def __init__(self, db=None, token_tracker=None, tenant_id: str = None):
+    def __init__(
+        self,
+        db=None,
+        token_tracker=None,
+        tenant_id: str = None,
+        load_credentials: bool = True,
+    ):
         """
         Initialize provider.
 
@@ -151,6 +157,7 @@ class SearchProvider(ABC):
         self.db = db
         self.token_tracker = token_tracker
         self.tenant_id = tenant_id
+        self.load_credentials = load_credentials
         self.provider_name = self.get_provider_name()
         self.logger = logging.getLogger(f"{__name__}.{self.provider_name}")
 
