@@ -101,7 +101,8 @@ class TTSProviderRegistry:
     async def get_provider_status(
         cls,
         provider_name: str,
-        db: Optional[Session] = None
+        db: Optional[Session] = None,
+        tenant_id: str = None,
     ) -> ProviderStatus:
         """
         Get health status for a specific provider.
@@ -109,6 +110,7 @@ class TTSProviderRegistry:
         Args:
             provider_name: Provider identifier
             db: Database session
+            tenant_id: Tenant identifier used to resolve typed provider credentials
 
         Returns:
             ProviderStatus with health information
@@ -121,7 +123,7 @@ class TTSProviderRegistry:
                 available=False
             )
 
-        provider = cls.get_provider(provider_name, db)
+        provider = cls.get_provider(provider_name, db, tenant_id=tenant_id)
         if not provider:
             return ProviderStatus(
                 provider=provider_name,

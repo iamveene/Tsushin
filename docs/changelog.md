@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an idempotent startup migration that backfills active legacy rows into typed tenant-scoped credentials (`ProviderInstance`, hosted `TTSInstance`, `SearchProviderIntegration`, `GoogleFlightsIntegration`, `AmadeusIntegration`, `SearxngInstance`) and soft-disables the migrated rows.
 - Removed runtime legacy key resolution from AI, image, ASR, TTS, search, travel, Hub catalog checks, setup, and flow preflight paths; unknown, incomplete, or undecryptable active legacy rows now block startup.
 - Removed the Hub Service API Keys fallback panel and routed provider/search/travel setup through Provider Instances or typed integration endpoints.
-- Updated regression coverage for migration behavior, Google Flights typed credentials, AI client explicit credentials, and audio transcription Provider Instance resolution.
+- Updated TTS provider status checks to resolve credentials with tenant context so hosted Gemini/OpenAI audio providers report the same typed configuration state as the Hub catalog.
+- Updated regression coverage for migration behavior, Google Flights typed credentials, AI client explicit credentials, TTS status tenant resolution, and audio transcription Provider Instance resolution.
 
 ### Changed — Repository automation activation clarity (2026-05-19)
 
