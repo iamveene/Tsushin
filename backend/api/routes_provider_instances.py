@@ -10,7 +10,7 @@ servers, Ollama instances, or custom LLM gateways).
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import logging
 import time
@@ -136,6 +136,21 @@ class TestConnectionResponse(BaseModel):
     success: bool
     message: str
     latency_ms: Optional[int] = None
+
+
+class OllamaModelInfo(BaseModel):
+    name: str
+    size: int = 0
+    modified_at: str = ""
+
+
+class OllamaHealthResponse(BaseModel):
+    status: str
+    base_url: str = ""
+    available: bool
+    models_count: int = 0
+    models: List[OllamaModelInfo] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 class TestConnectionRawRequest(BaseModel):
@@ -966,6 +981,69 @@ def create_provider_instance(
             background_tasks.add_task(_background_test_instance, instance.id, current_user.id)
 
     return _to_response(instance, db)
+
+
+def _ollama_model_info(raw_model: Any) -> Optional[OllamaModelInfo]:
+    if isinstance(raw_model, dict):
+        name = raw_model.get("name") or raw_model.get("id") or raw_model.get("model")
+        if not name:
+            return None
+        return OllamaModelInfo(
+            name=str(name),
+            size=int(raw_model.get("size") or 0),
+            modified_at=str(raw_model.get("modified_at") or ""),
+        )
+    if raw_model:
+        return OllamaModelInfo(name=str(raw_model))
+    return None
+
+
+@router.get("/ollama/health", response_model=OllamaHealthResponse)
+def get_ollama_health(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """
+    Compatibility health endpoint for Hub's optional Ollama widget.
+
+    The Hub calls this on mount even when Ollama is not configured. Return a
+    typed unavailable payload instead of letting the browser record a 404.
+    """
+    if not ctx.tenant_id:
+        return OllamaHealthResponse(
+            status="not_configured",
+            available=False,
+            error="Tenant context is required",
+        )
+
+    instance = (
+        db.query(ProviderInstance)
+        .filter(
+            ProviderInstance.tenant_id == ctx.tenant_id,
+            ProviderInstance.vendor == "ollama",
+            ProviderInstance.is_active == True,  # noqa: E712
+        )
+        .order_by(ProviderInstance.is_default.desc(), ProviderInstance.id.asc())
+        .first()
+    )
+    if not instance:
+        return OllamaHealthResponse(status="not_configured", available=False)
+
+    models = [
+        model
+        for model in (_ollama_model_info(raw) for raw in (instance.available_models or []))
+        if model is not None
+    ]
+    status_value = instance.health_status or "unknown"
+    return OllamaHealthResponse(
+        status=status_value,
+        base_url=instance.base_url or "",
+        available=status_value == "healthy",
+        models_count=len(models),
+        models=models,
+        error=instance.health_status_reason,
+    )
 
 
 @router.post("/provider-instances/ensure-ollama", response_model=ProviderInstanceResponse)
