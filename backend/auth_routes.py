@@ -721,10 +721,7 @@ async def setup_wizard(
 
         logger.info(f"Setup wizard: Created global admin '{global_admin.email}'")
 
-        # Step 3: Store API keys if provided
-        from services.api_key_service import store_api_key
-
-        # Default model per provider (shared by Steps 3b and 4)
+        # Step 3: Build ProviderInstances from setup credentials.
         from constants.llm_models import (
             DEFAULT_PROVIDER_MODELS,
             SENTINEL_DEFAULT_MODELS,
@@ -759,10 +756,6 @@ async def setup_wizard(
             )
 
         api_keys_stored = []
-        for vendor in configured_providers:
-            store_api_key(vendor, provider_key_map[vendor], tenant.id, db)
-            api_keys_stored.append(vendor)
-            logger.info(f"Setup wizard: Stored {vendor_labels.get(vendor, vendor)} API key for tenant {tenant.id}")
 
         primary_vendor = setup_request.primary_provider or (configured_providers[0] if configured_providers else "gemini")
         model_provider = primary_vendor if configured_providers else "gemini"

@@ -4,7 +4,7 @@
  * Integration Hub - Consolidated Single Page
  *
  * Manages all integrations organized by category:
- * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI, ElevenLabs
+ * - AI Providers: Ollama, Gemini, OpenAI, Anthropic, Groq, Grok, DeepSeek, Vertex AI
  * - Channels: WhatsApp, Telegram, Discord, and Slack
  * - Triggers: Email, Webhook, Jira, GitHub, and GitLab
  * - Productivity: Asana, Google Calendar
@@ -188,15 +188,6 @@ const VectorStoreIcon = () => (
   </svg>
 )
 
-interface APIKey {
-  id: number
-  service: string
-  api_key_preview: string
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
 interface OllamaHealth {
   status: string
   base_url: string
@@ -231,12 +222,6 @@ interface HubIntegration {
   workspace_gid?: string
   workspace_name?: string
   can_draft?: boolean | null
-}
-
-interface ModalData {
-  service: string
-  api_key: string
-  is_active: boolean
 }
 
 interface ToolboxStatus {
@@ -1419,11 +1404,8 @@ export default function HubPage() {
     fetchProviderInstances()
     refreshKokoroInstances().catch(() => {})
     refreshASRInstances().catch(() => {})  // v0.7.0 G1: pick up newly created ASR instances
-    fetchAPIKeys()
   })
 
-  // API Keys state
-  const [apiKeys, setApiKeys] = useState<APIKey[]>([])
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null)
   const [kokoroHealth, setKokoroHealth] = useState<KokoroHealth | null>(null)
   const [hubIntegrations, setHubIntegrations] = useState<HubIntegration[]>([])
@@ -1618,15 +1600,11 @@ export default function HubPage() {
 
   // UI state
   const [loading, setLoading] = useState(true)
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false)
-  const [apiKeyDeleteTarget, setApiKeyDeleteTarget] = useState<string | null>(null)
   const [showApiKeyPreviewByService, setShowApiKeyPreviewByService] = useState<Record<string, boolean>>({})
-  const [deletingApiKeyService, setDeletingApiKeyService] = useState<string | null>(null)
   const [showMcpCreateModal, setShowMcpCreateModal] = useState(false)
   const [showCreateModeSelector, setShowCreateModeSelector] = useState(false)
   const [showQRModal, setShowQRModal] = useState(false)
   const [showFiltersModal, setShowFiltersModal] = useState(false)  // Phase 17: Instance filters modal
-  const [editingKey, setEditingKey] = useState<APIKey | null>(null)
   const [selectedMcpInstance, setSelectedMcpInstance] = useState<WhatsAppMCPInstance | null>(null)
   const [selectedQrResource, setSelectedQrResource] = useState<'instance' | 'tester' | null>(null)
   const [resetAuthTarget, setResetAuthTarget] = useState<{ kind: 'instance'; instance: WhatsAppMCPInstance } | { kind: 'tester' } | null>(null)
@@ -1666,11 +1644,6 @@ export default function HubPage() {
   const [filterInputKeyword, setFilterInputKeyword] = useState('')
 
   // Form state
-  const [modalData, setModalData] = useState<ModalData>({
-    service: '',
-    api_key: '',
-    is_active: true
-  })
   const [mcpPhoneNumber, setMcpPhoneNumber] = useState('')
   const [mcpInstanceType, setMcpInstanceType] = useState<'agent' | 'tester'>('agent')
 
@@ -2017,10 +1990,9 @@ export default function HubPage() {
       // v0.7.0 release-finishing fix — gate tenant-scoped fetchers on the
       // session having a tenant. Global admins (no tenant binding) were
       // hitting a wall of 4xx errors from these per-load. The non-tenant
-      // calls (API keys, Ollama / Kokoro health, system config, provider
-      // instances, vector stores) still run for everyone.
+      // calls (Ollama / Kokoro health, system config, provider instances,
+      // vector stores) still run for everyone.
       const baseLoaders = [
-        fetchAPIKeys(),
         fetchOllamaHealth(),
         fetchKokoroHealth(),
         loadSystemConfig(),
@@ -2074,24 +2046,6 @@ export default function HubPage() {
       setWhatsappDelaySeconds(String(delayValue))
     } catch (error) {
       console.error('Failed to load system config:', error)
-    }
-  }
-
-  const fetchAPIKeys = async () => {
-    try {
-      const apiUrl = ''
-      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`)
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Failed to fetch API keys:', response.status, errorText)
-        setError(`Failed to load API keys: ${response.status}`)
-        return
-      }
-      const data = await response.json()
-      setApiKeys(data)
-    } catch (error) {
-      console.error('Failed to fetch API keys:', error)
-      setError('Failed to load API keys')
     }
   }
 
@@ -3088,19 +3042,6 @@ export default function HubPage() {
     }
   }, [])
 
-  // API Key handlers
-  const openAddApiKeyModal = (service: string) => {
-    setEditingKey(null)
-    setModalData({ service, api_key: '', is_active: true })
-    setShowApiKeyModal(true)
-  }
-
-  const openEditApiKeyModal = (key: APIKey) => {
-    setEditingKey(key)
-    setModalData({ service: key.service, api_key: '', is_active: key.is_active })
-    setShowApiKeyModal(true)
-  }
-
   const openAddJiraIntegrationModal = () => {
     setEditingJiraIntegration(null)
     setShowJiraIntegrationModal(true)
@@ -3619,37 +3560,25 @@ export default function HubPage() {
     }
     setVertexSaving(true)
     try {
-      const apiUrl = ''
-      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
-        method: 'POST',
-        body: JSON.stringify({
-          service: 'vertex_ai',
-          api_key: vertexPrivateKey.trim(),
-          is_active: true
-        })
-      })
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Failed to save: ${errorText}`)
+      const existing = providerInstances.find((instance) => instance.vendor === 'vertex_ai' && instance.is_active)
+      const payload = {
+        vendor: 'vertex_ai',
+        instance_name: existing?.instance_name || 'Vertex AI',
+        api_key: vertexPrivateKey.trim(),
+        available_models: existing?.available_models?.length ? existing.available_models : ['gemini-2.5-flash'],
+        is_default: existing?.is_default ?? true,
+        extra_config: {
+          project_id: vertexProjectId.trim(),
+          region: vertexRegion.trim() || 'us-east5',
+          sa_email: vertexSaEmail.trim(),
+        },
       }
-      // Also save project_id, region, sa_email as structured metadata via separate keys
-      // Save vertex_ai_project_id
-      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
-        method: 'POST',
-        body: JSON.stringify({ service: 'vertex_ai_project_id', api_key: vertexProjectId.trim(), is_active: true })
-      })
-      // Save vertex_ai_region
-      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
-        method: 'POST',
-        body: JSON.stringify({ service: 'vertex_ai_region', api_key: vertexRegion.trim(), is_active: true })
-      })
-      // Save vertex_ai_sa_email
-      await authenticatedFetch(`${apiUrl}/api/api-keys`, {
-        method: 'POST',
-        body: JSON.stringify({ service: 'vertex_ai_sa_email', api_key: vertexSaEmail.trim(), is_active: true })
-      })
-
-      await fetchAPIKeys()
+      if (existing) {
+        await api.updateProviderInstance(existing.id, payload)
+      } else {
+        await api.createProviderInstance(payload)
+      }
+      await fetchProviderInstances()
       setVertexDirty(false)
       setShowVertexAiModal(false)
       setSuccessMessage('Vertex AI credentials saved successfully')
@@ -3676,74 +3605,6 @@ export default function HubPage() {
       setVertexTestResult({ success: false, message: err instanceof Error ? err.message : 'Test failed' })
     } finally {
       setVertexTesting(false)
-    }
-  }
-
-  const saveAPIKey = async () => {
-    if (!modalData.service || !modalData.api_key) {
-      toast.warning(
-        'Validation',
-        modalData.service === 'searxng'
-          ? 'Please provide the SearXNG base URL'
-          : 'Please select a service and provide the API key'
-      )
-      return
-    }
-
-    setSaving(true)
-    setError(null)
-    try {
-      const apiUrl = ''
-      const response = await authenticatedFetch(`${apiUrl}/api/api-keys`, {
-        method: 'POST',
-        body: JSON.stringify(modalData)
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Failed to save API key:', response.status, errorText)
-        throw new Error(`Failed to save API key: ${response.status}`)
-      }
-
-      await fetchAPIKeys()
-      setShowApiKeyModal(false)
-      setSuccessMessage(editingKey ? 'API key updated' : 'API key added')
-      setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error: any) {
-      console.error('Error saving API key:', error)
-      setError(error.message || 'Failed to save API key')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const deleteAPIKey = async () => {
-    if (!apiKeyDeleteTarget) return
-
-    const service = apiKeyDeleteTarget
-    setDeletingApiKeyService(service)
-    setError(null)
-    try {
-      const apiUrl = ''
-      const response = await authenticatedFetch(`${apiUrl}/api/api-keys/${service}`, {
-        method: 'DELETE'
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Failed to delete API key:', response.status, errorText)
-        throw new Error(`Failed to remove API key: ${response.status}`)
-      }
-
-      await fetchAPIKeys()
-      setApiKeyDeleteTarget(null)
-      setSuccessMessage('API key removed')
-      setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (error: any) {
-      console.error('Error deleting API key:', error)
-      setError(error.message || 'Failed to remove API key')
-    } finally {
-      setDeletingApiKeyService(null)
     }
   }
 
@@ -4417,8 +4278,6 @@ export default function HubPage() {
   }
 
   // Helper functions
-  const getApiKeyForService = (service: string) => apiKeys.find(k => k.service === service)
-
   const getStatusBadge = (status: string) => {
     const colors: Record<string, string> = {
       running: 'bg-green-500/20 text-green-400 border-green-500/50',
@@ -4462,16 +4321,11 @@ export default function HubPage() {
   const showDedicatedTesterCard = hasComposeTesterContainer
   const testerSourceLabel = testerControlSource === 'runtime' ? 'Runtime-managed tester' : 'Compose-managed tester'
   const testerContainerLabel = testerStatus?.name || runtimeTesterInstances[0]?.container_name || 'tester-mcp'
-  const apiKeyDeleteLabel = apiKeyDeleteTarget
-    ? [...AI_PROVIDERS, ...TOOL_APIS].find(item => item.value === apiKeyDeleteTarget)?.label ?? apiKeyDeleteTarget
-    : null
-
   // Render integration card based on status
   const renderIntegrationCard = (
     item: { value: string; label: string; Icon: React.FC<IconProps>; description: string; status: string },
     type: 'ai' | 'tool' | 'app'
   ) => {
-    const apiKey = getApiKeyForService(item.value)
     const isComingSoon = item.status === 'coming_soon'
     const configuredInstance = type === 'ai'
       ? (
@@ -4479,12 +4333,11 @@ export default function HubPage() {
         || providerInstances.find(i => i.vendor === item.value && i.is_active && i.api_key_configured)
       )
       : null
-    // Tool APIs — SearXNG has no API key; its configured state is driven by
-    // SearxngInstance rows, not the `api_keys` table.
+    // Tool APIs — configured state is driven by typed integration rows.
     const hasSearxngInstance = type === 'tool' && item.value === 'searxng' && searxngInstances.some(i => i.is_active)
     const hasJiraIntegration = type === 'tool' && item.value === 'jira' && jiraIntegrations.some(i => i.is_active)
     const hasInstanceKey = Boolean(configuredInstance)
-    const configuredViaInstance = !apiKey && (hasInstanceKey || hasSearxngInstance || hasJiraIntegration)
+    const configuredViaInstance = hasInstanceKey || hasSearxngInstance || hasJiraIntegration
     const showApiKeyPreview = Boolean(showApiKeyPreviewByService[item.value])
     const ItemIcon = item.Icon
 
@@ -4501,11 +4354,6 @@ export default function HubPage() {
             </div>
             <div>
               <h3 className="font-semibold text-white">{item.label}</h3>
-              {/* (v0.7.x) The inline "Fallback — instance key takes priority"
-                  amber label was removed; the Service API Keys surface is now
-                  collapsed by default and only lists vendors that have NO
-                  matching ProviderInstance, so duplicate display is impossible
-                  by construction. */}
               {configuredViaInstance && (
                 <span className="text-[10px] text-teal-400/80">
                   {hasJiraIntegration ? 'Configured via Hub Jira connection' : `Configured via instance: ${configuredInstance?.instance_name}`}
@@ -4518,31 +4366,17 @@ export default function HubPage() {
               Coming Soon
             </span>
           ) : (
-            <span className={(apiKey?.is_active || configuredViaInstance) ? 'badge badge-success' : 'badge badge-neutral'}>
-              {apiKey
-                ? (apiKey.is_active ? 'Active' : 'Inactive')
-                : hasSearxngInstance
+            <span className={configuredViaInstance ? 'badge badge-success' : 'badge badge-neutral'}>
+              {hasSearxngInstance
+                ? 'Active'
+                : hasJiraIntegration
                   ? 'Active'
-                  : hasJiraIntegration
-                    ? 'Active'
-                    : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
+                  : (configuredViaInstance ? 'Instance configured' : 'Not configured')}
             </span>
           )}
         </div>
         <p className="text-xs text-tsushin-slate mb-4">{item.description}</p>
-        {!isComingSoon && apiKey && (
-          <div className="text-sm text-tsushin-slate mb-4">
-            <button
-              type="button"
-              onClick={() => setShowApiKeyPreviewByService((current) => ({ ...current, [item.value]: !showApiKeyPreview }))}
-              className="text-xs text-teal-300 hover:text-white"
-            >
-              {showApiKeyPreview ? 'Hide key preview' : 'Show key preview'}
-            </button>
-            {showApiKeyPreview && <p className="mt-1 font-mono text-xs text-tsushin-accent">{apiKey.api_key_preview}</p>}
-          </div>
-        )}
-        {!isComingSoon && !apiKey && configuredInstance && (
+        {!isComingSoon && configuredInstance && (
           <div className="text-sm text-tsushin-slate mb-4">
             <p className="text-xs text-tsushin-slate">Using instance <span className="font-medium text-white">{configuredInstance.instance_name}</span></p>
             <button
@@ -4557,47 +4391,25 @@ export default function HubPage() {
         )}
         {!isComingSoon && canWriteHub && (
           <div className="flex gap-2">
-            {apiKey ? (
-              <>
-                <button
-                  onClick={() => item.value === 'vertex_ai' ? setShowVertexAiModal(true) : openEditApiKeyModal(apiKey)}
-                  className="flex-1 btn-ghost py-2 text-sm"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => setApiKeyDeleteTarget(apiKey.service)}
-                  className="flex-1 py-2 text-sm rounded-lg font-medium bg-tsushin-vermilion/10 text-tsushin-vermilion border border-tsushin-vermilion/30 hover:bg-tsushin-vermilion/20 transition-all"
-                >
-                  Remove
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => {
-                  if (item.value === 'vertex_ai') {
-                    setShowVertexAiModal(true)
-                    return
-                  }
-                  // Tool APIs that own a richer flow (auto-provisioning, OAuth-style credentials)
-                  // route through the generic Add Integration wizard so we share one codepath.
-                  const wizardProviders = new Set(['searxng', 'amadeus', 'google_flights'])
-                  if (type === 'tool' && item.value === 'jira') {
-                    openAddJiraIntegrationModal()
-                    return
-                  }
-                  if (type === 'tool' && wizardProviders.has(item.value)) {
-                    setAddIntegrationInitialProvider(item.value)
-                    setShowSearchWizard(true)
-                    return
-                  }
-                  openAddApiKeyModal(item.value)
-                }}
-                className="w-full btn-secondary py-2 text-sm"
-              >
-                {configuredViaInstance ? 'Configure Fallback' : 'Configure'}
-              </button>
-            )}
+            <button
+              onClick={() => {
+                if (type === 'ai') {
+                  openProviderSetupWizard(item.value)
+                  return
+                }
+                if (type === 'tool' && item.value === 'jira') {
+                  openAddJiraIntegrationModal()
+                  return
+                }
+                if (type === 'tool') {
+                  setAddIntegrationInitialProvider(item.value)
+                  setShowSearchWizard(true)
+                }
+              }}
+              className="w-full btn-secondary py-2 text-sm"
+            >
+              Configure
+            </button>
           </div>
         )}
         {isComingSoon && (
@@ -4637,22 +4449,11 @@ export default function HubPage() {
     { key: 'mcp-servers', label: 'MCP Servers', Icon: ServerIcon, color: 'text-cyan-400', iconBg: 'bg-cyan-400/10' },
     { key: 'vector-stores', label: 'Vector Stores', Icon: VectorStoreIcon, color: 'text-emerald-400', iconBg: 'bg-emerald-400/10' },
   ]
-  // Service API Keys — surface every vendor that has a legacy api_key row,
-  // even when a matching ProviderInstance also exists. Hiding shadowed rows
-  // (the prior behavior) created an invisible-orphan class of bug: a legacy
-  // ApiKey row would silently shadow a visible ProviderInstance via the
-  // get_api_key resolver, with no UI surface to find or delete it. Now the
-  // resolver prefers ProviderInstance, but legacy rows must still be
-  // discoverable so users can clean them up. The card itself flags
-  // "Configured via instance" when both exist so it's clear which one wins.
-  const visibleAiFallbackProviders = AI_PROVIDERS.filter(provider =>
-    Boolean(getApiKeyForService(provider.value))
-  )
   const visibleToolApis = TOOL_APIS.filter(tool => {
-    if (tool.value === 'jira') return false
+    if (tool.value === 'jira') return jiraIntegrations.some(i => i.is_active)
     if (tool.value === 'password_vault') return false
     if (tool.value === 'searxng') return searxngInstances.some(i => i.is_active)
-    return Boolean(getApiKeyForService(tool.value))
+    return false
   })
   // v0.7.x: align Ollama visibility with Kokoro — show panel only when an
   // active provider_instance exists. `ollamaEnabled` (tenant setting) remains
@@ -4768,7 +4569,7 @@ export default function HubPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="text-lg font-display font-semibold text-white">AI Providers</h2>
-                    <p className="text-sm text-tsushin-slate">Manage provider instances and API keys for AI models</p>
+                    <p className="text-sm text-tsushin-slate">Manage provider instances for AI models</p>
                   </div>
                   {canWriteHub && (
                     <button
@@ -4839,9 +4640,9 @@ export default function HubPage() {
                     }
                   }
 
-                  // LLM provider instances grid — excludes:
+                  // LLM provider instances grid - excludes:
                   // - 'ollama': has its own dedicated Local Services section above with health monitoring
-                  // - 'elevenlabs': TTS-only provider configured via API Keys, not provider instances
+                  // - 'elevenlabs': TTS-only provider configured as a hosted TTSInstance
                   const allVendors = Object.keys(vendorGroups)
                     .filter(v => v !== 'ollama' && v !== 'elevenlabs')
                     .sort()
@@ -4980,8 +4781,7 @@ export default function HubPage() {
                                               onClick={() => {
                                                 // v0.7.0: cascade-aware delete via reassign modal.
                                                 // The native confirm() was replaced because it
-                                                // silently orphaned dependent agents (the AIClient
-                                                // legacy fallback masked the problem).
+                                                // silently orphaned dependent agents.
                                                 setInstanceMenuOpen(null)
                                                 setDeletingInstance(inst)
                                               }}
@@ -5709,25 +5509,6 @@ export default function HubPage() {
                 </div>
                 )}
 
-                {/* (v0.7.x) Service API Keys — collapsed disclosure.
-                    Only renders vendors that have a fallback api_key AND no
-                    matching ProviderInstance, so vendors already covered by
-                    an instance never duplicate here. Collapsed by default to
-                    keep the Hub clean for users who only use instances. */}
-                {visibleAiFallbackProviders.length > 0 && (
-                  <details className="pt-2 group">
-                    <summary className="cursor-pointer list-none flex items-center gap-2 select-none">
-                      <ChevronRightIcon size={14} className="text-tsushin-slate transition-transform group-open:rotate-90" />
-                      <div>
-                        <h3 className="text-sm font-semibold text-tsushin-fog">Service API Keys — fallback keys</h3>
-                        <p className="text-xs text-tsushin-slate">{visibleAiFallbackProviders.length} vendor{visibleAiFallbackProviders.length !== 1 ? 's' : ''} using a fallback key (no provider instance)</p>
-                      </div>
-                    </summary>
-                    <div className="mt-3 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {visibleAiFallbackProviders.map(provider => renderIntegrationCard(provider, 'ai'))}
-                    </div>
-                  </details>
-                )}
               </div>
             )}
 
@@ -7017,7 +6798,7 @@ export default function HubPage() {
                     <LightbulbIcon size={16} className="text-teal-300" /> Built-in Tools
                   </h3>
                   <p className="text-xs text-tsushin-slate">
-                    These tools are automatically available to agents when the corresponding API keys are configured.
+                    These tools are automatically available to agents when the corresponding provider connections are configured.
                     Tools include: Web Search (Brave/SearXNG/Tavily/Google), Flight Search (Amadeus/Google), and Web Scraping.
                   </p>
                 </div>
@@ -7525,128 +7306,6 @@ export default function HubPage() {
           onSave={saveBrowserSessionProfile}
         />
       )}
-
-      {/* API Key Modal */}
-      {showApiKeyModal && (
-        <Modal
-          isOpen={showApiKeyModal}
-          onClose={() => setShowApiKeyModal(false)}
-          title={
-            modalData.service === 'searxng'
-              ? (editingKey ? 'Edit SearXNG URL' : 'Add SearXNG URL')
-              : (editingKey ? 'Edit API Key' : 'Add API Key')
-          }
-          footer={
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowApiKeyModal(false)}
-                className="px-4 py-2 bg-gray-700 text-white rounded"
-                disabled={saving}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveAPIKey}
-                className="px-4 py-2 bg-teal-500 text-white rounded disabled:opacity-50"
-                disabled={saving}
-              >
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          }
-        >
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Service</label>
-              <select
-                value={modalData.service}
-                onChange={(e) => setModalData({ ...modalData, service: e.target.value })}
-                disabled={!!editingKey}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white disabled:opacity-50"
-              >
-                <option value="">Select service...</option>
-                <optgroup label="AI Providers">
-                  {AI_PROVIDERS.filter(p => p.status === 'available').map(p => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="Tool APIs">
-                  {TOOL_APIS.filter(t => t.status === 'available').map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
-                </optgroup>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                {modalData.service === 'searxng' ? 'Base URL' : 'API Key'}
-              </label>
-              <input
-                type={modalData.service === 'searxng' ? 'text' : 'password'}
-                value={modalData.api_key}
-                onChange={(e) => setModalData({ ...modalData, api_key: e.target.value })}
-                placeholder={
-                  modalData.service === 'searxng'
-                    ? 'https://your-searxng-instance.example.com'
-                    : (editingKey ? 'Enter new key to update' : 'Enter API key')
-                }
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white"
-              />
-              {modalData.service === 'searxng' && (
-                <p className="text-xs text-tsushin-slate mt-2">
-                  Enter the base URL of your SearXNG instance. Tsushin will call `/search?format=json` on that host.
-                </p>
-              )}
-            </div>
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={modalData.is_active}
-                onChange={(e) => setModalData({ ...modalData, is_active: e.target.checked })}
-                className="mr-2"
-              />
-              <span className="text-sm text-gray-300">Enable this integration</span>
-            </label>
-          </div>
-        </Modal>
-      )}
-
-      <Modal
-        isOpen={Boolean(apiKeyDeleteTarget)}
-        onClose={() => {
-          if (!deletingApiKeyService) {
-            setApiKeyDeleteTarget(null)
-          }
-        }}
-        title="Remove Integration"
-        footer={
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={() => setApiKeyDeleteTarget(null)}
-              className="px-4 py-2 bg-gray-700 text-white rounded disabled:opacity-50"
-              disabled={Boolean(deletingApiKeyService)}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={deleteAPIKey}
-              className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
-              disabled={Boolean(deletingApiKeyService)}
-            >
-              {deletingApiKeyService ? 'Removing...' : 'Remove'}
-            </button>
-          </div>
-        }
-      >
-        <div className="space-y-3 text-sm text-tsushin-slate">
-          <p>
-            Remove the {apiKeyDeleteLabel || 'selected'} integration from this workspace?
-          </p>
-          <p className="text-xs text-tsushin-slate/80">
-            Agents will stop using this credential until you add a new key.
-          </p>
-        </div>
-      </Modal>
 
       {/* WhatsApp Create Mode Selector */}
       <WhatsAppCreateModeSelector

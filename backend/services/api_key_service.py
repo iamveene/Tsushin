@@ -1,25 +1,17 @@
 """
-Phase 4.6: API Key Service
-Phase SEC-001: Added encryption at rest for API keys (CRIT-003 fix).
+Legacy API key helpers.
 
-Centralized service for loading API keys from database.
-Configure via Settings → Integrations or Hub → API Keys UI (encrypted at rest).
-
-Priority order (post-2026-05-07 fix; see get_api_key docstring for context):
-1. Tenant ProviderInstance default (vendor=service)
-2. Tenant ProviderInstance (only active candidate, when no default flag set)
-3. Tenant-specific legacy ApiKey row
-4. System-wide legacy ApiKey row (tenant_id = NULL)
-
-No env var fallback — all keys must be stored in the database.
+The `api_key` table is retained only as a migration/audit source. Runtime
+credential resolution must use typed configuration models such as
+ProviderInstance, TTSInstance, SearchProviderIntegration, GoogleFlightsIntegration
+or AmadeusIntegration. Any runtime call into get_api_key()/store_api_key() is a
+bug and should fail closed.
 """
 
-from typing import Iterable, Optional, Sequence, TypeVar
+from typing import Optional
 from sqlalchemy.orm import Session
 from models import ApiKey
 import logging
-
-from services.provider_aliases import get_api_key_service_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -103,235 +95,20 @@ def _encrypt_api_key(plaintext_key: str, service: str, tenant_id: Optional[str],
         return None
 
 
-def _decrypt_provider_instance_key(encrypted_key: str, tenant_id: str, db: Session) -> Optional[str]:
-    """Decrypt a provider instance API key."""
-    try:
-        from hub.security import TokenEncryption
-        from services.encryption_key_service import get_api_key_encryption_key
-
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            return None
-        encryptor = TokenEncryption(encryption_key.encode())
-        identifier = f"provider_instance_{tenant_id}"
-        return encryptor.decrypt(encrypted_key, identifier)
-    except Exception as e:
-        logger.error(f"Failed to decrypt provider instance key: {e}")
-        return None
-
-
-T = TypeVar("T")
-
-
-def _pick_by_candidate_priority(
-    rows: Iterable[T],
-    candidates: Sequence[str],
-    attr_name: str,
-) -> Optional[T]:
-    """Select the row matching the highest-priority service/vendor alias."""
-    ordered = list(rows)
-    if not ordered:
-        return None
-    priority = {candidate: idx for idx, candidate in enumerate(candidates)}
-    return sorted(
-        ordered,
-        key=lambda row: priority.get(getattr(row, attr_name, None), len(priority)),
-    )[0]
-
-
 def get_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> Optional[str]:
-    """
-    Get API key for a service.
-
-    Priority order (post-2026-05-07 fix):
-    1. Tenant ProviderInstance default for vendor=service
-    2. Tenant ProviderInstance (only active candidate, when no default)
-    3. Tenant-specific legacy ApiKey row
-    4. System-wide legacy ApiKey row
-
-    Why ProviderInstance comes first: the Hub UI presents ProviderInstance as
-    the canonical configuration surface and hides legacy ApiKey rows for any
-    vendor that already has a ProviderInstance (frontend/app/hub/page.tsx
-    fallback disclosure). If the resolver checked the legacy table first, an
-    orphaned ApiKey row (e.g. a leftover QA seed or a TTS-cloud wizard side
-    effect) would silently override the visible ProviderInstance — exactly
-    the regression that surfaced via the QA-070 `sk-test-qa070-tts-fake-12345`
-    leak. Modern config wins; legacy ApiKey rows only fill in when no
-    ProviderInstance exists.
-
-    Args:
-        service: Service name or provider id ('anthropic', 'openai', 'gemini',
-            'openrouter', 'brave_search', 'brave', 'amadeus', 'serpapi',
-            'google_flights'). Provider/service aliases are resolved by
-            services.provider_aliases.
-        db: Database session
-        tenant_id: Optional tenant ID for multi-tenant key isolation
-
-    Returns:
-        API key string or None if not found
-        Note: For 'amadeus', returns 'key:secret' concatenated with colon
-    """
-    if not db:
-        logger.error(f"❌ get_api_key called with db=None for service={service}")
-        return None
-
-    service = str(service or "").strip().lower()
-    candidate_services = get_api_key_service_candidates(service)
-    if not candidate_services:
-        logger.warning("No API key service requested")
-        return None
-
-    # Step 1+2: Tenant ProviderInstance — modern, UI-visible config wins.
-    if tenant_id:
-        try:
-            from models import ProviderInstance
-            default_instances = db.query(ProviderInstance).filter(
-                ProviderInstance.vendor.in_(candidate_services),
-                ProviderInstance.tenant_id == tenant_id,
-                ProviderInstance.is_active == True,
-                ProviderInstance.is_default == True,
-                ProviderInstance.api_key_encrypted.isnot(None)
-            ).all()
-            instance = _pick_by_candidate_priority(
-                default_instances, candidate_services, "vendor"
-            )
-
-            if instance:
-                key = _decrypt_provider_instance_key(
-                    instance.api_key_encrypted, tenant_id, db
-                )
-                if key:
-                    logger.info(
-                        f" Using provider instance key for {service} "
-                        f"(vendor: {instance.vendor}, instance: {instance.instance_name})"
-                    )
-                    return key
-
-            # If no default but exactly one active instance has a key, use it.
-            # Avoids "not configured" confusion when one candidate clearly exists.
-            active_instances = db.query(ProviderInstance).filter(
-                ProviderInstance.vendor.in_(candidate_services),
-                ProviderInstance.tenant_id == tenant_id,
-                ProviderInstance.is_active == True,
-                ProviderInstance.api_key_encrypted.isnot(None)
-            ).all()
-            if len(active_instances) == 1:
-                only_instance = active_instances[0]
-                key = _decrypt_provider_instance_key(
-                    only_instance.api_key_encrypted, tenant_id, db
-                )
-                if key:
-                    logger.info(
-                        f" Using the only active provider instance key for {service} "
-                        f"(vendor: {only_instance.vendor}, instance: {only_instance.instance_name})"
-                    )
-                    return key
-        except Exception as e:
-            logger.warning(f"Failed to load provider instance key for {service}: {e}")
-
-    # Step 3: Tenant-specific legacy ApiKey row — fallback for vendors without
-    # a ProviderInstance (e.g. ElevenLabs TTS today, search/maps tool keys).
-    if tenant_id:
-        try:
-            tenant_keys = db.query(ApiKey).filter(
-                ApiKey.service.in_(candidate_services),
-                ApiKey.tenant_id == tenant_id,
-                ApiKey.is_active == True
-            ).all()
-            tenant_key = _pick_by_candidate_priority(
-                tenant_keys, candidate_services, "service"
-            )
-
-            if tenant_key:
-                logger.info(
-                    f" Using tenant-specific legacy ApiKey for {service} "
-                    f"(resolved service: {tenant_key.service}, tenant: {tenant_id})"
-                )
-                return _decrypt_api_key(tenant_key, db)
-        except Exception as e:
-            logger.warning(f"Failed to load tenant-specific API key for {service}: {e}")
-
-    # Step 4: System-wide legacy ApiKey row (tenant_id = NULL).
-    try:
-        system_keys = db.query(ApiKey).filter(
-            ApiKey.service.in_(candidate_services),
-            ApiKey.tenant_id.is_(None),
-            ApiKey.is_active == True
-        ).all()
-        system_key = _pick_by_candidate_priority(
-            system_keys, candidate_services, "service"
-        )
-
-        if system_key:
-            logger.info(
-                f" Using system-wide legacy ApiKey for {service} "
-                f"(resolved service: {system_key.service})"
-            )
-            return _decrypt_api_key(system_key, db)
-    except Exception as e:
-        logger.warning(f"Failed to load system-wide API key from database for {service}: {e}")
-
-    logger.warning(f"No API key found for {service}. Configure via Hub → AI Providers or Service API Keys.")
-    return None
+    raise RuntimeError(
+        "Legacy api_key runtime resolver is retired. "
+        "Use ProviderInstance or a typed integration model instead."
+    )
 
 
 def has_api_key(service: str, db: Session, tenant_id: Optional[str] = None) -> bool:
-    """
-    Check if an API key exists for a service.
-
-    Args:
-        service: Service name
-        db: Database session
-
-    Returns:
-        True if key exists, False otherwise
-    """
-    return get_api_key(service, db, tenant_id=tenant_id) is not None
+    """Legacy runtime availability checks are retired."""
+    return False
 
 
 def store_api_key(service: str, api_key: str, tenant_id: Optional[str], db: Session) -> ApiKey:
-    """
-    Store or update an API key in the database (encrypted).
-    Used by setup wizard to configure initial API keys.
-
-    Args:
-        service: Service name ('gemini', 'openai', 'anthropic', etc.)
-        api_key: The API key value (plaintext - will be encrypted)
-        tenant_id: Tenant ID (None for system-wide keys)
-        db: Database session
-
-    Returns:
-        The created or updated ApiKey object
-    """
-    # Encrypt the API key
-    encrypted_key = _encrypt_api_key(api_key, service, tenant_id, db)
-    if not encrypted_key:
-        raise ValueError(f"Failed to encrypt API key for {service}")
-
-    # Check if key already exists
-    existing_key = db.query(ApiKey).filter(
-        ApiKey.service == service,
-        ApiKey.tenant_id == tenant_id if tenant_id else ApiKey.tenant_id.is_(None)
-    ).first()
-
-    if existing_key:
-        # Update existing key - store encrypted, clear plaintext
-        existing_key.api_key_encrypted = encrypted_key
-        existing_key.api_key = None  # Clear plaintext
-        existing_key.is_active = True
-        db.commit()
-        logger.info(f"Updated API key for {service} (tenant: {tenant_id or 'system-wide'}) [encrypted]")
-        return existing_key
-    else:
-        # Create new key - store encrypted only
-        new_key = ApiKey(
-            service=service,
-            api_key=None,  # No plaintext
-            api_key_encrypted=encrypted_key,
-            tenant_id=tenant_id,
-            is_active=True
-        )
-        db.add(new_key)
-        db.commit()
-        logger.info(f"Created API key for {service} (tenant: {tenant_id or 'system-wide'}) [encrypted]")
-        return new_key
+    raise RuntimeError(
+        "Legacy api_key writes are retired. "
+        "Create ProviderInstance or typed integration rows instead."
+    )

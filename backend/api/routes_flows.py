@@ -1415,14 +1415,12 @@ def _check_required_credentials(
     template is configured for the tenant. Returns the list of missing
     credentials (empty list means all present).
 
-    Most credentials live in `ApiKey.service` (per-tenant) — e.g. 'gmail',
-    'google_calendar'. Provider-shaped Hub integrations such as Password
-    Vault/1Password are checked against their own tenant-scoped integration
-    rows so UI-created financial templates can depend on them without a seed.
+    Credentials are checked against typed tenant-scoped integrations. Legacy
+    ApiKey rows are ignored because the runtime resolver is retired.
     """
     if not required:
         return []
-    from models import ApiKey, PasswordVaultIntegration
+    from models import HubIntegration, PasswordVaultIntegration
     missing: List[str] = []
     params = params or {}
     for service in required:
@@ -1441,14 +1439,18 @@ def _check_required_credentials(
                 missing.append(service)
             continue
 
-        from services.provider_aliases import get_api_key_service_candidates
-
-        credential_services = get_api_key_service_candidates(service)
-        row = db.query(ApiKey.id).filter(
-            ApiKey.service.in_(credential_services),
-            ApiKey.is_active == True,  # noqa: E712
-            (ApiKey.tenant_id == tenant_id) | (ApiKey.tenant_id.is_(None)),
-        ).first()
+        integration_type = {
+            "gmail": "gmail",
+            "google_calendar": "calendar",
+            "calendar": "calendar",
+        }.get(normalized)
+        row = None
+        if integration_type:
+            row = db.query(HubIntegration.id).filter(
+                HubIntegration.type == integration_type,
+                HubIntegration.tenant_id == tenant_id,
+                HubIntegration.is_active == True,  # noqa: E712
+            ).first()
         if not row:
             missing.append(service)
     return missing

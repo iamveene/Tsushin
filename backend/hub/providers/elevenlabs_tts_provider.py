@@ -9,7 +9,6 @@ Features:
 - Emotional tone control
 """
 
-import os
 import time
 import logging
 from typing import Dict, List, Optional, Any
@@ -102,13 +101,13 @@ class ElevenLabsTTSProvider(TTSProvider):
         self._api_key: Optional[str] = None
 
     def _get_api_key(self) -> Optional[str]:
-        """Get ElevenLabs API key from database (tenant-specific or system-wide)."""
+        """Get ElevenLabs API key from the hosted TTSInstance row."""
         if self._api_key:
             return self._api_key
 
         if self.db:
-            from services.api_key_service import get_api_key
-            key = get_api_key('elevenlabs', self.db, tenant_id=self.tenant_id)
+            from services.tts_instance_service import TTSInstanceService
+            key = TTSInstanceService.resolve_hosted_api_key("elevenlabs", self.tenant_id, self.db)
             if key:
                 self._api_key = key
                 return key

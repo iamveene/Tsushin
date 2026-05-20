@@ -455,7 +455,7 @@ Tsushin ships with 22 built-in skills. Enable or disable them per agent from the
 | **Agent Communication (A2A)** | Tool | Enables inter-agent questions and task delegation, gated by `agent_communication_permission` rules. |
 | **Custom Skill (Adapter)** | Tool | Runtime adapter for tenant-authored custom skills (Instruction / Script / MCP Server). |
 
-Provider names in skills and Flow steps are normalized to the matching Tool API credential. For example, Brave web search can use a `brave_search` Tool API key, Google web search uses the SerpAPI key, and Google Flights accepts either a dedicated `google_flights` key or the shared SerpAPI key configured in **Hub > Tool APIs**. Agents that use the **Flight Search** skill can then select Google Flights as their provider.
+Provider names in skills and Flow steps are normalized to typed Hub integrations. Brave/Tavily/Google web search credentials are configured through **Hub > Tool APIs > Add Integration > Web Search**. Google Flights is configured separately through **Hub > Tool APIs > Add Integration > Travel > Google Flights**, and agents that use the **Flight Search** skill can then select Google Flights as their provider.
 
 **Active skill modes:** `Tool` (LLM tool call or explicit slash command), `Passive` (runs automatically after every response), and `Special` (media-triggered).
 

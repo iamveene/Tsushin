@@ -354,11 +354,10 @@ def test_tts_providers_registered_match_frontend_fallback():
         f"frontend/components/provider-wizard/steps/StepVendorSelect.tsx."
     )
 
-    # Surface 5: ProviderWizard's StepProgress save branch. Cloud TTS providers
-    # whose key is persisted via /api/api-keys (i.e. NOT Kokoro, which has its
-    # own TTSInstance path) must be enumerated in the save-branch condition,
-    # otherwise the wizard finalize step will silently fall through to the LLM
-    # /api/provider-instances path, which then 400s on missing available_models.
+    # Surface 5: ProviderWizard's StepProgress save branch. Hosted cloud TTS
+    # providers must be enumerated in typed save branches (ProviderInstance for
+    # OpenAI/Gemini and TTSInstance for ElevenLabs); otherwise the wizard
+    # finalize step can fall through to the wrong creation path.
     progress_path = FRONTEND / "components" / "provider-wizard" / "steps" / "StepProgress.tsx"
     assert progress_path.exists(), f"StepProgress.tsx not found at {progress_path}"
     progress_text = _read(progress_path)

@@ -8,19 +8,11 @@ import logging
 from sqlalchemy.orm import Session
 
 from .flight_search_provider import FlightSearchProvider
-from models import HubIntegration, ApiKey, GoogleFlightsIntegration
-from hub.security import TokenEncryption
-from services.encryption_key_service import get_api_key_encryption_key
-from services.api_key_service import get_api_key as get_decrypted_api_key
-from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES, normalize_flight_provider_id
+from models import HubIntegration
+from services.provider_aliases import normalize_flight_provider_id
 
 
 logger = logging.getLogger(__name__)
-
-GOOGLE_FLIGHTS_SERVICE_PRIORITY = {
-    service: index for index, service in enumerate(GOOGLE_FLIGHTS_API_KEY_SERVICES)
-}
-
 
 class FlightProviderRegistry:
     """
@@ -109,9 +101,6 @@ class FlightProviderRegistry:
 
         integration = query.first()
 
-        if not integration and provider_name == "google_flights":
-            integration = cls._sync_google_flights_integration(db, tenant_id)
-
         if not integration:
             logger.warning(
                 f"No active integration found for provider '{provider_name}'"
@@ -127,82 +116,6 @@ class FlightProviderRegistry:
         except Exception as e:
             logger.error(f"Failed to instantiate provider '{provider_name}': {e}")
             return None
-
-    @classmethod
-    def _sync_google_flights_integration(
-        cls,
-        db: Session,
-        tenant_id: Optional[str]
-    ) -> Optional[GoogleFlightsIntegration]:
-        """
-        Ensure Google Flights integration exists when API key is present.
-        """
-        key_query = db.query(ApiKey).filter(
-            ApiKey.service.in_(GOOGLE_FLIGHTS_API_KEY_SERVICES),
-            ApiKey.is_active == True
-        )
-
-        def _choose_key(candidates: List[ApiKey]) -> Optional[ApiKey]:
-            if not candidates:
-                return None
-            return sorted(
-                candidates,
-                key=lambda key: GOOGLE_FLIGHTS_SERVICE_PRIORITY.get(key.service, 99),
-            )[0]
-
-        api_key = None
-        if tenant_id:
-            api_key = _choose_key(
-                key_query.filter(ApiKey.tenant_id == tenant_id).all()
-            )
-            if not api_key:
-                api_key = _choose_key(
-                    key_query.filter(ApiKey.tenant_id == None).all()
-                )
-        else:
-            api_key = _choose_key(
-                key_query.filter(ApiKey.tenant_id == None).all()
-            )
-            if not api_key:
-                api_key = _choose_key(key_query.all())
-
-        if not api_key:
-            return None
-
-        # CRIT-004 fix: Get decrypted API key from api_key_service (not api_key.api_key which may be NULL)
-        # Then re-encrypt with dedicated encryption key (not JWT_SECRET_KEY)
-        decrypted_key = get_decrypted_api_key(api_key.service, db, tenant_id=api_key.tenant_id)
-        if not decrypted_key:
-            logger.warning("Could not get decrypted API key for GoogleFlightsIntegration sync")
-            return None
-
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            logger.error("Failed to get encryption key for GoogleFlightsIntegration sync")
-            return None
-
-        encryptor = TokenEncryption(encryption_key.encode())
-        # Use consistent identifier with ApiKey table
-        identifier = f"apikey_google_flights_{api_key.tenant_id or 'system'}"
-        encrypted_key = encryptor.encrypt(decrypted_key, identifier)
-
-        integration = GoogleFlightsIntegration(
-            name="Google Flights (SerpApi)",
-            display_name="Google Flights",
-            is_active=api_key.is_active,
-            tenant_id=api_key.tenant_id,
-            api_key_encrypted=encrypted_key,
-            default_currency="USD",
-            default_language="en"
-        )
-        db.add(integration)
-        db.commit()
-        db.refresh(integration)
-        logger.info(
-            "Created Google Flights integration from ApiKey"
-            + (f" (tenant: {api_key.tenant_id})" if api_key.tenant_id else " (system)")
-        )
-        return integration
 
     @classmethod
     def list_available_providers(
@@ -256,8 +169,6 @@ class FlightProviderRegistry:
                 if tenant_id:
                     query = query.filter(HubIntegration.tenant_id == tenant_id)
                 integration = query.first()
-                if not integration and name == "google_flights":
-                    integration = cls._sync_google_flights_integration(db, tenant_id)
                 provider_info["configured"] = integration is not None
 
                 if integration:

@@ -45,10 +45,9 @@ interface ProviderMeta {
   category: CategoryId
   description: string
   skillType: 'web_search' | 'travel'
-  // How to commit credentials in step 3. Values map to the back-end routes.
-  credentialMode: 'api_key' | 'searxng_autoprovision' | 'amadeus'
+  // How to commit credentials in step 3. Values map to typed back-end routes.
+  credentialMode: 'hosted_api' | 'searxng_autoprovision' | 'amadeus'
   skillProvider?: string  // what we set in AgentSkill.config.provider (web_search)
-  apiKeyService?: string  // service name for /api/api-keys (api_key mode)
   keyUrl?: string
   disabled?: boolean
   disabledReason?: string
@@ -63,7 +62,7 @@ interface ProviderMeta {
 // the backend registries (SearchProviderRegistry + FlightProviderRegistry).
 //
 // Keep credential-workflow fields (credentialMode / skillProvider /
-// apiKeyService / keyUrl) here — they are UI metadata and do NOT live on the
+// keyUrl) here — they are UI metadata and do NOT live on the
 // backend registries. Live backend rows are merged with entries here (matched
 // by `id`) at render time.
 //
@@ -79,9 +78,8 @@ const FALLBACK_PROVIDERS: ProviderMeta[] = [
     category: 'web_search',
     description: 'Privacy-first, generous free tier, no PII in queries.',
     skillType: 'web_search',
-    credentialMode: 'api_key',
+    credentialMode: 'hosted_api',
     skillProvider: 'brave',
-    apiKeyService: 'brave_search',
     keyUrl: 'https://brave.com/search/api/',
   },
   {
@@ -99,9 +97,8 @@ const FALLBACK_PROVIDERS: ProviderMeta[] = [
     category: 'web_search',
     description: 'Live Google SERP; paid after free quota.',
     skillType: 'web_search',
-    credentialMode: 'api_key',
+    credentialMode: 'hosted_api',
     skillProvider: 'google',
-    apiKeyService: 'serpapi',
     keyUrl: 'https://serpapi.com/manage-api-key',
   },
   {
@@ -110,9 +107,8 @@ const FALLBACK_PROVIDERS: ProviderMeta[] = [
     category: 'web_search',
     description: 'AI-optimized answers with a concise summary; paid after free quota.',
     skillType: 'web_search',
-    credentialMode: 'api_key',
+    credentialMode: 'hosted_api',
     skillProvider: 'tavily',
-    apiKeyService: 'tavily',
     keyUrl: 'https://app.tavily.com/home',
   },
   // --- Travel ---
@@ -132,9 +128,8 @@ const FALLBACK_PROVIDERS: ProviderMeta[] = [
     category: 'travel',
     description: 'Uses the same SerpAPI key as Google Search.',
     skillType: 'travel',
-    credentialMode: 'api_key',
+    credentialMode: 'hosted_api',
     skillProvider: 'google_flights',
-    apiKeyService: 'serpapi',
     keyUrl: 'https://serpapi.com/manage-api-key',
   },
 ]
@@ -169,7 +164,7 @@ const PROVIDER_TO_CATEGORY: Record<ProviderId, CategoryId> = FALLBACK_PROVIDERS.
  *
  * Rules:
  *  - FALLBACK_PROVIDERS entry supplies credential-workflow fields
- *    (credentialMode / skillProvider / apiKeyService / keyUrl) — these don't
+ *    (credentialMode / skillProvider / keyUrl) — these don't
  *    exist on the backend registry.
  *  - Live row supplies fresh label + description (human-editable server-side).
  *  - Live-only rows (backend adds a new provider before the fallback array
@@ -213,7 +208,7 @@ export default function AddIntegrationWizard({
   const [category, setCategory] = useState<CategoryId>(startingCategory)
   const [provider, setProvider] = useState<ProviderId>(startingProvider)
 
-  // api_key mode
+  // hosted credential mode
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
 
@@ -324,31 +319,15 @@ export default function AddIntegrationWizard({
     setSavingCredentials(true)
     setCredentialError(null)
     try {
-      if (meta.credentialMode === 'api_key') {
+      if (meta.credentialMode === 'hosted_api') {
         if (!apiKey.trim() || apiKey.trim().length < 10) {
           setCredentialError('Paste the full API key')
           return false
         }
-        let res = await authenticatedFetch('/api/api-keys', {
-          method: 'POST',
-          body: JSON.stringify({
-            service: meta.apiKeyService,
-            api_key: apiKey.trim(),
-            is_active: true,
-          }),
-        })
-        if (res.status === 400) {
-          const body = await res.json().catch(() => ({}))
-          if (/already/i.test(body.detail || '')) {
-            res = await authenticatedFetch(`/api/api-keys/${meta.apiKeyService}`, {
-              method: 'PUT',
-              body: JSON.stringify({ api_key: apiKey.trim(), is_active: true }),
-            })
-          }
-        }
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.detail || `HTTP ${res.status}`)
+        if (meta.id === 'google_flights') {
+          await api.configureGoogleFlights(apiKey.trim())
+        } else {
+          await api.configureSearchProvider(meta.skillProvider || meta.id, apiKey.trim())
         }
         return true
       }
@@ -613,7 +592,7 @@ export default function AddIntegrationWizard({
   // STEP 3 — Credentials (mode-dependent)
   if (step === 3) {
     const canProceed =
-      meta.credentialMode === 'api_key'
+      meta.credentialMode === 'hosted_api'
         ? !!apiKey.trim()
         : meta.credentialMode === 'searxng_autoprovision'
         ? (!!searxngInstanceName.trim() && (autoProvision || !!externalUrl.trim()))
@@ -638,7 +617,7 @@ export default function AddIntegrationWizard({
         <div className="space-y-5">
           {stepIndicator}
 
-          {meta.credentialMode === 'api_key' && (
+          {meta.credentialMode === 'hosted_api' && (
             <>
               {meta.keyUrl && (
                 <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-4 text-sm text-amber-100">

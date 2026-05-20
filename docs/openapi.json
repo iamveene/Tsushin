@@ -2506,20 +2506,13 @@
     "/api/api-keys": {
       "get": {
         "summary": "List Api Keys",
-        "description": "List all configured API keys (masked).\n\nPhase 7.9.2: Returns keys for the user's tenant AND shared keys (NULL tenant_id).\nGlobal admins see all keys.",
         "operationId": "list_api_keys_api_api_keys_get",
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ApiKeyResponse"
-                  },
-                  "type": "array",
-                  "title": "Response List Api Keys Api Api Keys Get"
-                }
+                "schema": {}
               }
             }
           }
@@ -2532,36 +2525,13 @@
       },
       "post": {
         "summary": "Create Or Update Api Key",
-        "description": "Create or update an API key for a service.\n\nPhase 7.9.2: Creates tenant-specific key. Use global admin to create shared keys.\nPhase SEC-001: API keys are now encrypted at rest.",
         "operationId": "create_or_update_api_key_api_api_keys_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApiKeyCreate"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "201": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiKeyResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
+                "schema": {}
               }
             }
           }
@@ -2576,10 +2546,9 @@
     "/api/api-keys/services": {
       "get": {
         "summary": "List Supported Services",
-        "description": "List all supported services for API key configuration",
         "operationId": "list_supported_services_api_api_keys_services_get",
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -2587,13 +2556,17 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/api-keys/{service}": {
       "get": {
         "summary": "Get Api Key Route",
-        "description": "Get API key for a specific service (masked).\n\nPhase 7.9.2: Priority lookup:\n1. Tenant-specific key first\n2. Fallback to shared key (NULL tenant_id)",
         "operationId": "get_api_key_route_api_api_keys__service__get",
         "security": [
           {
@@ -2612,13 +2585,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiKeyResponse"
-                }
+                "schema": {}
               }
             }
           },
@@ -2636,7 +2607,6 @@
       },
       "put": {
         "summary": "Update Api Key",
-        "description": "Update an existing API key.\n\nPhase 7.9.2: Only updates keys belonging to user's tenant (or shared if global admin).\nPhase SEC-001: API keys are now encrypted at rest.",
         "operationId": "update_api_key_api_api_keys__service__put",
         "security": [
           {
@@ -2654,24 +2624,12 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApiKeyUpdate"
-              }
-            }
-          }
-        },
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiKeyResponse"
-                }
+                "schema": {}
               }
             }
           },
@@ -2689,7 +2647,6 @@
       },
       "delete": {
         "summary": "Delete Api Key",
-        "description": "Delete an API key.\n\nPhase 7.9.2: Only deletes keys belonging to user's tenant (or shared if global admin).",
         "operationId": "delete_api_key_api_api_keys__service__delete",
         "security": [
           {
@@ -2708,7 +2665,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -2727,28 +2684,6 @@
             }
           }
         }
-      }
-    },
-    "/api/ollama/health": {
-      "get": {
-        "summary": "Check Ollama Health",
-        "description": "Check Ollama local LLM service health status.\nReturns online/offline status and available models.\nPhase 5.2.1: Uses configured base URL from Config table.",
-        "operationId": "check_ollama_health_api_ollama_health_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
       }
     },
     "/api/agents/{agent_id}/knowledge": {
@@ -29712,6 +29647,53 @@
         }
       }
     },
+    "/api/triggers/github/{trigger_id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "GitHub Triggers"
+        ],
+        "summary": "Rotate Github Trigger Secret",
+        "operationId": "rotate_github_trigger_secret_api_triggers_github__trigger_id__rotate_secret_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/api__routes_github_triggers__RepositoryTriggerSecretRotateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/github/{trigger_id}/recap-config": {
       "get": {
         "tags": [
@@ -30226,6 +30208,53 @@
         }
       }
     },
+    "/api/triggers/gitlab/{trigger_id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "GitLab Triggers"
+        ],
+        "summary": "Rotate Gitlab Trigger Secret",
+        "operationId": "rotate_gitlab_trigger_secret_api_triggers_gitlab__trigger_id__rotate_secret_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/api__routes_gitlab_triggers__RepositoryTriggerSecretRotateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers/gitlab/{trigger_id}/recap-config": {
       "get": {
         "tags": [
@@ -30447,6 +30476,53 @@
             }
           }
         }
+      }
+    },
+    "/api/wizards/repository-automation": {
+      "post": {
+        "tags": [
+          "Wizards"
+        ],
+        "summary": "Create Repository Automation",
+        "description": "Create or reuse a repository-review trigger and its executor wiring.",
+        "operationId": "create_repository_automation_api_wizards_repository_automation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryAutomationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryAutomationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/triggers/github/{trigger_id}/inbound": {
@@ -37921,6 +37997,63 @@
         ]
       }
     },
+    "/api/hub/search-providers/{provider_id}/configure": {
+      "post": {
+        "tags": [
+          "Hub Providers"
+        ],
+        "summary": "Configure Hosted Search Provider",
+        "operationId": "configure_hosted_search_provider_api_hub_search_providers__provider_id__configure_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCatalogEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/hub/productivity-services": {
       "get": {
         "tags": [
@@ -37971,6 +38104,52 @@
                   },
                   "type": "array",
                   "title": "Response List Travel Providers Api Hub Travel Providers Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/hub/travel-providers/google_flights/configure": {
+      "post": {
+        "tags": [
+          "Hub Providers"
+        ],
+        "summary": "Configure Google Flights Provider",
+        "operationId": "configure_google_flights_provider_api_hub_travel_providers_google_flights_configure_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCatalogEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -50543,120 +50722,6 @@
           "last_request_at"
         ],
         "title": "ApiClientUsageResponse"
-      },
-      "ApiKeyCreate": {
-        "properties": {
-          "service": {
-            "type": "string",
-            "title": "Service"
-          },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
-          },
-          "is_active": {
-            "type": "boolean",
-            "title": "Is Active",
-            "default": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "service",
-          "api_key"
-        ],
-        "title": "ApiKeyCreate"
-      },
-      "ApiKeyResponse": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "service": {
-            "type": "string",
-            "title": "Service"
-          },
-          "api_key_preview": {
-            "type": "string",
-            "title": "Api Key Preview"
-          },
-          "is_active": {
-            "type": "boolean",
-            "title": "Is Active"
-          },
-          "tenant_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tenant Id"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "service",
-          "api_key_preview",
-          "is_active"
-        ],
-        "title": "ApiKeyResponse"
-      },
-      "ApiKeyUpdate": {
-        "properties": {
-          "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "is_active": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Active"
-          }
-        },
-        "type": "object",
-        "title": "ApiKeyUpdate"
       },
       "ApprovalDecisionRequest": {
         "properties": {
@@ -74627,6 +74692,52 @@
         "title": "ProviderCatalogEntry",
         "description": "One row in a provider catalog (search or travel)."
       },
+      "ProviderCredentialRequest": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "default_country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Country"
+          },
+          "default_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Language"
+          },
+          "default_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Currency"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key"
+        ],
+        "title": "ProviderCredentialRequest"
+      },
       "ProviderInfo": {
         "properties": {
           "id": {
@@ -76358,6 +76469,628 @@
         },
         "type": "object",
         "title": "RemoteAccessConfigUpdate"
+      },
+      "RepositoryAutomationAgentRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skills"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "skills"
+        ],
+        "title": "RepositoryAutomationAgentRef"
+      },
+      "RepositoryAutomationBindingRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "trigger_kind": {
+            "type": "string",
+            "title": "Trigger Kind"
+          },
+          "trigger_instance_id": {
+            "type": "integer",
+            "title": "Trigger Instance Id"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Types"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "flow_definition_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Definition Id"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "suppress_default_agent": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppress Default Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "trigger_kind",
+          "trigger_instance_id",
+          "is_active"
+        ],
+        "title": "RepositoryAutomationBindingRef"
+      },
+      "RepositoryAutomationFlowRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "default_agent_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Id"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_active",
+          "created"
+        ],
+        "title": "RepositoryAutomationFlowRef"
+      },
+      "RepositoryAutomationIntegrationRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "gitlab"
+            ],
+            "title": "Provider"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "reused": {
+            "type": "boolean",
+            "title": "Reused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "name",
+          "reused"
+        ],
+        "title": "RepositoryAutomationIntegrationRef"
+      },
+      "RepositoryAutomationProviderWebhookSetup": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "gitlab"
+            ],
+            "title": "Provider"
+          },
+          "relative_inbound_url": {
+            "type": "string",
+            "title": "Relative Inbound Url"
+          },
+          "inbound_url": {
+            "type": "string",
+            "title": "Inbound Url"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "webhook_secret_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret Preview"
+          },
+          "trigger_created": {
+            "type": "boolean",
+            "title": "Trigger Created"
+          },
+          "webhook_secret_once": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret Once"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "relative_inbound_url",
+          "inbound_url",
+          "events",
+          "trigger_created"
+        ],
+        "title": "RepositoryAutomationProviderWebhookSetup"
+      },
+      "RepositoryAutomationRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "gitlab"
+            ],
+            "title": "Provider"
+          },
+          "integration_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Integration Id"
+          },
+          "template_id": {
+            "type": "string",
+            "enum": [
+              "repository_review_team",
+              "repository_pr_agent"
+            ],
+            "title": "Template Id"
+          },
+          "repo_owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Owner"
+          },
+          "repo_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Name"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "target": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Target"
+          },
+          "existing_trigger_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Trigger Id"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "branch_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Filter"
+          },
+          "path_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Filters"
+          },
+          "author_filter": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Filter"
+          },
+          "trigger_criteria": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Criteria"
+          },
+          "integration_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Name"
+          },
+          "trigger_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Name"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          },
+          "flow_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Name"
+          },
+          "routing_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "team_primary",
+                  "agent_flow"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Routing Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "integration_id",
+          "template_id"
+        ],
+        "title": "RepositoryAutomationRequest"
+      },
+      "RepositoryAutomationResponse": {
+        "properties": {
+          "integration": {
+            "$ref": "#/components/schemas/RepositoryAutomationIntegrationRef"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/RepositoryAutomationTriggerRef"
+          },
+          "flow": {
+            "$ref": "#/components/schemas/RepositoryAutomationFlowRef"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryAutomationTeamRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryAutomationAgentRef"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryAutomationBindingRef"
+            },
+            "type": "array",
+            "title": "Bindings"
+          },
+          "provider_webhook_setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryAutomationProviderWebhookSetup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Links"
+          },
+          "routing_mode": {
+            "type": "string",
+            "enum": [
+              "team_primary",
+              "agent_flow"
+            ],
+            "title": "Routing Mode"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "integration",
+          "trigger",
+          "flow",
+          "agents",
+          "bindings",
+          "links",
+          "routing_mode",
+          "created_at"
+        ],
+        "title": "RepositoryAutomationResponse"
+      },
+      "RepositoryAutomationTeamRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "member_count": {
+            "type": "integer",
+            "title": "Member Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "member_count"
+        ],
+        "title": "RepositoryAutomationTeamRef"
+      },
+      "RepositoryAutomationTriggerRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "gitlab"
+            ],
+            "title": "Provider"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "canonical_events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Canonical Events"
+          },
+          "reused": {
+            "type": "boolean",
+            "title": "Reused"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "inbound_url": {
+            "type": "string",
+            "title": "Inbound Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "name",
+          "events",
+          "canonical_events",
+          "reused",
+          "is_active",
+          "inbound_url"
+        ],
+        "title": "RepositoryAutomationTriggerRef"
       },
       "ResetMemoryRequest": {
         "properties": {
@@ -84549,6 +85282,17 @@
             ],
             "title": "Base Url"
           },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
           "is_default": {
             "type": "boolean",
             "title": "Is Default",
@@ -84667,6 +85411,17 @@
               }
             ],
             "title": "Base Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
           },
           "default_voice": {
             "anyOf": [
@@ -91182,6 +91937,52 @@
         ],
         "title": "CommandResponse",
         "description": "Response for a single command."
+      },
+      "api__routes_github_triggers__RepositoryTriggerSecretRotateResponse": {
+        "properties": {
+          "webhook_secret_once": {
+            "type": "string",
+            "title": "Webhook Secret Once"
+          },
+          "webhook_secret_preview": {
+            "type": "string",
+            "title": "Webhook Secret Preview"
+          },
+          "warning": {
+            "type": "string",
+            "title": "Warning",
+            "default": "Save this secret now. It will not be shown again. Update the GitHub webhook secret; the previous secret is invalidated."
+          }
+        },
+        "type": "object",
+        "required": [
+          "webhook_secret_once",
+          "webhook_secret_preview"
+        ],
+        "title": "RepositoryTriggerSecretRotateResponse"
+      },
+      "api__routes_gitlab_triggers__RepositoryTriggerSecretRotateResponse": {
+        "properties": {
+          "webhook_secret_once": {
+            "type": "string",
+            "title": "Webhook Secret Once"
+          },
+          "webhook_secret_preview": {
+            "type": "string",
+            "title": "Webhook Secret Preview"
+          },
+          "warning": {
+            "type": "string",
+            "title": "Warning",
+            "default": "Save this secret now. It will not be shown again. Update the GitLab webhook token; the previous secret is invalidated."
+          }
+        },
+        "type": "object",
+        "required": [
+          "webhook_secret_once",
+          "webhook_secret_preview"
+        ],
+        "title": "RepositoryTriggerSecretRotateResponse"
       },
       "api__routes_google__IntegrationResponse": {
         "properties": {

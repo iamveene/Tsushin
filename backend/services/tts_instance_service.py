@@ -19,7 +19,7 @@ from models import TTSInstance, Config
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_VENDORS = {"kokoro"}
+SUPPORTED_VENDORS = {"kokoro", "elevenlabs"}
 AUTO_PROVISIONABLE_VENDORS = {"kokoro"}
 
 
@@ -73,6 +73,7 @@ class TTSInstanceService:
         default_speed: Optional[float] = None,
         default_language: Optional[str] = None,
         default_format: Optional[str] = None,
+        api_key: Optional[str] = None,
         mem_limit: Optional[str] = None,
         cpu_quota: Optional[int] = None,
     ) -> TTSInstance:
@@ -103,6 +104,9 @@ class TTSInstanceService:
             kwargs["default_language"] = default_language
         if default_format is not None:
             kwargs["default_format"] = default_format
+        if api_key:
+            kwargs["api_key_encrypted"] = TTSInstanceService._encrypt_key(api_key, tenant_id, db)
+            kwargs["api_key_preview"] = TTSInstanceService.mask_api_key(api_key)
         if mem_limit is not None:
             kwargs["mem_limit"] = mem_limit
         if cpu_quota is not None:
@@ -113,6 +117,59 @@ class TTSInstanceService:
         db.commit()
         db.refresh(instance)
         return instance
+
+    @staticmethod
+    def mask_api_key(api_key: str) -> str:
+        if not api_key:
+            return ""
+        if len(api_key) <= 8:
+            return "***"
+        return f"{api_key[:4]}...{api_key[-4:]}"
+
+    @staticmethod
+    def _encrypt_key(api_key: str, tenant_id: str, db: Session) -> str:
+        from hub.security import TokenEncryption
+        from services.encryption_key_service import get_api_key_encryption_key
+
+        encryption_key = get_api_key_encryption_key(db)
+        if not encryption_key:
+            raise ValueError("Failed to get encryption key for TTS instance API key encryption")
+        encryptor = TokenEncryption(encryption_key.encode())
+        return encryptor.encrypt(api_key, f"tts_instance_{tenant_id}")
+
+    @staticmethod
+    def _decrypt_key(encrypted_key: str, tenant_id: str, db: Session) -> str:
+        from hub.security import TokenEncryption
+        from services.encryption_key_service import get_api_key_encryption_key
+
+        encryption_key = get_api_key_encryption_key(db)
+        if not encryption_key:
+            raise ValueError("Failed to get encryption key for TTS instance API key decryption")
+        encryptor = TokenEncryption(encryption_key.encode())
+        return encryptor.decrypt(encrypted_key, f"tts_instance_{tenant_id}")
+
+    @staticmethod
+    def get_default_hosted_instance(vendor: str, tenant_id: str, db: Session) -> Optional[TTSInstance]:
+        if vendor not in SUPPORTED_VENDORS or vendor in AUTO_PROVISIONABLE_VENDORS:
+            return None
+        return (
+            db.query(TTSInstance)
+            .filter(
+                TTSInstance.vendor == vendor,
+                TTSInstance.tenant_id == tenant_id,
+                TTSInstance.is_active == True,
+                TTSInstance.api_key_encrypted.isnot(None),
+            )
+            .order_by(TTSInstance.is_default.desc(), TTSInstance.id.desc())
+            .first()
+        )
+
+    @staticmethod
+    def resolve_hosted_api_key(vendor: str, tenant_id: str, db: Session) -> Optional[str]:
+        instance = TTSInstanceService.get_default_hosted_instance(vendor, tenant_id, db)
+        if not instance:
+            return None
+        return TTSInstanceService._decrypt_key(instance.api_key_encrypted, tenant_id, db)
 
     # ------------------------------------------------------------------ provision
 
@@ -257,6 +314,11 @@ class TTSInstanceService:
                 TTSInstance.id != instance_id,
                 TTSInstance.is_default == True,
             ).update({"is_default": False})
+
+        api_key = kwargs.pop("api_key", None)
+        if api_key:
+            instance.api_key_encrypted = TTSInstanceService._encrypt_key(api_key, tenant_id, db)
+            instance.api_key_preview = TTSInstanceService.mask_api_key(api_key)
 
         for key, value in kwargs.items():
             if value is not None and hasattr(instance, key):

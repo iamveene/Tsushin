@@ -23,8 +23,8 @@ interface Props {
   defaultVendor?: string
 }
 
-// LLM provider instances only — ElevenLabs is a TTS provider configured
-// separately via Hub > TTS Providers > API Keys, not as a provider instance.
+// LLM provider instances only. ElevenLabs is a hosted TTS provider configured
+// through the Provider Wizard / TTSInstance path, not as a ProviderInstance.
 //
 // Static FALLBACK only — the live list comes from GET /api/providers/vendors
 // so a vendor added to backend VALID_VENDORS surfaces here automatically.

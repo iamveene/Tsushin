@@ -330,10 +330,7 @@ def test_audio_transcript_fails_closed_when_pinned_asr_instance_fails():
             return_value=_FakeProvider(failing_response),
         ), patch(
             "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
-        ) as get_openai_provider, patch(
-            "agent.skills.audio_transcript.get_api_key",
-            return_value="sk-test",
-        ):
+        ) as get_openai_provider:
             result = asyncio.run(
                 skill.process(
                     _make_message(audio_path),
@@ -380,10 +377,7 @@ def test_audio_transcript_pinned_instance_error_does_not_include_cloud_fallback(
             return_value=_FakeProvider(failing_local),
         ), patch(
             "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
-        ) as get_openai_provider, patch(
-            "agent.skills.audio_transcript.get_api_key",
-            return_value="sk-test",
-        ):
+        ) as get_openai_provider:
             result = asyncio.run(
                 skill.process(
                     _make_message(audio_path),
@@ -426,8 +420,11 @@ def test_audio_transcript_openai_mode_uses_cloud():
             "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider",
             return_value=_FakeProvider(openai_response),
         ), patch(
-            "agent.skills.audio_transcript.get_api_key",
+            "services.provider_instance_service.ProviderInstanceService.resolve_default_api_key",
             return_value="sk-test",
+        ), patch(
+            "services.provider_instance_service.ProviderInstanceService.get_instance",
+            return_value=None,
         ):
             result = asyncio.run(
                 skill.process(

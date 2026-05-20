@@ -8,24 +8,20 @@ def _read(relative: str) -> str:
     return (BACKEND_ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_google_flights_runtime_accepts_unified_serpapi_key():
-    registry = _read("hub/providers/registry.py")
+def test_google_flights_runtime_uses_typed_integration_only():
     provider = _read("hub/providers/google_flights_provider.py")
-    aliases = _read("services/provider_aliases.py")
 
-    assert 'GOOGLE_FLIGHTS_API_KEY_SERVICES = API_KEY_SERVICE_CANDIDATES["google_flights"]' in aliases
-    assert "from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES" in registry
-    assert "get_decrypted_api_key(api_key.service" in registry
-    assert 'get_decrypted_api_key("google_flights"' in provider
+    assert "decrypt_google_flights_key" in provider
+    assert "ApiKey" not in provider
+    assert "get_api_key" not in provider
 
 
-def test_serpapi_key_syncs_google_flights_integration():
-    source = _read("api/routes_api_keys.py")
+def test_google_flights_setup_uses_typed_config_endpoint():
+    source = _read("api/routes_hub_providers.py")
 
-    assert "from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES" in source
-    assert "api_key.service in GOOGLE_FLIGHTS_API_KEY_SERVICES" in source
-    assert "HubIntegration.type == 'google_flights'" in source
-    assert 'identifier = f"apikey_google_flights_{api_key.tenant_id or \'system\'}"' in source
+    assert '@router.post("/travel-providers/google_flights/configure"' in source
+    assert "configure_google_flights_integration(" in source
+    assert 'tenant_has_configured=True' in source
 
 
 def test_flight_provider_agent_link_writes_agent_skill_and_uses_tenant_provider():
@@ -39,19 +35,21 @@ def test_flight_provider_agent_link_writes_agent_skill_and_uses_tenant_provider(
     assert "agent.config" not in source
 
 
-def test_google_flights_catalog_treats_serpapi_as_configured():
+def test_google_flights_catalog_checks_typed_hub_integration():
     source = _read("api/routes_hub_providers.py")
 
-    assert "has_api_key(provider_id, db, tenant_id=tenant_id)" in source
+    assert "HubIntegration.type == provider_id" in source
+    assert "has_api_key(" not in source
 
 
-def test_provider_aliases_cover_search_and_flight_config_drift():
+def test_provider_aliases_cover_search_and_flight_id_drift():
     aliases = _read("services/provider_aliases.py")
     search_skill = _read("agent/skills/search_skill.py")
-    flows = _read("api/routes_flows.py")
+    flight_skill = _read("agent/skills/flight_search_skill.py")
 
-    assert '"brave": ("brave_search", "brave")' in aliases
-    assert '"google": ("serpapi", "google_flights")' in aliases
-    assert '"google_flights": ("google_flights", "serpapi")' in aliases
+    assert '"brave_search": "brave"' in aliases
+    assert '"google_search": "google"' in aliases
+    assert '"serpapi": "google"' in aliases
+    assert '"serpapi": "google_flights"' in aliases
     assert "normalize_search_provider_id(provider_name)" in search_skill
-    assert "get_api_key_service_candidates(service)" in flows
+    assert "normalize_flight_provider_id(provider_name)" in flight_skill

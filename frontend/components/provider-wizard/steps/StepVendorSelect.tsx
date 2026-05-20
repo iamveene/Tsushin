@@ -42,9 +42,9 @@ const LLM_LOCAL: VendorOption[] = [
 ]
 
 const TTS_CLOUD: VendorOption[] = [
-  { id: 'openai',     label: 'OpenAI TTS',         description: 'tts-1 / tts-1-hd voices (alloy, nova, echo, fable, onyx, shimmer). Reuses your OpenAI API key — same key as the OpenAI LLM card.', Icon: MicrophoneIcon },
-  { id: 'gemini',     label: 'Google Gemini TTS',  description: 'Preview models — Fast (2.5 Flash), Balanced (3.1 Flash, default), Quality (2.5 Pro). 30 prebuilt voices, WAV output. Reuses your Gemini API key — same key as the Gemini LLM / Image cards.', Icon: GeminiIcon, tag: 'Preview' },
-  { id: 'elevenlabs', label: 'ElevenLabs',         description: 'Hosted high-fidelity voice generation. Requires an API key.',                                                                                                                                  Icon: MicrophoneIcon },
+  { id: 'openai',     label: 'OpenAI TTS',         description: 'tts-1 / tts-1-hd voices (alloy, nova, echo, fable, onyx, shimmer). Uses your OpenAI Provider Instance.', Icon: MicrophoneIcon },
+  { id: 'gemini',     label: 'Google Gemini TTS',  description: 'Preview models — Fast (2.5 Flash), Balanced (3.1 Flash, default), Quality (2.5 Pro). 30 prebuilt voices, WAV output. Uses your Gemini Provider Instance.', Icon: GeminiIcon, tag: 'Preview' },
+  { id: 'elevenlabs', label: 'ElevenLabs',         description: 'Hosted high-fidelity voice generation through a dedicated TTS connection.',                                                                                                                                  Icon: MicrophoneIcon },
 ]
 
 const TTS_LOCAL: VendorOption[] = [
@@ -55,7 +55,7 @@ const ASR_CLOUD: VendorOption[] = [
   {
     id: 'openai',
     label: 'OpenAI Whisper API',
-    description: 'Cloud transcription via OpenAI’s hosted whisper-1 model. Reuses the OpenAI API key from the LLM > OpenAI provider — no separate credential to enter.',
+    description: 'Cloud transcription via OpenAI’s hosted whisper-1 model. Uses the OpenAI Provider Instance from Hub.',
     Icon: MicrophoneIcon,
   },
 ]

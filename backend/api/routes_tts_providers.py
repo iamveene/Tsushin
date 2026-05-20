@@ -92,9 +92,7 @@ class ProviderInfoResponse(BaseModel):
     supported_formats: List[str] = []
     supported_languages: List[str] = []
     pricing: Dict = {}
-    # True when the caller's tenant has credentials configured for this provider
-    # (API key row OR default ProviderInstance with a key). Lets wizards filter
-    # out "needs setup" providers without a separate round-trip.
+    # True when the caller's tenant has typed credentials configured for this provider.
     tenant_has_configured: bool = False
 
 
@@ -147,10 +145,8 @@ def list_tts_providers(
     try:
         providers = TTSProviderRegistry.list_providers(db)
 
-        # Per-tenant credential resolution — saves the wizard a round-trip per
-        # provider. api_key_service.get_api_key already checks both the ApiKey
-        # table and the default ProviderInstance for the vendor.
-        from services.api_key_service import get_api_key
+        from services.provider_instance_service import ProviderInstanceService
+        from services.tts_instance_service import TTSInstanceService
         tenant_id = getattr(current_user, "tenant_id", None)
 
         def _tenant_has_configured(provider_id: str, requires_api_key: bool) -> bool:
@@ -159,7 +155,11 @@ def list_tts_providers(
             if not tenant_id:
                 return False
             try:
-                return bool(get_api_key(provider_id, db, tenant_id=tenant_id))
+                if provider_id == "elevenlabs":
+                    return bool(TTSInstanceService.resolve_hosted_api_key(provider_id, tenant_id, db))
+                if provider_id in {"openai", "gemini"}:
+                    return bool(ProviderInstanceService.resolve_default_api_key(provider_id, tenant_id, db))
+                return False
             except Exception:
                 return False
 

@@ -12,7 +12,6 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime
 
 from agent.skills.base import BaseSkill, InboundMessage, SkillResult
-from services.api_key_service import get_api_key
 from hub.providers.asr_provider import ASRRequest
 from hub.providers.asr_registry import ASRProviderRegistry
 
@@ -58,7 +57,7 @@ class AudioTranscriptSkill(BaseSkill):
 
     Configuration:
     {
-        "api_key": "sk-...",        # OpenAI API key (required)
+        "provider_instance_id": 1,   # Optional OpenAI Provider Instance override
         "language": "auto",         # Language code or "auto" for detection
         "model": "whisper-1",       # Whisper model to use
         "response_mode": "conversational"  # "conversational" or "transcript_only"
@@ -298,13 +297,14 @@ class AudioTranscriptSkill(BaseSkill):
                     if instance and instance.vendor == "openai" and instance.is_active:
                         api_key = ProviderInstanceService.resolve_api_key(instance, db)
 
-                if not api_key:
-                    api_key = get_api_key("openai", db, tenant_id=tenant_id) or config.get("api_key")
+                if not api_key and tenant_id:
+                    from services.provider_instance_service import ProviderInstanceService
+                    api_key = ProviderInstanceService.resolve_default_api_key("openai", tenant_id, db)
 
                 if not api_key:
                     return SkillResult(
                         success=False,
-                        output="❌ OpenAI API key not configured",
+                        output="❌ OpenAI Provider Instance is not configured",
                         metadata={"error": "missing_api_key"},
                     )
 
@@ -469,7 +469,7 @@ class AudioTranscriptSkill(BaseSkill):
             Dict with default config values
         """
         return {
-            "api_key": None,  # Uses OPENAI_API_KEY from env if not provided
+            "provider_instance_id": None,  # Optional OpenAI Provider Instance override
             "asr_mode": "openai",  # openai | instance (per-agent assignment; no tenant default)
             "asr_instance_id": None,  # Pin a specific local Whisper/Speaches/openai_whisper instance when set
             "language": "auto",  # Auto-detect language
@@ -492,10 +492,10 @@ class AudioTranscriptSkill(BaseSkill):
         return {
             "type": "object",
             "properties": {
-                "api_key": {
-                    "type": "string",
-                    "description": "OpenAI API key (uses OPENAI_API_KEY env var if not provided)",
-                    "format": "password"
+                "provider_instance_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional OpenAI Provider Instance ID for Whisper API routing.",
+                    "default": None
                 },
                 "asr_mode": {
                     "type": "string",
