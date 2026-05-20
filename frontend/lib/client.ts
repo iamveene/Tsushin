@@ -1997,6 +1997,7 @@ export interface GitHubTrigger extends TriggerInstanceBase {
   author_filter?: string | null
   last_delivery_id?: string | null
   inbound_url?: string
+  provider_webhook_setup?: RepositoryProviderWebhookSetup | null
 }
 
 export interface GitHubTriggerCreateRequest {
@@ -2069,6 +2070,7 @@ export interface GitLabTrigger extends TriggerInstanceBase {
   author_filter?: string | null
   last_delivery_id?: string | null
   inbound_url?: string
+  provider_webhook_setup?: RepositoryProviderWebhookSetup | null
 }
 
 export interface GitLabTriggerCreateRequest {
@@ -2130,6 +2132,28 @@ export interface GitLabIntegrationUpdateRequest {
 export type RepositoryAutomationProvider = 'github' | 'gitlab'
 export type RepositoryAutomationTemplateId = 'repository_review_team' | 'repository_pr_agent'
 export type RepositoryAutomationRoutingMode = 'team_primary' | 'agent_flow'
+
+export interface RepositoryProviderWebhookSetup {
+  provider: RepositoryAutomationProvider
+  trigger_id?: number | null
+  inbound_url?: string | null
+  relative_inbound_url?: string | null
+  events: string[]
+  webhook_secret_preview?: string | null
+  secret_preview?: string | null
+  webhook_secret_once?: string | null
+  trigger_created?: boolean | null
+  trigger_reused?: boolean | null
+}
+
+export interface RepositoryTriggerSecretRotateResponse {
+  webhook_secret_once?: string | null
+  webhook_secret?: string | null
+  webhook_secret_preview?: string | null
+  api_secret?: string | null
+  api_secret_preview?: string | null
+  warning?: string | null
+}
 
 export interface RepositoryAutomationRequest {
   provider: RepositoryAutomationProvider
@@ -2202,6 +2226,7 @@ export interface RepositoryAutomationResponse {
   links: Record<string, string>
   routing_mode: RepositoryAutomationRoutingMode
   created_at: string
+  provider_webhook_setup?: RepositoryProviderWebhookSetup | null
 }
 
 export type PasswordVaultProviderType = 'onepassword'
@@ -7797,6 +7822,14 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to delete GitHub trigger')
   },
 
+  async rotateGitHubTriggerSecret(id: number): Promise<RepositoryTriggerSecretRotateResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github/${id}/rotate-secret`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to rotate GitHub webhook secret')
+    return res.json()
+  },
+
   async listGitLabTriggers(): Promise<GitLabTrigger[]> {
     const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch GitLab triggers')
@@ -7834,6 +7867,14 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete GitLab trigger')
+  },
+
+  async rotateGitLabTriggerSecret(id: number): Promise<RepositoryTriggerSecretRotateResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/gitlab/${id}/rotate-secret`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to rotate GitLab webhook secret')
+    return res.json()
   },
 
   // ---- v0.7.0: GitHub Hub Integrations (mirrors Jira) ----

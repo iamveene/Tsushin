@@ -549,7 +549,11 @@ The wizard offers two repository-review templates:
 - **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs.
 - **Standalone PR/MR reviewer agent** — creates or wires one reviewer agent with Code Repository access and **A2A enabled**, then leaves the generated Flow route active so the trigger runs through that agent.
 
+After creation, the success screen shows what Tsushin created and what still needs to be configured at the provider. Copy the inbound URL, enable the listed GitHub/GitLab events, and paste the one-time webhook secret when the trigger was newly created. Existing trigger secrets are never revealed again; use the trigger detail page's rotate-secret action if you need a replacement secret and then update the provider-side webhook.
+
 Repository criteria should be read as PR/MR-first where the current UI is PR/MR-centered. GitHub uses pull request language; GitLab maps the same review workflow to merge requests and MR IIDs.
+
+GitLab review output is advisory/read-only in this release. Generated reviewers can inspect merge requests and recommend approve/hold outcomes, but Tsushin does not perform GitLab MR approval or request-changes write actions unless those capabilities are explicitly enabled in a future release.
 
 ### Ticket Management skill (Jira) — v0.7.0
 
@@ -684,6 +688,8 @@ All trigger kinds share the same **Trigger Creation Wizard** (Hub > Triggers > "
 - **Jira** -- live JQL polling against a Jira Cloud project. Connect your Jira account once via Hub > Tool APIs > Jira (with an API token); the wizard then asks for a JQL query and a poll interval. One notification per deduped issue.
 - **GitHub** -- repository events on a connected repo. Connect your GitHub account once via Hub > Developer Tools; the wizard then asks for the events to listen to and repository filters (branch, paths changed, author, draft state, title/body matchers for PRs).
 - **GitLab** -- GitLab.com project webhook events on a connected project. Connect GitLab once via Hub > Developer Tools; the wizard asks for the full project path, events such as push or merge request, and the same shared repository criteria model.
+
+GitHub/GitLab trigger detail pages include a provider setup card with the inbound URL, enabled events, masked secret preview, last delivery timestamp, and a rotate-secret action for users with write access. Rotation returns the replacement secret once; after that, Tsushin only shows the masked preview.
 
 ### What happens after you click "Create Trigger"
 

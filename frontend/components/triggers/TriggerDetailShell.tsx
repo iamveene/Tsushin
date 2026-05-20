@@ -55,6 +55,7 @@ import RoutingSection from '@/components/triggers/sections/RoutingSection'
 import OutputsSection from '@/components/triggers/sections/OutputsSection'
 import MemoryRecapCard from '@/components/triggers/sections/MemoryRecapCard'
 import type { EmailGmailIntegrationSummary } from '@/components/triggers/sections/EmailSourceCard'
+import { absoluteProviderWebhookUrl, providerWebhookSetupFromTrigger } from '@/lib/repository-automation'
 
 // Wave 3 of the Triggers ↔ Flows unification: the shared shell now also
 // handles `email` and `webhook` kinds. The standalone fork pages are
@@ -304,6 +305,7 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [publicIngress, setPublicIngress] = useState<PublicIngressInfo | null>(null)
   const [webhookCopied, setWebhookCopied] = useState(false)
   const [webhookRotating, setWebhookRotating] = useState(false)
+  const [repositorySecretOnce, setRepositorySecretOnce] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     if (!hasValidId) return
@@ -313,7 +315,9 @@ export default function TriggerDetailShell({ kind }: Props) {
       const triggerPromise = api.getTriggerDetail(kind, triggerId)
       const eventsPromise = api.getWakeEvents({ limit: 50, channel_type: kind, channel_instance_id: triggerId }).catch(() => null)
       const gmailPromise = kind === 'email' ? fetchGmailIntegrations().catch(() => []) : Promise.resolve([] as EmailGmailIntegrationSummary[])
-      const ingressPromise = kind === 'webhook' ? api.getMyPublicIngress().catch(() => null) : Promise.resolve(null)
+      const ingressPromise = kind === 'webhook' || kind === 'github' || kind === 'gitlab'
+        ? api.getMyPublicIngress().catch(() => null)
+        : Promise.resolve(null)
       const [triggerData, wakeEvents, integrations, ingressData] = await Promise.all([
         triggerPromise,
         eventsPromise,
@@ -375,10 +379,18 @@ export default function TriggerDetailShell({ kind }: Props) {
   }, [gmailIntegrations, kind, trigger])
 
   const absoluteInboundUrl = useMemo(() => {
-    if (kind !== 'webhook' || !trigger) return ''
-    const webhook = trigger as WebhookIntegration
+    if (!trigger || (kind !== 'webhook' && kind !== 'github' && kind !== 'gitlab')) return ''
+    if (kind === 'github' || kind === 'gitlab') {
+      return absoluteProviderWebhookUrl(
+        providerWebhookSetupFromTrigger(kind, trigger as GitHubTrigger | GitLabTrigger),
+        publicIngress,
+      )
+    }
+    const inboundPath = (trigger as WebhookIntegration | GitHubTrigger | GitLabTrigger).inbound_url
+    if (!inboundPath) return ''
     const base = publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')
-    return `${base}${webhook.inbound_url}`
+    if (/^https?:\/\//i.test(inboundPath)) return inboundPath
+    return `${base.replace(/\/$/, '')}${inboundPath.startsWith('/') ? inboundPath : `/${inboundPath}`}`
   }, [kind, publicIngress, trigger])
 
   const updateActive = async () => {
@@ -568,19 +580,30 @@ export default function TriggerDetailShell({ kind }: Props) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   const handleRotateWebhookSecret = async () => {
-    if (!trigger || kind !== 'webhook') return
+    if (!trigger || (kind !== 'webhook' && kind !== 'github' && kind !== 'gitlab')) return
     setShowRotateConfirm(false)
     setWebhookRotating(true)
     setError(null)
+    setRepositorySecretOnce(null)
     try {
-      const result = await api.rotateWebhookSecret(trigger.id)
-      setSuccess(`New secret: ${result.api_secret} — copy it now; it will not be shown again.`)
-      // Refresh trigger to update preview
-      const refreshed = await api.getWebhookIntegration(trigger.id)
-      setTrigger(refreshed)
+      if (kind === 'webhook') {
+        const result = await api.rotateWebhookSecret(trigger.id)
+        setSuccess(`New secret: ${result.api_secret} — copy it now; it will not be shown again.`)
+        const refreshed = await api.getWebhookIntegration(trigger.id)
+        setTrigger(refreshed)
+      } else {
+        const result = kind === 'github'
+          ? await api.rotateGitHubTriggerSecret(trigger.id)
+          : await api.rotateGitLabTriggerSecret(trigger.id)
+        const secret = result.webhook_secret_once || result.webhook_secret || ''
+        setRepositorySecretOnce(secret || null)
+        setSuccess('New repository webhook secret generated. Copy it from the Source setup card before leaving this page.')
+        const refreshed = await api.getTriggerDetail(kind, trigger.id)
+        setTrigger(refreshed as BreadthTrigger)
+      }
       setTimeout(() => setSuccess(null), 12000)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'Failed to rotate webhook secret'))
+      setError(getErrorMessage(err, 'Failed to rotate trigger secret'))
     } finally {
       setWebhookRotating(false)
     }
@@ -682,11 +705,13 @@ export default function TriggerDetailShell({ kind }: Props) {
           trigger={trigger}
           gmailIntegration={kind === 'email' ? gmailIntegration : null}
           publicIngress={kind === 'webhook' ? publicIngress : null}
-          absoluteInboundUrl={kind === 'webhook' ? absoluteInboundUrl : ''}
+          absoluteInboundUrl={(kind === 'webhook' || kind === 'github' || kind === 'gitlab') ? absoluteInboundUrl : ''}
           copied={webhookCopied}
           onCopyInboundUrl={handleCopyInboundUrl}
           rotatingSecret={webhookRotating}
           onRotateWebhookSecret={kind === 'webhook' ? () => setShowRotateConfirm(true) : undefined}
+          onRotateRepositorySecret={(kind === 'github' || kind === 'gitlab') ? () => setShowRotateConfirm(true) : undefined}
+          repositorySecretOnce={(kind === 'github' || kind === 'gitlab') ? repositorySecretOnce : null}
           canWriteHub={canWriteHub}
         />
 
@@ -1126,8 +1151,8 @@ export default function TriggerDetailShell({ kind }: Props) {
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
-        title="Rotate webhook signing secret?"
-        message="Any caller still using the previous secret will start failing immediately. The new secret is shown once after rotation — copy it before closing the page."
+        title={kind === 'github' || kind === 'gitlab' ? `Rotate ${KIND_CONFIG[kind].label} secret?` : 'Rotate webhook signing secret?'}
+        message="Any caller still using the previous secret will start failing immediately. The new secret is shown once after rotation; copy it before closing the page and update the provider-side webhook."
         confirmLabel="Rotate secret"
         danger
         isBusy={webhookRotating}

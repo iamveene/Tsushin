@@ -3,6 +3,8 @@ import type {
   GitHubTrigger,
   GitLabIntegration,
   GitLabTrigger,
+  PublicIngressInfo,
+  RepositoryProviderWebhookSetup,
   TriggerKind,
 } from '@/lib/client'
 import type { TeamWizardDraft } from '@/lib/team-wizard/reducer'
@@ -128,6 +130,51 @@ export function triggerRepositoryLabel(provider: RepositoryAutomationProvider, t
 
 export function triggerDisplayName(provider: RepositoryAutomationProvider, trigger: RepositoryAutomationTrigger): string {
   return trigger.integration_name || triggerRepositoryLabel(provider, trigger)
+}
+
+export function repositoryConnectionHref(provider: RepositoryAutomationProvider): string {
+  return `/hub?tab=developer&repoProvider=${provider}&addRepositoryConnection=1`
+}
+
+export function providerWebhookSetupFromTrigger(
+  provider: RepositoryAutomationProvider,
+  trigger: RepositoryAutomationTrigger,
+): RepositoryProviderWebhookSetup {
+  return trigger.provider_webhook_setup || {
+    provider,
+    trigger_id: trigger.id,
+    inbound_url: trigger.inbound_url || `/api/triggers/${provider}/${trigger.id}/inbound`,
+    events: trigger.events || [provider === 'gitlab' ? 'merge_request' : 'pull_request'],
+    webhook_secret_preview: trigger.webhook_secret_preview || null,
+    trigger_reused: true,
+  }
+}
+
+export function providerWebhookSetupInboundPath(setup: RepositoryProviderWebhookSetup | null | undefined): string {
+  return setup?.inbound_url || setup?.relative_inbound_url || ''
+}
+
+export function providerWebhookSetupSecretPreview(setup: RepositoryProviderWebhookSetup | null | undefined): string {
+  return setup?.webhook_secret_preview || setup?.secret_preview || ''
+}
+
+export function providerWebhookSetupWasCreated(setup: RepositoryProviderWebhookSetup | null | undefined): boolean {
+  if (!setup) return false
+  if (typeof setup.trigger_created === 'boolean') return setup.trigger_created
+  if (typeof setup.trigger_reused === 'boolean') return !setup.trigger_reused
+  return false
+}
+
+export function absoluteProviderWebhookUrl(
+  setup: RepositoryProviderWebhookSetup | null | undefined,
+  publicIngress?: PublicIngressInfo | null,
+): string {
+  const inboundPath = providerWebhookSetupInboundPath(setup)
+  if (!inboundPath) return ''
+  if (/^https?:\/\//i.test(inboundPath)) return inboundPath
+  const base = publicIngress?.url || (typeof window !== 'undefined' ? window.location.origin : '')
+  if (!base) return inboundPath
+  return `${base.replace(/\/$/, '')}${inboundPath.startsWith('/') ? inboundPath : `/${inboundPath}`}`
 }
 
 export function teamPresetFromRepositoryAutomation(draft: RepositoryAutomationDraft): Partial<TeamWizardDraft> {

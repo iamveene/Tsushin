@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Repository automation activation clarity (2026-05-19)
+
+- Made Repository Automation Wizard success states activation-honest: Tsushin now returns provider webhook setup metadata, shows the inbound URL/events/secret preview, and reveals the webhook secret only once when a new repository trigger is created.
+- Added GitHub/GitLab trigger secret rotation endpoints and trigger-detail setup cards so operators can recover a non-revealable existing secret without recreating the trigger.
+- Aligned the generic Repository Review Team preset with the repository automation service by defaulting the template to line topology.
+- Renamed GitHub/GitLab Developer Tools card actions to **Create automation** and documented that they open the centralized Repository Automation Wizard.
+- Clarified that GitLab review automation remains advisory/read-only until write capabilities are intentionally enabled in a future release.
+
 ### Changed — Developer Tools repository connection entrypoint (2026-05-19)
 
 - Restored the Hub tab label and section heading to **Developer Tools** because Shell Command Center and Sandboxed Tools live there alongside repository connections.
