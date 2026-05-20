@@ -2175,6 +2175,7 @@ export interface RepositoryAutomationRequest {
   team_name?: string | null
   flow_name?: string | null
   routing_mode?: RepositoryAutomationRoutingMode | null
+  notify_contact_id?: number | null
 }
 
 export interface RepositoryAutomationResponse {
@@ -2206,6 +2207,8 @@ export interface RepositoryAutomationResponse {
     name: string
     status: string
     member_count: number
+    notification_contact_id?: number | null
+    notification_contact_name?: string | null
   } | null
   agents: Array<{
     id: number

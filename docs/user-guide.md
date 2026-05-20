@@ -549,6 +549,8 @@ The wizard offers two repository-review templates:
 - **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs.
 - **Standalone PR/MR reviewer agent** — creates or wires one reviewer agent with Code Repository access and **A2A enabled**, then leaves the generated Flow route active so the trigger runs through that agent.
 
+For review teams, the Source step includes **Team completion notification**. Choose a WhatsApp-capable contact to receive the final team summary when the PR/MR review run completes. If your Tsushin user is already mapped to a contact, the wizard preselects that contact; you can still choose no notification.
+
 After creation, the success screen shows what Tsushin created and what still needs to be configured at the provider. Copy the inbound URL, enable the listed GitHub/GitLab events, and paste the one-time webhook secret when the trigger was newly created. Existing trigger secrets are never revealed again; use the trigger detail page's rotate-secret action if you need a replacement secret and then update the provider-side webhook.
 
 Repository criteria should be read as PR/MR-first where the current UI is PR/MR-centered. GitHub uses pull request language; GitLab maps the same review workflow to merge requests and MR IIDs.

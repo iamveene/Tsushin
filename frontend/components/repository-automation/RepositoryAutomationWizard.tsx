@@ -19,8 +19,10 @@ import {
   type GitHubTrigger,
   type GitLabIntegration,
   type GitLabTrigger,
+  type Contact,
   type PublicIngressInfo,
   type RepositoryAutomationResponse,
+  type UserContactMappingStatus,
 } from '@/lib/client'
 import {
   REPOSITORY_AUTOMATION_TEMPLATES,
@@ -62,6 +64,8 @@ type LoadState = {
   gitlabIntegrations: GitLabIntegration[]
   githubTriggers: GitHubTrigger[]
   gitlabTriggers: GitLabTrigger[]
+  contacts: Contact[]
+  userContactMapping: UserContactMappingStatus | null
   publicIngress: PublicIngressInfo | null
   loading: boolean
   error: string | null
@@ -72,6 +76,8 @@ const initialLoadState: LoadState = {
   gitlabIntegrations: [],
   githubTriggers: [],
   gitlabTriggers: [],
+  contacts: [],
+  userContactMapping: null,
   publicIngress: null,
   loading: false,
   error: null,
@@ -91,6 +97,14 @@ function statusTone(value?: string | null): string {
   if (['unhealthy', 'error', 'failed'].includes(normalized)) return 'border-rose-400/40 bg-rose-500/10 text-rose-200'
   if (['warning', 'degraded'].includes(normalized)) return 'border-amber-400/40 bg-amber-500/10 text-amber-200'
   return 'border-tsushin-border bg-tsushin-surface/60 text-tsushin-slate'
+}
+
+function isNotificationContact(contact: Contact): boolean {
+  return (
+    contact.is_active
+    && contact.role !== 'agent'
+    && Boolean((contact.phone_number || '').trim() || (contact.whatsapp_id || '').trim())
+  )
 }
 
 function activeTriggers(provider: RepositoryAutomationProvider, loadState: LoadState): RepositoryAutomationTrigger[] {
@@ -137,20 +151,28 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
       api.listGitLabIntegrations().catch(() => [] as GitLabIntegration[]),
       api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
       api.listGitLabTriggers().catch(() => [] as GitLabTrigger[]),
+      api.getContacts().catch(() => [] as Contact[]),
+      api.getUserContactMapping().catch(() => null),
       api.getMyPublicIngress().catch(() => null),
     ])
-      .then(([githubIntegrations, gitlabIntegrations, githubTriggers, gitlabTriggers, publicIngress]) => {
+      .then(([githubIntegrations, gitlabIntegrations, githubTriggers, gitlabTriggers, contacts, userContactMapping, publicIngress]) => {
         if (cancelled) return
         setLoadState({
           githubIntegrations,
           gitlabIntegrations,
           githubTriggers,
           gitlabTriggers,
+          contacts,
+          userContactMapping,
           publicIngress,
           loading: false,
           error: null,
         })
         setDraft((current) => {
+          const mappedContactId = userContactMapping?.mapping?.contact_id ?? null
+          const mappedNotificationContact = mappedContactId
+            ? contacts.find((contact) => contact.id === mappedContactId && isNotificationContact(contact))
+            : null
           const selectedList = current.provider === 'gitlab' ? gitlabIntegrations : githubIntegrations
           const active = selectedList.find((item) => item.id === current.integrationId)
             || selectedList.find(isActiveRepositoryIntegration)
@@ -163,6 +185,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
             repositoryOwner: current.repositoryOwner || parsed.owner,
             repositoryName: current.repositoryName || parsed.repo,
             projectPath: current.projectPath || parsed.projectPath,
+            notifyContactId: current.notifyContactId ?? mappedNotificationContact?.id ?? null,
           }
         })
       })
@@ -255,6 +278,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
         branchFilter: '',
         pathFiltersText: '',
         authorFilter: '',
+        notifyContactId: current.notifyContactId,
       }
     })
   }
@@ -285,6 +309,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
         path_filters: splitPathFilters(draft.pathFiltersText),
         author_filter: draft.authorFilter.trim() || null,
         routing_mode: draft.routingMode,
+        notify_contact_id: draft.templateId === 'repository_review_team' ? draft.notifyContactId : null,
       })
       setResult(response)
     } catch (error) {
@@ -375,6 +400,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
           selectedIntegration={selectedIntegration}
           triggers={triggers}
           selectedTrigger={selectedTrigger}
+          contacts={loadState.contacts}
           onProviderChange={selectProvider}
           onPatch={patchDraft}
         />
@@ -387,6 +413,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
           selectedTrigger={selectedTrigger}
           repoLabel={repoLabel}
           publicIngress={loadState.publicIngress}
+          contacts={loadState.contacts}
           result={result}
         />
       )}
@@ -475,6 +502,7 @@ function SourceStep({
   selectedIntegration,
   triggers,
   selectedTrigger,
+  contacts,
   onProviderChange,
   onPatch,
 }: {
@@ -483,9 +511,11 @@ function SourceStep({
   selectedIntegration: RepositoryAutomationIntegration | null
   triggers: RepositoryAutomationTrigger[]
   selectedTrigger: RepositoryAutomationTrigger | null
+  contacts: Contact[]
   onProviderChange: (provider: RepositoryAutomationProvider) => void
   onPatch: (patch: Partial<RepositoryAutomationDraft>) => void
 }) {
+  const notificationContacts = contacts.filter(isNotificationContact)
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -687,6 +717,29 @@ function SourceStep({
           </label>
         </div>
       </div>
+
+      {draft.templateId === 'repository_review_team' && (
+        <div className="rounded-lg border border-tsushin-border bg-tsushin-surface/40 p-4">
+          <div className="mb-3">
+            <div className="text-sm font-semibold text-white">Team completion notification</div>
+            <p className="mt-1 text-xs text-tsushin-slate">
+              Send the final review-team summary to a WhatsApp contact after the run completes.
+            </p>
+          </div>
+          <select
+            value={draft.notifyContactId ?? ''}
+            onChange={(event) => onPatch({ notifyContactId: event.target.value ? Number(event.target.value) : null })}
+            className="select text-sm"
+          >
+            <option value="">No WhatsApp notification</option>
+            {notificationContacts.map((contact) => (
+              <option key={contact.id} value={contact.id}>
+                {contact.friendly_name}{contact.phone_number ? ` · ${contact.phone_number}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   )
 }
@@ -698,6 +751,7 @@ function ReviewStep({
   selectedTrigger,
   repoLabel,
   publicIngress,
+  contacts,
   result,
 }: {
   draft: RepositoryAutomationDraft
@@ -706,6 +760,7 @@ function ReviewStep({
   selectedTrigger: RepositoryAutomationTrigger | null
   repoLabel: string
   publicIngress: PublicIngressInfo | null
+  contacts: Contact[]
   result: RepositoryAutomationResponse | null
 }) {
   const [secretCopied, setSecretCopied] = useState(false)
@@ -726,6 +781,8 @@ function ReviewStep({
   const oneTimeSecret = setup?.webhook_secret_once || ''
   const setupWasCreated = providerWebhookSetupWasCreated(setup)
   const providerName = providerLabel(draft.provider)
+  const selectedNotificationContact = contacts.find((contact) => contact.id === draft.notifyContactId) || null
+  const resultNotificationName = result?.team?.notification_contact_name || selectedNotificationContact?.friendly_name || ''
   const rows = [
     ['Template', templateName],
     ['Repository Integration credentials', selectedIntegration ? `Reuse ${integrationLabel(draft.provider, selectedIntegration)} (#${selectedIntegration.id})` : 'Missing integration'],
@@ -734,6 +791,7 @@ function ReviewStep({
     ['Flow deterministic steps', 'Create or reuse a generated triggered Flow as the editable output surface'],
     ['Agent actor with tools', draft.templateId === 'repository_pr_agent' ? 'Create standalone reviewer agent with Code Repository read tools and A2A enabled' : 'Create read-only team member agents for repository review'],
     ['Team coordinated actors', draft.templateId === 'repository_review_team' ? 'Create Coordinator, Reviewer, and Merge Readiness in a line topology' : 'Not created for standalone agent template'],
+    ['Team notification', draft.templateId === 'repository_review_team' ? (resultNotificationName ? `Send final summary to ${resultNotificationName}` : 'No WhatsApp notification selected') : 'Not used for standalone agent template'],
     ['Routing mode', draft.routingMode === 'team_primary' ? 'Team binding runs first; Flow binding is linked but inactive' : 'Active generated Flow routes to the reviewer agent'],
   ]
   return (

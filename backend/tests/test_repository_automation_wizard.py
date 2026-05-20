@@ -59,12 +59,14 @@ from models import (  # noqa: E402
     AgentTeamMember,
     AgentTeamTrigger,
     Base,
+    Contact,
     FlowDefinition,
     FlowTriggerBinding,
     GitHubChannelInstance,
     GitHubIntegration,
     GitLabChannelInstance,
     GitLabIntegration,
+    UserContactMapping,
 )
 from models_rbac import Tenant, User  # noqa: E402
 
@@ -208,6 +210,132 @@ def test_github_review_team_creates_trigger_flow_team_agents_and_canonical_bindi
         .all()
     )
     assert [membership.execution_order for membership in memberships] == [1, 2, 3]
+
+
+def test_review_team_uses_selected_notification_contact(db_session):
+    _seed_tenant(db_session)
+    integration = _github_integration(db_session)
+    contact = Contact(
+        tenant_id="tenant-a",
+        friendly_name="Vini",
+        role="human",
+        phone_number="+5527999616279",
+        is_active=True,
+    )
+    db_session.add(contact)
+    db_session.commit()
+
+    result = _create(
+        RepositoryAutomationRequest(
+            provider="github",
+            integration_id=integration.id,
+            repo_owner="octo",
+            repo_name="repo",
+            template_id="repository_review_team",
+            events=["pull_request"],
+            notify_contact_id=contact.id,
+        ),
+        db_session,
+    )
+
+    team = db_session.get(AgentTeam, result["team"]["id"])
+    assert f"[notify:contact:{contact.id}]" in team.description
+    assert result["team"]["notification_contact_id"] == contact.id
+    assert result["team"]["notification_contact_name"] == "Vini"
+
+
+def test_review_team_defaults_to_current_user_contact_mapping(db_session):
+    _seed_tenant(db_session)
+    integration = _github_integration(db_session)
+    contact = Contact(
+        tenant_id="tenant-a",
+        friendly_name="Mapped User",
+        role="human",
+        whatsapp_id="5527999616279@s.whatsapp.net",
+        is_active=True,
+    )
+    db_session.add(contact)
+    db_session.flush()
+    db_session.add(UserContactMapping(user_id=1, contact_id=contact.id))
+    db_session.commit()
+
+    result = _create(
+        RepositoryAutomationRequest(
+            provider="github",
+            integration_id=integration.id,
+            repo_owner="octo",
+            repo_name="repo",
+            template_id="repository_review_team",
+            events=["pull_request"],
+        ),
+        db_session,
+    )
+
+    team = db_session.get(AgentTeam, result["team"]["id"])
+    assert f"[notify:contact:{contact.id}]" in team.description
+    assert result["team"]["notification_contact_id"] == contact.id
+
+
+def test_review_team_ignores_unreachable_default_contact_mapping(db_session):
+    _seed_tenant(db_session)
+    integration = _github_integration(db_session)
+    contact = Contact(
+        tenant_id="tenant-a",
+        friendly_name="Mapped User",
+        role="human",
+        is_active=True,
+    )
+    db_session.add(contact)
+    db_session.flush()
+    db_session.add(UserContactMapping(user_id=1, contact_id=contact.id))
+    db_session.commit()
+
+    result = _create(
+        RepositoryAutomationRequest(
+            provider="github",
+            integration_id=integration.id,
+            repo_owner="octo",
+            repo_name="repo",
+            template_id="repository_review_team",
+            events=["pull_request"],
+        ),
+        db_session,
+    )
+
+    team = db_session.get(AgentTeam, result["team"]["id"])
+    assert "[notify:contact:" not in team.description
+    assert result["team"]["notification_contact_id"] is None
+
+
+def test_review_team_rejects_foreign_notification_contact(db_session):
+    _seed_tenant(db_session, "tenant-a", 1)
+    _seed_tenant(db_session, "tenant-b", 2)
+    integration = _github_integration(db_session, "tenant-a")
+    foreign_contact = Contact(
+        tenant_id="tenant-b",
+        friendly_name="Other Tenant",
+        role="human",
+        phone_number="+15555550100",
+        is_active=True,
+    )
+    db_session.add(foreign_contact)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        _create(
+            RepositoryAutomationRequest(
+                provider="github",
+                integration_id=integration.id,
+                repo_owner="octo",
+                repo_name="repo",
+                template_id="repository_review_team",
+                events=["pull_request"],
+                notify_contact_id=foreign_contact.id,
+            ),
+            db_session,
+        )
+
+    assert exc.value.status_code == 404
 
 
 def test_gitlab_standalone_agent_routes_generated_flow_to_reviewer(db_session):

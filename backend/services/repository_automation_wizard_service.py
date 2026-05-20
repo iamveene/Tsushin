@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -44,6 +45,7 @@ from models import (
     HubIntegration,
     TeamStatus,
     TeamTopology,
+    UserContactMapping,
 )
 from services.flow_binding_service import (
     ensure_system_managed_flow_for_trigger,
@@ -171,7 +173,8 @@ class RepositoryAutomationWizardService:
             agents: list[Agent]
             team_ref: Optional[dict[str, Any]] = None
             if payload.template_id == "repository_review_team":
-                agents, team_ref = self._create_or_reuse_review_team(payload, integration)
+                notification_contact = self._resolve_notification_contact(payload.notify_contact_id)
+                agents, team_ref = self._create_or_reuse_review_team(payload, integration, notification_contact)
                 default_agent_id = None
             else:
                 agents = [self._create_or_reuse_reviewer_agent(payload, integration, role_suffix="Reviewer")]
@@ -452,6 +455,7 @@ class RepositoryAutomationWizardService:
         self,
         payload: RepositoryAutomationRequest,
         integration: HubIntegration,
+        notification_contact: Optional[Contact],
     ) -> tuple[list[Agent], dict[str, Any]]:
         base = payload.team_name or f"{_provider_label(payload.provider)} {_repository_label(payload)} Review Team"
         coordinator = self._create_or_reuse_reviewer_agent(payload, integration, role_suffix="Coordinator")
@@ -490,6 +494,8 @@ class RepositoryAutomationWizardService:
 
         if team is None:
             raise RepositoryAutomationWizardError(500, "Failed to create repository review team")
+        if notification_contact is not None:
+            team.description = self._description_with_notification(team.description, notification_contact.id)
         if team.status != TeamStatus.ACTIVE.value:
             team.status = TeamStatus.ACTIVE.value
         self._ensure_team_members(team, team_agents)
@@ -507,7 +513,46 @@ class RepositoryAutomationWizardService:
             "name": team.name,
             "status": team.status,
             "member_count": member_count,
+            "notification_contact_id": notification_contact.id if notification_contact else None,
+            "notification_contact_name": notification_contact.friendly_name if notification_contact else None,
         }
+
+    def _resolve_notification_contact(self, contact_id: Optional[int]) -> Optional[Contact]:
+        explicit_contact = contact_id is not None
+        if contact_id is None and self.user_id:
+            mapping = (
+                self.db.query(UserContactMapping)
+                .filter(UserContactMapping.user_id == self.user_id)
+                .first()
+            )
+            contact_id = mapping.contact_id if mapping is not None else None
+        if contact_id is None:
+            return None
+        contact = (
+            self.db.query(Contact)
+            .filter(
+                Contact.id == contact_id,
+                Contact.tenant_id == self.tenant_id,
+                Contact.is_active.is_(True),
+            )
+            .first()
+        )
+        if contact is None:
+            if not explicit_contact:
+                return None
+            raise RepositoryAutomationWizardError(404, "Notification contact not found")
+        if not ((contact.phone_number or "").strip() or (contact.whatsapp_id or "").strip()):
+            if not explicit_contact:
+                return None
+            raise RepositoryAutomationWizardError(409, "Notification contact must have a WhatsApp ID or phone number")
+        return contact
+
+    @staticmethod
+    def _description_with_notification(description: Optional[str], contact_id: int) -> str:
+        base = (description or "").strip() or "Automated repository review team."
+        cleaned = re.sub(r"\s*\[notify:contact:\d+\]\s*", " ", base).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return f"{cleaned} [notify:contact:{contact_id}]"
 
     @staticmethod
     def _review_team_goal_text() -> str:

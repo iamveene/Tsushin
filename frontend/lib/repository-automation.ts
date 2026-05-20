@@ -43,6 +43,7 @@ export interface RepositoryAutomationDraft {
   branchFilter: string
   pathFiltersText: string
   authorFilter: string
+  notifyContactId: number | null
 }
 
 export const REPOSITORY_AUTOMATION_TEMPLATES: Array<{
@@ -86,6 +87,7 @@ export function defaultRepositoryAutomationDraft(options: RepositoryAutomationOp
     branchFilter: '',
     pathFiltersText: '',
     authorFilter: '',
+    notifyContactId: null,
   }
 }
 

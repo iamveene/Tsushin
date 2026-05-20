@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Repository automation team notifications (2026-05-20)
+
+- Added an explicit team-completion WhatsApp notification contact to the Repository Automation Wizard for review-team templates, defaulting to the current user's mapped contact when available and tenant-valid.
+- Persisted the notification target into the generated Agent Team completion directive and returned the selected contact in the wizard response so GitHub/GitLab PR/MR team reviews can notify the intended operator after completion.
+- Added tenant-safety checks that reject foreign, inactive, or non-WhatsApp-reachable notification contacts.
+
 ### Changed — Repository automation activation clarity (2026-05-19)
 
 - Made Repository Automation Wizard success states activation-honest: Tsushin now returns provider webhook setup metadata, shows the inbound URL/events/secret preview, and reveals the webhook secret only once when a new repository trigger is created.
