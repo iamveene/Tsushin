@@ -10,6 +10,7 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import type { EmailTrigger, GitHubTrigger, GitLabTrigger, JiraTrigger, PublicIngressInfo, WebhookIntegration } from '@/lib/client'
+import { formatRelative } from '@/lib/dateUtils'
 import EmailSourceCard, { type EmailGmailIntegrationSummary } from './EmailSourceCard'
 import WebhookSourceCard from './WebhookSourceCard'
 
@@ -28,6 +29,8 @@ interface Props {
   onCopyInboundUrl?: () => void
   rotatingSecret?: boolean
   onRotateWebhookSecret?: () => void
+  onRotateRepositorySecret?: () => void
+  repositorySecretOnce?: string | null
   canWriteHub?: boolean
 }
 
@@ -59,6 +62,8 @@ export default function SourceSection({
   onCopyInboundUrl,
   rotatingSecret = false,
   onRotateWebhookSecret,
+  onRotateRepositorySecret,
+  repositorySecretOnce,
   canWriteHub = false,
 }: Props) {
   if (kind === 'email') {
@@ -113,6 +118,19 @@ export default function SourceSection({
   const integrationLinkClass = isGitLab ? 'text-orange-200 hover:text-white' : 'text-violet-200 hover:text-white'
   const reviewLabel = isGitLab ? 'MR' : 'PR'
   const reviewEvent = isGitLab ? 'merge_request' : 'pull_request'
+  const providerSetup = repository.provider_webhook_setup
+  const providerInboundUrl = absoluteInboundUrl || providerSetup?.inbound_url || providerSetup?.relative_inbound_url || repository.inbound_url || ''
+  const configuredEvents = (providerSetup?.events || repository.events || []).length > 0 ? (providerSetup?.events || repository.events || []) : [reviewEvent]
+  const providerSecretPreview = providerSetup?.webhook_secret_preview || providerSetup?.secret_preview || repository.webhook_secret_preview || 'No secret preview stored'
+  const lastDelivery = repository.last_delivery_id
+    ? `${repository.last_delivery_id}${repository.last_activity_at ? ` (${formatRelative(repository.last_activity_at)})` : ''}`
+    : repository.last_activity_at
+      ? `Last activity ${formatRelative(repository.last_activity_at)}`
+      : 'No deliveries recorded'
+  const providerSecretLabel = isGitLab ? 'Secret token' : 'Webhook secret'
+  const providerSetupHint = isGitLab
+    ? 'Create or update the project webhook in GitLab, paste this URL, enable the listed events, and set the secret token.'
+    : 'Create or update the repository webhook in GitHub, paste this URL, choose application/json, enable the listed events, and set the webhook secret.'
   // v0.7.0: When the saved criteria envelope is a PR Submitted envelope,
   // render it as a read-only structured panel so operators can scan the
   // matching rules at a glance instead of decoding raw JSON.
@@ -139,6 +157,74 @@ export default function SourceSection({
 
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-white">{providerLabel} provider webhook setup</div>
+            <p className="mt-1 max-w-3xl text-xs text-tsushin-slate">{providerSetupHint}</p>
+          </div>
+          {canWriteHub && onRotateRepositorySecret && (
+            <button
+              type="button"
+              onClick={onRotateRepositorySecret}
+              disabled={rotatingSecret}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-100 hover:text-white disabled:opacity-50"
+            >
+              {rotatingSecret ? 'Rotating...' : 'Rotate secret'}
+            </button>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <DetailRow label="Inbound URL">
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+              <code className="min-w-0 flex-1 break-all rounded bg-black/30 px-2 py-1 text-xs text-cyan-100">
+                {providerInboundUrl || 'Inbound URL unavailable'}
+              </code>
+              {onCopyInboundUrl && providerInboundUrl && (
+                <button
+                  type="button"
+                  onClick={onCopyInboundUrl}
+                  className="rounded-lg border border-cyan-400/40 px-2.5 py-1 text-xs text-cyan-100 hover:text-white"
+                >
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              )}
+            </div>
+          </DetailRow>
+          <DetailRow label="Events to enable">{configuredEvents.join(', ')}</DetailRow>
+          <DetailRow label={`${providerSecretLabel} preview`}>
+            {providerSecretPreview}
+          </DetailRow>
+          <DetailRow label="Last delivery">
+            {repository.last_delivery_id ? <span className="font-mono">{lastDelivery}</span> : lastDelivery}
+          </DetailRow>
+        </div>
+
+        {repositorySecretOnce && (
+          <div className="mt-4 rounded-lg border border-amber-400/40 bg-amber-500/10 p-3 text-sm text-amber-50">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="font-medium">New {providerSecretLabel.toLowerCase()} shown once</div>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(repositorySecretOnce)}
+                className="rounded-lg border border-amber-300/40 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-100 hover:text-white"
+              >
+                Copy secret
+              </button>
+            </div>
+            <code className="mt-2 block break-all rounded bg-black/30 px-2 py-1 text-xs text-amber-100">{repositorySecretOnce}</code>
+            <p className="mt-2 text-xs text-amber-100/80">Update the provider-side webhook now. Tsushin will only show the masked preview after this page refreshes.</p>
+          </div>
+        )}
+
+        {isGitLab && (
+          <p className="mt-4 rounded-lg border border-orange-400/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-100">
+            GitLab review output is advisory/read-only in this release; generated reviewers recommend approve or hold, but do not perform MR approval or request-changes actions.
+          </p>
+        )}
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <Field label={isGitLab ? 'Project' : 'Repository'} value={projectPath} />
         <Field

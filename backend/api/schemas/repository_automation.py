@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 
 RepositoryProvider = Literal["github", "gitlab"]
@@ -163,6 +163,23 @@ class RepositoryAutomationBindingRef(BaseModel):
     suppress_default_agent: Optional[bool] = None
 
 
+class RepositoryAutomationProviderWebhookSetup(BaseModel):
+    provider: RepositoryProvider
+    relative_inbound_url: str
+    inbound_url: str
+    events: list[str]
+    webhook_secret_preview: Optional[str] = None
+    trigger_created: bool
+    webhook_secret_once: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.webhook_secret_once is None:
+            data.pop("webhook_secret_once", None)
+        return data
+
+
 class RepositoryAutomationResponse(BaseModel):
     integration: RepositoryAutomationIntegrationRef
     trigger: RepositoryAutomationTriggerRef
@@ -170,6 +187,7 @@ class RepositoryAutomationResponse(BaseModel):
     team: Optional[RepositoryAutomationTeamRef] = None
     agents: list[RepositoryAutomationAgentRef]
     bindings: list[RepositoryAutomationBindingRef]
+    provider_webhook_setup: Optional[RepositoryAutomationProviderWebhookSetup] = None
     links: dict[str, str]
     routing_mode: RepositoryRoutingMode
     created_at: datetime

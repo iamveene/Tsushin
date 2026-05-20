@@ -19,14 +19,19 @@ import {
   type GitHubTrigger,
   type GitLabIntegration,
   type GitLabTrigger,
+  type PublicIngressInfo,
   type RepositoryAutomationResponse,
 } from '@/lib/client'
 import {
   REPOSITORY_AUTOMATION_TEMPLATES,
+  absoluteProviderWebhookUrl,
   defaultRepositoryAutomationDraft,
   integrationLabel,
   isActiveRepositoryIntegration,
   parseRepositoryLabel,
+  providerWebhookSetupSecretPreview,
+  providerWebhookSetupWasCreated,
+  repositoryConnectionHref,
   repositoryLabelFromDraft,
   repositoryLabelFromIntegration,
   triggerDisplayName,
@@ -57,6 +62,7 @@ type LoadState = {
   gitlabIntegrations: GitLabIntegration[]
   githubTriggers: GitHubTrigger[]
   gitlabTriggers: GitLabTrigger[]
+  publicIngress: PublicIngressInfo | null
   loading: boolean
   error: string | null
 }
@@ -66,6 +72,7 @@ const initialLoadState: LoadState = {
   gitlabIntegrations: [],
   githubTriggers: [],
   gitlabTriggers: [],
+  publicIngress: null,
   loading: false,
   error: null,
 }
@@ -130,14 +137,16 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
       api.listGitLabIntegrations().catch(() => [] as GitLabIntegration[]),
       api.listGitHubTriggers().catch(() => [] as GitHubTrigger[]),
       api.listGitLabTriggers().catch(() => [] as GitLabTrigger[]),
+      api.getMyPublicIngress().catch(() => null),
     ])
-      .then(([githubIntegrations, gitlabIntegrations, githubTriggers, gitlabTriggers]) => {
+      .then(([githubIntegrations, gitlabIntegrations, githubTriggers, gitlabTriggers, publicIngress]) => {
         if (cancelled) return
         setLoadState({
           githubIntegrations,
           gitlabIntegrations,
           githubTriggers,
           gitlabTriggers,
+          publicIngress,
           loading: false,
           error: null,
         })
@@ -377,6 +386,7 @@ export default function RepositoryAutomationWizard({ isOpen, options, onClose }:
           selectedIntegration={selectedIntegration}
           selectedTrigger={selectedTrigger}
           repoLabel={repoLabel}
+          publicIngress={loadState.publicIngress}
           result={result}
         />
       )}
@@ -514,7 +524,11 @@ function SourceStep({
           </div>
           {activeIntegrations.length === 0 ? (
             <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-              No active {providerLabel(draft.provider)} connection is available. Create or enable one in Hub Developer Tools, then return to select it here.
+              No active {providerLabel(draft.provider)} connection is available.{' '}
+              <Link href={repositoryConnectionHref(draft.provider)} className="font-medium text-amber-50 underline decoration-amber-200/60 underline-offset-4 hover:text-white">
+                Add a {providerLabel(draft.provider)} connection
+              </Link>
+              {' '}in Hub Developer Tools, then return to select it here.
             </div>
           ) : (
             <select
@@ -683,6 +697,7 @@ function ReviewStep({
   selectedIntegration,
   selectedTrigger,
   repoLabel,
+  publicIngress,
   result,
 }: {
   draft: RepositoryAutomationDraft
@@ -690,8 +705,27 @@ function ReviewStep({
   selectedIntegration: RepositoryAutomationIntegration | null
   selectedTrigger: RepositoryAutomationTrigger | null
   repoLabel: string
+  publicIngress: PublicIngressInfo | null
   result: RepositoryAutomationResponse | null
 }) {
+  const [secretCopied, setSecretCopied] = useState(false)
+  const [urlCopied, setUrlCopied] = useState(false)
+  const setup = result
+    ? result.provider_webhook_setup || {
+        provider: result.trigger.provider,
+        trigger_id: result.trigger.id,
+        inbound_url: result.trigger.inbound_url,
+        events: result.trigger.events,
+        webhook_secret_preview: null,
+        trigger_reused: result.trigger.reused,
+        trigger_created: !result.trigger.reused,
+      }
+    : null
+  const setupUrl = absoluteProviderWebhookUrl(setup, publicIngress)
+  const secretPreview = providerWebhookSetupSecretPreview(setup)
+  const oneTimeSecret = setup?.webhook_secret_once || ''
+  const setupWasCreated = providerWebhookSetupWasCreated(setup)
+  const providerName = providerLabel(draft.provider)
   const rows = [
     ['Template', templateName],
     ['Repository Integration credentials', selectedIntegration ? `Reuse ${integrationLabel(draft.provider, selectedIntegration)} (#${selectedIntegration.id})` : 'Missing integration'],
@@ -722,7 +756,7 @@ function ReviewStep({
         <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-emerald-100">
             <CheckCircleIcon size={16} />
-            Repository automation is ready
+            Repository automation saved
           </div>
           <div className="mt-3 grid gap-2 text-sm text-emerald-50 md:grid-cols-2">
             <Link href={result.links.trigger} className="rounded-lg border border-emerald-300/25 px-3 py-2 hover:bg-emerald-400/10">
@@ -741,6 +775,93 @@ function ReviewStep({
                 Agent #{result.agents[0].id}
               </Link>
             )}
+          </div>
+        </div>
+      )}
+      {result && setup && (
+        <div className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-cyan-50">{providerName} webhook setup</div>
+              <p className="mt-1 text-xs leading-5 text-cyan-100/80">
+                Configure the provider-side webhook with this inbound URL, the listed events, and the secret below.
+              </p>
+            </div>
+            <span className="rounded-full border border-cyan-300/30 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-100">
+              {setupWasCreated ? 'New trigger' : 'Existing trigger'}
+            </span>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs uppercase tracking-wide text-cyan-100/70">Inbound URL</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const url = setupUrl || setup.inbound_url || setup.relative_inbound_url || result.trigger.inbound_url
+                    navigator.clipboard?.writeText(url)
+                    setUrlCopied(true)
+                    setTimeout(() => setUrlCopied(false), 2000)
+                  }}
+                  className="rounded-lg border border-cyan-300/30 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-100 hover:text-white"
+                >
+                  {urlCopied ? 'Copied' : 'Copy URL'}
+                </button>
+              </div>
+              <code className="mt-1 block break-all rounded-lg border border-cyan-300/20 bg-black/30 p-3 text-xs text-cyan-100">
+                {setupUrl || setup.inbound_url || setup.relative_inbound_url || result.trigger.inbound_url}
+              </code>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-cyan-100/70">Events</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(setup.events || result.trigger.events || [defaultEvent(draft.provider)]).map((event) => (
+                    <span key={event} className="rounded-full border border-cyan-300/25 bg-black/20 px-2.5 py-1 font-mono text-xs text-cyan-100">
+                      {event}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-cyan-100/70">Secret preview</div>
+                <code className="mt-2 block break-all rounded-lg border border-cyan-300/20 bg-black/30 p-3 text-xs text-cyan-100">
+                  {secretPreview || (oneTimeSecret ? 'Shown below once' : 'Not revealable for reused triggers')}
+                </code>
+              </div>
+            </div>
+
+            {oneTimeSecret && (
+              <div className="rounded-lg border border-amber-300/30 bg-amber-400/10 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-amber-100">Webhook secret shown once</div>
+                    <p className="mt-1 text-xs text-amber-100/80">Paste this into {providerName}; Tsushin will only keep the encrypted value and preview.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(oneTimeSecret)
+                      setSecretCopied(true)
+                      setTimeout(() => setSecretCopied(false), 2000)
+                    }}
+                    className="rounded-lg border border-amber-300/40 bg-amber-400/10 px-3 py-1.5 text-xs text-amber-100 hover:text-white"
+                  >
+                    {secretCopied ? 'Copied' : 'Copy secret'}
+                  </button>
+                </div>
+                <code className="mt-3 block break-all rounded-lg bg-black/40 px-3 py-2 font-mono text-xs text-amber-100">
+                  {oneTimeSecret}
+                </code>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-cyan-300/20 bg-black/20 p-3 text-xs leading-5 text-cyan-100/80">
+              {draft.provider === 'gitlab'
+                ? 'In GitLab, open the project Webhooks settings, paste the URL, set the Secret token, and enable the listed events. GitLab automation is advisory/read-only in this release: generated reviewers inspect merge requests and recommend approve or hold outcomes, but Tsushin does not perform GitLab write actions.'
+                : 'In GitHub, open repository Webhooks, add this Payload URL, keep Content type as application/json, paste the secret, and select the listed events.'}
+            </div>
           </div>
         </div>
       )}

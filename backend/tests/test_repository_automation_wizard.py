@@ -165,6 +165,11 @@ def test_github_review_team_creates_trigger_flow_team_agents_and_canonical_bindi
     assert result["trigger"]["reused"] is False
     assert result["trigger"]["events"] == ["pull_request"]
     assert result["trigger"]["canonical_events"] == ["github.pull_request"]
+    assert result["provider_webhook_setup"]["provider"] == "github"
+    assert result["provider_webhook_setup"]["relative_inbound_url"] == f"/api/triggers/github/{result['trigger']['id']}/inbound"
+    assert result["provider_webhook_setup"]["events"] == ["pull_request"]
+    assert result["provider_webhook_setup"]["trigger_created"] is True
+    assert result["provider_webhook_setup"]["webhook_secret_once"].startswith("ghwhsec_")
     assert result["routing_mode"] == "team_primary"
     assert result["team"]["status"] == "active"
     assert result["team"]["member_count"] == 3
@@ -181,6 +186,8 @@ def test_github_review_team_creates_trigger_flow_team_agents_and_canonical_bindi
     assert trigger.default_agent_id is None
     assert trigger.branch_filter == "main"
     assert trigger.path_filters == ["backend/**"]
+    assert result["provider_webhook_setup"]["webhook_secret_preview"] == trigger.webhook_secret_preview
+    assert trigger.webhook_secret_encrypted != result["provider_webhook_setup"]["webhook_secret_once"]
 
     flow_binding = db_session.query(FlowTriggerBinding).one()
     assert flow_binding.is_system_managed is True
@@ -192,6 +199,15 @@ def test_github_review_team_creates_trigger_flow_team_agents_and_canonical_bindi
     team_binding = db_session.query(AgentTeamTrigger).one()
     assert team_binding.config_json["event_types"] == ["github.pull_request"]
     assert result["bindings"][1]["kind"] == "team"
+    team = db_session.get(AgentTeam, result["team"]["id"])
+    assert team.topology == "line"
+    memberships = (
+        db_session.query(AgentTeamMember)
+        .filter(AgentTeamMember.team_id == team.id)
+        .order_by(AgentTeamMember.execution_order.asc())
+        .all()
+    )
+    assert [membership.execution_order for membership in memberships] == [1, 2, 3]
 
 
 def test_gitlab_standalone_agent_routes_generated_flow_to_reviewer(db_session):
@@ -217,9 +233,15 @@ def test_gitlab_standalone_agent_routes_generated_flow_to_reviewer(db_session):
     assert result["trigger"]["events"] == ["merge_request"]
     assert result["trigger"]["canonical_events"] == ["gitlab.merge_request"]
     assert result["flow"]["default_agent_id"] == agent_id
+    assert result["provider_webhook_setup"]["provider"] == "gitlab"
+    assert result["provider_webhook_setup"]["relative_inbound_url"] == f"/api/triggers/gitlab/{result['trigger']['id']}/inbound"
+    assert result["provider_webhook_setup"]["events"] == ["merge_request"]
+    assert result["provider_webhook_setup"]["trigger_created"] is True
+    assert result["provider_webhook_setup"]["webhook_secret_once"].startswith("glwhsec_")
 
     trigger = db_session.get(GitLabChannelInstance, result["trigger"]["id"])
     assert trigger.default_agent_id == agent_id
+    assert result["provider_webhook_setup"]["webhook_secret_preview"] == trigger.webhook_secret_preview
     binding = db_session.query(FlowTriggerBinding).one()
     assert binding.is_active is True
     assert binding.suppress_default_agent is True
@@ -308,8 +330,13 @@ def test_trigger_reuse_and_team_binding_are_idempotent(db_session):
     first = _create(payload, db_session)
     second = _create(payload, db_session)
 
+    assert first["provider_webhook_setup"]["trigger_created"] is True
+    assert first["provider_webhook_setup"]["webhook_secret_once"].startswith("ghwhsec_")
     assert second["trigger"]["id"] == first["trigger"]["id"]
     assert second["trigger"]["reused"] is True
+    assert second["provider_webhook_setup"]["trigger_created"] is False
+    assert second["provider_webhook_setup"]["relative_inbound_url"] == first["provider_webhook_setup"]["relative_inbound_url"]
+    assert "webhook_secret_once" not in second["provider_webhook_setup"]
     assert db_session.query(GitHubChannelInstance).count() == 1
     assert db_session.query(AgentTeamTrigger).count() == 1
     assert db_session.query(FlowTriggerBinding).count() == 1

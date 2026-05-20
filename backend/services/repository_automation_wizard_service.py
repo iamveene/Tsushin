@@ -165,7 +165,7 @@ class RepositoryAutomationWizardService:
             integration = self._load_integration(payload.provider, payload.integration_id)
             provider_events, canonical_events = _canonicalize_events(payload.provider, payload.events)
             trigger_criteria = _validated_trigger_criteria(payload.provider, payload.trigger_criteria)
-            trigger, trigger_reused = self._create_or_reuse_trigger(payload, provider_events)
+            trigger, trigger_reused, webhook_secret_once = self._create_or_reuse_trigger(payload, provider_events)
             self._apply_trigger_preferences(payload, trigger, provider_events, trigger_criteria)
 
             agents: list[Agent]
@@ -224,9 +224,10 @@ class RepositoryAutomationWizardService:
             self.db.refresh(flow)
             self.db.refresh(flow_binding)
 
+            trigger_inbound_url = f"/api/triggers/{payload.provider}/{trigger.id}/inbound"
             links = {
                 "trigger": f"/hub/triggers/{payload.provider}/{trigger.id}",
-                "trigger_inbound": f"/api/triggers/{payload.provider}/{trigger.id}/inbound",
+                "trigger_inbound": trigger_inbound_url,
                 "flow": f"/flows?edit={flow.id}",
             }
             if team_ref is not None:
@@ -248,6 +249,16 @@ class RepositoryAutomationWizardService:
             ]
             if team_binding_ref is not None:
                 bindings.append(team_binding_ref)
+            provider_webhook_setup = {
+                "provider": payload.provider,
+                "relative_inbound_url": trigger_inbound_url,
+                "inbound_url": trigger_inbound_url,
+                "events": list(trigger.events or []),
+                "webhook_secret_preview": trigger.webhook_secret_preview,
+                "trigger_created": not trigger_reused,
+            }
+            if webhook_secret_once is not None:
+                provider_webhook_setup["webhook_secret_once"] = webhook_secret_once
 
             return {
                 "integration": {
@@ -264,7 +275,7 @@ class RepositoryAutomationWizardService:
                     "canonical_events": canonical_events,
                     "reused": trigger_reused,
                     "is_active": bool(trigger.is_active),
-                    "inbound_url": f"/api/triggers/{payload.provider}/{trigger.id}/inbound",
+                    "inbound_url": trigger_inbound_url,
                 },
                 "flow": {
                     "id": flow.id,
@@ -283,6 +294,7 @@ class RepositoryAutomationWizardService:
                     for agent in agents
                 ],
                 "bindings": bindings,
+                "provider_webhook_setup": provider_webhook_setup,
                 "links": links,
                 "routing_mode": payload.routing_mode,
                 "created_at": datetime.utcnow(),
@@ -310,17 +322,17 @@ class RepositoryAutomationWizardService:
         self,
         payload: RepositoryAutomationRequest,
         provider_events: list[str],
-    ) -> tuple[Any, bool]:
+    ) -> tuple[Any, bool, Optional[str]]:
         if payload.existing_trigger_id is not None:
             trigger = self._load_trigger(payload.provider, payload.existing_trigger_id, require_active=True)
             self._validate_trigger_matches(payload, trigger)
-            return trigger, True
+            return trigger, True, None
 
         trigger = self._find_matching_trigger(payload)
         if trigger is not None:
             if not _active(trigger):
                 raise RepositoryAutomationWizardError(409, f"{payload.provider} trigger is inactive")
-            return trigger, True
+            return trigger, True, None
 
         if payload.provider == "github":
             secret = generate_github_webhook_secret()
@@ -363,7 +375,7 @@ class RepositoryAutomationWizardService:
             )
         self.db.add(trigger)
         self.db.flush()
-        return trigger, False
+        return trigger, False, secret
 
     def _apply_trigger_preferences(
         self,
