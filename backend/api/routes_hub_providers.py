@@ -114,7 +114,7 @@ def list_search_providers(
     """
     try:
         SearchProviderRegistry.initialize_providers()
-        providers = SearchProviderRegistry.list_providers(db)
+        providers = SearchProviderRegistry.list_providers(db, tenant_id=ctx.tenant_id)
 
         out: List[ProviderCatalogEntry] = []
         for p in providers:

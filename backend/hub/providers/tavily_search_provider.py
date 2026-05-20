@@ -35,10 +35,22 @@ class TavilySearchProvider(SearchProvider):
 
     BASE_URL = "https://api.tavily.com/search"
 
-    def __init__(self, db: Optional[Session] = None, token_tracker=None, tenant_id: str = None):
-        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        token_tracker=None,
+        tenant_id: str = None,
+        load_credentials: bool = True,
+    ):
+        super().__init__(
+            db=db,
+            token_tracker=token_tracker,
+            tenant_id=tenant_id,
+            load_credentials=load_credentials,
+        )
         self._api_key: Optional[str] = None
-        self._load_api_key()
+        if load_credentials:
+            self._load_api_key()
 
     def _load_api_key(self) -> None:
         if self.db:

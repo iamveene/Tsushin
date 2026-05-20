@@ -38,7 +38,13 @@ class BraveSearchProvider(SearchProvider):
 
     BASE_URL = "https://api.search.brave.com/res/v1/web/search"
 
-    def __init__(self, db: Optional[Session] = None, token_tracker=None, tenant_id: str = None):
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        token_tracker=None,
+        tenant_id: str = None,
+        load_credentials: bool = True,
+    ):
         """
         Initialize Brave Search provider.
 
@@ -47,9 +53,15 @@ class BraveSearchProvider(SearchProvider):
             token_tracker: TokenTracker instance for usage tracking
             tenant_id: Tenant ID for multi-tenant API key isolation
         """
-        super().__init__(db=db, token_tracker=token_tracker, tenant_id=tenant_id)
+        super().__init__(
+            db=db,
+            token_tracker=token_tracker,
+            tenant_id=tenant_id,
+            load_credentials=load_credentials,
+        )
         self._api_key: Optional[str] = None
-        self._load_api_key()
+        if load_credentials:
+            self._load_api_key()
 
     def _load_api_key(self):
         """Load API key from the typed SearchProviderIntegration row."""

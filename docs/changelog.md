@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed runtime legacy key resolution from AI, image, ASR, TTS, search, travel, Hub catalog checks, setup, and flow preflight paths; unknown, incomplete, or undecryptable active legacy rows now block startup.
 - Removed the Hub Service API Keys fallback panel and routed provider/search/travel setup through Provider Instances or typed integration endpoints.
 - Updated TTS provider status checks to resolve credentials with tenant context so hosted Gemini/OpenAI audio providers report the same typed configuration state as the Hub catalog.
+- Updated web-search provider catalogs and skill-provider assignment lists to resolve tenant-scoped `SearchProviderIntegration` rows while keeping catalog metadata reads out of credential-loading paths.
 - Updated regression coverage for migration behavior, Google Flights typed credentials, AI client explicit credentials, TTS status tenant resolution, and audio transcription Provider Instance resolution.
 
 ### Changed — Repository automation activation clarity (2026-05-19)
