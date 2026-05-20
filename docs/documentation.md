@@ -342,7 +342,7 @@ Track B breadth turns the dispatch foundation into user-facing trigger adapter r
 * **Trigger rows** — `JiraChannelInstance`, `GitHubChannelInstance`, and `GitLabChannelInstance` store tenant-scoped source config, linked Hub integration references, encrypted secrets where applicable, default-agent references, health snapshots, cursors, and active/paused state.
 * **Webhook criteria** — Webhook trigger rows now carry optional `trigger_criteria`. JSONPath matchers are evaluated before subscription matching; failed criteria write `filtered_out` dedupe evidence and do not create wake/run rows.
 * **Runtime adapters** — Jira has the persisted trigger row, JQL test-query, linked-integration credential handling, and issue normalization contract; GitHub validates `X-Hub-Signature-256` deliveries and GitLab validates `X-Gitlab-Token` deliveries before dispatching through `TriggerDispatchService`; Webhook criteria can filter signed inbound payloads.
-* **Hub UI** — Hub > Triggers supports Email, Webhook, Jira, GitHub, and GitLab trigger setup. Trigger detail pages live at `/hub/triggers/{type}/{id}` with criteria tabs, recent wake-event tabs, and wake-event filters. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
+* **Hub UI** — Hub > Triggers supports Email, Webhook, Jira, GitHub, and GitLab trigger setup. Trigger detail pages live at `/hub/triggers/{type}/{id}` with criteria tabs, recent wake-event tabs, wake-event filters, wired Flow/Team cards, and provider webhook setup cards for repository triggers. Webhook setup/edit/detail flows share the same criteria builder and can test JSONPath criteria against a sample payload before saving.
 
 ### 2.11.1 v0.7.0 Jira Trigger Finalization
 
@@ -2190,7 +2190,11 @@ The wizard ships two repository-review templates:
 
 Repository criteria remain PR/MR-first where the current UI is still review-centered. GitHub copy should say pull request; GitLab copy should say merge request while preserving the normalized `pull_request` / `pr_number` API aliases used by the shared Code Repository skill.
 
-The backend entrypoint is `POST /api/wizards/repository-automation`. It accepts `provider`, `integration_id`, provider-specific repository target (`repo_owner` + `repo_name` or `project_path`), `template_id`, optional `existing_trigger_id`, repository events and filters, criteria, names, and routing preferences. The response returns created/reused `integration`, `trigger`, `flow`, optional `team`, `agents[]`, `bindings[]`, `links`, and `routing_mode`.
+The backend entrypoint is `POST /api/wizards/repository-automation`. It accepts `provider`, `integration_id`, provider-specific repository target (`repo_owner` + `repo_name` or `project_path`), `template_id`, optional `existing_trigger_id`, repository events and filters, criteria, names, and routing preferences. The response returns created/reused `integration`, `trigger`, `flow`, optional `team`, `agents[]`, `bindings[]`, `links`, `routing_mode`, and optional `provider_webhook_setup`.
+
+`provider_webhook_setup` is the activation contract for repository providers: it includes the provider, relative inbound URL, events to enable, masked secret preview, whether the trigger was newly created, and `webhook_secret_once` only when the wizard created a new trigger. Reused trigger secrets remain non-revealable; GitHub/GitLab trigger detail pages expose rotate-secret actions that return a replacement secret once and persist only the encrypted secret plus preview.
+
+GitLab repository automation remains advisory/read-only in this release. Generated reviewer agents can read merge requests and produce recommendations, but GitLab write actions stay disabled until deliberately implemented and enabled.
 
 ### 14.3.2 Trigger detail aggregates all binding kinds (2026-05-07)
 

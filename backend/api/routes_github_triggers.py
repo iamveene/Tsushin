@@ -254,6 +254,15 @@ class GitHubTriggerRead(BaseModel):
     auto_flow_id: Optional[int] = None
 
 
+class RepositoryTriggerSecretRotateResponse(BaseModel):
+    webhook_secret_once: str
+    webhook_secret_preview: str
+    warning: str = (
+        "Save this secret now. It will not be shown again. "
+        "Update the GitHub webhook secret; the previous secret is invalidated."
+    )
+
+
 class GitHubCriteriaTestRequest(BaseModel):
     """Body for the unsaved-criteria dry-run endpoint."""
 
@@ -640,6 +649,27 @@ def update_github_trigger(
     db.commit()
     db.refresh(instance)
     return _to_read(db, instance)
+
+
+@router.post("/{trigger_id}/rotate-secret", response_model=RepositoryTriggerSecretRotateResponse)
+def rotate_github_trigger_secret(
+    trigger_id: int,
+    ctx: TenantContext = Depends(get_tenant_context),
+    _user=Depends(require_permission("hub.write")),
+    db: Session = Depends(get_db),
+) -> RepositoryTriggerSecretRotateResponse:
+    instance = _load_github_trigger(db, ctx, trigger_id)
+    webhook_secret = generate_webhook_secret()
+    instance.webhook_secret_encrypted = encrypt_webhook_secret(db, instance.tenant_id, webhook_secret)
+    instance.webhook_secret_preview = preview_secret(webhook_secret)
+    instance.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(instance)
+    logger.info("Rotated GitHub trigger %s webhook secret for tenant %s", instance.id, instance.tenant_id)
+    return RepositoryTriggerSecretRotateResponse(
+        webhook_secret_once=webhook_secret,
+        webhook_secret_preview=instance.webhook_secret_preview,
+    )
 
 
 @router.delete("/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)

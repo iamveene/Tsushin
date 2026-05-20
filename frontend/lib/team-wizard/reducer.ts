@@ -146,7 +146,7 @@ export const TEAM_TEMPLATE_PRESETS: TeamTemplatePreset[] = [
       name: 'Repository Review Team',
       description: 'Coordinates repository review, evidence checks, and merge readiness.',
       goal_text: 'Review pull or merge requests using read-only repository access, identify blocking risks, and produce a clear merge-readiness summary.',
-      topology: 'mesh',
+      topology: 'line',
       status: 'active',
       max_steps: 12,
       max_concurrent_runs: 1,

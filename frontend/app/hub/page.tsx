@@ -804,7 +804,7 @@ function GitHubIntegrationsPanel({
           </div>
           <div>
             <h3 className="font-semibold text-white">GitHub</h3>
-            <p className="text-xs text-tsushin-slate">Shared GitHub connection for the Code Repository skill and PR triggers</p>
+            <p className="text-xs text-tsushin-slate">Shared GitHub connection for Code Repository, PR triggers, and the centralized Repository Automation Wizard</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -817,7 +817,7 @@ function GitHubIntegrationsPanel({
               onClick={() => onAutomate(null)}
               className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
             >
-              Automate
+              Create automation
             </button>
           )}
         </div>
@@ -864,7 +864,7 @@ function GitHubIntegrationsPanel({
                         onClick={() => onAutomate(integration)}
                         className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
                       >
-                        Automate
+                        Create automation
                       </button>
                       <button
                         type="button"
@@ -1016,19 +1016,25 @@ function GitLabIntegrationModal({
 function RepositoryIntegrationCreateModal({
   isOpen,
   saving,
+  initialProvider = 'github',
   onClose,
   onSaveGitHub,
   onSaveGitLab,
 }: {
   isOpen: boolean
   saving: boolean
+  initialProvider?: 'github' | 'gitlab'
   onClose: () => void
   onSaveGitHub: (draft: GitHubIntegrationDraft) => void
   onSaveGitLab: (draft: GitLabIntegrationDraft) => void
 }) {
-  const [provider, setProvider] = useState<'github' | 'gitlab'>('github')
+  const [provider, setProvider] = useState<'github' | 'gitlab'>(initialProvider)
   const [githubDraft, setGithubDraft] = useState<GitHubIntegrationDraft>(() => githubIntegrationDraftFromTarget(null))
   const [gitlabDraft, setGitlabDraft] = useState<GitLabIntegrationDraft>(() => gitlabIntegrationDraftFromTarget(null))
+
+  useEffect(() => {
+    if (isOpen) setProvider(initialProvider)
+  }, [initialProvider, isOpen])
 
   const canSave = provider === 'github'
     ? Boolean(githubDraft.integration_name.trim() && githubDraft.pat_token.trim() && !saving)
@@ -1213,7 +1219,7 @@ function GitLabIntegrationsPanel({
           </div>
           <div>
             <h3 className="font-semibold text-white">GitLab</h3>
-            <p className="text-xs text-tsushin-slate">Shared GitLab connection for the Code Repository skill and MR triggers</p>
+            <p className="text-xs text-tsushin-slate">Shared GitLab connection for Code Repository, MR triggers, and the centralized Repository Automation Wizard</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1226,7 +1232,7 @@ function GitLabIntegrationsPanel({
               onClick={() => onAutomate(null)}
               className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 hover:text-white"
             >
-              Automate
+              Create automation
             </button>
           )}
         </div>
@@ -1270,7 +1276,7 @@ function GitLabIntegrationsPanel({
                         onClick={() => onAutomate(integration)}
                         className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-100 hover:text-white"
                       >
-                        Automate
+                        Create automation
                       </button>
                       <button
                         type="button"
@@ -1382,6 +1388,19 @@ export default function HubPage() {
     }
   }, [searchParams])
 
+  useEffect(() => {
+    const shouldOpen = searchParams?.get('addRepositoryConnection')
+    if (shouldOpen !== '1' && shouldOpen !== 'true') return
+    if (!canWriteHub) return
+    const providerParam = searchParams?.get('repoProvider')
+    const provider = providerParam === 'gitlab' ? 'gitlab' : 'github'
+    setActiveTab('developer')
+    setEditingGithubIntegration(null)
+    setEditingGitlabIntegration(null)
+    setRepositoryIntegrationInitialProvider(provider)
+    setShowRepositoryIntegrationModal(true)
+  }, [canWriteHub, searchParams])
+
   // Advanced-mode fallback from ProviderWizard → opens legacy ProviderInstanceModal
   // with the vendor pre-selected.
   useEffect(() => {
@@ -1452,6 +1471,7 @@ export default function HubPage() {
   const [editingGitlabIntegration, setEditingGitlabIntegration] = useState<GitLabIntegration | null>(null)
   const [showGitlabIntegrationModal, setShowGitlabIntegrationModal] = useState(false)
   const [showRepositoryIntegrationModal, setShowRepositoryIntegrationModal] = useState(false)
+  const [repositoryIntegrationInitialProvider, setRepositoryIntegrationInitialProvider] = useState<'github' | 'gitlab'>('github')
   const [passwordVaultIntegrations, setPasswordVaultIntegrations] = useState<PasswordVaultIntegration[]>([])
   const [passwordVaultIntegrationsLoading, setPasswordVaultIntegrationsLoading] = useState(false)
   const [editingPasswordVaultIntegration, setEditingPasswordVaultIntegration] = useState<PasswordVaultIntegration | null>(null)
@@ -3144,9 +3164,10 @@ export default function HubPage() {
 
   // ---- v0.7.0: GitHub Hub Integration handlers (mirror Jira) ----
 
-  const openAddRepositoryIntegrationModal = () => {
+  const openAddRepositoryIntegrationModal = (provider: 'github' | 'gitlab' = 'github') => {
     setEditingGithubIntegration(null)
     setEditingGitlabIntegration(null)
+    setRepositoryIntegrationInitialProvider(provider)
     setShowRepositoryIntegrationModal(true)
   }
 
@@ -6611,7 +6632,7 @@ export default function HubPage() {
                   </div>
                   {canWriteHub && (
                     <button
-                      onClick={openAddRepositoryIntegrationModal}
+                      onClick={() => openAddRepositoryIntegrationModal()}
                       className="btn-primary w-full sm:w-auto justify-center"
                     >
                       + Add Repository Connection
@@ -7439,9 +7460,10 @@ export default function HubPage() {
 
       {showRepositoryIntegrationModal && (
         <RepositoryIntegrationCreateModal
-          key="repository-connection-create"
+          key={`repository-connection-create-${repositoryIntegrationInitialProvider}`}
           isOpen={showRepositoryIntegrationModal}
           saving={saving}
+          initialProvider={repositoryIntegrationInitialProvider}
           onClose={() => setShowRepositoryIntegrationModal(false)}
           onSaveGitHub={saveGitHubIntegration}
           onSaveGitLab={saveGitLabIntegration}

@@ -58,6 +58,7 @@ from api.routes_github_triggers import (  # noqa: E402
     create_github_trigger,
     delete_github_trigger,
     list_github_triggers,
+    rotate_github_trigger_secret,
     update_github_trigger,
 )
 from channels.github import trigger as github_trigger  # noqa: E402
@@ -385,6 +386,57 @@ def test_update_and_delete_github_trigger_are_tenant_scoped(db_session):
 
     with pytest.raises(HTTPException) as exc_info:
         delete_github_trigger(
+            trigger_id=trigger_b.id,
+            ctx=_ctx("tenant-a"),
+            _user=SimpleNamespace(id=1),
+            db=db_session,
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_rotate_github_trigger_secret_is_tenant_scoped(db_session, monkeypatch):
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-a", user_id=1, contact_id=101, agent_id=201)
+    _seed_tenant_user_agent(db_session, tenant_id="tenant-b", user_id=2, contact_id=102, agent_id=202)
+    _seed_github_integration(db_session, integration_id=11, tenant_id="tenant-a")
+    _seed_github_integration(db_session, integration_id=12, tenant_id="tenant-b")
+    trigger_a = _seed_github_trigger(
+        db_session,
+        instance_id=901,
+        tenant_id="tenant-a",
+        created_by=1,
+        github_integration_id=11,
+        default_agent_id=201,
+        webhook_secret_plain="old-secret-a",
+    )
+    trigger_b = _seed_github_trigger(
+        db_session,
+        instance_id=902,
+        tenant_id="tenant-b",
+        created_by=2,
+        github_integration_id=12,
+        default_agent_id=202,
+    )
+    db_session.commit()
+    old_encrypted = trigger_a.webhook_secret_encrypted
+    monkeypatch.setattr(triggers, "generate_webhook_secret", lambda: "rotated-secret-5678")
+
+    rotated = rotate_github_trigger_secret(
+        trigger_id=trigger_a.id,
+        ctx=_ctx("tenant-a"),
+        _user=SimpleNamespace(id=1),
+        db=db_session,
+    )
+
+    assert rotated.webhook_secret_once == "rotated-secret-5678"
+    assert rotated.webhook_secret_preview == "rota...5678"
+    assert "not be shown again" in rotated.warning
+    refreshed = db_session.query(GitHubChannelInstance).filter_by(id=trigger_a.id).one()
+    assert refreshed.webhook_secret_preview == "rota...5678"
+    assert refreshed.webhook_secret_encrypted != old_encrypted
+    assert refreshed.webhook_secret_encrypted != "rotated-secret-5678"
+
+    with pytest.raises(HTTPException) as exc_info:
+        rotate_github_trigger_secret(
             trigger_id=trigger_b.id,
             ctx=_ctx("tenant-a"),
             _user=SimpleNamespace(id=1),
