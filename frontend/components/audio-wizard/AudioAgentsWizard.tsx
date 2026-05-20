@@ -139,7 +139,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
   // -------------------- Detection helpers --------------------
   const kokoroRunning = existingTTSInstances.find(t => t.vendor === 'kokoro' && t.is_active)
   const hasOpenAIKey = providerInstances.some(p => p.vendor === 'openai' && p.api_key_configured)
-  const hasElevenLabsKey = providerInstances.some(p => p.vendor === 'elevenlabs' && p.api_key_configured)
+  const hasElevenLabsKey = existingTTSInstances.some(t => t.vendor === 'elevenlabs' && t.is_active && t.api_key_configured)
   const hasGeminiKey = providerInstances.some(p => p.vendor === 'gemini' && p.api_key_configured)
 
   // -------------------- Step indicator --------------------
@@ -185,7 +185,7 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
           response_format: state.format,
         })
       } else {
-        // OpenAI / ElevenLabs / Gemini: set skill config directly (no TTSInstance)
+        // Cloud providers: set skill config directly; credentials live in ProviderInstance or hosted TTSInstance.
         const cfg: Record<string, unknown> = {
           provider: state.provider,
           voice: state.voice,

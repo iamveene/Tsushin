@@ -1,614 +1,83 @@
-"""
-Phase 4.6: API Key Management Routes
-Phase 7.9.2: Added tenant isolation for multi-tenancy support
-Phase SEC-001: Added encryption at rest for API keys (CRIT-003 fix)
+"""Retired legacy Service API Keys routes.
 
-Provides endpoints for CRUD operations on API keys for LLM providers and tool services.
+The legacy ``api_key`` table is audit/migration-only. Runtime credentials are
+stored in typed models such as ProviderInstance, TTSInstance, SearchProvider,
+GoogleFlightsIntegration, AmadeusIntegration, and SearxngInstance.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
-from datetime import datetime
-import httpx
-import os
-import logging
-from urllib.parse import urlparse
 
-from models import ApiKey, GoogleFlightsIntegration, HubIntegration
+from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from models_rbac import User
-from auth_dependencies import (
-    TenantContext,
-    get_tenant_context,
-    require_permission,
-    get_current_user_required
-)
-from hub.security import TokenEncryption
-from services.encryption_key_service import get_api_key_encryption_key
-from services.provider_aliases import GOOGLE_FLIGHTS_API_KEY_SERVICES
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Global engine reference
 _engine = None
 
+
 def set_engine(engine):
-    """Set the global engine reference"""
+    """Set the global engine reference for app startup compatibility."""
     global _engine
     _engine = engine
 
-# Dependency to get database session
-def get_db():
-    from sqlalchemy.orm import sessionmaker
-    SessionLocal = sessionmaker(bind=_engine)
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        db.close()
 
-
-# Pydantic schemas
-class ApiKeyCreate(BaseModel):
-    service: str  # 'anthropic', 'openai', 'gemini', 'brave_search', 'amadeus', 'google_flights', 'serpapi'
-    api_key: str
-    is_active: bool = True
-
-
-class ApiKeyUpdate(BaseModel):
-    api_key: Optional[str] = None
-    is_active: Optional[bool] = None
-
-
-class ApiKeyResponse(BaseModel):
-    id: int
-    service: str
-    api_key_preview: str  # Masked key for security (e.g., "sk-...xyz")
-    is_active: bool
-    tenant_id: Optional[str] = None
-    created_at: Optional[datetime] = None  # Optional to handle legacy records
-    updated_at: Optional[datetime] = None  # Optional to handle legacy records
-
-    class Config:
-        from_attributes = True
-
-
-# Supported services
-SUPPORTED_SERVICES = {
-    'anthropic': 'Anthropic (Claude)',
-    'openai': 'OpenAI (GPT)',
-    'gemini': 'Google Gemini',
-    'openrouter': 'OpenRouter',
-    'groq': 'Groq (LLaMA/Mixtral)',
-    'grok': 'Grok (xAI)',
-    'deepseek': 'DeepSeek',
-    'elevenlabs': 'ElevenLabs (TTS)',
-    'brave_search': 'Brave Search API',
-    'searxng': 'SearXNG Base URL',
-    'amadeus': 'Amadeus (Flight Search)',
-    'google_flights': 'Google Flights (SerpApi)',
-    'serpapi': 'SerpAPI (Google Search)',
-    'vertex_ai': 'Vertex AI (Google Cloud)',
-    'vertex_ai_project_id': 'Vertex AI Project ID',
-    'vertex_ai_region': 'Vertex AI Region',
-    'vertex_ai_sa_email': 'Vertex AI Service Account Email',
-    'tavily': 'Tavily (Web Search)',
-}
-
-# BUG-666: minimum shape checks per service so the Tool-API card cannot be
-# "activated" with a 1-character placeholder. These are intentionally loose —
-# a real test-connection roundtrip is still the authoritative health signal —
-# but they reject keys that obviously cannot work.
-_API_KEY_SHAPE: Dict[str, Dict[str, Any]] = {
-    # OpenAI-family keys: start with sk- and are ≥ ~30 chars in practice.
-    'openai':      {'prefix': 'sk-',   'min_len': 20},
-    'deepseek':    {'prefix': 'sk-',   'min_len': 20},
-    # Anthropic: sk-ant-* (long).
-    'anthropic':   {'prefix': 'sk-ant', 'min_len': 30},
-    # Groq: gsk_*
-    'groq':        {'prefix': 'gsk_',  'min_len': 20},
-    # xAI Grok: xai-*
-    'grok':        {'prefix': 'xai-',  'min_len': 20},
-    # Google / Vertex / Gemini / Brave / Amadeus / SerpAPI / Tavily / OpenRouter:
-    # no canonical prefix, just require a minimum length.
-    'gemini':      {'min_len': 20},
-    'vertex_ai':   {'min_len': 20},
-    'openrouter':  {'min_len': 20},
-    'elevenlabs':  {'min_len': 20},
-    'brave_search': {'min_len': 20},
-    'amadeus':     {'min_len': 20},
-    'google_flights': {'min_len': 20},
-    'serpapi':     {'min_len': 32},
-    'tavily':      {'prefix': 'tvly-', 'min_len': 20},
-}
-
-
-def _validate_api_key_shape(service: str, api_key: str) -> Optional[str]:
-    """Return an error string when the key obviously cannot be valid, else None.
-
-    Intentionally only checks structural red flags — empty, trivially short,
-    or missing a mandatory vendor prefix. Full correctness is still verified
-    by the per-provider test-connection flow.
-    """
-    if not api_key or not api_key.strip():
-        return "API key cannot be empty."
-    key = api_key.strip()
-    # URL-style services are validated elsewhere (SSRF).
-    if service in ('searxng', 'vertex_ai_project_id', 'vertex_ai_region', 'vertex_ai_sa_email'):
-        return None
-    rule = _API_KEY_SHAPE.get(service)
-    if not rule:
-        # Unknown service → just require a minimum length.
-        if len(key) < 8:
-            return "API key looks too short (≥ 8 chars expected)."
-        return None
-    min_len = rule.get('min_len', 8)
-    if len(key) < min_len:
-        return f"API key looks too short (≥ {min_len} chars expected for {service})."
-    prefix = rule.get('prefix')
-    if prefix and not key.startswith(prefix):
-        return f"API key should start with '{prefix}' for {service}."
-    return None
-
-
-def mask_api_key(key: str, service: Optional[str] = None) -> str:
-    """Mask API key for display (show first 4 and last 4 chars)"""
-    if not key:
-        return '***'
-    if service == 'searxng':
-        try:
-            parsed = urlparse(key)
-            if parsed.scheme and parsed.netloc:
-                suffix = parsed.path.rstrip('/')
-                suffix = suffix if suffix else ''
-                return f"{parsed.scheme}://{parsed.netloc}{suffix}"
-        except Exception:
-            pass
-    if len(key) <= 8:
-        return '***'
-    return f"{key[:4]}...{key[-4:]}"
-
-
-def _encrypt_api_key_for_storage(plaintext_key: str, service: str, tenant_id: Optional[str], db: Session) -> Optional[str]:
-    """Encrypt an API key for storage using the API key-specific encryption key (MED-001 fix)."""
-    try:
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            logger.error("Failed to get encryption key for API key encryption")
-            return None
-        encryptor = TokenEncryption(encryption_key.encode())
-        identifier = f"apikey_{service}_{tenant_id or 'system'}"
-        return encryptor.encrypt(plaintext_key, identifier)
-    except Exception as e:
-        logger.error(f"Failed to encrypt API key for {service}: {e}")
-        return None
-
-
-def _decrypt_api_key_for_display(api_key_record: ApiKey, db: Session) -> Optional[str]:
-    """Decrypt an API key for display (masking). Falls back to plaintext for migration compatibility."""
-    # Try encrypted field first
-    if api_key_record.api_key_encrypted:
-        try:
-            # MED-001 security fix: Use dedicated API key encryption key
-            encryption_key = get_api_key_encryption_key(db)
-            if encryption_key:
-                encryptor = TokenEncryption(encryption_key.encode())
-                identifier = f"apikey_{api_key_record.service}_{api_key_record.tenant_id or 'system'}"
-                return encryptor.decrypt(api_key_record.api_key_encrypted, identifier)
-        except Exception as e:
-            logger.error(f"Failed to decrypt API key for {api_key_record.service}: {e}")
-            return None
-    # Fall back to plaintext (migration compatibility)
-    return api_key_record.api_key
-
-
-def to_api_key_response(k: ApiKey, db: Session) -> ApiKeyResponse:
-    """Convert ApiKey model to response (with decryption for masking)"""
-    # Get decrypted key for masking
-    decrypted_key = _decrypt_api_key_for_display(k, db)
-    return ApiKeyResponse(
-        id=k.id,
-        service=k.service,
-        api_key_preview=mask_api_key(decrypted_key, k.service) if decrypted_key else '***',
-        is_active=k.is_active,
-        tenant_id=k.tenant_id,
-        created_at=k.created_at,
-        updated_at=k.updated_at
+def _legacy_api_keys_gone() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Legacy Service API Keys are retired. Use Provider Instances or "
+            "typed Hub integrations instead."
+        ),
     )
 
 
-def sync_to_hub_integration(db: Session, api_key: ApiKey, plaintext_key: str):
-    """
-    Sync ApiKey to HubIntegration for services that use the new Provider architecture.
-
-    Args:
-        db: Database session
-        api_key: The ApiKey record
-        plaintext_key: The plaintext API key (needed for re-encryption for HubIntegration)
-    """
-    if api_key.service in GOOGLE_FLIGHTS_API_KEY_SERVICES:
-        # Check if integration exists
-        integration = db.query(HubIntegration).filter(
-            HubIntegration.type == 'google_flights',
-            HubIntegration.tenant_id == api_key.tenant_id
-        ).first()
-
-        # CRIT-004 fix: Use dedicated API key encryption key (not JWT_SECRET_KEY)
-        # This ensures encryption persists across container restarts
-        encryption_key = get_api_key_encryption_key(db)
-        if not encryption_key:
-            logger.error("Failed to get encryption key for GoogleFlightsIntegration sync")
-            return
-        encryptor = TokenEncryption(encryption_key.encode())
-        # Use consistent identifier with ApiKey table
-        identifier = f"apikey_google_flights_{api_key.tenant_id or 'system'}"
-        encrypted_key = encryptor.encrypt(plaintext_key, identifier)
-
-        if integration:
-            # Update existing
-            # Since integration is a HubIntegration object (polymorphic load?),
-            # we need to ensure we have the GoogleFlightsIntegration object or cast it
-            # If it was loaded as HubIntegration, we might need to query the child
-            gf = db.query(GoogleFlightsIntegration).filter(GoogleFlightsIntegration.id == integration.id).first()
-            if gf:
-                gf.api_key_encrypted = encrypted_key
-                # Update parent fields
-                gf.is_active = api_key.is_active
-        else:
-            # Create new via inheritance
-            gf = GoogleFlightsIntegration(
-                # Hub fields
-                name="Google Flights (SerpApi)",
-                display_name="Google Flights",
-                is_active=api_key.is_active,
-                tenant_id=api_key.tenant_id,
-
-                # Child fields
-                api_key_encrypted=encrypted_key,
-                default_currency="USD",
-                default_language="en"
-            )
-            db.add(gf)
-
-
-@router.get("/api-keys", response_model=List[ApiKeyResponse])
+@router.get("/api-keys", status_code=410)
 def list_api_keys(
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.read")),
-    ctx: TenantContext = Depends(get_tenant_context)
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """
-    List all configured API keys (masked).
-
-    Phase 7.9.2: Returns keys for the user's tenant AND shared keys (NULL tenant_id).
-    Global admins see all keys.
-    """
-    query = db.query(ApiKey)
-
-    # Apply tenant filtering - include tenant's keys AND shared (NULL tenant_id) keys
-    query = ctx.filter_by_tenant(query, ApiKey.tenant_id)
-
-    keys = query.all()
-    return [to_api_key_response(k, db) for k in keys]
+    _legacy_api_keys_gone()
 
 
-@router.get("/api-keys/services")
-def list_supported_services():
-    """List all supported services for API key configuration"""
-    return {"services": SUPPORTED_SERVICES}
+@router.get("/api-keys/services", status_code=410)
+def list_supported_services(
+    current_user: User = Depends(require_permission("org.settings.read")),
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    _legacy_api_keys_gone()
 
 
-@router.get("/api-keys/{service}", response_model=ApiKeyResponse)
+@router.get("/api-keys/{service}", status_code=410)
 def get_api_key_route(
     service: str,
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.read")),
-    ctx: TenantContext = Depends(get_tenant_context)
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """
-    Get API key for a specific service (masked).
-
-    Phase 7.9.2: Priority lookup:
-    1. Tenant-specific key first
-    2. Fallback to shared key (NULL tenant_id)
-    """
-    # First try tenant-specific key
-    if ctx.tenant_id:
-        key = db.query(ApiKey).filter(
-            ApiKey.service == service,
-            ApiKey.tenant_id == ctx.tenant_id
-        ).first()
-
-        if key:
-            return to_api_key_response(key, db)
-
-    # Fallback to shared key (NULL tenant_id)
-    key = db.query(ApiKey).filter(
-        ApiKey.service == service,
-        ApiKey.tenant_id.is_(None)
-    ).first()
-
-    if not key:
-        raise HTTPException(status_code=404, detail=f"API key for '{service}' not found")
-
-    # Verify user can access this resource
-    if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=404, detail="API key not found")
-
-    return to_api_key_response(key, db)
+    _legacy_api_keys_gone()
 
 
-@router.post("/api-keys", response_model=ApiKeyResponse, status_code=201)
+@router.post("/api-keys", status_code=410)
 def create_or_update_api_key(
-    data: ApiKeyCreate,
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
-    ctx: TenantContext = Depends(get_tenant_context)
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """
-    Create or update an API key for a service.
-
-    Phase 7.9.2: Creates tenant-specific key. Use global admin to create shared keys.
-    Phase SEC-001: API keys are now encrypted at rest.
-    """
-    # Validate service
-    if data.service not in SUPPORTED_SERVICES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported service. Must be one of: {', '.join(SUPPORTED_SERVICES.keys())}"
-        )
-
-    # BUG-666: reject obviously invalid keys (empty / too short / wrong prefix)
-    # before encrypting. The card used to accept "test" and mark itself Active.
-    shape_err = _validate_api_key_shape(data.service, data.api_key)
-    if shape_err:
-        raise HTTPException(status_code=400, detail=shape_err)
-
-    if data.service == "searxng":
-        from utils.ssrf_validator import SSRFValidationError, validate_url
-
-        try:
-            data.api_key = validate_url(data.api_key.strip(), allow_private=True).rstrip("/")
-        except SSRFValidationError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid SearXNG URL: {e}")
-
-    # Encrypt the API key
-    encrypted_key = _encrypt_api_key_for_storage(data.api_key, data.service, ctx.tenant_id, db)
-    if not encrypted_key:
-        raise HTTPException(status_code=500, detail="Failed to encrypt API key")
-
-    # Check if key already exists for this tenant
-    existing = db.query(ApiKey).filter(
-        ApiKey.service == data.service,
-        ApiKey.tenant_id == ctx.tenant_id
-    ).first()
-
-    if existing:
-        # Update existing key - store encrypted, clear plaintext
-        existing.api_key_encrypted = encrypted_key
-        existing.api_key = None  # Clear plaintext for security
-        existing.is_active = data.is_active
-        existing.updated_at = datetime.utcnow()
-        db.commit()
-        db.refresh(existing)
-        result = existing
-    else:
-        # Create new key for this tenant - encrypted only
-        new_key = ApiKey(
-            service=data.service,
-            api_key=None,  # No plaintext storage
-            api_key_encrypted=encrypted_key,
-            is_active=data.is_active,
-            tenant_id=ctx.tenant_id  # Assign to user's tenant
-        )
-        db.add(new_key)
-        db.commit()
-        db.refresh(new_key)
-        result = new_key
-
-    # Sync to HubIntegration if needed (pass plaintext for re-encryption)
-    try:
-        sync_to_hub_integration(db, result, data.api_key)
-        db.commit()
-    except Exception as e:
-        # Don't fail the request if sync fails, but log it
-        logger.warning(f"Failed to sync API key to HubIntegration: {e}")
-
-    return to_api_key_response(result, db)
+    _legacy_api_keys_gone()
 
 
-@router.put("/api-keys/{service}", response_model=ApiKeyResponse)
+@router.put("/api-keys/{service}", status_code=410)
 def update_api_key(
     service: str,
-    data: ApiKeyUpdate,
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
-    ctx: TenantContext = Depends(get_tenant_context)
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """
-    Update an existing API key.
-
-    Phase 7.9.2: Only updates keys belonging to user's tenant (or shared if global admin).
-    Phase SEC-001: API keys are now encrypted at rest.
-    """
-    # Find key - first try tenant-specific, then shared
-    key = db.query(ApiKey).filter(
-        ApiKey.service == service,
-        ApiKey.tenant_id == ctx.tenant_id
-    ).first()
-
-    if not key and ctx.is_global_admin:
-        # Global admin can update shared keys
-        key = db.query(ApiKey).filter(
-            ApiKey.service == service,
-            ApiKey.tenant_id.is_(None)
-        ).first()
-
-    if not key:
-        raise HTTPException(status_code=404, detail=f"API key for '{service}' not found")
-
-    # Verify access
-    if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=404, detail="API key not found")
-
-    plaintext_key_for_sync = None
-    if data.api_key is not None:
-        # BUG-666: apply the same shape check on update as on create.
-        shape_err = _validate_api_key_shape(service, data.api_key)
-        if shape_err:
-            raise HTTPException(status_code=400, detail=shape_err)
-        if service == "searxng":
-            from utils.ssrf_validator import SSRFValidationError, validate_url
-
-            try:
-                data.api_key = validate_url(data.api_key.strip(), allow_private=True).rstrip("/")
-            except SSRFValidationError as e:
-                raise HTTPException(status_code=400, detail=f"Invalid SearXNG URL: {e}")
-
-        # Encrypt the new key
-        encrypted_key = _encrypt_api_key_for_storage(data.api_key, service, key.tenant_id, db)
-        if not encrypted_key:
-            raise HTTPException(status_code=500, detail="Failed to encrypt API key")
-        key.api_key_encrypted = encrypted_key
-        key.api_key = None  # Clear plaintext for security
-        plaintext_key_for_sync = data.api_key
-
-    if data.is_active is not None:
-        key.is_active = data.is_active
-
-    key.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(key)
-
-    # Sync to HubIntegration if needed (only if key was updated)
-    if plaintext_key_for_sync:
-        try:
-            sync_to_hub_integration(db, key, plaintext_key_for_sync)
-            db.commit()
-        except Exception as e:
-            logger.warning(f"Failed to sync API key to HubIntegration: {e}")
-
-    return to_api_key_response(key, db)
+    _legacy_api_keys_gone()
 
 
-@router.delete("/api-keys/{service}")
+@router.delete("/api-keys/{service}", status_code=410)
 def delete_api_key(
     service: str,
-    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.settings.write")),
-    ctx: TenantContext = Depends(get_tenant_context)
+    ctx: TenantContext = Depends(get_tenant_context),
 ):
-    """
-    Delete an API key.
-
-    Phase 7.9.2: Only deletes keys belonging to user's tenant (or shared if global admin).
-    """
-    # Find key - first try tenant-specific, then shared (for global admin)
-    key = db.query(ApiKey).filter(
-        ApiKey.service == service,
-        ApiKey.tenant_id == ctx.tenant_id
-    ).first()
-
-    if not key and ctx.is_global_admin:
-        # Global admin can delete shared keys
-        key = db.query(ApiKey).filter(
-            ApiKey.service == service,
-            ApiKey.tenant_id.is_(None)
-        ).first()
-
-    if not key:
-        raise HTTPException(status_code=404, detail=f"API key for '{service}' not found")
-
-    # Verify access
-    if not ctx.can_access_resource(key.tenant_id):
-        raise HTTPException(status_code=404, detail="API key not found")
-
-    db.delete(key)
-    db.commit()
-    return {"message": f"API key for '{service}' deleted successfully"}
-
-
-# ==================== Ollama Integration (Phase 5.2) ====================
-
-@router.get("/ollama/health")
-async def check_ollama_health(
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user_required),
-):
-    """
-    Check Ollama local LLM service health status.
-    Returns online/offline status and available models.
-    Phase 5.2.1: Uses configured base URL from Config table.
-    """
-    # Load from Config table if available, otherwise from env var
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-    ollama_api_key = None
-
-    from models import Config
-    config = db.query(Config).first()
-    if config and config.ollama_base_url:
-        ollama_base_url = config.ollama_base_url
-    if config and config.ollama_api_key:
-        ollama_api_key = config.ollama_api_key
-
-    from utils.ssrf_validator import validate_ollama_url, SSRFValidationError
-    try:
-        ollama_base_url = validate_ollama_url(ollama_base_url)
-    except SSRFValidationError as e:
-        return {"status": "error", "base_url": ollama_base_url, "available": False, "error": f"SSRF blocked: {e}"}
-
-    try:
-        headers = {}
-        if ollama_api_key:
-            headers["Authorization"] = f"Bearer {ollama_api_key}"
-
-        async with httpx.AsyncClient(timeout=5.0, headers=headers if headers else None) as client:
-            response = await client.get(f"{ollama_base_url}/api/tags")
-
-            if response.status_code == 200:
-                data = response.json()
-                models = data.get("models", [])
-
-                return {
-                    "status": "online",
-                    "base_url": ollama_base_url,
-                    "available": True,
-                    "models_count": len(models),
-                    "models": [
-                        {
-                            "name": m.get("name"),
-                            "size": m.get("size", 0),
-                            "modified_at": m.get("modified_at")
-                        }
-                        for m in models
-                    ]
-                }
-            else:
-                return {
-                    "status": "error",
-                    "base_url": ollama_base_url,
-                    "available": False,
-                    "error": f"HTTP {response.status_code}"
-                }
-    except httpx.ConnectError:
-        return {
-            "status": "offline",
-            "base_url": ollama_base_url,
-            "available": False,
-            "error": "Cannot connect to Ollama. Start with: ollama serve"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "base_url": ollama_base_url,
-            "available": False,
-            "error": str(e)
-        }
+    _legacy_api_keys_gone()

@@ -292,6 +292,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Ollama startup reconcile failed: {e}")
 
+    # Legacy ApiKey retirement gate. Active rows are migrated into typed
+    # per-tenant configuration and then soft-disabled. Unknown or undecryptable
+    # active rows block startup so deployments cannot keep using fallback keys.
+    from sqlalchemy.orm import sessionmaker
+    from services.legacy_api_key_migration_service import migrate_active_legacy_api_keys
+    LegacyKeySession = sessionmaker(bind=engine)
+    legacy_key_db = LegacyKeySession()
+    try:
+        migration_stats = migrate_active_legacy_api_keys(legacy_key_db)
+        if migration_stats["legacy_rows_seen"]:
+            logger.info(
+                "legacy_api_key_migration: rows_seen=%s rows_disabled=%s typed_rows_touched=%s",
+                migration_stats["legacy_rows_seen"],
+                migration_stats["legacy_rows_disabled"],
+                migration_stats["typed_rows_touched"],
+            )
+    finally:
+        legacy_key_db.close()
+
     # v0.7.0: Bootstrap orphan vendor agents.
     # Materialise an active provider_instance for every (tenant, vendor) pair
     # that has agents but zero active instances, and relink agents whose
@@ -301,7 +320,6 @@ async def lifespan(app: FastAPI):
     # the legacy hardcoded Ollama URL but the UI showed nothing.
     try:
         from services.provider_instance_service import ProviderInstanceService
-        from sqlalchemy.orm import sessionmaker
         BootSession = sessionmaker(bind=engine)
         boot_db = BootSession()
         try:

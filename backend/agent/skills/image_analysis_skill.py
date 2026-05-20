@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import httpx
 
 from agent.skills.base import BaseSkill, InboundMessage, SkillResult
-from services.api_key_service import get_api_key
+from services.provider_instance_service import ProviderInstanceService
 
 if TYPE_CHECKING:
     from analytics.token_tracker import TokenTracker
@@ -316,13 +316,14 @@ class ImageAnalysisSkill(BaseSkill):
         return "image/jpeg"
 
     async def _get_api_key(self) -> Optional[str]:
-        """Load Gemini API key from tenant-scoped API key storage."""
+        """Load Gemini API key from the tenant ProviderInstance."""
         try:
             if self._db_session:
                 tenant_id = None
                 if isinstance(getattr(self, "_config", None), dict):
                     tenant_id = self._config.get("tenant_id")
-                return get_api_key("gemini", self._db_session, tenant_id=tenant_id)
+                if tenant_id:
+                    return ProviderInstanceService.resolve_default_api_key("gemini", tenant_id, self._db_session)
             return None
         except Exception:
             return None

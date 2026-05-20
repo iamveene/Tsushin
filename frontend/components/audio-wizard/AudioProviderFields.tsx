@@ -46,9 +46,9 @@ interface ProviderCardData {
 
 const FALLBACK_PROVIDER_CARDS: ProviderCardData[] = [
   { id: 'kokoro', title: 'Kokoro TTS', desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free', status: 'available', defaultVoice: 'pf_dora' },
-  { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
-  { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
-  { id: 'gemini', title: 'Google Gemini TTS (Preview)', desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview', status: 'missing', defaultVoice: 'Zephyr' },
+  { id: 'openai', title: 'OpenAI TTS', desc: 'High-quality cloud TTS. Requires an OpenAI Provider Instance.', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
+  { id: 'elevenlabs', title: 'ElevenLabs', desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs TTS connection.', cost: 'Paid', status: 'missing', defaultVoice: 'nova' },
+  { id: 'gemini', title: 'Google Gemini TTS (Preview)', desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Uses your Gemini Provider Instance.', cost: 'Preview', status: 'missing', defaultVoice: 'Zephyr' },
 ]
 
 // Copy descriptions / cost labels per provider id. The backend supplies id,
@@ -58,9 +58,9 @@ const FALLBACK_PROVIDER_CARDS: ProviderCardData[] = [
 // row, we fall back to the backend's display name + description.
 const PROVIDER_COPY: Partial<Record<string, { desc: string; cost: string }>> = {
   kokoro: { desc: 'Free, open-source, runs locally in a Docker container. Portuguese + English voices.', cost: 'Free' },
-  openai: { desc: 'High-quality cloud TTS. Requires an OpenAI API key (configured in Hub → AI Providers).', cost: 'Paid' },
-  elevenlabs: { desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs API key.', cost: 'Paid' },
-  gemini: { desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Reuses your Gemini API key.', cost: 'Preview' },
+  openai: { desc: 'High-quality cloud TTS. Requires an OpenAI Provider Instance.', cost: 'Paid' },
+  elevenlabs: { desc: 'Premium voice cloning and expressive TTS. Requires an ElevenLabs TTS connection.', cost: 'Paid' },
+  gemini: { desc: '30 prebuilt voices from gemini-3.1-flash-tts-preview. WAV output, no speed control. Uses your Gemini Provider Instance.', cost: 'Preview' },
 }
 
 function backendProviderToCard(
@@ -142,7 +142,7 @@ export function AudioProviderPicker({
                 <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Detected</span>
               )}
               {opt.status === 'missing' && (
-                <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/30">Needs API key</span>
+                <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/30">Needs connection</span>
               )}
             </div>
           </div>
@@ -405,19 +405,19 @@ export function AudioVoiceFields({
 
           {value.provider === 'openai' && !hasOpenAIKey && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-              No OpenAI API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
+              No OpenAI Provider Instance detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
             </div>
           )}
 
           {value.provider === 'elevenlabs' && !hasElevenLabsKey && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-              No ElevenLabs API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
+              No ElevenLabs TTS connection detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
             </div>
           )}
 
           {value.provider === 'gemini' && !hasGeminiKey && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-              No Gemini API key detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
+              No Gemini Provider Instance detected. Add one at <a href="/hub?tab=ai-providers" className="underline">Hub → AI Providers</a>, then re-open this wizard.
             </div>
           )}
         </>
@@ -425,12 +425,12 @@ export function AudioVoiceFields({
 
       {!wantsTTS && (
         <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
-          Transcription uses OpenAI Whisper. Ensure an OpenAI API key is configured in{' '}
+          Transcription uses OpenAI Whisper. Ensure an OpenAI Provider Instance is configured in{' '}
           <a href="/hub?tab=ai-providers" className="underline hover:text-white">
             Hub → AI Providers
           </a>.
           {!hasOpenAIKey && (
-            <div className="mt-2 text-amber-200">⚠ No OpenAI API key detected.</div>
+            <div className="mt-2 text-amber-200">No OpenAI Provider Instance detected.</div>
           )}
         </div>
       )}
@@ -763,7 +763,7 @@ export function AudioTranscriptFields({
       <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-sm text-gray-300">
         {value.asrMode === 'openai' && (
           <div>
-            Uses the cloud OpenAI Whisper API. Requires the OpenAI API key configured under{' '}
+            Uses the cloud OpenAI Whisper API. Requires the OpenAI Provider Instance configured under{' '}
             <a href="/hub?tab=ai-providers" className="underline hover:text-white">
               Hub → AI Providers
             </a>{' '}

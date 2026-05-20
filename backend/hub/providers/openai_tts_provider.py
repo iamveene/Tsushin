@@ -7,7 +7,6 @@ Pricing (as of 2025):
 - tts-1-hd: $0.030 per 1,000 characters
 """
 
-import os
 import logging
 import tempfile
 from typing import Dict, List, Optional, Any
@@ -22,7 +21,7 @@ from .tts_provider import (
     VoiceInfo,
     ProviderStatus
 )
-from services.api_key_service import get_api_key
+from services.provider_instance_service import ProviderInstanceService
 
 
 logger = logging.getLogger(__name__)
@@ -113,12 +112,12 @@ class OpenAITTSProvider(TTSProvider):
         return "OpenAI TTS"
 
     def _get_api_key(self) -> Optional[str]:
-        """Get OpenAI API key from database (tenant-specific or system-wide)."""
+        """Get OpenAI API key from the tenant ProviderInstance."""
         if self._api_key:
             return self._api_key
 
         if self.db:
-            key = get_api_key("openai", self.db, tenant_id=self.tenant_id)
+            key = ProviderInstanceService.resolve_default_api_key("openai", self.tenant_id, self.db)
             if key:
                 self._api_key = key
 

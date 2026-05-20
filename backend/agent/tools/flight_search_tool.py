@@ -1,9 +1,8 @@
 """
 Flight Search Tool for Agents
-Uses API key from database or environment variable to search flights via Amadeus API.
+Uses the tenant AmadeusIntegration to search flights via Amadeus API.
 """
 
-import os
 import re
 import logging
 import requests
@@ -75,7 +74,7 @@ class FlightSearchTool:
         "valletta": "MLA",
     }
 
-    def __init__(self, db: Optional[Session] = None, api_key: str = None, api_secret: str = None):
+    def __init__(self, db: Optional[Session] = None, api_key: str = None, api_secret: str = None, tenant_id: Optional[str] = None):
         """
         Initialize FlightSearchTool.
 
@@ -85,6 +84,7 @@ class FlightSearchTool:
             api_secret: Optional explicit API secret
         """
         self.db = db
+        self.tenant_id = tenant_id
         self._api_key = api_key
         self._api_secret = api_secret
         self.base_url = "https://test.api.amadeus.com"  # Use test environment by default
@@ -92,25 +92,32 @@ class FlightSearchTool:
         self._token_expires_at = None
 
     def _get_api_credentials(self) -> tuple:
-        """Get API key and secret from provided values, database, or environment."""
+        """Get API key and secret from explicit values or typed AmadeusIntegration."""
         api_key = self._api_key
         api_secret = self._api_secret
 
-        if not api_key and self.db:
+        if not api_key and self.db and self.tenant_id:
             try:
-                from models import ApiKey
-                db_key = self.db.query(ApiKey).filter(
-                    ApiKey.service == "amadeus",
-                    ApiKey.is_active == True
+                from hub.security import TokenEncryption
+                from models import AmadeusIntegration
+                from services.encryption_key_service import get_amadeus_encryption_key
+
+                integration = self.db.query(AmadeusIntegration).filter(
+                    AmadeusIntegration.type == "amadeus",
+                    AmadeusIntegration.tenant_id == self.tenant_id,
+                    AmadeusIntegration.is_active == True,  # noqa: E712
                 ).first()
-                if db_key:
-                    # The API key field might contain both key and secret separated by ":"
-                    if ":" in db_key.api_key:
-                        api_key, api_secret = db_key.api_key.split(":", 1)
-                    else:
-                        api_key = db_key.api_key
+                if integration:
+                    encryption_key = get_amadeus_encryption_key(self.db)
+                    if encryption_key:
+                        api_key = integration.api_key
+                        encryptor = TokenEncryption(encryption_key.encode())
+                        api_secret = encryptor.decrypt(
+                            integration.api_secret_encrypted,
+                            f"amadeus_{integration.id}",
+                        )
             except Exception as e:
-                logger.warning(f"Failed to load API key from database: {e}")
+                logger.warning(f"Failed to load Amadeus integration credentials: {e}")
 
         return api_key, api_secret
 

@@ -16,7 +16,7 @@ const OPTIONS: Option[] = [
   {
     id: 'cloud',
     label: 'Cloud / API',
-    description: 'Use a hosted provider. You bring an API key — Tsushin calls the vendor directly.',
+    description: 'Use a hosted provider through a tenant-scoped provider connection.',
     Icon: CloudIcon,
   },
   {

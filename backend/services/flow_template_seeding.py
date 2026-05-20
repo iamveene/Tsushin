@@ -15,8 +15,7 @@ Design notes:
     `on_failure=skip` by breaking the execution loop — the downstream
     notification step never fires. See architect blueprint for details.
   * Credentials (Gmail, Calendar, etc.) are NEVER embedded in config_json —
-    skill handlers resolve them at runtime via api_key_service using
-    tenant_id context.
+    skill handlers resolve tenant-scoped typed integrations at runtime.
 """
 from __future__ import annotations
 

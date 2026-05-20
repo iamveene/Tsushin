@@ -8,7 +8,6 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 import google.generativeai as genai
 import httpx  # Phase 5.2: Ollama support
-from services.api_key_service import get_api_key
 from constants.llm_models import DEEPSEEK_DEFAULT_BASE_URL
 
 if TYPE_CHECKING:
@@ -35,11 +34,11 @@ class AIClient:
         Args:
             provider: AI provider ('anthropic', 'openai', 'gemini', 'ollama', 'openrouter', 'groq', 'grok', 'deepseek', 'vertex_ai')
             model_name: Model identifier
-            db: Database session for loading API keys (optional, falls back to env vars)
+            db: Database session for loading ProviderInstance credentials
             token_tracker: TokenTracker instance for usage tracking (Phase 7.2)
             temperature: Model temperature (0.0-1.0), defaults to 0.7
             max_tokens: Maximum response tokens, defaults to 2048
-            tenant_id: Tenant ID for loading tenant-specific API keys
+            tenant_id: Tenant ID for loading tenant-scoped ProviderInstances
             provider_instance_id: Optional provider instance ID for per-instance API key/URL resolution
         """
         self.provider = provider.lower()
@@ -61,8 +60,7 @@ class AIClient:
         # BUG-582 SAFETY NET: if the caller didn't pass a provider_instance_id
         # (e.g. an agent row where the FK was silently dropped by an older
         # wizard schema), fall back to the tenant's default instance for the
-        # requested vendor. This protects Vertex/Bedrock-style providers whose
-        # creds are multi-field and can't live in the flat `api_key` fallback.
+        # requested vendor. This protects multi-field providers such as Vertex AI.
         if provider_instance_id is None and db is not None and tenant_id is not None:
             try:
                 from services.provider_instance_service import ProviderInstanceService
@@ -122,13 +120,11 @@ class AIClient:
                     # accepts both shapes and both field-name conventions
                     # (sa_email vs service_account_email, region vs location).
                     from utils.vertex_config import normalise_vertex_config, VERTEX_CONFIG_ERROR
-                    raw_api_key = api_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
+                    raw_api_key = api_key or ""
                     vertex_project_id, vertex_region, vertex_sa_email, vertex_private_key = (
                         normalise_vertex_config(raw_api_key, instance.extra_config)
                     )
-                    vertex_project_id = vertex_project_id or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
-                    vertex_region = vertex_region or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
-                    vertex_sa_email = vertex_sa_email or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
+                    vertex_region = vertex_region or "us-east5"
 
                     if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                         raise ValueError(VERTEX_CONFIG_ERROR)
@@ -199,26 +195,16 @@ class AIClient:
         api_key = None
         if _explicit_api_key:
             api_key = _explicit_api_key
-        elif db and provider not in ('ollama', 'vertex_ai'):
-            api_key = get_api_key(self.provider, db, tenant_id=tenant_id)
-
-        # Vertex AI uses its own credential loading (service account, not simple API key)
-        # but may store the private key in the api_key table
-        if db and provider == 'vertex_ai':
-            api_key = get_api_key('vertex_ai', db, tenant_id=tenant_id)  # Optional — private key from DB
+        elif db and tenant_id and provider not in ('ollama', 'vertex_ai'):
+            from services.provider_instance_service import ProviderInstanceService
+            api_key = ProviderInstanceService.resolve_default_api_key(self.provider, tenant_id, db)
 
         # Validate API key for cloud providers (skip Ollama and Vertex AI which handle their own auth)
         if provider not in ('ollama', 'vertex_ai') and not api_key:
-            # Fallback: try the default provider instance for this vendor
-            if db and tenant_id:
-                from services.provider_instance_service import ProviderInstanceService
-                default_instance = ProviderInstanceService.get_default_instance(self.provider, tenant_id, db)
-                if default_instance:
-                    api_key = ProviderInstanceService.resolve_api_key(default_instance, db)
             if not api_key:
                 raise ValueError(
                     f"No API key found for provider: {provider}. "
-                    f"Configure via Hub → API Keys or set environment variable."
+                    "Configure a Provider Instance in Hub → AI Providers."
                 )
 
         # Initialize async clients (Phase 6.11.1)
@@ -287,11 +273,7 @@ class AIClient:
                 normalise_vertex_config(api_key, None)
             )
 
-            if db:
-                vertex_private_key = vertex_private_key or get_api_key('vertex_ai', db, tenant_id=tenant_id) or ""
-                vertex_project_id = vertex_project_id or get_api_key('vertex_ai_project_id', db, tenant_id=tenant_id) or ""
-                vertex_region = vertex_region or get_api_key('vertex_ai_region', db, tenant_id=tenant_id) or "us-east5"
-                vertex_sa_email = vertex_sa_email or get_api_key('vertex_ai_sa_email', db, tenant_id=tenant_id) or ""
+            vertex_region = vertex_region or "us-east5"
 
             if not vertex_project_id or not vertex_sa_email or not vertex_private_key:
                 raise ValueError(VERTEX_CONFIG_ERROR)

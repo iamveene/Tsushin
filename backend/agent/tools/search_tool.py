@@ -8,7 +8,7 @@ import requests
 import logging
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
-from services.api_key_service import get_api_key
+from services.search_provider_integration_service import resolve_search_provider_api_key
 
 
 class SearchTool:
@@ -24,15 +24,14 @@ class SearchTool:
         Initialize Search Tool
 
         Args:
-            api_key: Brave Search API key (optional, overrides database/env)
-            db: Database session for loading API key (Phase 4.6)
-            tenant_id: Optional tenant scope for tenant-specific API key lookup
+            api_key: Brave Search API key (explicit test override)
+            db: Database session for loading typed Brave credentials
+            tenant_id: Optional tenant scope
         """
-        # Priority: explicit api_key > database (env var fallback removed)
         if api_key:
             self.api_key = api_key
         elif db:
-            self.api_key = get_api_key('brave_search', db, tenant_id=tenant_id)
+            self.api_key = resolve_search_provider_api_key("brave", tenant_id, db)
         else:
             self.api_key = None
 

@@ -22,7 +22,7 @@ from .search_provider import (
     SearchResult,
     SearchProviderStatus,
 )
-from services.api_key_service import get_api_key
+from services.search_provider_integration_service import resolve_search_provider_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class TavilySearchProvider(SearchProvider):
     """Tavily Search API provider — AI-optimized web search with a concise
     answer string alongside the ranked result list.
 
-    Configured via Hub > Tool APIs > Tavily (api_key service = 'tavily')."""
+    Configured via Hub > Tool APIs > Tavily."""
 
     BASE_URL = "https://api.tavily.com/search"
 
@@ -42,10 +42,10 @@ class TavilySearchProvider(SearchProvider):
 
     def _load_api_key(self) -> None:
         if self.db:
-            self._api_key = get_api_key("tavily", self.db, tenant_id=self.tenant_id)
+            self._api_key = resolve_search_provider_api_key("tavily", self.tenant_id, self.db)
             if self._api_key:
                 self.logger.info(
-                    f"✓ Loaded Tavily API key from database (tenant: {self.tenant_id or 'system'})"
+                    f"✓ Loaded Tavily API key from SearchProviderIntegration (tenant: {self.tenant_id})"
                 )
         if not self._api_key:
             self.logger.warning(
