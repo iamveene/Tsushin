@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated TTS provider status checks to resolve credentials with tenant context so hosted Gemini/OpenAI audio providers report the same typed configuration state as the Hub catalog.
 - Updated web-search provider catalogs and skill-provider assignment lists to resolve tenant-scoped `SearchProviderIntegration` rows while keeping catalog metadata reads out of credential-loading paths.
 - Restored a typed `/api/ollama/health` response for the Hub's optional Ollama widget so public browser QA does not record a 404 when Ollama is unavailable.
+- Fixed the case-memory vector bridge runner so Playground/trigger indexing can call the async bridge from an already-running request loop without leaking an unawaited coroutine warning.
 - Updated regression coverage for migration behavior, Google Flights typed credentials, AI client explicit credentials, TTS status tenant resolution, and audio transcription Provider Instance resolution.
 
 ### Changed — Repository automation activation clarity (2026-05-19)

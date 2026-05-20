@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import warnings
 from types import SimpleNamespace
 
 import pytest
@@ -201,6 +202,28 @@ def test_indexer_creates_case_memory_row(db_session, monkeypatch):
 
     rows = db_session.query(CaseMemory).all()
     assert len(rows) == 1
+
+
+def test_sync_coroutine_runner_inside_event_loop_does_not_leak_warning():
+    from services import case_memory_service as cms
+
+    async def fake_bridge_write():
+        return ["problem"]
+
+    async def exercise_inside_running_loop():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            result = cms._run_coroutine_from_sync(fake_bridge_write)
+        return result, caught
+
+    result, caught = asyncio.run(exercise_inside_running_loop())
+
+    assert result == ["problem"]
+    assert not [
+        warning
+        for warning in caught
+        if "was never awaited" in str(warning.message)
+    ]
 
 
 def test_indexer_idempotent(db_session, monkeypatch):
