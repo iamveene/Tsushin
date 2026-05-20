@@ -7,7 +7,6 @@ SerpAPI provides access to Google Search results through a simple API.
 - Documentation: https://serpapi.com/search-api
 """
 
-import os
 import time
 import logging
 from typing import Dict, List, Optional, Any
@@ -21,7 +20,7 @@ from .search_provider import (
     SearchResult,
     SearchProviderStatus
 )
-from services.api_key_service import get_api_key
+from services.search_provider_integration_service import resolve_search_provider_api_key
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ class SerpApiSearchProvider(SearchProvider):
     Google Search via SerpAPI provider.
 
     High-quality search results from Google Search.
-    Configured via Studio → API Keys → serpapi.
+    Configured via Hub → Tool APIs → Google Search.
 
     API Documentation: https://serpapi.com/search-api
     """
@@ -53,42 +52,12 @@ class SerpApiSearchProvider(SearchProvider):
         self._load_api_key()
 
     def _load_api_key(self):
-        """Load API key from database only (configured via Hub → API Keys)."""
+        """Load API key from the typed SearchProviderIntegration row."""
         if self.db:
-            self._api_key = get_api_key('google', self.db, tenant_id=self.tenant_id)
-
-            # Fallback: Try GoogleFlightsIntegration table (encrypted key, legacy)
-            if not self._api_key:
-                try:
-                    from models import GoogleFlightsIntegration
-                    from hub.security import TokenEncryption
-                    from services.encryption_key_service import get_api_key_encryption_key
-
-                    gf_query = self.db.query(GoogleFlightsIntegration).filter(
-                        GoogleFlightsIntegration.is_active == True
-                    )
-                    if self.tenant_id:
-                        gf_query = gf_query.filter(GoogleFlightsIntegration.tenant_id == self.tenant_id)
-                    else:
-                        gf_query = gf_query.filter(GoogleFlightsIntegration.tenant_id == None)
-                    gf_integration = gf_query.first()
-
-                    if gf_integration:
-                        # CRIT-004 fix: Use dedicated API key encryption key (not JWT_SECRET_KEY)
-                        encryption_key = get_api_key_encryption_key(self.db)
-                        if encryption_key:
-                            encryptor = TokenEncryption(encryption_key.encode())
-                            # Use consistent identifier with ApiKey table
-                            identifier = f"apikey_google_flights_{gf_integration.tenant_id or 'system'}"
-                            self._api_key = encryptor.decrypt(gf_integration.api_key_encrypted, identifier)
-                            self.logger.info("✓ Loaded SerpAPI key from GoogleFlightsIntegration (decrypted)")
-                        else:
-                            self.logger.warning("Could not get encryption key for GoogleFlightsIntegration decryption")
-                except Exception as e:
-                    self.logger.debug(f"Could not load from GoogleFlightsIntegration: {e}")
+            self._api_key = resolve_search_provider_api_key("google", self.tenant_id, self.db)
 
         if not self._api_key:
-            self.logger.warning(f"SerpAPI API key not configured (tenant: {self.tenant_id}). Configure via Hub → API Keys.")
+            self.logger.warning(f"SerpAPI API key not configured (tenant: {self.tenant_id}). Configure via Hub → Tool APIs.")
 
     def get_provider_name(self) -> str:
         return "google"

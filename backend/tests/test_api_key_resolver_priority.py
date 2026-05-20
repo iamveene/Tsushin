@@ -1,22 +1,18 @@
 """
-Resolver-priority regression for `services.api_key_service.get_api_key`.
+Regression coverage for retiring legacy ``api_key`` runtime credentials.
 
-Background — 2026-05-07 incident: an orphaned `ApiKey` row left over from a
-QA-070 wave A1 wizard run (`sk-test-qa070-tts-fake-12345`) silently shadowed
-the user's visible OpenAI ProviderInstance for weeks. The TTS-cloud branch of
-the Provider Wizard wrote that key into the legacy `api_keys` table, the Hub
-UI hid the row once a same-vendor ProviderInstance existed, and `get_api_key`
-checked the legacy table BEFORE ProviderInstance — so every audio_transcript
-call resolved to the fake key and 401'd at OpenAI.
-
-These tests pin the resolver to the new contract: ProviderInstance for the
-tenant wins, legacy ApiKey rows only fill in when no instance exists.
+The only supported use of the legacy table is migration/audit. Runtime callers
+must resolve credentials through typed models: ProviderInstance, TTSInstance,
+SearchProviderIntegration, GoogleFlightsIntegration, AmadeusIntegration, or
+SearxngInstance.
 """
 
 import os
 import sys
 import types
 
+import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
@@ -24,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Stub heavy optional deps before models import (mirrors test_provider_instance_hardening).
+# Stub heavy optional deps before models import.
 docker_stub = types.ModuleType("docker")
 docker_stub.errors = types.SimpleNamespace(NotFound=Exception, DockerException=Exception)
 docker_stub.DockerClient = object
@@ -55,9 +51,23 @@ def _compile_jsonb_sqlite(_type, _compiler, **_kw):
 
 
 import models_rbac  # noqa: F401  # registers RBAC tables on Base before create_all
-from cryptography.fernet import Fernet
-from models import ApiKey, Base, Config, ProviderInstance
-from services import api_key_service
+from models import (  # noqa: E402
+    ApiKey,
+    Base,
+    Config,
+    GoogleFlightsIntegration,
+    ProviderInstance,
+    SearchProviderIntegration,
+    SearxngInstance,
+    TTSInstance,
+)
+from models_rbac import Tenant  # noqa: E402
+from services import api_key_service  # noqa: E402
+from services.google_flights_integration_service import resolve_google_flights_api_key  # noqa: E402
+from services.legacy_api_key_migration_service import migrate_active_legacy_api_keys  # noqa: E402
+from services.provider_instance_service import ProviderInstanceService  # noqa: E402
+from services.search_provider_integration_service import resolve_search_provider_api_key  # noqa: E402
+from services.tts_instance_service import TTSInstanceService  # noqa: E402
 
 
 TENANT_A = "tenant-alpha"
@@ -69,25 +79,31 @@ def _make_session():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     db = Session()
-    # The encryption_key_service auto-generates a Fernet key on first encrypt
-    # if Config is empty, but cannot persist it to a fresh sqlite DB without
-    # a Config row. Without a stable persisted key, the next call generates
-    # a different key and decryption fails. Seed one here so encrypt/decrypt
-    # use the same key throughout the test.
     fernet_key = Fernet.generate_key().decode()
     db.add(Config(messages_db_path="", api_key_encryption_key=fernet_key))
     db.commit()
     return db
 
 
-def _seed_legacy_api_key(db, *, tenant_id, service, plaintext):
-    """Insert a legacy ApiKey row using the encryption helpers under test."""
+def _seed_tenant(db, tenant_id: str, active: bool = True):
+    tenant = Tenant(
+        id=tenant_id,
+        name=tenant_id,
+        slug=tenant_id,
+        is_active=active,
+    )
+    db.add(tenant)
+    db.commit()
+    return tenant
+
+
+def _seed_legacy_api_key(db, *, tenant_id, service, plaintext, active=True):
     encrypted = api_key_service._encrypt_api_key(plaintext, service, tenant_id, db)
     row = ApiKey(
         service=service,
         api_key=None,
         api_key_encrypted=encrypted,
-        is_active=True,
+        is_active=active,
         tenant_id=tenant_id,
     )
     db.add(row)
@@ -96,251 +112,121 @@ def _seed_legacy_api_key(db, *, tenant_id, service, plaintext):
     return row
 
 
-def _seed_provider_instance(
-    db,
-    *,
-    tenant_id,
-    vendor,
-    plaintext,
-    instance_name="op1",
-    is_default=True,
-    is_active=True,
-):
-    from services.provider_instance_service import ProviderInstanceService
-
-    encrypted = ProviderInstanceService._encrypt_key(plaintext, tenant_id, db)
-    instance = ProviderInstance(
-        tenant_id=tenant_id,
-        vendor=vendor,
-        instance_name=instance_name,
-        api_key_encrypted=encrypted,
-        is_default=is_default,
-        is_active=is_active,
-    )
-    db.add(instance)
-    db.commit()
-    db.refresh(instance)
-    return instance
-
-
-def test_provider_instance_default_beats_legacy_api_key_row():
-    """The exact 2026-05-07 incident: stale legacy row + valid ProviderInstance.
-
-    Before the fix, get_api_key returned the legacy row first. The fix flips
-    the priority so the visible ProviderInstance wins.
-    """
+def test_legacy_runtime_resolver_is_retired():
     db = _make_session()
     try:
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="openai",
-            plaintext="sk-test-qa070-tts-fake-12345",
-        )
-        _seed_provider_instance(
-            db,
-            tenant_id=TENANT_A,
-            vendor="openai",
-            plaintext="sk-real-op1-key",
-        )
-
-        resolved = api_key_service.get_api_key("openai", db, tenant_id=TENANT_A)
-        assert resolved == "sk-real-op1-key", (
-            "ProviderInstance default must win over legacy ApiKey row for "
-            "the same vendor; otherwise an orphaned legacy row silently "
-            "shadows the visible config (incident 2026-05-07)."
-        )
-    finally:
-        db.close()
-
-
-def test_legacy_api_key_used_when_no_provider_instance_exists():
-    """Without a ProviderInstance, the legacy ApiKey row is the only candidate."""
-    db = _make_session()
-    try:
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="elevenlabs",
-            plaintext="sk-elevenlabs-real",
-        )
-
-        resolved = api_key_service.get_api_key("elevenlabs", db, tenant_id=TENANT_A)
-        assert resolved == "sk-elevenlabs-real"
-    finally:
-        db.close()
-
-
-def test_inactive_provider_instance_falls_through_to_legacy_api_key():
-    """An inactive ProviderInstance must NOT block the legacy fallback —
-    otherwise disabling an instance would also silently disable the tenant.
-    """
-    db = _make_session()
-    try:
-        _seed_provider_instance(
-            db,
-            tenant_id=TENANT_A,
-            vendor="openai",
-            plaintext="sk-disabled-instance",
-            is_active=False,
-        )
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="openai",
-            plaintext="sk-legacy-fallback",
-        )
-
-        resolved = api_key_service.get_api_key("openai", db, tenant_id=TENANT_A)
-        assert resolved == "sk-legacy-fallback"
-    finally:
-        db.close()
-
-
-def test_non_default_single_instance_still_wins_over_legacy():
-    """If a tenant has exactly one active instance for a vendor (even without
-    is_default=True), the resolver still prefers it over a legacy ApiKey row.
-    Matches the existing 'only candidate' UX shortcut.
-    """
-    db = _make_session()
-    try:
-        _seed_provider_instance(
-            db,
-            tenant_id=TENANT_A,
-            vendor="openai",
-            plaintext="sk-single-non-default",
-            is_default=False,
-        )
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="openai",
-            plaintext="sk-legacy-shadowed",
-        )
-
-        resolved = api_key_service.get_api_key("openai", db, tenant_id=TENANT_A)
-        assert resolved == "sk-single-non-default"
-    finally:
-        db.close()
-
-
-def test_resolver_is_tenant_isolated():
-    """A ProviderInstance in tenant B must not satisfy a tenant-A lookup,
-    and a legacy row scoped to tenant A must not leak to tenant B.
-    """
-    db = _make_session()
-    try:
-        _seed_provider_instance(
-            db,
-            tenant_id=TENANT_B,
-            vendor="openai",
-            plaintext="sk-tenant-b-instance",
-        )
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="openai",
-            plaintext="sk-tenant-a-legacy",
-        )
-
-        # Tenant A sees only its legacy row.
-        assert (
+        with pytest.raises(RuntimeError, match="Legacy api_key runtime resolver is retired"):
             api_key_service.get_api_key("openai", db, tenant_id=TENANT_A)
-            == "sk-tenant-a-legacy"
-        )
-        # Tenant B sees only its instance.
+        assert api_key_service.has_api_key("openai", db, tenant_id=TENANT_A) is False
+        with pytest.raises(RuntimeError, match="Legacy api_key writes are retired"):
+            api_key_service.store_api_key("openai", "sk-test", TENANT_A, db)
+    finally:
+        db.close()
+
+
+def test_migration_backfills_typed_rows_and_disables_legacy_rows():
+    db = _make_session()
+    try:
+        _seed_tenant(db, TENANT_A)
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="openai", plaintext="sk-openai-real")
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="elevenlabs", plaintext="sk-elevenlabs-real")
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="brave_search", plaintext="BSA-brave-real")
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="google_flights", plaintext="serpapi-flights-real")
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="searxng", plaintext="https://search.example.test")
+
+        stats = migrate_active_legacy_api_keys(db)
+
+        assert stats == {
+            "legacy_rows_seen": 5,
+            "legacy_rows_disabled": 5,
+            "typed_rows_touched": 5,
+        }
+        assert db.query(ApiKey).filter(ApiKey.is_active == True).count() == 0  # noqa: E712
+
+        provider = db.query(ProviderInstance).filter_by(tenant_id=TENANT_A, vendor="openai").one()
+        assert ProviderInstanceService.resolve_api_key(provider, db) == "sk-openai-real"
+
+        tts = db.query(TTSInstance).filter_by(tenant_id=TENANT_A, vendor="elevenlabs").one()
+        assert tts.api_key_preview == "sk-e...real"
+        assert TTSInstanceService.resolve_hosted_api_key("elevenlabs", TENANT_A, db) == "sk-elevenlabs-real"
+
+        search = db.query(SearchProviderIntegration).filter_by(tenant_id=TENANT_A, provider_id="brave").one()
+        assert search.api_key_preview == "BSA-...real"
+        assert resolve_search_provider_api_key("brave", TENANT_A, db) == "BSA-brave-real"
+
+        flights = db.query(GoogleFlightsIntegration).filter_by(tenant_id=TENANT_A).one()
+        assert flights.display_name == "Google Flights"
+        assert resolve_google_flights_api_key(TENANT_A, db) == "serpapi-flights-real"
+
+        searxng = db.query(SearxngInstance).filter_by(tenant_id=TENANT_A).one()
+        assert searxng.base_url == "https://search.example.test"
+    finally:
+        db.close()
+
+
+def test_serpapi_maps_to_search_provider_only():
+    db = _make_session()
+    try:
+        _seed_tenant(db, TENANT_A)
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="serpapi", plaintext="serpapi-search-real")
+
+        stats = migrate_active_legacy_api_keys(db)
+
+        assert stats["legacy_rows_disabled"] == 1
+        assert resolve_search_provider_api_key("google", TENANT_A, db) == "serpapi-search-real"
+        assert db.query(GoogleFlightsIntegration).filter_by(tenant_id=TENANT_A).count() == 0
+    finally:
+        db.close()
+
+
+def test_system_wide_rows_expand_to_each_active_tenant():
+    db = _make_session()
+    try:
+        _seed_tenant(db, TENANT_A)
+        _seed_tenant(db, TENANT_B)
+        _seed_tenant(db, "inactive-tenant", active=False)
+        _seed_legacy_api_key(db, tenant_id=None, service="gemini", plaintext="gemini-system-key")
+
+        stats = migrate_active_legacy_api_keys(db)
+
+        assert stats["legacy_rows_seen"] == 1
+        assert stats["legacy_rows_disabled"] == 1
+        assert ProviderInstanceService.resolve_default_api_key("gemini", TENANT_A, db) == "gemini-system-key"
+        assert ProviderInstanceService.resolve_default_api_key("gemini", TENANT_B, db) == "gemini-system-key"
         assert (
-            api_key_service.get_api_key("openai", db, tenant_id=TENANT_B)
-            == "sk-tenant-b-instance"
+            db.query(ProviderInstance)
+            .filter_by(tenant_id="inactive-tenant", vendor="gemini")
+            .count()
+            == 0
         )
     finally:
         db.close()
 
 
-def test_system_wide_legacy_key_fills_in_when_nothing_tenant_scoped():
-    """System-wide ApiKey (tenant_id=NULL) is the last-resort fallback."""
+def test_unknown_active_legacy_service_blocks_migration():
     db = _make_session()
     try:
-        encrypted = api_key_service._encrypt_api_key(
-            "sk-system-wide", "openai", None, db
-        )
-        row = ApiKey(
-            service="openai",
-            api_key=None,
-            api_key_encrypted=encrypted,
-            is_active=True,
-            tenant_id=None,
-        )
-        db.add(row)
-        db.commit()
+        _seed_tenant(db, TENANT_A)
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="mystery", plaintext="secret")
 
-        resolved = api_key_service.get_api_key("openai", db, tenant_id=TENANT_A)
-        assert resolved == "sk-system-wide"
+        with pytest.raises(RuntimeError, match="is not mapped"):
+            migrate_active_legacy_api_keys(db)
+
+        assert db.query(ApiKey).filter(ApiKey.service == "mystery", ApiKey.is_active == True).count() == 1  # noqa: E712
+        assert db.query(ProviderInstance).count() == 0
     finally:
         db.close()
 
 
-def test_provider_id_alias_resolves_brave_search_service_key():
-    """Provider id 'brave' must resolve the Tool APIs service 'brave_search'."""
+def test_incomplete_amadeus_legacy_row_blocks_migration():
     db = _make_session()
     try:
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="brave_search",
-            plaintext="brave-real-api-key-value",
-        )
+        _seed_tenant(db, TENANT_A)
+        _seed_legacy_api_key(db, tenant_id=TENANT_A, service="amadeus", plaintext="client-id-only")
 
-        resolved = api_key_service.get_api_key("brave", db, tenant_id=TENANT_A)
-        assert resolved == "brave-real-api-key-value"
-    finally:
-        db.close()
+        with pytest.raises(RuntimeError, match="client_id:client_secret"):
+            migrate_active_legacy_api_keys(db)
 
-
-def test_google_search_alias_resolves_serpapi_before_google_flights():
-    """Google Search should prefer serpapi while retaining legacy flight-key fallback."""
-    db = _make_session()
-    try:
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="google_flights",
-            plaintext="legacy-google-flights-key",
-        )
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="serpapi",
-            plaintext="primary-serpapi-key",
-        )
-
-        assert api_key_service.get_api_key("google", db, tenant_id=TENANT_A) == "primary-serpapi-key"
-        assert api_key_service.get_api_key("serpapi", db, tenant_id=TENANT_A) == "primary-serpapi-key"
-    finally:
-        db.close()
-
-
-def test_google_flights_alias_prefers_dedicated_key_then_serpapi_fallback():
-    """Google Flights keeps its dedicated-key priority but accepts SerpAPI."""
-    db = _make_session()
-    try:
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="serpapi",
-            plaintext="shared-serpapi-key",
-        )
-        assert api_key_service.get_api_key("google_flights", db, tenant_id=TENANT_A) == "shared-serpapi-key"
-
-        _seed_legacy_api_key(
-            db,
-            tenant_id=TENANT_A,
-            service="google_flights",
-            plaintext="dedicated-google-flights-key",
-        )
-        assert (
-            api_key_service.get_api_key("google_flights", db, tenant_id=TENANT_A)
-            == "dedicated-google-flights-key"
-        )
+        assert db.query(ApiKey).filter(ApiKey.service == "amadeus", ApiKey.is_active == True).count() == 1  # noqa: E712
     finally:
         db.close()

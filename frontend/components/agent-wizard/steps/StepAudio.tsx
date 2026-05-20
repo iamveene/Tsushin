@@ -35,7 +35,7 @@ export default function StepAudio() {
   const audio = state.draft.audio
   const kokoroRunning = ttsInstances.find(t => t.vendor === 'kokoro' && t.is_active)
   const hasOpenAIKey = providerInstances.some(p => p.vendor === 'openai' && p.api_key_configured)
-  const hasElevenLabsKey = providerInstances.some(p => p.vendor === 'elevenlabs' && p.api_key_configured)
+  const hasElevenLabsKey = ttsInstances.some(t => t.vendor === 'elevenlabs' && t.is_active && t.api_key_configured)
   const hasGeminiKey = providerInstances.some(p => p.vendor === 'gemini' && p.api_key_configured)
 
   const wantsTTS = audio ? (audio.capability === 'voice' || audio.capability === 'hybrid') : false
@@ -153,7 +153,7 @@ export default function StepAudio() {
 
       {!providerOK && wantsTTS && (
         <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
-          <div className="mb-2">Selected provider needs an API key. You can switch to Kokoro (free, local) to proceed.</div>
+          <div className="mb-2">Selected provider needs a configured connection. You can switch to Kokoro (free, local) to proceed.</div>
           <button
             type="button"
             onClick={() => patchAudio({ provider: 'kokoro', voice: 'pf_dora' })}

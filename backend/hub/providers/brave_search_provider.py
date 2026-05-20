@@ -7,7 +7,6 @@ Brave Search is a privacy-focused search engine with a powerful API.
 - Paid tier: $0.009 per 1,000 queries
 """
 
-import os
 import time
 import logging
 from typing import Dict, List, Optional, Any
@@ -21,7 +20,7 @@ from .search_provider import (
     SearchResult,
     SearchProviderStatus
 )
-from services.api_key_service import get_api_key
+from services.search_provider_integration_service import resolve_search_provider_api_key
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ class BraveSearchProvider(SearchProvider):
     Brave Search API provider.
 
     Fast, privacy-focused web search with good international support.
-    Configured via Studio → API Keys → brave_search.
+    Configured via Hub → Tool APIs → Brave Search.
 
     API Documentation: https://api.search.brave.com/
     """
@@ -53,14 +52,14 @@ class BraveSearchProvider(SearchProvider):
         self._load_api_key()
 
     def _load_api_key(self):
-        """Load API key from database only (configured via Hub → API Keys)."""
+        """Load API key from the typed SearchProviderIntegration row."""
         if self.db:
-            self._api_key = get_api_key('brave', self.db, tenant_id=self.tenant_id)
+            self._api_key = resolve_search_provider_api_key("brave", self.tenant_id, self.db)
             if self._api_key:
-                self.logger.info(f"✓ Loaded Brave API key from database (tenant: {self.tenant_id or 'system'})")
+                self.logger.info(f"✓ Loaded Brave API key from SearchProviderIntegration (tenant: {self.tenant_id})")
 
         if not self._api_key:
-            self.logger.warning(f"Brave Search API key not configured (tenant: {self.tenant_id}). Configure via Hub → API Keys.")
+            self.logger.warning(f"Brave Search API key not configured (tenant: {self.tenant_id}). Configure via Hub → Tool APIs.")
 
     def get_provider_name(self) -> str:
         return "brave"

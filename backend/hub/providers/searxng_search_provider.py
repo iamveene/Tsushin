@@ -21,7 +21,6 @@ from .search_provider import (
     SearchResult,
     SearchProviderStatus,
 )
-from services.api_key_service import get_api_key
 from utils.ssrf_validator import SSRFValidationError, validate_url
 
 
@@ -44,10 +43,7 @@ class SearXNGSearchProvider(SearchProvider):
     def _load_base_url(self):
         """Load SearXNG base URL from the active SearxngInstance row for this tenant.
 
-        v0.6.0-patch.6: resolver shifted from ApiKey('searxng') (legacy) to
-        per-tenant SearxngInstance rows, which match the Kokoro/Ollama pattern
-        and carry container lifecycle state. The old ApiKey path still exists
-        for audit purposes but is marked inactive by migration 0043.
+        Resolver uses only per-tenant SearxngInstance rows.
         """
         if not self.db or not self.tenant_id:
             self._base_url = None
@@ -61,15 +57,6 @@ class SearXNGSearchProvider(SearchProvider):
                 configured_url = inst.base_url
         except Exception as e:
             self.logger.warning(f"Could not query SearxngInstance: {e}")
-
-        # Legacy-install safety net: if the migration decrypt path couldn't
-        # backfill a URL, fall back once to the old ApiKey so existing setups
-        # keep working until the user re-runs the wizard.
-        if not configured_url:
-            try:
-                configured_url = get_api_key("searxng", self.db, tenant_id=self.tenant_id)
-            except Exception:
-                configured_url = None
 
         if configured_url:
             try:

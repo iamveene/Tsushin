@@ -1268,7 +1268,7 @@ Common base schema source: `backend/agent/skills/base.py:183-227`.
 | `password_vault` | Password Vault | tool | Resolve explicit vault references for agents and flows without exposing raw secret values. v0.7.x ships 1Password service-account support through Hub → Tool APIs and returns redacted metadata plus short-lived secret handles for trusted executors | `password_vault_skill.py` |
 | `custom` (base) | Custom Skill | tool | Adapter for tenant-authored custom skills. `skill_type` becomes `custom:{slug}` at runtime | `custom_skill_adapter.py:25-37` |
 
-Provider-backed skills resolve stored provider ids through `backend/services/provider_aliases.py` before checking credentials or creating runtime providers. This keeps the UI-facing provider names and the Tool APIs credential services aligned: `brave`/`brave_search`, `google`/`serpapi`, and `google_flights`/`serpapi` are accepted consistently by skill execution, Flow credential preflight, and Hub configured-state checks.
+Provider-backed skills normalize UI-facing provider ids through `backend/services/provider_aliases.py` before creating runtime providers. Credentials are resolved only through typed configuration rows: Search providers use `SearchProviderIntegration`, Google Flights uses `GoogleFlightsIntegration`, Amadeus uses `AmadeusIntegration`, SearXNG uses `SearxngInstance`, and AI/image/ASR providers use `ProviderInstance`.
 
 Active skill modes (Source: `backend/agent/skills/base.py:71-78`):
 - `tool` — exposed as an LLM function-call tool; deterministic entry points are separate slash commands such as `/invoke`, `/shell`, `/search`, `/email`, `/flows`, `/scheduler`, `/image`, `/browser`, and `/flights`.
@@ -3257,11 +3257,10 @@ The guided wizard replaces the flat `ProviderSetupWizard` category picker (delet
 | TTS | Local | kokoro |
 | Image | Cloud | openai (pre-tagged "GPT Image 2"), gemini (pre-tagged "Gemini API Imagen 4") |
 
-**Backend endpoints used (no new endpoints introduced):**
+**Backend endpoints used:**
 
 - `POST /api/provider-instances` — LLM cloud, LLM local (Ollama), Image (OpenAI/Gemini).
-- `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container).
-- `POST /api/api-keys` — TTS ElevenLabs (legacy api_keys surface).
+- `POST /api/tts-instances` — TTS Kokoro (auto-provisions its own container) and hosted ElevenLabs credentials.
 - `POST /api/settings/ollama/provision` — Ollama container lifecycle after `ProviderInstance` create.
 - `api.pullOllamaModel(id, model)` — each selected starter model.
 - `api.testProviderConnectionRaw({...})` — unsaved connection test on Step 5.
@@ -3303,15 +3302,18 @@ The legacy Ollama panel-level **Enable Ollama** `ToggleSwitch` at the card heade
 
 **v0.7.x follow-up — full Ollama/Kokoro parity.** The Ollama panel also no longer renders when the tenant has no `ollama` provider instance, matching Kokoro (`kokoroInstances.length > 0`) and SearXNG (`searxngInstances.length > 0`). Mode (host vs. auto-provision) is derived from `instance.is_auto_provisioned` rather than a live radio on the card — it's a creation-time choice made in the wizard. The separate **Deprovision** / **Test Connection** / **Refresh Models** / **Manage Instance** buttons that used to live at the bottom of the Ollama card were removed; `ManagedContainerPanel.onTest` + `onDelete` + the inline host-mode action strip cover those affordances. A new `ollamaConfirmDelete` modal (mirroring the Kokoro modal) handles the Delete action, including the optional "remove container volume" checkbox for pulled-model cleanup.
 
-### 19.10 Service API Keys disclosure (v0.7.x)
+### 19.10 Legacy Service API Keys retirement (v0.7.x)
 
-The **Hub → AI Providers** tab no longer renders the legacy Service API Keys block as an always-visible grid. Instead it's a collapsed `<details>` disclosure that:
+The legacy `api_key` table is retained only as a migration/audit source. Backend startup runs `migrate_active_legacy_api_keys()` to move active rows into typed, tenant-scoped configuration models and then soft-disable the original rows. Unknown, incomplete, or undecryptable active rows block startup.
 
-- Only renders when `visibleAiFallbackProviders.length > 0` (i.e., at least one vendor has a fallback api_key configured).
-- Filters out any vendor that already has a `ProviderInstance` row (`vendorsWithInstances` set at `hub/page.tsx`). This removes the duplicate-Gemini display by construction: a vendor with an instance is configured via the instance grid; a vendor with only a legacy `api_keys` row falls into this disclosure.
-- Stays collapsed by default so the Hub is clean for tenants who only use instances.
+Runtime credential resolution never reads `api_key` rows. The `/api/api-keys*` routes return **410 Gone** and do not create, update, or expose Service API Key records. Operators must use Provider Instances or typed Hub integrations:
 
-The inline "Fallback — instance key takes priority" amber label has been removed — with the new filtering, the fallback card and the instance card can never appear on the same page simultaneously.
+- AI, image, OpenAI ASR, and OpenAI/Gemini TTS: `ProviderInstance`.
+- ElevenLabs: hosted `TTSInstance` with encrypted credential fields.
+- Brave, Tavily, and SerpAPI Google Search: `SearchProviderIntegration`.
+- Google Flights: `GoogleFlightsIntegration`.
+- Amadeus: `AmadeusIntegration` (legacy rows must decrypt to `client_id:client_secret`; incomplete active rows block startup instead of being guessed).
+- SearXNG: `SearxngInstance`.
 
 ### 19.11 LLM Providers Catalog endpoint (v0.7.0)
 
@@ -3373,8 +3375,9 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
 
 **Sources:** `backend/hub/providers/brave_search_provider.py`, `backend/hub/providers/serpapi_search_provider.py`, `backend/hub/providers/searxng_search_provider.py`, `backend/hub/providers/tavily_search_provider.py`, `backend/hub/providers/google_flights_provider.py`, `backend/hub/providers/search_registry.py`, `backend/hub/providers/flight_search_provider.py`
 
-- **Brave Search**: API key based web search provider (primary supported search provider in v0.6.0). The runtime accepts both the provider id `brave` and the Tool APIs credential service `brave_search`.
-- **SerpAPI**: used for both generic web search and Google Flights. The Tool APIs wizard stores this as the tenant's `serpapi` key; Google web search and Google Flights both resolve through the shared provider alias layer. Google Flights treats active `serpapi` or `google_flights` API keys as valid provider credentials, syncs them into the Google Flights Hub integration as needed, and still falls back to env vars `SERPAPI_KEY` or `GOOGLE_FLIGHTS_API_KEY`.
+- **Brave Search**: hosted web search provider. Credentials are stored per tenant in `SearchProviderIntegration` (`provider_id='brave'`).
+- **SerpAPI**: hosted Google web search provider. Credentials are stored per tenant in `SearchProviderIntegration` (`provider_id='google'`).
+- **Google Flights**: travel provider backed by a tenant-scoped `GoogleFlightsIntegration` credential. It does not reuse web-search credentials at runtime.
 - **SearXNG (self-hosted, auto-provisioned)** — since v0.6.0-patch.6. Per-tenant
   `SearxngInstance` rows spawn a dedicated container in port range **6500–6599**
   via `services/searxng_container_manager.py`, mirroring the Kokoro TTS /
@@ -3404,9 +3407,8 @@ Model: `AmadeusIntegration` (`models.py:1881`). Holds Amadeus API key+secret (en
   `https://api.tavily.com/search`. Request posts JSON `{api_key, query,
   search_depth: 'basic', max_results, include_answer: true}`; response carries
   both a ranked result list and a pre-synthesized `answer` string surfaced via
-  `SearchResponse.metadata['answer']`. API key is stored encrypted per-tenant
-  (`service='tavily'`) and loaded through `get_api_key('tavily', ...)` like
-  every other API-key provider.
+  `SearchResponse.metadata['answer']`. Credentials are stored encrypted per tenant
+  in `SearchProviderIntegration` (`provider_id='tavily'`).
 - All search providers register with `SearchRegistry` and are configured
   through the Hub page via the generic **Add Integration** wizard
   (`frontend/components/integrations/AddIntegrationWizard.tsx`). Since v0.7.x
@@ -4502,7 +4504,7 @@ Tenant-scoped routes backing the frontend (require UI JWT). All routers are incl
 | Prefix | Route file | Purpose |
 |---|---|---|
 | `/api/agents*` | `routes_agents.py` | Tenant-scoped agent CRUD, memory, knowledge, skills |
-| `/api/api-keys*` | `routes_api_keys.py` | AI-provider API-key management |
+| `/api/api-keys*` | `routes_api_keys.py` | Retired legacy Service API Keys shim; returns 410 Gone |
 | `/api/audit-logs*` | `routes_audit.py` | Audit event browse + export |
 | `/api/cache*` | `routes_cache.py` | Contact/memory cache admin |
 | `/api/channel-health*` | `routes_channel_health.py` | Channel up/down monitoring |

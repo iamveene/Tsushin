@@ -22,7 +22,7 @@ from PIL import Image
 import io
 
 from agent.skills.base import BaseSkill, InboundMessage, SkillResult
-from services.api_key_service import get_api_key
+from services.provider_instance_service import ProviderInstanceService
 
 if TYPE_CHECKING:
     from analytics.token_tracker import TokenTracker
@@ -776,25 +776,27 @@ class ImageSkill(BaseSkill):
             return {"success": False, "error": str(e)}
 
     async def _get_api_key(self) -> Optional[str]:
-        """Get Gemini API key from database."""
+        """Get Gemini API key from the tenant ProviderInstance."""
         try:
             if self._db_session:
                 tenant_id = None
                 if isinstance(getattr(self, '_config', None), dict):
                     tenant_id = self._config.get('tenant_id')
-                return get_api_key("gemini", self._db_session, tenant_id=tenant_id)
+                if tenant_id:
+                    return ProviderInstanceService.resolve_default_api_key("gemini", tenant_id, self._db_session)
             return None
         except Exception:
             return None
 
     async def _get_openai_api_key(self) -> Optional[str]:
-        """Get OpenAI API key from database."""
+        """Get OpenAI API key from the tenant ProviderInstance."""
         try:
             if self._db_session:
                 tenant_id = None
                 if isinstance(getattr(self, '_config', None), dict):
                     tenant_id = self._config.get('tenant_id')
-                return get_api_key("openai", self._db_session, tenant_id=tenant_id)
+                if tenant_id:
+                    return ProviderInstanceService.resolve_default_api_key("openai", tenant_id, self._db_session)
             return None
         except Exception:
             return None

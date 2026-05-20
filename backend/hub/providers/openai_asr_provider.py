@@ -18,7 +18,7 @@ from openai import (
 )
 
 from .asr_provider import ASRProvider, ASRRequest, ASRResponse
-from services.api_key_service import get_api_key
+from services.provider_instance_service import ProviderInstanceService
 
 
 # Bursts of audios (3-6 voice notes back-to-back) fan out to several
@@ -46,7 +46,7 @@ class OpenAIASRProvider(ASRProvider):
     async def transcribe(self, request: ASRRequest) -> ASRResponse:
         api_key = self._api_key
         if not api_key and self.db is not None:
-            api_key = get_api_key("openai", self.db, tenant_id=self.tenant_id)
+            api_key = ProviderInstanceService.resolve_default_api_key("openai", self.tenant_id, self.db)
         if not api_key:
             return ASRResponse(success=False, provider=self.provider_name, error="missing_api_key")
 

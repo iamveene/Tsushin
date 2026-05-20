@@ -351,14 +351,7 @@ async def _background_test_instance(instance_id: int, user_id: int) -> None:
             return
 
         has_instance_key = bool(_decrypt_provider_key(instance, db))
-        has_tenant_key = False
-        if not has_instance_key:
-            try:
-                from services.api_key_service import get_api_key
-                has_tenant_key = bool(get_api_key(instance.vendor, db, tenant_id=instance.tenant_id))
-            except Exception:
-                pass
-        if not has_instance_key and not has_tenant_key and instance.vendor != "ollama":
+        if not has_instance_key and instance.vendor != "ollama":
             return
 
         from api.routes_integrations import PROVIDER_TEST_MODELS
@@ -1286,15 +1279,11 @@ async def test_provider_connection_raw(
         )
 
     api_key = data.api_key
-    if not api_key:
-        # Fall back to tenant-level API key for this vendor
-        from services.api_key_service import get_api_key
-        api_key = get_api_key(vendor, db, tenant_id=ctx.tenant_id)
 
     if not api_key and vendor not in ("ollama",):
         return TestConnectionResponse(
             success=False,
-            message="No API key provided and no tenant-level key configured for this vendor",
+            message="No API key provided",
         )
 
     # Validate base_url against SSRF if provided
@@ -1443,12 +1432,8 @@ async def test_provider_connection(
     # Ensure credentials exist before testing. Actual invocation still goes
     # through provider_instance_id so saved-instance tests match runtime.
     has_instance_key = bool(_decrypt_provider_key(instance, db))
-    has_tenant_key = False
-    if not has_instance_key:
-        from services.api_key_service import get_api_key
-        has_tenant_key = bool(get_api_key(instance.vendor, db, tenant_id=instance.tenant_id))
 
-    if not has_instance_key and not has_tenant_key and instance.vendor not in ("ollama",):
+    if not has_instance_key and instance.vendor not in ("ollama",):
         # Ollama may not need an API key
         audit = ProviderConnectionAudit(
             tenant_id=instance.tenant_id,
@@ -1457,13 +1442,13 @@ async def test_provider_connection(
             action="test_connection",
             base_url=instance.base_url,
             success=False,
-            error_message="No API key configured for this instance or vendor",
+            error_message="No API key configured for this instance",
         )
         db.add(audit)
         db.commit()
         return TestConnectionResponse(
             success=False,
-            message="No API key configured for this instance or vendor",
+            message="No API key configured for this instance",
         )
 
     # Determine a test model: prefer explicit request > saved models > hardcoded fallback
@@ -1661,15 +1646,12 @@ async def discover_models(
         except SSRFValidationError as e:
             raise HTTPException(status_code=400, detail=f"SSRF blocked: {e}")
 
-        # Resolve API key (instance-specific first, then tenant-level)
+        # Resolve API key from this instance only.
         api_key = _decrypt_provider_key(instance, db)
-        if not api_key:
-            from services.api_key_service import get_api_key
-            api_key = get_api_key("gemini", db, tenant_id=instance.tenant_id)
         if not api_key:
             raise HTTPException(
                 status_code=400,
-                detail="No Gemini API key configured for this instance or tenant"
+                detail="No Gemini API key configured for this instance"
             )
 
         headers = {"x-goog-api-key": api_key}
@@ -1725,9 +1707,6 @@ async def discover_models(
 
             headers = {}
             api_key = _decrypt_provider_key(instance, db)
-            if not api_key:
-                from services.api_key_service import get_api_key
-                api_key = get_api_key(instance.vendor, db, tenant_id=instance.tenant_id)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
 

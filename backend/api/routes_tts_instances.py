@@ -52,10 +52,11 @@ def get_db():
 # ============================================================================
 
 class TTSInstanceCreate(BaseModel):
-    vendor: str  # "kokoro" (only supported for v0.6.0-patch.5)
+    vendor: str  # "kokoro" (local) or hosted providers such as "elevenlabs"
     instance_name: str
     description: Optional[str] = None
     base_url: Optional[str] = None
+    api_key: Optional[str] = None
     is_default: bool = False
     default_voice: Optional[str] = None
     default_speed: Optional[float] = None
@@ -70,6 +71,7 @@ class TTSInstanceUpdate(BaseModel):
     instance_name: Optional[str] = None
     description: Optional[str] = None
     base_url: Optional[str] = None
+    api_key: Optional[str] = None
     default_voice: Optional[str] = None
     default_speed: Optional[float] = None
     default_language: Optional[str] = None
@@ -87,6 +89,8 @@ class TTSInstanceResponse(BaseModel):
     instance_name: str
     description: Optional[str] = None
     base_url: Optional[str] = None
+    api_key_configured: bool = False
+    api_key_preview: Optional[str] = None
     health_status: str
     health_status_reason: Optional[str] = None
     last_health_check: Optional[str] = None
@@ -132,6 +136,8 @@ def _to_response(instance: TTSInstance) -> Dict[str, Any]:
         "instance_name": instance.instance_name,
         "description": instance.description,
         "base_url": instance.base_url,
+        "api_key_configured": bool(getattr(instance, "api_key_encrypted", None)),
+        "api_key_preview": getattr(instance, "api_key_preview", None),
         "health_status": instance.health_status or "unknown",
         "health_status_reason": instance.health_status_reason,
         "last_health_check": (
@@ -224,6 +230,16 @@ async def create_tts_instance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported vendor: {data.vendor}",
         )
+    if data.vendor != "kokoro" and data.auto_provision:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Auto-provisioning is not supported for hosted TTS vendor '{data.vendor}'",
+        )
+    if data.vendor != "kokoro" and not data.api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"API key is required for hosted TTS vendor '{data.vendor}'",
+        )
 
     # Duplicate-name guard (active rows)
     existing = db.query(TTSInstance).filter(
@@ -253,6 +269,7 @@ async def create_tts_instance(
             db=db,
             description=data.description,
             base_url=data.base_url,
+            api_key=data.api_key,
             is_default=data.is_default,
             default_voice=data.default_voice,
             default_speed=data.default_speed,

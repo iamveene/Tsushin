@@ -4856,10 +4856,12 @@ export interface ASRDeleteResponse {
 export interface TTSInstance {
   id: number
   tenant_id: string
-  vendor: string  // kokoro
+  vendor: string
   instance_name: string
   description?: string | null
   base_url?: string | null
+  api_key_configured?: boolean
+  api_key_preview?: string | null
   extra_config?: Record<string, any> | null
   default_voice?: string | null
   default_speed?: number | null
@@ -4883,6 +4885,7 @@ export interface TTSInstanceCreate {
   instance_name: string
   description?: string
   base_url?: string
+  api_key?: string
   is_default?: boolean
   auto_provision?: boolean
   mem_limit?: string
@@ -6294,6 +6297,26 @@ export const api = {
   async getTravelProviders(): Promise<TravelProviderInfo[]> {
     const res = await authenticatedFetch(`${API_URL}/api/hub/travel-providers`)
     if (!res.ok) await handleApiError(res, 'Failed to fetch travel providers')
+    return res.json()
+  },
+
+  async configureSearchProvider(providerId: string, apiKey: string): Promise<SearchProviderInfo> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/search-providers/${providerId}/configure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to configure search provider')
+    return res.json()
+  },
+
+  async configureGoogleFlights(apiKey: string): Promise<TravelProviderInfo> {
+    const res = await authenticatedFetch(`${API_URL}/api/hub/travel-providers/google_flights/configure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to configure Google Flights')
     return res.json()
   },
 

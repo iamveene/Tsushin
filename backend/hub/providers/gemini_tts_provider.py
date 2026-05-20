@@ -17,13 +17,12 @@ Key characteristics shared across the preview models:
 - No SSML, no speed control
 - Preview quirk: model occasionally returns text tokens instead of audio → retry up to 2x
 
-Reuses the existing tenant Gemini API key (ApiKey.service = "gemini") — no new credential flow.
+Uses the tenant Gemini ProviderInstance as its credential source.
 """
 
 import asyncio
 import io
 import logging
-import os
 import tempfile
 import wave
 from pathlib import Path
@@ -36,7 +35,7 @@ from .tts_provider import (
     TTSResponse,
     VoiceInfo,
 )
-from services.api_key_service import get_api_key
+from services.provider_instance_service import ProviderInstanceService
 
 
 logger = logging.getLogger(__name__)
@@ -127,7 +126,7 @@ class GeminiTTSProvider(TTSProvider):
         if self._api_key:
             return self._api_key
         if self.db:
-            key = get_api_key("gemini", self.db, tenant_id=self.tenant_id)
+            key = ProviderInstanceService.resolve_default_api_key("gemini", self.tenant_id, self.db)
             if key:
                 self._api_key = key
         return self._api_key

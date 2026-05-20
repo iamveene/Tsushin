@@ -52,7 +52,7 @@ async def test_integration_connection(
 
     try:
         if provider == "elevenlabs":
-            return await _test_elevenlabs(db)
+            return await _test_elevenlabs(db, ctx.tenant_id)
         elif provider == "vertex_ai":
             return await _test_vertex_ai(db, ctx.tenant_id)
         else:
@@ -130,11 +130,11 @@ async def _test_llm_provider(
         )
 
 
-async def _test_elevenlabs(db: Session) -> TestConnectionResponse:
+async def _test_elevenlabs(db: Session, tenant_id: str) -> TestConnectionResponse:
     """Test ElevenLabs connection via health check."""
     from hub.providers.elevenlabs_tts_provider import ElevenLabsTTSProvider
 
-    provider = ElevenLabsTTSProvider(db=db)
+    provider = ElevenLabsTTSProvider(db=db, tenant_id=tenant_id)
     status = await provider.health_check()
 
     return TestConnectionResponse(
@@ -149,13 +149,23 @@ async def _test_elevenlabs(db: Session) -> TestConnectionResponse:
 async def _test_vertex_ai(db: Session, tenant_id: str) -> TestConnectionResponse:
     """Test Vertex AI connection by obtaining an OAuth2 access token with the configured service account."""
     try:
-        from services.api_key_service import get_api_key
+        from services.provider_instance_service import ProviderInstanceService
+        from utils.vertex_config import normalise_vertex_config
 
-        # Load credentials from DB only — no env var fallback
-        project_id = get_api_key("vertex_ai_project_id", db, tenant_id=tenant_id) or ""
-        region = get_api_key("vertex_ai_region", db, tenant_id=tenant_id) or "us-east5"
-        sa_email = get_api_key("vertex_ai_sa_email", db, tenant_id=tenant_id) or ""
-        private_key = get_api_key("vertex_ai", db, tenant_id=tenant_id) or ""
+        instance = ProviderInstanceService.get_default_keyed_instance("vertex_ai", tenant_id, db)
+        if not instance:
+            return TestConnectionResponse(
+                success=False,
+                message="No Vertex AI Provider Instance configured",
+                provider="vertex_ai",
+                error="Configure Vertex AI in Hub → AI Providers",
+            )
+        private_key_blob = ProviderInstanceService.resolve_api_key(instance, db) or ""
+        project_id, region, sa_email, private_key = normalise_vertex_config(
+            private_key_blob,
+            instance.extra_config,
+        )
+        region = region or "us-east5"
 
         if not project_id or not sa_email or not private_key:
             missing = []
@@ -169,7 +179,7 @@ async def _test_vertex_ai(db: Session, tenant_id: str) -> TestConnectionResponse
                 success=False,
                 message=f"Missing Vertex AI configuration: {', '.join(missing)}",
                 provider="vertex_ai",
-                error=f"Configure via Settings → Integrations: {', '.join(missing)}",
+                error=f"Configure the Vertex AI Provider Instance: {', '.join(missing)}",
             )
 
         # Attempt to create credentials and refresh to get a token

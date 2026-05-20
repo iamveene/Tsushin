@@ -60,7 +60,7 @@ export default function StepReview() {
   if (isAsrCloud) {
     rows.push({
       label: 'Credential source',
-      value: <span className="text-xs text-tsushin-slate">Reuses your saved OpenAI API key</span>,
+      value: <span className="text-xs text-tsushin-slate">Uses your OpenAI Provider Instance</span>,
       editStep: null,
     })
   } else if (draft.hosting === 'cloud') {
@@ -120,17 +120,11 @@ export default function StepReview() {
       editStep: modelsEditStep,
     })
   }
-  // The "Default instance" toggle only applies to surfaces that produce a
-  // ProviderInstance row (LLM cloud, Ollama local) or a TTSInstance row
-  // (Kokoro). For cloud TTS via api_keys (ElevenLabs / OpenAI / Gemini) the
-  // tenant has at most one api_key per service, so default-routing is
-  // meaningless — hide the row to avoid confusion.
-  const cloudTtsViaApiKey = draft.modality === 'tts' && (
-    draft.vendor === 'elevenlabs' || draft.vendor === 'openai' || draft.vendor === 'gemini'
-  )
+  // The "Default instance" toggle applies to ProviderInstance rows and
+  // TTSInstance rows. ASR cloud has no row and local ASR selection is per agent.
   // ASR doesn't surface a default-instance toggle in the wizard; local
   // Speech-to-Text instances are managed from Hub → AI Providers.
-  if (!cloudTtsViaApiKey && draft.modality !== 'asr') {
+  if (draft.modality !== 'asr') {
     rows.push({ label: 'Default instance', value: draft.is_default ? 'Yes' : 'No', editStep: modelsEditStep })
   }
 

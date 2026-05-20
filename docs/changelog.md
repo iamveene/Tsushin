@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Legacy Service API Keys retired (2026-05-20)
+
+- Retired `/api/api-keys*` as a runtime/configuration surface; the routes now return `410 Gone` and legacy `api_key` rows are audit/migration-only.
+- Added an idempotent startup migration that backfills active legacy rows into typed tenant-scoped credentials (`ProviderInstance`, hosted `TTSInstance`, `SearchProviderIntegration`, `GoogleFlightsIntegration`, `AmadeusIntegration`, `SearxngInstance`) and soft-disables the migrated rows.
+- Removed runtime legacy key resolution from AI, image, ASR, TTS, search, travel, Hub catalog checks, setup, and flow preflight paths; unknown, incomplete, or undecryptable active legacy rows now block startup.
+- Removed the Hub Service API Keys fallback panel and routed provider/search/travel setup through Provider Instances or typed integration endpoints.
+- Updated regression coverage for migration behavior, Google Flights typed credentials, AI client explicit credentials, and audio transcription Provider Instance resolution.
+
 ### Changed — Repository automation activation clarity (2026-05-19)
 
 - Made Repository Automation Wizard success states activation-honest: Tsushin now returns provider webhook setup metadata, shows the inbound URL/events/secret preview, and reveals the webhook secret only once when a new repository trigger is created.

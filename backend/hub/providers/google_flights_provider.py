@@ -18,8 +18,6 @@ from .flight_search_provider import (
     FlightSegment
 )
 from models import GoogleFlightsIntegration
-from hub.security import TokenEncryption
-from services.encryption_key_service import get_api_key_encryption_key
 
 
 logger = logging.getLogger(__name__)
@@ -38,50 +36,18 @@ class GoogleFlightsProvider(FlightSearchProvider):
         self.currency = integration.default_currency or "USD"
         self.hl = integration.default_language or "en"
 
-        # CRIT-004 fix: Use dedicated API key encryption key (not JWT_SECRET_KEY)
-        # This ensures decryption works across container restarts
-        encryption_key = get_api_key_encryption_key(db)
-        encryptor = None
-        if encryption_key:
-            encryptor = TokenEncryption(encryption_key.encode())
-
-        # Try to decrypt the encrypted API key from GoogleFlightsIntegration first
-        if encryptor and integration.api_key_encrypted:
+        if integration.api_key_encrypted:
             try:
-                # Use consistent identifier with ApiKey table
-                identifier = f"apikey_google_flights_{integration.tenant_id or 'system'}"
-                self.api_key = encryptor.decrypt(integration.api_key_encrypted, identifier)
+                from services.google_flights_integration_service import decrypt_google_flights_key
+
+                self.api_key = decrypt_google_flights_key(integration, db)
                 logger.info("GoogleFlightsProvider: Decrypted API key from integration")
             except Exception as e:
                 logger.warning(f"GoogleFlightsProvider: Could not decrypt API key from integration: {e}")
                 self.api_key = None
 
-        # Fallback: Try to get API key from ApiKey table (using api_key_service for correct decryption)
         if not self.api_key:
-            try:
-                from services.api_key_service import get_api_key as get_decrypted_api_key
-                tenant_id = integration.tenant_id
-                self.api_key = get_decrypted_api_key("google_flights", db, tenant_id=tenant_id)
-                if self.api_key:
-                    logger.info(
-                        "GoogleFlightsProvider: Got API key from alias-aware ApiKey service "
-                        f"(tenant: {tenant_id})"
-                    )
-                if not self.api_key:
-                    logger.warning("GoogleFlightsProvider: No API key found in ApiKey table")
-            except Exception as fallback_error:
-                logger.error(f"GoogleFlightsProvider: Fallback API key lookup failed: {fallback_error}")
-
-        # Final fallback: Try environment variable SERPAPI_KEY or GOOGLE_FLIGHTS_API_KEY
-        if not self.api_key:
-            import os
-            env_key = os.environ.get("SERPAPI_KEY") or os.environ.get("GOOGLE_FLIGHTS_API_KEY")
-            if env_key:
-                self.api_key = env_key
-                logger.info("GoogleFlightsProvider: Using API key from environment variable")
-
-        if not self.api_key:
-            raise ValueError("GoogleFlightsProvider: No valid API key available")
+            raise ValueError("GoogleFlightsProvider: No active GoogleFlightsIntegration API key available")
 
     def get_provider_name(self) -> str:
         return "google_flights"

@@ -17,8 +17,8 @@ import { CheckCircleIcon, AlertTriangleIcon } from '@/components/ui/icons'
  * For OpenAI/Gemini (cloud TTS): POST /api/provider-instances — same path as LLM
  *   cloud, since the same vendor key powers both. The resolver picks the default
  *   instance per vendor.
- * For ElevenLabs (cloud TTS): save the api_key via the legacy api_keys surface —
- *   ProviderInstance does not yet support elevenlabs as a vendor.
+ * For ElevenLabs (cloud TTS): POST /api/tts-instances with encrypted hosted
+ *   provider credentials.
  *
  * Failures surface a Retry → back to Review. The `fireComplete` callback hands
  * control back to the Hub so it can refetch the instance list.
@@ -67,16 +67,12 @@ export default function StepProgress() {
         setProgress({ message: 'TTS container provisioning...' })
       }
       // Branch 2a: TTS cloud OpenAI / Gemini — create a real ProviderInstance.
-      // Previously this branch wrote to the legacy api_keys table via /api/api-keys,
+      // Previously this branch wrote to the retired legacy api_key table,
       // which (a) silently overwrote any existing tenant-wide LLM key for the
       // same vendor, (b) discarded the wizard's `instance_name`, and (c) became
-      // invisible in the Hub once any ProviderInstance for that vendor existed
-      // (the fallback disclosure hides vendors with an instance). That combo
-      // let an orphaned QA seed (sk-test-qa070-tts-fake-12345) shadow the
-      // visible ProviderInstance for weeks. Now both LLM and TTS cloud flows
-      // use the same ProviderInstance backbone — the resolver prefers
-      // ProviderInstance over legacy ApiKey rows, and the instance_name
-      // round-trips to the DB so cleanup/audit can see what was created.
+      // invisible after the Hub moved to ProviderInstances. Now both LLM and
+      // OpenAI/Gemini TTS flows use the same ProviderInstance backbone, and
+      // the instance_name round-trips to the DB for cleanup/audit.
       else if (
         draft.modality === 'tts' &&
         (draft.vendor === 'openai' || draft.vendor === 'gemini')
@@ -101,22 +97,20 @@ export default function StepProgress() {
         const result = await api.createProviderInstance(body)
         createdInstanceId = result.id
       }
-      // Branch 2b: TTS cloud ElevenLabs — legacy api_keys surface remains the
-      // only path because `elevenlabs` is not in ProviderInstance.SUPPORTED_VENDORS.
-      // When elevenlabs gains ProviderInstance support, fold it into 2a.
+      // Branch 2b: TTS cloud ElevenLabs — first-class hosted TTSInstance.
       else if (draft.modality === 'tts' && draft.vendor === 'elevenlabs') {
-        const res = await authenticatedFetch('/api/api-keys', {
-          method: 'POST',
-          body: JSON.stringify({
-            service: draft.vendor,
-            api_key: draft.api_key,
-            is_active: true,
-          }),
-        })
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '')
-          throw new Error(`Failed to save ${draft.vendor} API key (${res.status}) ${txt}`)
+        if (!draft.api_key) {
+          throw new Error('ElevenLabs API key is required.')
         }
+        const body: TTSInstanceCreate = {
+          vendor: 'elevenlabs',
+          instance_name: draft.instance_name || 'ElevenLabs',
+          api_key: draft.api_key,
+          is_default: draft.is_default,
+          auto_provision: false,
+        }
+        const result = await api.createTTSInstance(body)
+        createdInstanceId = result.id
       }
       // Branch 3a: ASR cloud — no separate provider row required. The OpenAI
       // Whisper API call path reuses the OpenAI key already saved on the
@@ -124,7 +118,7 @@ export default function StepProgress() {
       // instance for the cloud case (audio_transcript skill falls through
       // to OpenAI when no local instance is selected).
       else if (draft.modality === 'asr' && draft.hosting === 'cloud') {
-        setProgress({ message: 'OpenAI Whisper API uses your existing OpenAI key — nothing to provision.' })
+        setProgress({ message: 'OpenAI Whisper API uses your OpenAI Provider Instance — nothing to provision.' })
         // Nothing to create; mark as done immediately.
       }
       // Branch 3b: ASR local (speaches / openai_whisper) — /api/asr-instances
@@ -172,7 +166,7 @@ export default function StepProgress() {
             sa_email: draft.extra_config?.sa_email || '',
             private_key: draft.extra_config?.private_key || '',
           }
-          // Vertex stores the key in extra_config.private_key, not api_key.
+          // Vertex stores the private key on the typed ProviderInstance payload.
           body.api_key = undefined
         }
         const result = await api.createProviderInstance(body)

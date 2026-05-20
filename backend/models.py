@@ -4575,6 +4575,32 @@ class GoogleFlightsIntegration(HubIntegration):
     }
 
 
+class SearchProviderIntegration(HubIntegration):
+    """
+    Tenant-scoped hosted web-search provider credentials.
+
+    Replaces the retired ApiKey services for Brave Search, Tavily, and
+    SerpAPI-powered Google Search. SearXNG keeps using SearxngInstance because
+    it is a managed/external service endpoint, not a hosted API credential.
+    """
+    __tablename__ = "search_provider_integration"
+
+    id = Column(Integer, ForeignKey("hub_integration.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(String(40), nullable=False, index=True)  # brave|google|tavily
+    api_key_encrypted = Column(Text, nullable=False)
+    api_key_preview = Column(String(32), nullable=True)
+    default_country = Column(String(5), default="US", nullable=True)
+    default_language = Column(String(10), default="en", nullable=True)
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'search_provider',
+    }
+
+    __table_args__ = (
+        Index("idx_search_provider_integration_provider", "provider_id"),
+    )
+
+
 class BrowserAutomationIntegration(HubIntegration):
     """
     Browser Automation Integration.
@@ -5446,6 +5472,8 @@ class TTSInstance(Base):
 
     # Connection — base_url populated post-provision with DNS alias URL
     base_url = Column(String(500), nullable=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    api_key_preview = Column(String(32), nullable=True)
 
     # Health monitoring
     health_status = Column(String(20), default="unknown", nullable=False)

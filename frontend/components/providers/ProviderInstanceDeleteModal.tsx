@@ -6,10 +6,9 @@
  *
  * v0.7.0: previously the delete was a single window.confirm("Delete X?") that
  * silently soft-deleted the row and quietly nulled out provider_instance_id
- * on every dependent agent. The agents kept "working" only because the
- * AIClient legacy fallback masked the orphan state. Now the delete UI surfaces
- * the dependent agents, asks where to reassign them, and the backend refuses
- * the delete unless either reassign or unassign is explicitly chosen.
+ * on every dependent agent. Now the delete UI surfaces the dependent agents,
+ * asks where to reassign them, and the backend refuses the delete unless either
+ * reassign or unassign is explicitly chosen.
  */
 
 import { useEffect, useMemo, useState } from 'react'

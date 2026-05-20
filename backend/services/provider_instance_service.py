@@ -501,6 +501,34 @@ class ProviderInstanceService:
         ).first()
 
     @staticmethod
+    def get_default_keyed_instance(vendor: str, tenant_id: str, db: Session) -> Optional[ProviderInstance]:
+        """Get the preferred active keyed ProviderInstance for a tenant/vendor."""
+        default = db.query(ProviderInstance).filter(
+            ProviderInstance.vendor == vendor,
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.is_default == True,
+            ProviderInstance.is_active == True,
+            ProviderInstance.api_key_encrypted.isnot(None),
+        ).first()
+        if default:
+            return default
+        keyed = db.query(ProviderInstance).filter(
+            ProviderInstance.vendor == vendor,
+            ProviderInstance.tenant_id == tenant_id,
+            ProviderInstance.is_active == True,
+            ProviderInstance.api_key_encrypted.isnot(None),
+        ).all()
+        return keyed[0] if len(keyed) == 1 else None
+
+    @staticmethod
+    def resolve_default_api_key(vendor: str, tenant_id: str, db: Session) -> Optional[str]:
+        """Resolve a tenant's ProviderInstance key without legacy fallback."""
+        instance = ProviderInstanceService.get_default_keyed_instance(vendor, tenant_id, db)
+        if not instance:
+            return None
+        return ProviderInstanceService.resolve_api_key(instance, db)
+
+    @staticmethod
     def create_instance(tenant_id: str, vendor: str, instance_name: str, db: Session,
                         base_url: str = None, api_key: str = None,
                         available_models: list = None, is_default: bool = False) -> ProviderInstance:
@@ -1057,12 +1085,10 @@ class ProviderInstanceService:
 
     @staticmethod
     def resolve_api_key(instance: ProviderInstance, db: Session) -> Optional[str]:
-        """Decrypt instance key. Falls back to get_api_key() if no instance key."""
+        """Decrypt the ProviderInstance key only."""
         if instance.api_key_encrypted:
             return ProviderInstanceService._decrypt_key(instance.api_key_encrypted, instance.tenant_id, db)
-        # Fallback to legacy key resolution
-        from services.api_key_service import get_api_key
-        return get_api_key(instance.vendor, db, tenant_id=instance.tenant_id)
+        return None
 
     @staticmethod
     def log_connection_audit(tenant_id: str, user_id: int, instance_id: int, action: str,
