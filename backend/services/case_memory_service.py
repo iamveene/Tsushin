@@ -39,7 +39,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -595,6 +595,31 @@ async def _write_vectors_via_bridge(
     return written
 
 
+def _run_coroutine_from_sync(coro_factory: Callable[[], Any]) -> Any:
+    """Run an async coroutine from sync code without leaking it.
+
+    ``asyncio.run(coro)`` constructs ``coro`` before it checks whether the
+    current thread already owns a running loop. In async request handlers that
+    raises and leaves the coroutine unawaited. Accepting a factory lets us
+    choose the execution context first, then construct the coroutine inside the
+    loop that will actually await it.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro_factory())
+
+    import concurrent.futures
+
+    def _run_in_thread() -> Any:
+        return asyncio.run(coro_factory())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(_run_in_thread).result()
+
+
 def index_case(
     db: Session,
     *,
@@ -856,10 +881,8 @@ def index_case(
     written: List[str] = []
     if write_vectors_async:
         try:
-            import asyncio
-
-            written = asyncio.run(
-                _write_vectors_via_bridge(
+            def _bridge_write_coro():
+                return _write_vectors_via_bridge(
                     db,
                     tenant_id=tenant_id,
                     agent=agent,
@@ -872,36 +895,8 @@ def index_case(
                     credentials=credentials,
                     vectors=vectors_payload,
                 )
-            )
-        except RuntimeError as exc:
-            # Already inside an event loop — schedule synchronously via a fresh
-            # loop is unsafe; fall back to a thread-bound runner.
-            if "asyncio.run() cannot be called" in str(exc) or "running event loop" in str(exc):
-                import asyncio
-                import concurrent.futures
 
-                def _run() -> List[str]:
-                    return asyncio.run(
-                        _write_vectors_via_bridge(
-                            db,
-                            tenant_id=tenant_id,
-                            agent=agent,
-                            case_id=case.id,
-                            wake_event_id=wake_event_id,
-                            origin_kind=origin_kind,
-                            run_id=run_id,
-                            trigger_kind=trigger_kind,
-                            contract=contract,
-                            credentials=credentials,
-                            vectors=vectors_payload,
-                        )
-                    )
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    written = executor.submit(_run).result()
-            else:
-                logger.exception("case_memory: bridge write failed")
-                written = []
+            written = _run_coroutine_from_sync(_bridge_write_coro)
         except Exception:
             logger.exception("case_memory: bridge write failed")
             written = []
