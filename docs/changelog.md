@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added backend scheduler support for hourly recurrence and cron-expression overrides, including duplicate suppression inside the same cron/hourly window.
 - Updated frontend Flow recurrence types and operator documentation so `FlowDefinition.recurrence_rule` documents hourly and cron recurrence support.
 
+### Fixed — Browser CAPTCHA solver generation bounds (2026-05-21)
+
+- Allowed `browser_automation.solve_captcha` Ollama configs to pass bounded generation options such as `num_predict`, `num_ctx`, `top_p`, `repeat_penalty`, and `ollama_keep_alive` so CPU-only multimodal CAPTCHA solves do not run unbounded.
+- Added regression coverage for CAPTCHA solver payload construction while preserving the existing generic selector/input/submit/result configuration model.
+
 ### Fixed — Ollama raw connection testing (2026-05-21)
 
 - Fixed raw `POST /api/provider-instances/test-connection` for Ollama so first-run/pre-save tests probe the supplied `base_url` directly instead of requiring a saved/default Ollama ProviderInstance first.
