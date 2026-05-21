@@ -544,6 +544,63 @@ def test_captcha_ollama_payload_honors_generation_bounds(monkeypatch, tmp_path):
     assert captured["payload"]["options"]["repeat_penalty"] == 1.05
 
 
+def test_captcha_gemini_payload_uses_provider_instance_key(monkeypatch, tmp_path):
+    skill_module = _import_any("agent.skills.browser_automation_skill")
+    skill_cls = _get_attr_any(skill_module, "BrowserAutomationSkill")
+
+    from PIL import Image
+    import google.generativeai as genai
+
+    image_path = tmp_path / "captcha.png"
+    Image.new("RGB", (10, 10), "white").save(image_path)
+    captured = {}
+
+    class FakeGenerationConfig:
+        def __init__(self, *, temperature, max_output_tokens):
+            self.temperature = temperature
+            self.max_output_tokens = max_output_tokens
+
+    class FakeModel:
+        def __init__(self, *, model_name, generation_config):
+            captured["model_name"] = model_name
+            captured["init_generation_config"] = generation_config
+
+        def generate_content(self, parts, generation_config):
+            captured["parts"] = parts
+            captured["call_generation_config"] = generation_config
+            return SimpleNamespace(text="cnz5l\n")
+
+    def fake_configure(*, api_key):
+        captured["api_key"] = api_key
+
+    monkeypatch.setattr(genai, "GenerationConfig", FakeGenerationConfig)
+    monkeypatch.setattr(genai, "GenerativeModel", FakeModel)
+    monkeypatch.setattr(genai, "configure", fake_configure)
+
+    skill = skill_cls()
+    monkeypatch.setattr(skill, "_resolve_captcha_gemini_api_key", lambda _params: "gemini-key")
+
+    guesses = asyncio.run(
+        skill._captcha_guesses_from_gemini(
+            str(image_path),
+            {
+                "gemini_model": "gemini-2.5-flash-lite",
+                "captcha_length": 5,
+                "num_predict": 30,
+                "temperature": "0",
+            },
+        )
+    )
+
+    assert guesses == ["cnz5l"]
+    assert captured["api_key"] == "gemini-key"
+    assert captured["model_name"] == "gemini-2.5-flash-lite"
+    assert captured["call_generation_config"].temperature == 0
+    assert captured["call_generation_config"].max_output_tokens == 30
+    assert "CAPTCHA" in captured["parts"][0]
+    assert captured["parts"][1].size == (10, 10)
+
+
 def test_browser_automation_reresolves_evicted_password_vault_handles(monkeypatch):
     flow_module = _import_any("flows.flow_engine")
     skill_module = _import_any("agent.skills.browser_automation_skill")

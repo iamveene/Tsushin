@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Generic Gemini CAPTCHA solver provider (2026-05-21)
+
+- Added a generic Gemini-backed option for `browser_automation.solve_captcha`, using the tenant's configured Gemini provider instance or environment key while preserving the existing site-profile selectors, prompt, retry, and length settings.
+- Added regression coverage for Gemini CAPTCHA payload construction so slow CPU-only Ollama hosts can use a faster multimodal provider without creating Correios-specific runner logic.
+
 ### Changed — Flow recurrence UI support (2026-05-21)
 
 - Exposed hourly recurrence and the raw `cron_expression` override in the Flow create/edit recurrence panel, while preserving daily, weekly, and monthly interval behavior.
