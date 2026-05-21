@@ -13,6 +13,7 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   autoHeight?: boolean
   showCloseButton?: boolean
+  overlayKind?: string
 }
 
 const sizeClasses = {
@@ -31,7 +32,8 @@ export default function Modal({
   footer,
   size = 'md',
   autoHeight = false,
-  showCloseButton = true
+  showCloseButton = true,
+  overlayKind
 }: ModalProps) {
   // SSR safety: only render portal after mount
   const [mounted, setMounted] = useState(false)
@@ -58,6 +60,7 @@ export default function Modal({
   return createPortal(
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+      data-tsushin-modal={overlayKind}
       {...backdropDismiss}
     >
       <div
