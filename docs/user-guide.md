@@ -546,10 +546,12 @@ Use the **Repository Automation Wizard** as the recommended setup path for GitHu
 
 The wizard offers two repository-review templates:
 
-- **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs.
+- **Review team** — creates a coordinated team with **Coordinator**, **Reviewer**, and **Merge Readiness** roles. The team trigger binding is the active route; the generated Flow is linked for deterministic review/output edits but kept inactive to avoid duplicate review runs. The **Team completion notification** selector chooses the WhatsApp contact that receives the final team summary; if your user account is mapped to an active reachable contact, the wizard preselects that contact.
 - **Standalone PR/MR reviewer agent** — creates or wires one reviewer agent with Code Repository access and **A2A enabled**, then leaves the generated Flow route active so the trigger runs through that agent.
 
 After creation, the success screen shows what Tsushin created and what still needs to be configured at the provider. Copy the inbound URL, enable the listed GitHub/GitLab events, and paste the one-time webhook secret when the trigger was newly created. Existing trigger secrets are never revealed again; use the trigger detail page's rotate-secret action if you need a replacement secret and then update the provider-side webhook.
+
+When you open the generated Flow for a review-team automation, remember that the Flow Notification node is not the active team-summary route while the generated Flow binding is inactive. The edit modal surfaces the wired Agent Team completion target, such as `@Vini`, so you can tell who receives the final summary even though the Flow notification recipient may be blank unless you intentionally enable the Flow route.
 
 Repository criteria should be read as PR/MR-first where the current UI is PR/MR-centered. GitHub uses pull request language; GitLab maps the same review workflow to merge requests and MR IIDs.
 
