@@ -220,15 +220,36 @@ Rules:
         with open(image_path, "rb") as fh:
             image_base64 = base64.b64encode(fh.read()).decode("ascii")
 
+        options = {
+            "temperature": float(params.get("temperature", 0)),
+        }
+        for key in ("num_predict", "num_ctx", "top_k", "seed"):
+            value = params.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                options[key] = int(value)
+            except (TypeError, ValueError):
+                logger.debug("Ignoring invalid Ollama CAPTCHA option %s=%r", key, value)
+        for key in ("top_p", "repeat_penalty"):
+            value = params.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                options[key] = float(value)
+            except (TypeError, ValueError):
+                logger.debug("Ignoring invalid Ollama CAPTCHA option %s=%r", key, value)
+
         payload = {
             "model": model,
             "prompt": prompt,
             "images": [image_base64],
             "stream": False,
-            "options": {
-                "temperature": float(params.get("temperature", 0)),
-            },
+            "options": options,
         }
+        keep_alive = params.get("ollama_keep_alive") or params.get("keep_alive")
+        if keep_alive:
+            payload["keep_alive"] = str(keep_alive)
         timeout = float(params.get("solver_timeout_seconds") or params.get("timeout_seconds") or 60)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{base_url}/api/generate", json=payload)

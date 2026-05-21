@@ -481,6 +481,69 @@ def test_captcha_guess_normalization_prefers_exact_length():
     assert skill_cls._captcha_guess_lines("6252\n62562\n6252") == ["6252", "62562"]
 
 
+def test_captcha_ollama_payload_honors_generation_bounds(monkeypatch, tmp_path):
+    skill_module = _import_any("agent.skills.browser_automation_skill")
+    skill_cls = _get_attr_any(skill_module, "BrowserAutomationSkill")
+
+    image_path = tmp_path / "captcha.png"
+    image_path.write_bytes(b"fake-image")
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": "178b63\n"}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["payload"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(skill_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    skill = skill_cls()
+    guesses = asyncio.run(
+        skill._captcha_guesses_from_ollama(
+            str(image_path),
+            {
+                "ollama_base_url": "http://ollama.test",
+                "ollama_model": "gemma4:latest",
+                "solver_timeout_seconds": 240,
+                "captcha_length": 6,
+                "num_predict": 20,
+                "num_ctx": "1024",
+                "top_p": "0.1",
+                "repeat_penalty": "1.05",
+                "ollama_keep_alive": "30m",
+            },
+        )
+    )
+
+    assert guesses == ["178b63"]
+    assert captured["timeout"] == 240
+    assert captured["url"] == "http://ollama.test/api/generate"
+    assert captured["payload"]["model"] == "gemma4:latest"
+    assert captured["payload"]["stream"] is False
+    assert captured["payload"]["keep_alive"] == "30m"
+    assert captured["payload"]["options"]["temperature"] == 0
+    assert captured["payload"]["options"]["num_predict"] == 20
+    assert captured["payload"]["options"]["num_ctx"] == 1024
+    assert captured["payload"]["options"]["top_p"] == 0.1
+    assert captured["payload"]["options"]["repeat_penalty"] == 1.05
+
+
 def test_browser_automation_reresolves_evicted_password_vault_handles(monkeypatch):
     flow_module = _import_any("flows.flow_engine")
     skill_module = _import_any("agent.skills.browser_automation_skill")
