@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Flow editor cosmetic QA polish (2026-05-21)
+
+- Polished the Flow Browser Automation step editor so selector and tool-argument rows render as compact responsive cards instead of cramped single-line grids, improving Correios-style CAPTCHA/tracking profiles on desktop and mobile.
+- Kept modal footers readable on narrow screens by preventing Save/Cancel wrapping and hiding floating helper surfaces while blocking Flow edit modals are open.
+
 ### Fixed — Flow editor portable config rows (2026-05-21)
 
 - Fixed Flow step editors so portable object-shaped configs for Browser Automation selectors, secret references, Data Transform extraction/parser rules, and Gate conditions render as editable rows instead of crashing the page.
