@@ -869,9 +869,9 @@ Flows let you build multi-step automated workflows.
 
 1. Navigate to **Studio > Flows** and click **Create Flow**.
 2. Name your flow and select the type.
-3. Choose an **execution mode**: Immediate, Scheduled (one-time), Recurring (cron-based), Keyword, or Triggered.
+3. Choose an **execution mode**: Immediate, Scheduled (one-time), Recurring, Keyword, or Triggered.
 4. For **Triggered**, select an existing Hub trigger (Email/Gmail, Jira, GitHub, GitLab, or Webhook). Tsushin creates a locked Source step and the `flow_trigger_binding` automatically.
-5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving.
+5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving. Recurring flows can run hourly, daily, weekly, or monthly; use the cron override when the schedule needs a raw cron expression.
 6. **Add steps** in sequence.
 
 ### Step Types
