@@ -98,7 +98,32 @@ class BrowserAutomationSkill(BaseSkill):
             return None
 
     @staticmethod
-    def _captcha_guess_lines(text: str, expected_length: Optional[int] = None) -> List[str]:
+    def _captcha_length_bounds(params: Dict[str, Any]) -> tuple[int, int]:
+        expected_length = BrowserAutomationSkill._captcha_expected_length(params)
+        if expected_length:
+            return expected_length, expected_length
+
+        def _coerce(value: Any, default: int) -> int:
+            try:
+                parsed = int(str(value).strip())
+                return parsed if 1 <= parsed <= 12 else default
+            except (TypeError, ValueError):
+                return default
+
+        min_length = _coerce(params.get("captcha_min_length") or params.get("min_length"), 4)
+        max_length = _coerce(params.get("captcha_max_length") or params.get("max_length"), 8)
+        if min_length > max_length:
+            min_length, max_length = max_length, min_length
+        return min_length, max_length
+
+    @staticmethod
+    def _captcha_guess_lines(
+        text: str,
+        expected_length: Optional[int] = None,
+        *,
+        min_length: int = 4,
+        max_length: int = 8,
+    ) -> List[str]:
         """Normalize model output into ordered, plausible CAPTCHA guesses."""
         guesses: List[str] = []
         fallback: List[str] = []
@@ -107,15 +132,15 @@ class BrowserAutomationSkill(BaseSkill):
             if expected_length:
                 if len(cleaned) == expected_length:
                     guesses.append(cleaned)
-                elif 4 <= len(cleaned) <= 8:
+                elif min_length <= len(cleaned) <= max_length:
                     fallback.append(cleaned)
-            elif 4 <= len(cleaned) <= 8:
+            elif min_length <= len(cleaned) <= max_length:
                 guesses.append(cleaned)
         if not guesses:
             cleaned = re.sub(r"[^a-zA-Z0-9]", "", str(text or "")).strip().lower()
             if expected_length and len(cleaned) == expected_length:
                 guesses.append(cleaned)
-            elif not expected_length and 4 <= len(cleaned) <= 8:
+            elif not expected_length and min_length <= len(cleaned) <= max_length:
                 guesses.append(cleaned)
         if not guesses and not expected_length:
             guesses.extend(fallback)
@@ -202,11 +227,12 @@ class BrowserAutomationSkill(BaseSkill):
             or "http://host.docker.internal:11434"
         ).rstrip("/")
         expected_length = self._captcha_expected_length(params)
+        min_length, max_length = self._captcha_length_bounds(params)
         length_hint = str(expected_length or "").strip()
         length_rule = (
             f"The code is exactly {length_hint} characters."
             if length_hint.isdigit()
-            else "The code is 5 or 6 characters."
+            else f"The code is {min_length} to {max_length} characters."
         )
         prompt = str(params.get("prompt") or f"""
 Read this CAPTCHA image exactly.
@@ -256,7 +282,12 @@ Rules:
             response = await client.post(f"{base_url}/api/generate", json=payload)
             response.raise_for_status()
             data = response.json()
-        return self._captcha_guess_lines(str(data.get("response") or ""), expected_length)
+        return self._captcha_guess_lines(
+            str(data.get("response") or ""),
+            expected_length,
+            min_length=min_length,
+            max_length=max_length,
+        )
 
     def _resolve_captcha_gemini_api_key(self, params: Dict[str, Any]) -> Optional[str]:
         if params.get("gemini_api_key"):
@@ -315,11 +346,12 @@ Rules:
             or "gemini-2.5-flash-lite"
         )
         expected_length = self._captcha_expected_length(params)
+        min_length, max_length = self._captcha_length_bounds(params)
         length_hint = str(expected_length or "").strip()
         length_rule = (
             f"The code is exactly {length_hint} characters."
             if length_hint.isdigit()
-            else "The code is 4 to 8 characters."
+            else f"The code is {min_length} to {max_length} characters."
         )
         prompt = str(params.get("prompt") or f"""
 Read this CAPTCHA image exactly.
@@ -357,7 +389,12 @@ Rules:
                 generation_config=generation_config,
             )
 
-        return self._captcha_guess_lines(self._extract_gemini_text(response), expected_length)
+        return self._captcha_guess_lines(
+            self._extract_gemini_text(response),
+            expected_length,
+            min_length=min_length,
+            max_length=max_length,
+        )
 
     @staticmethod
     def _captcha_model_name(params: Dict[str, Any], solver_provider: str) -> str:

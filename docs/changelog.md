@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — Generic Gemini CAPTCHA solver provider (2026-05-21)
 
 - Added a generic Gemini-backed option for `browser_automation.solve_captcha`, using the tenant's configured Gemini provider instance or environment key while preserving the existing site-profile selectors, prompt, retry, and length settings.
+- Added configurable CAPTCHA length bounds (`captcha_min_length` / `captcha_max_length`) so sites with variable-length image challenges can be solved without forcing a site-specific runner.
 - Added regression coverage for Gemini CAPTCHA payload construction so slow CPU-only Ollama hosts can use a faster multimodal provider without creating Correios-specific runner logic.
 
 ### Changed — Flow recurrence UI support (2026-05-21)
