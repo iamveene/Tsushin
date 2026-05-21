@@ -29,6 +29,18 @@ function isExcludedPath(pathname: string | null): boolean {
   )
 }
 
+function hasVisibleBlockingOverlay(): boolean {
+  if (typeof document === 'undefined') return false
+  return Array.from(document.querySelectorAll<HTMLElement>('.fixed.inset-0, [role="dialog"]')).some((element) => {
+    const style = window.getComputedStyle(element)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    const zIndex = Number.parseInt(style.zIndex || '0', 10)
+    return Number.isFinite(zIndex) && zIndex >= 50
+  })
+}
+
 export default function PlaygroundMini() {
   const { user } = useAuth()
   const pathname = usePathname()
@@ -39,6 +51,7 @@ export default function PlaygroundMini() {
   const glowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [isGlowing, setIsGlowing] = useState(false)
+  const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false)
 
   const mini = usePlaygroundMini({ userId: user?.id ?? null })
 
@@ -128,6 +141,32 @@ export default function PlaygroundMini() {
     }
   }, [excluded, mini])
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const updateOverlayState = () => setHasBlockingOverlay(hasVisibleBlockingOverlay())
+    updateOverlayState()
+
+    const observer = new MutationObserver(updateOverlayState)
+    observer.observe(document.body, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: ['class', 'style', 'role', 'aria-hidden'],
+    })
+    window.addEventListener('resize', updateOverlayState)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateOverlayState)
+    }
+  }, [pathname])
+
+  useEffect(() => {
+    if (hasBlockingOverlay && mini.isOpen) {
+      mini.setOpen(false)
+    }
+  }, [hasBlockingOverlay, mini])
+
   // --- Cleanup glow timer on unmount ---
   useEffect(() => {
     return () => {
@@ -135,10 +174,10 @@ export default function PlaygroundMini() {
     }
   }, [])
 
-  if (!user || excluded) return null
+  if (!user || excluded || hasBlockingOverlay) return null
 
   const fabBaseClasses =
-    'fixed bottom-6 right-6 z-[70] w-14 h-14 rounded-full flex items-center justify-center text-white shadow-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tsushin-accent'
+    'fixed bottom-6 right-6 z-[40] w-14 h-14 rounded-full flex items-center justify-center text-white shadow-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-tsushin-accent'
   const fabColorClasses = mini.isOpen
     ? 'bg-tsushin-elevated border border-tsushin-border hover:bg-tsushin-surface'
     : 'bg-gradient-to-br from-tsushin-indigo to-tsushin-indigo-glow hover:scale-105'
