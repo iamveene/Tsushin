@@ -125,6 +125,7 @@ class FlowDefinitionResponse(BaseModel):
     # Phase 8.0 fields (optional for backward compat)
     execution_method: Optional[str] = "immediate"
     scheduled_at: Optional[datetime] = None
+    recurrence_rule: Optional[Dict[str, Any]] = None
     flow_type: Optional[str] = "workflow"
     default_agent_id: Optional[int] = None
     # BUG-336: Keyword triggers
@@ -404,6 +405,7 @@ def flow_to_response(flow: FlowDefinition, db: Session) -> FlowDefinitionRespons
         step_count=count,
         execution_method=flow.execution_method or "immediate",
         scheduled_at=flow.scheduled_at,
+        recurrence_rule=flow.recurrence_rule,
         flow_type=flow.flow_type or "workflow",
         default_agent_id=flow.default_agent_id,
         trigger_keywords=flow.trigger_keywords or [],  # BUG-336

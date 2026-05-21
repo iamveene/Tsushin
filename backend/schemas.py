@@ -211,11 +211,26 @@ class ConversationThreadStatus(str, Enum):
 # --- Recurrence Rule Schema ---
 class RecurrenceRule(BaseModel):
     """Cron-like recurrence configuration"""
-    frequency: Literal["daily", "weekly", "monthly"] = "daily"
+    frequency: Literal["hourly", "daily", "weekly", "monthly"] = "daily"
     interval: int = Field(default=1, ge=1, description="Recurrence interval")
     days_of_week: Optional[List[int]] = Field(default=None, description="Days for weekly recurrence (1=Monday, 7=Sunday)")
     timezone: Optional[str] = Field(default="America/Sao_Paulo", description="Timezone for scheduling")
+    start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="Local start time in HH:MM format")
     cron_expression: Optional[str] = Field(default=None, description="Raw cron expression (overrides other fields)")
+
+    @field_validator("cron_expression")
+    @classmethod
+    def validate_cron_expression_field(cls, value):
+        if value is None:
+            return None
+
+        expression = value.strip()
+        if not expression:
+            return None
+
+        from services.cron_preview_service import validate_cron_expression
+
+        return validate_cron_expression(expression)
 
 
 # --- Flow Step Schemas ---

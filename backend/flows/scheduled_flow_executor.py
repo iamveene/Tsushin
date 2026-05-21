@@ -5,8 +5,8 @@ Polls for flows with scheduled triggers and executes them at the right time.
 import asyncio
 import json
 import logging
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional
 from sqlalchemy.orm import Session
 import pytz
 
@@ -222,10 +222,11 @@ class ScheduledFlowExecutor:
             logger.info(f"🔁 Checking recurring flow #{flow.id}: rule={recurrence_rule}")
 
             frequency = recurrence_rule.get('frequency', 'daily')
-            interval = recurrence_rule.get('interval', 1)
+            interval = max(int(recurrence_rule.get('interval', 1) or 1), 1)
             timezone_str = recurrence_rule.get('timezone', 'America/Sao_Paulo')
             days_of_week = recurrence_rule.get('days_of_week')  # For weekly recurrence
             start_time = recurrence_rule.get('start_time')  # HH:MM format
+            cron_expression = recurrence_rule.get('cron_expression')
 
             logger.info(f"   Frequency: {frequency}, Interval: {interval}, Start time: {start_time}, Timezone: {timezone_str}")
 
@@ -249,8 +250,81 @@ class ScheduledFlowExecutor:
 
             # Check if we should execute based on frequency
             should_execute = False
+            scheduled_for = None
 
-            if frequency == 'daily':
+            if cron_expression:
+                return self._check_cron_recurring_flow(
+                    flow=flow,
+                    recurrence_rule=recurrence_rule,
+                    cron_expression=cron_expression,
+                    timezone_str=timezone_str,
+                    now_utc=now_utc,
+                    last_executed_at=last_executed_at,
+                )
+
+            if frequency == 'hourly':
+                target_minute = 0
+
+                if flow.scheduled_at:
+                    if flow.scheduled_at.tzinfo is None:
+                        scheduled_aware = pytz.UTC.localize(flow.scheduled_at)
+                    else:
+                        scheduled_aware = flow.scheduled_at.astimezone(pytz.UTC)
+                    scheduled_local = scheduled_aware.astimezone(tz)
+                    target_minute = scheduled_local.minute
+                else:
+                    scheduled_local = None
+
+                if start_time:
+                    time_parts = start_time.split(':')
+                    # For hourly recurrence, start_time provides the minute
+                    # within each hour. The hour component is only meaningful
+                    # when scheduled_at provides an interval anchor.
+                    target_minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+
+                current_window = now_local.replace(
+                    minute=target_minute,
+                    second=0,
+                    microsecond=0,
+                )
+
+                if now_local >= current_window:
+                    scheduled_for = current_window.astimezone(pytz.UTC).replace(tzinfo=None)
+                    anchor_local = scheduled_local
+                    if anchor_local is None:
+                        anchor_local = now_local.replace(
+                            hour=0,
+                            minute=target_minute,
+                            second=0,
+                            microsecond=0,
+                        )
+                    anchor_window = anchor_local.replace(
+                        minute=target_minute,
+                        second=0,
+                        microsecond=0,
+                    )
+                    elapsed_hours = int((current_window - anchor_window).total_seconds() // 3600)
+                    if elapsed_hours < 0 or elapsed_hours % interval != 0:
+                        logger.info(f"   ✗ Hourly interval not due")
+                        return False, {}
+
+                    last_executed_utc = None
+                    if last_executed_at:
+                        last_executed_utc = (
+                            last_executed_at.astimezone(pytz.UTC).replace(tzinfo=None)
+                            if last_executed_at.tzinfo is not None
+                            else last_executed_at
+                        )
+
+                    if last_executed_utc and last_executed_utc >= scheduled_for:
+                        logger.info(f"   ✗ Already executed in this hourly window")
+                    else:
+                        logger.info(f"   ✓ Should execute hourly recurrence")
+                        should_execute = True
+                else:
+                    logger.info(f"   ✗ Hourly target minute not yet reached")
+
+            elif frequency == 'daily':
                 # For daily, check if start_time has arrived today
                 if start_time:
                     # Parse start_time (format: "HH:MM")
@@ -268,6 +342,12 @@ class ScheduledFlowExecutor:
                     logger.info(f"   Last executed: {last_executed_local}")
 
                     if (current_hour > target_hour) or (current_hour == target_hour and current_minute >= target_minute):
+                        scheduled_for = now_local.replace(
+                            hour=target_hour,
+                            minute=target_minute,
+                            second=0,
+                            microsecond=0,
+                        ).astimezone(pytz.UTC).replace(tzinfo=None)
                         # Check if we already executed today
                         if last_executed_local:
                             if last_executed_local.date() < now_local.date():
@@ -301,6 +381,12 @@ class ScheduledFlowExecutor:
                         current_minute = now_local.minute
 
                         if (current_hour > target_hour) or (current_hour == target_hour and current_minute >= target_minute):
+                            scheduled_for = now_local.replace(
+                                hour=target_hour,
+                                minute=target_minute,
+                                second=0,
+                                microsecond=0,
+                            ).astimezone(pytz.UTC).replace(tzinfo=None)
                             # Check if we already executed today
                             if last_executed_local:
                                 if last_executed_local.date() < now_local.date():
@@ -326,6 +412,13 @@ class ScheduledFlowExecutor:
                         current_minute = now_local.minute
 
                         if (current_hour > target_hour) or (current_hour == target_hour and current_minute >= target_minute):
+                            scheduled_for = now_local.replace(
+                                day=target_day,
+                                hour=target_hour,
+                                minute=target_minute,
+                                second=0,
+                                microsecond=0,
+                            ).astimezone(pytz.UTC).replace(tzinfo=None)
                             # Check if we already executed this month
                             if last_executed_local:
                                 if (last_executed_local.year < now_local.year) or \
@@ -342,6 +435,7 @@ class ScheduledFlowExecutor:
                     "frequency": frequency,
                     "interval": interval,
                     "executed_at": now_utc.isoformat(),
+                    "scheduled_for": scheduled_for.isoformat() if scheduled_for else None,
                     "flow_type": flow.flow_type
                 }
 
@@ -351,6 +445,96 @@ class ScheduledFlowExecutor:
 
         except Exception as e:
             logger.error(f"Error checking recurring flow #{flow.id}: {e}", exc_info=True)
+            return False, {}
+
+    def _check_cron_recurring_flow(
+        self,
+        *,
+        flow: FlowDefinition,
+        recurrence_rule: dict,
+        cron_expression: str,
+        timezone_str: str,
+        now_utc: datetime,
+        last_executed_at: Optional[datetime],
+    ) -> tuple:
+        """
+        Check recurring flow execution using a raw cron expression.
+
+        The cron expression overrides frequency-based recurrence. We evaluate
+        the next cron fire after the last execution, falling back to the flow's
+        scheduled/created baseline for first execution so old windows are not
+        replayed on newly-created flows.
+        """
+        try:
+            from services.cron_preview_service import (
+                calculate_next_fire_times,
+                validate_cron_expression,
+            )
+
+            expression = validate_cron_expression(cron_expression)
+
+            has_execution_baseline = bool(last_executed_at)
+            if last_executed_at:
+                if last_executed_at.tzinfo is not None:
+                    base_utc = last_executed_at.astimezone(pytz.UTC).replace(tzinfo=None)
+                else:
+                    base_utc = last_executed_at
+            elif flow.scheduled_at:
+                if flow.scheduled_at.tzinfo is not None:
+                    base_utc = flow.scheduled_at.astimezone(pytz.UTC).replace(tzinfo=None)
+                else:
+                    base_utc = flow.scheduled_at
+            elif getattr(flow, "created_at", None):
+                created_at = flow.created_at
+                if created_at.tzinfo is not None:
+                    base_utc = created_at.astimezone(pytz.UTC).replace(tzinfo=None)
+                else:
+                    base_utc = created_at
+            else:
+                base_utc = now_utc
+
+            if not has_execution_baseline:
+                base_utc = base_utc - timedelta(seconds=1)
+
+            next_fire_times = calculate_next_fire_times(
+                expression,
+                timezone_str,
+                base=base_utc,
+                count=1,
+            )
+            if not next_fire_times:
+                return False, {}
+
+            scheduled_for = next_fire_times[0]
+            if scheduled_for > now_utc:
+                logger.info(
+                    f"   ✗ Cron not due: next={scheduled_for.isoformat()}, now={now_utc.isoformat()}"
+                )
+                return False, {}
+
+            if last_executed_at:
+                last_executed_utc = (
+                    last_executed_at.astimezone(pytz.UTC).replace(tzinfo=None)
+                    if last_executed_at.tzinfo is not None
+                    else last_executed_at
+                )
+                if last_executed_utc >= scheduled_for:
+                    logger.info(f"   ✗ Already executed cron window {scheduled_for.isoformat()}")
+                    return False, {}
+
+            logger.info(
+                f"Recurring cron flow #{flow.id} is due: cron={expression}, scheduled_for={scheduled_for}"
+            )
+            return True, {
+                "trigger_type": "recurring",
+                "frequency": recurrence_rule.get("frequency", "daily"),
+                "cron_expression": expression,
+                "executed_at": now_utc.isoformat(),
+                "scheduled_for": scheduled_for.isoformat(),
+                "flow_type": flow.flow_type,
+            }
+        except Exception as e:
+            logger.error(f"Error checking cron recurring flow #{flow.id}: {e}", exc_info=True)
             return False, {}
 
     async def _execute_flow_async(self, flow: FlowDefinition, trigger_context: dict):

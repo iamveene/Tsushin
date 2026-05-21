@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
@@ -120,7 +121,8 @@ routes_flows = _load_module(
     "api.routes_flows",
     os.path.join("api", "routes_flows.py"),
 )
-from schemas import FlowCreate, FlowStepConfig, FlowStepCreate  # noqa: E402
+from flows.scheduled_flow_executor import ScheduledFlowExecutor  # noqa: E402
+from schemas import FlowCreate, FlowStepConfig, FlowStepCreate, RecurrenceRule  # noqa: E402
 from models import FlowDefinition, FlowNode  # noqa: E402
 
 
@@ -355,6 +357,39 @@ def test_create_triggered_flow_accepts_valid_source_step(monkeypatch):
         db.close()
 
 
+def test_create_recurring_flow_returns_hourly_cron_rule(monkeypatch):
+    monkeypatch.setattr(routes_flows, "log_tenant_event", lambda *args, **kwargs: None)
+    db = _make_session()
+    try:
+        out = _create_flow(
+            db,
+            FlowCreate(
+                name="Hourly watcher",
+                execution_method="recurring",
+                recurrence_rule=RecurrenceRule(
+                    frequency="hourly",
+                    interval=1,
+                    timezone="America/Sao_Paulo",
+                    start_time="00:00",
+                    cron_expression="0 * * * *",
+                ),
+                steps=[_message_step(position=1)],
+            ),
+        )
+
+        assert out.execution_method == "recurring"
+        assert out.recurrence_rule == {
+            "frequency": "hourly",
+            "interval": 1,
+            "days_of_week": None,
+            "timezone": "America/Sao_Paulo",
+            "start_time": "00:00",
+            "cron_expression": "0 * * * *",
+        }
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize(
     ("payload", "detail"),
     [
@@ -461,3 +496,162 @@ def test_create_scheduled_recurring_and_keyword_valid_payloads_still_work(monkey
         assert db.query(FlowDefinition).count() == 3
     finally:
         db.close()
+
+
+def _scheduled_flow_executor() -> ScheduledFlowExecutor:
+    return ScheduledFlowExecutor.__new__(ScheduledFlowExecutor)
+
+
+def _recurring_flow(
+    recurrence_rule: dict,
+    *,
+    scheduled_at: datetime | None = None,
+    last_executed_at: datetime | None = None,
+    created_at: datetime | None = None,
+):
+    return SimpleNamespace(
+        id=101,
+        recurrence_rule=recurrence_rule,
+        scheduled_at=scheduled_at,
+        last_executed_at=last_executed_at,
+        created_at=created_at,
+        flow_type="workflow",
+    )
+
+
+def test_recurrence_rule_accepts_hourly_frequency():
+    rule = RecurrenceRule(
+        frequency="hourly",
+        interval=1,
+        start_time="08:15",
+        cron_expression="0 * * * *",
+    )
+
+    assert rule.frequency == "hourly"
+    assert rule.start_time == "08:15"
+    assert rule.cron_expression == "0 * * * *"
+
+
+def test_recurrence_rule_rejects_invalid_cron_expression():
+    with pytest.raises(ValidationError):
+        RecurrenceRule(frequency="daily", interval=1, cron_expression="not cron")
+
+
+def test_hourly_recurring_flow_is_due_after_target_minute():
+    flow = _recurring_flow(
+        {"frequency": "hourly", "interval": 1, "timezone": "UTC"},
+        scheduled_at=datetime(2026, 5, 21, 12, 0),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is True
+    assert context["frequency"] == "hourly"
+    assert context["scheduled_for"] == "2026-05-21T13:00:00"
+
+
+def test_hourly_recurring_flow_is_not_due_before_target_minute():
+    flow = _recurring_flow(
+        {"frequency": "hourly", "interval": 1, "timezone": "UTC"},
+        scheduled_at=datetime(2026, 5, 21, 12, 30),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is False
+    assert context == {}
+
+
+def test_hourly_start_time_anchors_minute_not_daytime_hour():
+    flow = _recurring_flow(
+        {"frequency": "hourly", "interval": 1, "timezone": "UTC", "start_time": "09:00"},
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 0, 5),
+    )
+
+    assert should_execute is True
+    assert context["scheduled_for"] == "2026-05-21T00:00:00"
+
+
+def test_hourly_recurring_flow_does_not_duplicate_same_hour_window():
+    flow = _recurring_flow(
+        {"frequency": "hourly", "interval": 1, "timezone": "UTC"},
+        scheduled_at=datetime(2026, 5, 21, 12, 0),
+        last_executed_at=datetime(2026, 5, 21, 13, 1),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is False
+    assert context == {}
+
+
+def test_cron_recurring_flow_overrides_frequency_and_is_due():
+    flow = _recurring_flow(
+        {
+            "frequency": "monthly",
+            "cron_expression": "0 * * * *",
+            "timezone": "UTC",
+        },
+        created_at=datetime(2026, 5, 21, 12, 59),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is True
+    assert context["cron_expression"] == "0 * * * *"
+    assert context["scheduled_for"] == "2026-05-21T13:00:00"
+
+
+def test_cron_recurring_flow_is_not_due_before_next_fire():
+    flow = _recurring_flow(
+        {
+            "frequency": "daily",
+            "cron_expression": "0 * * * *",
+            "timezone": "UTC",
+        },
+        created_at=datetime(2026, 5, 21, 13, 1),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is False
+    assert context == {}
+
+
+def test_cron_recurring_flow_does_not_duplicate_same_cron_window():
+    flow = _recurring_flow(
+        {
+            "frequency": "daily",
+            "cron_expression": "0 * * * *",
+            "timezone": "UTC",
+        },
+        created_at=datetime(2026, 5, 21, 12, 59),
+        last_executed_at=datetime(2026, 5, 21, 13, 1),
+    )
+
+    should_execute, context = _scheduled_flow_executor()._check_recurring_flow(
+        flow,
+        datetime(2026, 5, 21, 13, 5),
+    )
+
+    assert should_execute is False
+    assert context == {}

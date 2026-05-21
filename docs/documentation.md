@@ -1913,7 +1913,7 @@ Initiator types (`models.py:1554`): `programmatic` (UI-created) | `agentic` (AI-
 `flow_definition.execution_method` (Source: `models.py:1546`):
 - `immediate` — runs on creation/trigger.
 - `scheduled` — runs at `scheduled_at` (DateTime).
-- `recurring` — driven by `recurrence_rule` JSON: `{frequency, interval, days_of_week, timezone}` (Source: `models.py:1548`).
+- `recurring` — driven by `recurrence_rule` JSON: `{frequency, interval, days_of_week, timezone, start_time, cron_expression}` (Source: `models.py:1548`). Supported frequency values are `hourly`, `daily`, `weekly`, and `monthly`; `cron_expression` is an optional raw override for schedules that do not fit the interval controls.
 - `keyword` — runs when configured `trigger_keywords` match.
 - `triggered` — runs when a selected Hub trigger fires. Triggered flows use an auto-generated locked Source step at position 1 and a `flow_trigger_binding` row.
 
@@ -2215,7 +2215,7 @@ After a trigger is selected, the Flow builder creates the Source step automatica
 
 ### 14.5 Flow Scheduling
 
-Scheduled and recurring automation is owned by Flows. Operators create a Flow with `execution_method='scheduled'` or `execution_method='recurring'`, configure the schedule in the Flow editor, and keep all output steps in the same graph. This removes trigger-owned scheduling and avoids maintaining two scheduling concepts.
+Scheduled and recurring automation is owned by Flows. Operators create a Flow with `execution_method='scheduled'` or `execution_method='recurring'`, configure the schedule in the Flow editor, and keep all output steps in the same graph. Recurring flows support hourly, daily, weekly, and monthly intervals, with an optional raw cron expression override on the FlowDefinition. This removes trigger-owned scheduling and avoids maintaining two scheduling concepts.
 
 ---
 
