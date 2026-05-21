@@ -2031,6 +2031,8 @@ A migrated financial workflow is accepted only when a normal operator can create
 
 For cross-environment replication, each source field in the redacted manifest must map to a visible Flow UI control. This includes schedule and recurrence, trigger/source binding, agent/provider choices, integration references, browser session profile, HTTP method/URL/headers/body, Browser Automation sequence actions, extraction rules, storage/dedupe keys, gate mode/conditions, notification channel/recipient/template, retry/failure behavior, and node ordering. If any field can only be reproduced through API/DB writes or raw import, log a product bug with the exact missing UI control.
 
+The same acceptance bar applies to non-financial portal monitors such as shipment tracking. A portable Flow profile should keep the provider name, subject key, selectors, CAPTCHA configuration, result selector, DOM extraction script/rules, storage key fields, Gate conditions, and Notification target in ordinary step config so another tenant can recreate or adapt the flow from the UI without an opaque runner.
+
 Acceptance for each migrated financial workflow requires all of the following evidence:
 
 1. UI recreation from scratch in Flows, with each primitive node editable and saved through the UI; JSON import/export is optional future capability, not acceptance evidence.

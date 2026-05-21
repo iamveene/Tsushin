@@ -876,6 +876,8 @@ Flows let you build multi-step automated workflows.
 
 Browser automation CAPTCHA steps stay configurable per site: choose the image, input, submit, and success selectors in the step settings, set exact or min/max code length when needed, then select an available multimodal solver provider such as Ollama or Gemini.
 
+Generic tracking, scraping, and portal-monitoring flows should be reconstructable from the UI. Keep site profiles in visible step fields: browser selectors, CAPTCHA selectors, wait/result selectors, extraction scripts or rules, dedupe keys, Gate conditions, and Notification recipients/templates. If you clone a profile to a similar site, update those fields in the step editors rather than relying on a hidden site-specific runner.
+
 ### Step Types
 
 | Step Type | What It Does |

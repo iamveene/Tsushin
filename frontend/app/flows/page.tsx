@@ -602,6 +602,78 @@ function normalizeStringMapRows(value: Record<string, any> | undefined | null): 
   return Object.entries(value).map(([key, rawValue]) => ({ key, value: String(rawValue ?? '') }))
 }
 
+function normalizeSecretReferenceRows(value: unknown): FlowSecretReferenceConfig[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is FlowSecretReferenceConfig => !!item && typeof item === 'object')
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, any>).map(([target, rawValue]) => {
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        return { target, ...(rawValue as FlowSecretReferenceConfig) }
+      }
+      return { target, reference: String(rawValue ?? '') }
+    })
+  }
+  return []
+}
+
+function normalizeBrowserSelectorRows(value: unknown): BrowserSelectorConfig[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => {
+        if (item && typeof item === 'object') return item as BrowserSelectorConfig
+        return { selector: String(item ?? '') }
+      })
+      .filter(item => Object.keys(item).length > 0)
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, any>).map(([name, rawValue]) => {
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        return { name, ...(rawValue as BrowserSelectorConfig) }
+      }
+      return { name, selector: String(rawValue ?? '') }
+    })
+  }
+  return []
+}
+
+function normalizeExtractionRuleRows(value: unknown): DataExtractionRuleConfig[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is DataExtractionRuleConfig => !!item && typeof item === 'object')
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, any>).map(([target, rawValue]) => {
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        return { target, ...(rawValue as DataExtractionRuleConfig) }
+      }
+      return { target, path: String(rawValue ?? '') }
+    })
+  }
+  return []
+}
+
+function normalizeParserRuleRows(value: unknown): DataParserRuleConfig[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is DataParserRuleConfig => !!item && typeof item === 'object')
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, any>).map(([field, rawValue]) => {
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        return { field, ...(rawValue as DataParserRuleConfig) }
+      }
+      return { field, parser: String(rawValue ?? '') }
+    })
+  }
+  return []
+}
+
+function normalizeGateConditionRows(value: unknown): Array<{ field: string; operator: string; value: any; type: string }> {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is { field: string; operator: string; value: any; type: string } => !!item && typeof item === 'object')
+  }
+  return []
+}
+
 function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
   return rows.reduce<Record<string, string>>((acc, row) => {
     const key = (row.key || '').trim()
@@ -672,8 +744,8 @@ function BrowserAutomationConfigPanel({
   currentStepPosition: number
 }) {
   const current = config || {}
-  const selectors = (current.selectors || []) as BrowserSelectorConfig[]
-  const secretReferences = (current.browser_secret_references || []) as FlowSecretReferenceConfig[]
+  const selectors = normalizeBrowserSelectorRows(current.selectors)
+  const secretReferences = normalizeSecretReferenceRows(current.browser_secret_references)
   const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
 
   function updateSelector(index: number, update: BrowserSelectorConfig) {
@@ -968,7 +1040,7 @@ function HttpRequestConfigPanel({
 }) {
   const current = config || {}
   const headers = normalizeHeaderRows(current.http_headers || current.headers)
-  const secretReferences = (current.http_secret_references || current.secret_references || []) as FlowSecretReferenceConfig[]
+  const secretReferences = normalizeSecretReferenceRows(current.http_secret_references || current.secret_references)
   const method = current.http_method || current.method || 'GET'
   const url = current.http_url || current.url || ''
   const body = current.http_body || current.body || ''
@@ -1097,8 +1169,8 @@ function DataTransformConfigPanel({
   onChange: (update: Partial<FlowStepConfig>) => void
 }) {
   const current = config || {}
-  const extractionRules = (current.extraction_rules || []) as DataExtractionRuleConfig[]
-  const parserRules = (current.parser_rules || []) as DataParserRuleConfig[]
+  const extractionRules = normalizeExtractionRuleRows(current.extraction_rules)
+  const parserRules = normalizeParserRuleRows(current.parser_rules)
   const sourceStepRows = normalizeStringMapRows(current.source_steps)
   const rawHandleRows = normalizeStringMapRows(current.raw_response_handles)
   const recordMappingRows = normalizeStringMapRows(current.record_mapping)
@@ -5219,14 +5291,14 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
                 <div className="space-y-2">
-                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                  {normalizeGateConditionRows(currentConfig?.gate_conditions).map((cond: any, ci: number) => (
                     <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
                       <div className="flex-1 grid grid-cols-4 gap-2">
                         <CursorSafeInput
                           type="text"
                           value={cond.field || ''}
                           onValueChange={(v) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], field: v }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -5237,7 +5309,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                         <select
                           value={cond.operator || '=='}
                           onChange={(e) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], operator: e.target.value }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -5274,7 +5346,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                           type="text"
                           value={cond.value ?? ''}
                           onValueChange={(v) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], value: v }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -5285,7 +5357,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                         <select
                           value={cond.type || 'string'}
                           onChange={(e) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], type: e.target.value }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -5302,7 +5374,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                       <button
                         type="button"
                         onClick={() => {
-                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          const updated = normalizeGateConditionRows(currentConfig?.gate_conditions).filter((_: any, i: number) => i !== ci)
                           updateConfig('gate_conditions', updated)
                         }}
                         className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
@@ -5317,7 +5389,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
                 <button
                   type="button"
                   onClick={() => {
-                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions), { field: '', operator: '==', value: '', type: 'string' }]
                     updateConfig('gate_conditions', updated)
                   }}
                   className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
@@ -6723,14 +6795,14 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">Conditions</label>
                 <div className="space-y-2">
-                  {(currentConfig?.gate_conditions || []).map((cond: any, ci: number) => (
+                  {normalizeGateConditionRows(currentConfig?.gate_conditions).map((cond: any, ci: number) => (
                     <div key={ci} className="flex gap-2 items-start p-2 bg-slate-800/50 rounded-lg border border-slate-700">
                       <div className="flex-1 grid grid-cols-4 gap-2">
                         <CursorSafeInput
                           type="text"
                           value={cond.field || ''}
                           onValueChange={(v) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], field: v }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -6741,7 +6813,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                         <select
                           value={cond.operator || '=='}
                           onChange={(e) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], operator: e.target.value }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -6778,7 +6850,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                           type="text"
                           value={cond.value ?? ''}
                           onValueChange={(v) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], value: v }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -6789,7 +6861,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                         <select
                           value={cond.type || 'string'}
                           onChange={(e) => {
-                            const updated = [...(currentConfig?.gate_conditions || [])]
+                            const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions)]
                             updated[ci] = { ...updated[ci], type: e.target.value }
                             updateConfig('gate_conditions', updated)
                           }}
@@ -6806,7 +6878,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                       <button
                         type="button"
                         onClick={() => {
-                          const updated = (currentConfig?.gate_conditions || []).filter((_: any, i: number) => i !== ci)
+                          const updated = normalizeGateConditionRows(currentConfig?.gate_conditions).filter((_: any, i: number) => i !== ci)
                           updateConfig('gate_conditions', updated)
                         }}
                         className="p-1.5 text-slate-500 hover:text-red-400 transition-colors"
@@ -6821,7 +6893,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
                 <button
                   type="button"
                   onClick={() => {
-                    const updated = [...(currentConfig?.gate_conditions || []), { field: '', operator: '==', value: '', type: 'string' }]
+                    const updated = [...normalizeGateConditionRows(currentConfig?.gate_conditions), { field: '', operator: '==', value: '', type: 'string' }]
                     updateConfig('gate_conditions', updated)
                   }}
                   className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-slate-600
