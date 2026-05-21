@@ -5799,11 +5799,11 @@ function EditableStepBuilder({
             >
               {/* Step Header */}
               <div
-                className="p-4 flex items-center gap-4 cursor-pointer"
+                className="p-4 flex flex-wrap items-center gap-3 sm:flex-nowrap sm:gap-4 cursor-pointer min-w-0"
                 onClick={() => setEditingIndex(editingIndex === index ? null : index)}
               >
                 {/* Reorder buttons */}
-                <div className="flex flex-col gap-1">
+                <div className="flex shrink-0 flex-col gap-1">
                   {/* v0.7.0 Wave 2: source step is locked at position 0; hide reorder buttons. */}
                   {step.type !== 'source' && (
                     <>
@@ -5830,7 +5830,7 @@ function EditableStepBuilder({
                 </div>
 
                 {/* Step icon */}
-                <div className="w-10 h-10 rounded-lg bg-slate-600 flex items-center justify-center text-slate-300">
+                <div className="w-10 h-10 shrink-0 rounded-lg bg-slate-600 flex items-center justify-center text-slate-300">
                   {(() => {
                     const stepType = STEP_TYPES.find(t => t.value === step.type)
                     if (stepType) {
@@ -5842,9 +5842,9 @@ function EditableStepBuilder({
                 </div>
 
                 {/* Step info */}
-                <div className="flex-1">
-                  <div className="font-medium text-white flex items-center gap-2">
-                    {step.name}
+                <div className="order-last min-w-0 basis-full sm:order-none sm:basis-auto sm:flex-1">
+                  <div className="font-medium text-white flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="min-w-0 break-words">{step.name}</span>
                     {step.type === 'source' && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
                         Locked at top
@@ -5866,7 +5866,7 @@ function EditableStepBuilder({
                       <span className="text-xs text-red-400">{step._error}</span>
                     )}
                   </div>
-                  <div className="text-sm text-slate-400">
+                  <div className="text-sm text-slate-400 break-words">
                     {STEP_TYPES.find(t => t.value === step.type)?.label}
                     {step.allow_multi_turn && ' • Multi-turn'}
                     {step.type === 'gate' && step.config?.gate_conditions && step.config.gate_conditions.length > 0 && (
@@ -5886,7 +5886,7 @@ function EditableStepBuilder({
                 {step.type !== 'source' && (
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteStep(index) }}
-                    className="text-red-400 hover:text-red-300 p-2"
+                    className="shrink-0 text-red-400 hover:text-red-300 p-2"
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -5895,7 +5895,7 @@ function EditableStepBuilder({
                 )}
 
                 {/* Expand/collapse indicator */}
-                <svg className={`w-5 h-5 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className={`w-5 h-5 shrink-0 text-slate-400 transition-transform ${editingIndex === index ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
