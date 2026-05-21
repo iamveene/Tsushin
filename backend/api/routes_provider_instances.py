@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import logging
 import time
+import httpx
 
 from models import ProviderInstance, ProviderConnectionAudit, Agent
 from constants.llm_models import (
@@ -342,6 +343,67 @@ def _sanitize_test_error(err_str: str, test_model: str) -> str:
     if "permission" in lower or "403" in err_str:
         return "Access denied — check API key permissions for this model"
     return f"Connection test failed: {err_str[:200]}"
+
+
+async def _test_raw_ollama_connection(
+    *,
+    base_url: str,
+    model_name: str,
+    api_key: Optional[str] = None,
+) -> Optional[str]:
+    """Probe a raw Ollama endpoint before a ProviderInstance exists.
+
+    The saved-instance path must continue to use AIClient with
+    provider_instance_id so runtime behavior matches real agents. The raw
+    pre-save path cannot require that DB row yet, so it talks to the supplied
+    Ollama URL directly.
+    """
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "You are a test assistant. Respond with exactly: OK"},
+            {"role": "user", "content": "Test connection. Reply with OK."},
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 8,
+            "num_ctx": 1024,
+        },
+    }
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=10.0),
+        headers=headers,
+    ) as client:
+        response = await client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
+
+    if response.status_code == 200:
+        try:
+            body = response.json()
+        except ValueError:
+            return "Ollama returned a non-JSON response"
+        if body.get("error"):
+            return str(body["error"])
+        return None
+
+    error_text = response.text
+    try:
+        parsed = response.json()
+        if isinstance(parsed, dict) and parsed.get("error"):
+            error_text = str(parsed["error"])
+    except ValueError:
+        pass
+
+    if response.status_code == 404:
+        return f"Model '{model_name}' not found. Pull it first: ollama pull {model_name}"
+    if response.status_code in (401, 403):
+        return "Authentication failed — check the Ollama API key or proxy permissions"
+    return f"Ollama API error: {response.status_code} - {error_text[:200]}"
 
 
 async def _background_test_instance(instance_id: int, user_id: int) -> None:
@@ -1365,11 +1427,15 @@ async def test_provider_connection_raw(
         )
 
     # Validate base_url against SSRF if provided
+    validated_base_url = data.base_url
     if data.base_url:
-        from utils.ssrf_validator import validate_url, SSRFValidationError
+        from utils.ssrf_validator import validate_url, validate_ollama_url, SSRFValidationError
         try:
-            allow_private = vendor in ("ollama", "custom")
-            validate_url(data.base_url, allow_private=allow_private)
+            if vendor == "ollama":
+                validated_base_url = validate_ollama_url(data.base_url)
+            else:
+                allow_private = vendor in ("custom",)
+                validated_base_url = validate_url(data.base_url, allow_private=allow_private)
         except SSRFValidationError as e:
             return TestConnectionResponse(
                 success=False,
@@ -1429,6 +1495,55 @@ async def test_provider_connection_raw(
     if not test_model and vendor == "custom":
         test_model = "default"
 
+    if vendor == "ollama":
+        if not validated_base_url:
+            return TestConnectionResponse(
+                success=False,
+                message="Ollama base URL is required for raw connection tests before saving an instance",
+            )
+
+        start_time = time.time()
+        try:
+            error_message = await _test_raw_ollama_connection(
+                base_url=validated_base_url,
+                model_name=test_model,
+                api_key=api_key,
+            )
+            latency_ms = int((time.time() - start_time) * 1000)
+            if error_message:
+                return TestConnectionResponse(
+                    success=False,
+                    message=error_message,
+                    latency_ms=latency_ms,
+                )
+            return TestConnectionResponse(
+                success=True,
+                message=f"Connected to {vendor}/{test_model}",
+                latency_ms=latency_ms,
+            )
+        except httpx.ConnectError:
+            latency_ms = int((time.time() - start_time) * 1000)
+            return TestConnectionResponse(
+                success=False,
+                message="Cannot connect to Ollama. Ensure it is running and reachable from the backend container",
+                latency_ms=latency_ms,
+            )
+        except httpx.TimeoutException:
+            latency_ms = int((time.time() - start_time) * 1000)
+            return TestConnectionResponse(
+                success=False,
+                message=f"Timeout. Model '{test_model}' may be slow. Try: ollama run {test_model}",
+                latency_ms=latency_ms,
+            )
+        except Exception as e:
+            logger.exception("Raw Ollama test connection failed")
+            latency_ms = int((time.time() - start_time) * 1000)
+            return TestConnectionResponse(
+                success=False,
+                message=_sanitize_test_error(str(e), test_model),
+                latency_ms=latency_ms,
+            )
+
     start_time = time.time()
     error_message = None
     success = False
@@ -1452,11 +1567,11 @@ async def test_provider_connection_raw(
         _disable_sdk_retries(client)
 
         # Override base_url if provided
-        if data.base_url:
+        if validated_base_url:
             if hasattr(client, 'client') and client.client:
-                client.client.base_url = data.base_url
+                client.client.base_url = validated_base_url
             if vendor == "ollama":
-                client.ollama_base_url = data.base_url
+                client.ollama_base_url = validated_base_url
 
         result = await client.generate(
             system_prompt="You are a test assistant. Respond with exactly: OK",

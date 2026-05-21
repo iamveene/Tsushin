@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Ollama raw connection testing (2026-05-21)
+
+- Fixed raw `POST /api/provider-instances/test-connection` for Ollama so first-run/pre-save tests probe the supplied `base_url` directly instead of requiring a saved/default Ollama ProviderInstance first.
+- Added regression coverage for raw Ollama tests with no saved ProviderInstance and for the explicit no-base-url pre-save error.
+- Retested the fix on the Ubuntu VM fresh-install stack at `https://10-211-55-5.sslip.io` with host Ollama reachable from the backend container; the raw test now returns `success=true` for `llama3.2:latest`.
+
 ### Changed — Legacy Service API Keys retired (2026-05-20)
 
 - Retired `/api/api-keys*` as a runtime/configuration surface; the routes now return `410 Gone` and legacy `api_key` rows are audit/migration-only.
