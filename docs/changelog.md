@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Flow editor portable config rows (2026-05-21)
+
+- Fixed Flow step editors so portable object-shaped configs for Browser Automation selectors, secret references, Data Transform extraction/parser rules, and Gate conditions render as editable rows instead of crashing the page.
+- Added product documentation that generic tracking/portal automations must remain reconstructable from the Flows UI using visible primitive nodes, including CAPTCHA selector profiles, extraction scripts, dedupe keys, gates, and notifications.
+
 ### Fixed — Generic Gemini CAPTCHA solver provider (2026-05-21)
 
 - Added a generic Gemini-backed option for `browser_automation.solve_captcha`, using the tenant's configured Gemini provider instance or environment key while preserving the existing site-profile selectors, prompt, retry, and length settings.
