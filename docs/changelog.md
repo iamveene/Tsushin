@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — Flow editor cosmetic QA polish (2026-05-21)
 
 - Polished the Flow Browser Automation step editor so selector and tool-argument rows render as compact responsive cards instead of cramped single-line grids, improving Correios-style CAPTCHA/tracking profiles on desktop and mobile.
+- Tightened Flow step headers on mobile so long node names, gate badges, delete controls, and expand chevrons wrap or shrink inside the edit modal instead of creating horizontal overflow.
 - Kept modal footers readable on narrow screens by preventing Save/Cancel wrapping and hiding floating helper surfaces while blocking Flow edit modals are open.
 - Paused the full onboarding tour while another blocking app modal is open so first-run users can still edit deep-linked flows without the tour intercepting node clicks.
 
