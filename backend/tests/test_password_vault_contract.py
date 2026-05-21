@@ -479,6 +479,13 @@ def test_captcha_guess_normalization_prefers_exact_length():
     assert skill_cls._captcha_guess_lines("6252\n62562\n6252", expected_length=5) == ["62562"]
     assert skill_cls._captcha_guess_lines("f67ancx\nF67ANCX\nF67AW", expected_length=5) == ["f67aw"]
     assert skill_cls._captcha_guess_lines("6252\n62562\n6252") == ["6252", "62562"]
+    assert skill_cls._captcha_guess_lines("m82\nmr82\nmr823", min_length=3, max_length=5) == [
+        "m82",
+        "mr82",
+        "mr823",
+    ]
+    assert skill_cls._captcha_length_bounds({"captcha_min_length": 6, "captcha_max_length": 3}) == (3, 6)
+    assert skill_cls._captcha_length_bounds({"captcha_length": 5, "captcha_min_length": 3}) == (5, 5)
 
 
 def test_captcha_ollama_payload_honors_generation_bounds(monkeypatch, tmp_path):

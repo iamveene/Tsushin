@@ -874,7 +874,7 @@ Flows let you build multi-step automated workflows.
 5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving. Recurring flows can run hourly, daily, weekly, or monthly; use the cron override when the schedule needs a raw cron expression.
 6. **Add steps** in sequence.
 
-Browser automation CAPTCHA steps stay configurable per site: choose the image, input, submit, and success selectors in the step settings, then select an available multimodal solver provider such as Ollama or Gemini.
+Browser automation CAPTCHA steps stay configurable per site: choose the image, input, submit, and success selectors in the step settings, set exact or min/max code length when needed, then select an available multimodal solver provider such as Ollama or Gemini.
 
 ### Step Types
 
