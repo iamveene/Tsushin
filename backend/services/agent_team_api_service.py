@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -46,6 +47,7 @@ SUPPORTED_TEAM_TRIGGER_KINDS = {
     TeamTriggerKind.JIRA.value,
     TeamTriggerKind.GMAIL.value,
 }
+NOTIFY_CONTACT_PATTERN = re.compile(r"\s*\[notify:contact:(\d+)\]\s*")
 
 
 class AgentTeamApiError(ValueError):
@@ -125,6 +127,46 @@ def _canonical_trigger_config(
         "filters": dict(filters or {}),
         "is_enabled": bool(is_enabled),
     }
+
+
+def _notification_contact_id(description: Optional[str]) -> Optional[int]:
+    match = NOTIFY_CONTACT_PATTERN.search(description or "")
+    return int(match.group(1)) if match else None
+
+
+def _strip_notification_directive(description: Optional[str]) -> Optional[str]:
+    if description is None:
+        return None
+    cleaned = NOTIFY_CONTACT_PATTERN.sub(" ", description).strip()
+    return re.sub(r"\s{2,}", " ", cleaned) or None
+
+
+def _description_with_notification(description: Optional[str], contact_id: int) -> str:
+    base = _strip_notification_directive(description) or "Automated repository review team."
+    return f"{base} [notify:contact:{contact_id}]"
+
+
+def _notification_contact_payload(
+    db: Session,
+    *,
+    tenant_id: Optional[str],
+    description: Optional[str],
+) -> tuple[Optional[int], Optional[str]]:
+    contact_id = _notification_contact_id(description)
+    if contact_id is None or not tenant_id:
+        return None, None
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.id == contact_id,
+            Contact.tenant_id == tenant_id,
+            Contact.is_active.is_(True),
+        )
+        .first()
+    )
+    if contact is None:
+        return contact_id, None
+    return contact.id, contact.friendly_name
 
 
 class AgentTeamApiService:
@@ -228,7 +270,14 @@ class AgentTeamApiService:
         if "name" in data and data["name"] != team.name:
             self._ensure_unique_name(data["name"], exclude_team_id=team.id)
             team.name = data["name"]
-        for field in ("description", "goal_text", "topology", "status", "max_steps", "max_total_tokens", "max_concurrent_runs"):
+        if "description" in data:
+            existing_notification_contact_id = _notification_contact_id(team.description)
+            next_description = data["description"]
+            if existing_notification_contact_id and not _notification_contact_id(next_description):
+                team.description = _description_with_notification(next_description, existing_notification_contact_id)
+            else:
+                team.description = next_description
+        for field in ("goal_text", "topology", "status", "max_steps", "max_total_tokens", "max_concurrent_runs"):
             if field in data:
                 if field == "status":
                     self._reject_direct_archive_status(data[field])
@@ -595,10 +644,15 @@ class AgentTeamApiService:
     def serialize_team(self, team: AgentTeam, *, detail: bool) -> dict[str, Any]:
         member_count = self._member_count(team.id)
         last_run = self._last_run(team.id)
+        notification_contact_id, notification_contact_name = _notification_contact_payload(
+            self.db,
+            tenant_id=team.tenant_id,
+            description=team.description,
+        )
         data = {
             "id": team.id,
             "name": team.name,
-            "description": team.description,
+            "description": _strip_notification_directive(team.description),
             "goal_text": team.goal_text,
             "topology": team.topology,
             "status": team.status,
@@ -606,6 +660,8 @@ class AgentTeamApiService:
             "sentinel_profile_id": team.sentinel_profile_id,
             "member_count": member_count,
             "last_run_status": last_run.status if last_run else None,
+            "notification_contact_id": notification_contact_id,
+            "notification_contact_name": notification_contact_name,
             "max_steps": team.max_steps,
             "max_total_tokens": team.max_total_tokens,
             "max_concurrent_runs": team.max_concurrent_runs,

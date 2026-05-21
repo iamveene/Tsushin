@@ -36,6 +36,7 @@ class RepositoryAutomationRequest(BaseModel):
     team_name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     flow_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     routing_mode: Optional[RepositoryRoutingMode] = None
+    notify_contact_id: Optional[int] = Field(default=None, gt=0)
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -149,6 +150,8 @@ class RepositoryAutomationTeamRef(BaseModel):
     name: str
     status: str
     member_count: int
+    notification_contact_id: Optional[int] = None
+    notification_contact_name: Optional[str] = None
 
 
 class RepositoryAutomationBindingRef(BaseModel):
