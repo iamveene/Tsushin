@@ -41,6 +41,7 @@ interface TourStep {
 function hasVisibleBlockingOverlay(): boolean {
   if (typeof document === 'undefined') return false
   return Array.from(document.querySelectorAll<HTMLElement>('.fixed.inset-0, [role="dialog"]')).some((element) => {
+    if (element.dataset.tsushinModal === 'onboarding') return false
     const style = window.getComputedStyle(element)
     if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
     const rect = element.getBoundingClientRect()
@@ -352,6 +353,10 @@ export default function OnboardingWizard() {
     return null
   }
 
+  if (hasBlockingOverlay) {
+    return null
+  }
+
   // BUG-595: Belt-and-suspenders — if the user has already completed or
   // dismissed the tour, never render the wizard Modal again, even if some
   // stray state flip set `isActive=true`. `hasCompletedOnboarding` is pinned
@@ -374,6 +379,7 @@ export default function OnboardingWizard() {
       onClose={dismissTour}
       size="xl"
       showCloseButton={true}
+      overlayKind="onboarding"
     >
       <div className="p-6">
         {/* Progress Indicator */}
