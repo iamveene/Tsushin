@@ -203,6 +203,86 @@ def test_provider_instance_response_includes_ollama_container_metadata():
         db.close()
 
 
+def test_raw_ollama_connection_uses_supplied_base_url_without_saved_instance():
+    db = _make_session()
+    captured = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"message":{"content":"OK"}}'
+
+        def json(self):
+            return {"message": {"content": "OK"}}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json):
+            captured["url"] = url
+            captured["payload"] = json
+            return _FakeResponse()
+
+    try:
+        ctx = _make_ctx(db, "tenant-alpha")
+        current_user = SimpleNamespace(id=1)
+        data = routes_provider_instances.TestConnectionRawRequest(
+            vendor="ollama",
+            base_url="http://127.0.0.1:11434",
+            model="llama3.2:latest",
+        )
+
+        with patch.object(routes_provider_instances.httpx, "AsyncClient", _FakeAsyncClient):
+            response = asyncio.run(
+                routes_provider_instances.test_provider_connection_raw(
+                    data=data,
+                    db=db,
+                    current_user=current_user,
+                    ctx=ctx,
+                )
+            )
+
+        assert response.success is True
+        assert response.message == "Connected to ollama/llama3.2:latest"
+        assert captured["url"] == "http://127.0.0.1:11434/api/chat"
+        assert captured["payload"]["model"] == "llama3.2:latest"
+        assert db.query(ProviderInstance).count() == 0
+    finally:
+        db.close()
+
+
+def test_raw_ollama_connection_requires_base_url_before_saved_instance():
+    db = _make_session()
+    try:
+        ctx = _make_ctx(db, "tenant-alpha")
+        current_user = SimpleNamespace(id=1)
+        data = routes_provider_instances.TestConnectionRawRequest(
+            vendor="ollama",
+            model="llama3.2:latest",
+        )
+
+        response = asyncio.run(
+            routes_provider_instances.test_provider_connection_raw(
+                data=data,
+                db=db,
+                current_user=current_user,
+                ctx=ctx,
+            )
+        )
+
+        assert response.success is False
+        assert "base URL is required" in response.message
+        assert db.query(ProviderInstance).count() == 0
+    finally:
+        db.close()
+
+
 def test_delete_provider_instance_deprovisions_auto_provisioned_ollama_before_soft_delete():
     db = _make_session()
     try:
