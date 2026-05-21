@@ -747,6 +747,9 @@ function BrowserAutomationConfigPanel({
   const selectors = normalizeBrowserSelectorRows(current.selectors)
   const secretReferences = normalizeSecretReferenceRows(current.browser_secret_references)
   const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
+  const compactInputClass = 'w-full min-w-0 px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none'
+  const fieldLabelClass = 'block text-[11px] font-medium uppercase text-slate-500 mb-1'
+  const removeButtonClass = 'shrink-0 rounded-md border border-red-500/30 px-2.5 py-1 text-xs font-medium text-red-300 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-200 transition-colors'
 
   function updateSelector(index: number, update: BrowserSelectorConfig) {
     const next = selectors.map((selector, selectorIndex) => selectorIndex === index ? { ...selector, ...update } : selector)
@@ -914,51 +917,73 @@ function BrowserAutomationConfigPanel({
         ) : (
           <div className="space-y-2">
             {selectors.map((selector, index) => (
-              <div key={index} className="grid gap-2 md:grid-cols-[1fr_120px_1.4fr_1fr_1.4fr_auto]">
-                <CursorSafeInput
-                  type="text"
-                  value={selector.name || ''}
-                  onValueChange={(value) => updateSelector(index, { name: value })}
-                  placeholder="field name"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-                <select
-                  value={selector.action || 'extract'}
-                  onChange={(e) => updateSelector(index, { action: e.target.value })}
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                >
-                  {BROWSER_ACTION_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <CursorSafeInput
-                  type="text"
-                  value={selector.selector || ''}
-                  onValueChange={(value) => updateSelector(index, { selector: value })}
-                  placeholder="CSS selector"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-                <CursorSafeInput
-                  type="text"
-                  value={selector.value || ''}
-                  onValueChange={(value) => updateSelector(index, { value })}
-                  placeholder="value"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-                <CursorSafeInput
-                  type="text"
-                  value={selector.fallback_selector || ''}
-                  onValueChange={(value) => updateSelector(index, { fallback_selector: value })}
-                  placeholder="fallback selector"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => onChange({ selectors: selectors.filter((_, selectorIndex) => selectorIndex !== index) })}
-                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
-                >
-                  Remove
-                </button>
+              <div key={index} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-slate-400">Selector {index + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => onChange({ selectors: selectors.filter((_, selectorIndex) => selectorIndex !== index) })}
+                    className={removeButtonClass}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="grid min-w-0 gap-2 lg:grid-cols-[minmax(120px,0.9fr)_minmax(130px,0.8fr)_minmax(220px,1.7fr)]">
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Name</span>
+                    <CursorSafeInput
+                      type="text"
+                      value={selector.name || ''}
+                      onValueChange={(value) => updateSelector(index, { name: value })}
+                      placeholder="field name"
+                      className={compactInputClass}
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Action</span>
+                    <select
+                      value={selector.action || 'extract'}
+                      onChange={(e) => updateSelector(index, { action: e.target.value })}
+                      className={compactInputClass}
+                    >
+                      {BROWSER_ACTION_OPTIONS.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>CSS selector</span>
+                    <CursorSafeInput
+                      type="text"
+                      value={selector.selector || ''}
+                      onValueChange={(value) => updateSelector(index, { selector: value })}
+                      placeholder="CSS selector"
+                      className={compactInputClass}
+                    />
+                  </label>
+                </div>
+                <div className="grid min-w-0 gap-2 md:grid-cols-2">
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Value</span>
+                    <CursorSafeInput
+                      type="text"
+                      value={selector.value || ''}
+                      onValueChange={(value) => updateSelector(index, { value })}
+                      placeholder="value"
+                      className={compactInputClass}
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Fallback selector</span>
+                    <CursorSafeInput
+                      type="text"
+                      value={selector.fallback_selector || ''}
+                      onValueChange={(value) => updateSelector(index, { fallback_selector: value })}
+                      placeholder="fallback selector"
+                      className={compactInputClass}
+                    />
+                  </label>
+                </div>
               </div>
             ))}
           </div>
@@ -981,36 +1006,47 @@ function BrowserAutomationConfigPanel({
         ) : (
           <div className="space-y-2">
             {toolArgumentRows.map((argument, index) => (
-              <div key={index} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
-                <CursorSafeInput
-                  type="text"
-                  value={argument.key || ''}
-                  onValueChange={(value) => {
-                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
-                    setToolArgumentRows(next)
-                  }}
-                  placeholder="script"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-                />
-                <TemplateTextarea
-                  value={argument.value || ''}
-                  onValueChange={(value) => {
-                    const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
-                    setToolArgumentRows(next)
-                  }}
-                  rows={(argument.key || '').trim() === 'script' ? 5 : 1}
-                  placeholder="Argument value or {{previous_step.field}}"
-                  className="px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-y font-mono"
-                  allSteps={allSteps}
-                  currentStepPosition={currentStepPosition}
-                />
-                <button
-                  type="button"
-                  onClick={() => setToolArgumentRows(toolArgumentRows.filter((_, itemIndex) => itemIndex !== index))}
-                  className="px-2 py-1.5 text-xs text-red-400 hover:text-red-300"
-                >
-                  Remove
-                </button>
+              <div key={index} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-slate-400">Argument {index + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => setToolArgumentRows(toolArgumentRows.filter((_, itemIndex) => itemIndex !== index))}
+                    className={removeButtonClass}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="grid min-w-0 gap-2 md:grid-cols-[minmax(140px,0.8fr)_minmax(0,2fr)]">
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Key</span>
+                    <CursorSafeInput
+                      type="text"
+                      value={argument.key || ''}
+                      onValueChange={(value) => {
+                        const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
+                        setToolArgumentRows(next)
+                      }}
+                      placeholder="script"
+                      className={compactInputClass}
+                    />
+                  </label>
+                  <label className="min-w-0">
+                    <span className={fieldLabelClass}>Value</span>
+                    <TemplateTextarea
+                      value={argument.value || ''}
+                      onValueChange={(value) => {
+                        const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
+                        setToolArgumentRows(next)
+                      }}
+                      rows={(argument.key || '').trim() === 'script' ? 5 : 2}
+                      placeholder="Argument value or {{previous_step.field}}"
+                      className={`${compactInputClass} resize-y font-mono`}
+                      allSteps={allSteps}
+                      currentStepPosition={currentStepPosition}
+                    />
+                  </label>
+                </div>
               </div>
             ))}
           </div>
@@ -7410,25 +7446,25 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-700 flex items-center justify-between">
+        <div className="px-4 py-3 sm:px-6 sm:py-4 border-t border-slate-700 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={handleValidate}
-            className="px-4 py-2 text-yellow-400 hover:text-yellow-300 transition-colors"
+            className="shrink-0 px-4 py-2 text-yellow-400 hover:text-yellow-300 transition-colors whitespace-nowrap"
           >
             Validate
           </button>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-end gap-2 sm:gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
+              className="px-4 py-2 text-slate-400 hover:text-white transition-colors whitespace-nowrap"
             >
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-medium rounded-lg
-                         hover:from-cyan-400 hover:to-blue-500 transition-all disabled:opacity-50"
+              className="min-w-[8.5rem] px-5 sm:px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-medium rounded-lg
+                         hover:from-cyan-400 hover:to-blue-500 transition-all disabled:opacity-50 whitespace-nowrap"
             >
               {saving ? 'Saving...' : 'Save Changes'}
             </button>

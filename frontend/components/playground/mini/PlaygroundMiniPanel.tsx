@@ -38,7 +38,7 @@ export default function PlaygroundMiniPanel({ data, onClose, panelRef }: Playgro
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
-      className="fixed z-[70] animate-scale-in bg-tsushin-surface border border-tsushin-border rounded-xl shadow-2xl flex flex-col overflow-hidden bottom-24 right-6 w-[380px] h-[min(560px,calc(100vh-8rem))] max-sm:inset-x-4 max-sm:bottom-4 max-sm:top-16 max-sm:w-auto max-sm:h-auto"
+      className="fixed z-[40] animate-scale-in bg-tsushin-surface border border-tsushin-border rounded-xl shadow-2xl flex flex-col overflow-hidden bottom-24 right-6 w-[380px] h-[min(560px,calc(100vh-8rem))] max-sm:inset-x-4 max-sm:bottom-4 max-sm:top-16 max-sm:w-auto max-sm:h-auto"
     >
       <MiniHeader
         agents={data.agents}

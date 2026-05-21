@@ -38,6 +38,18 @@ interface TourStep {
   customBody?: React.ReactNode
 }
 
+function hasVisibleBlockingOverlay(): boolean {
+  if (typeof document === 'undefined') return false
+  return Array.from(document.querySelectorAll<HTMLElement>('.fixed.inset-0, [role="dialog"]')).some((element) => {
+    const style = window.getComputedStyle(element)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    const zIndex = Number.parseInt(style.zIndex || '0', 10)
+    return Number.isFinite(zIndex) && zIndex >= 50
+  })
+}
+
 export default function OnboardingWizard() {
   const { state, nextStep, previousStep, minimize, maximize, completeTour, dismissTour, skipTour } = useOnboarding()
   const router = useRouter()
@@ -58,6 +70,27 @@ export default function OnboardingWizard() {
   const [ttsProviderSummaries, setTtsProviderSummaries] = useState<
     Array<{ id: string; name: string; is_free: boolean; voice_count: number; status: string }>
   >([])
+  const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false)
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const updateOverlayState = () => setHasBlockingOverlay(hasVisibleBlockingOverlay())
+    updateOverlayState()
+
+    const observer = new MutationObserver(updateOverlayState)
+    observer.observe(document.body, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: ['class', 'style', 'role', 'aria-hidden'],
+    })
+    window.addEventListener('resize', updateOverlayState)
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateOverlayState)
+    }
+  }, [pathname])
   useEffect(() => {
     // BUG-683: skip the authenticated /api/tts-providers fetch on public
     // surfaces (/setup, /auth/*). The tour isn't visible there anyway (see
@@ -298,17 +331,17 @@ export default function OnboardingWizard() {
     return null
   }
 
-  // Minimized pill UI - Always on top with very high z-index
-  if (state.isActive && state.isMinimized) {
+  // Minimized pill UI
+  if (state.isActive && state.isMinimized && !hasBlockingOverlay) {
     return (
       <button
         onClick={maximize}
-        className="fixed bottom-6 right-6 z-[90] bg-gradient-to-r from-teal-500 to-cyan-500 text-white px-6 py-3 rounded-full shadow-2xl hover:shadow-xl transition-all hover:scale-105 flex items-center gap-2 animate-pulse"
+        className="fixed bottom-24 right-4 sm:right-6 z-[45] max-w-[calc(100vw-2rem)] bg-gradient-to-r from-teal-500 to-cyan-500 text-white px-4 sm:px-6 py-3 rounded-full shadow-2xl hover:shadow-xl transition-all hover:scale-105 flex items-center gap-2 animate-pulse"
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <span className="font-semibold">
+        <span className="truncate font-semibold">
           Continue Tour ({state.currentStep}/{state.totalSteps})
         </span>
       </button>

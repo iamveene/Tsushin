@@ -114,7 +114,7 @@ Before your agents can think and respond, you need to connect at least one AI pr
 
 ### Quick-testing with Playground Mini (without leaving the page you're on)
 
-If you're mid-flow on another page — inspecting the Watcher Graph, editing a Flow, reading a dashboard — you don't have to leave to try an agent. **Playground Mini** is a floating chat bubble available on every page:
+If you're mid-flow on another page — inspecting the Watcher Graph, editing a Flow, reading a dashboard — you don't have to leave to try an agent. **Playground Mini** is a floating chat bubble available on every page and hides while blocking edit modals are open so it does not cover form actions:
 
 1. Click the circular chat icon in the **bottom-right** corner (it appears on Watcher, Studio, Hub, Flows, Core, Settings, and System pages). You can also open it anywhere with **Ctrl/Cmd + Shift + L**.
 2. Pick an **agent**, optionally a **project**, and either continue an existing **thread** or click **+** for a new one.
@@ -874,7 +874,7 @@ Flows let you build multi-step automated workflows.
 5. For **Scheduled**, **Recurring**, or **Keyword**, fill the required schedule, recurrence, or keyword fields before saving. Recurring flows can run hourly, daily, weekly, or monthly; use the cron override when the schedule needs a raw cron expression.
 6. **Add steps** in sequence.
 
-Browser automation CAPTCHA steps stay configurable per site: choose the image, input, submit, and success selectors in the step settings, set exact or min/max code length when needed, then select an available multimodal solver provider such as Ollama or Gemini.
+Browser automation CAPTCHA steps stay configurable per site: choose the image, input, submit, and success selectors in the step settings, set exact or min/max code length when needed, then select an available multimodal solver provider such as Ollama or Gemini. Selector and argument rows are edited as repeatable cards so long portal selectors remain readable on desktop and mobile.
 
 Generic tracking, scraping, and portal-monitoring flows should be reconstructable from the UI. Keep site profiles in visible step fields: browser selectors, CAPTCHA selectors, wait/result selectors, extraction scripts or rules, dedupe keys, Gate conditions, and Notification recipients/templates. If you clone a profile to a similar site, update those fields in the step editors rather than relying on a hidden site-specific runner.
 
