@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Flow recurrence UI support (2026-05-21)
+
+- Exposed hourly recurrence and the raw `cron_expression` override in the Flow create/edit recurrence panel, while preserving daily, weekly, and monthly interval behavior.
+- Added backend scheduler support for hourly recurrence and cron-expression overrides, including duplicate suppression inside the same cron/hourly window.
+- Updated frontend Flow recurrence types and operator documentation so `FlowDefinition.recurrence_rule` documents hourly and cron recurrence support.
+
 ### Fixed — Ollama raw connection testing (2026-05-21)
 
 - Fixed raw `POST /api/provider-instances/test-connection` for Ollama so first-run/pre-save tests probe the supplied `base_url` directly instead of requiring a saved/default Ollama ProviderInstance first.

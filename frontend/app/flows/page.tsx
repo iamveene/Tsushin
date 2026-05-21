@@ -2967,26 +2967,15 @@ function StatusBadge({ status }: { status: string }) {
 // ==================== RECURRENCE CONFIG PANEL ====================
 
 function RecurrenceConfigPanel({ value, onChange }: {
-  value?: {
-    frequency: 'daily' | 'weekly' | 'monthly'
-    interval?: number
-    days_of_week?: number[]
-    timezone?: string
-    start_time?: string
-  }
-  onChange: (value: {
-    frequency: 'daily' | 'weekly' | 'monthly'
-    interval?: number
-    days_of_week?: number[]
-    timezone?: string
-    start_time?: string
-  }) => void
+  value?: NonNullable<CreateFlowData['recurrence_rule']>
+  onChange: (value: NonNullable<CreateFlowData['recurrence_rule']>) => void
 }) {
   const frequency = value?.frequency || 'daily'
   const interval = value?.interval || 1
   const daysOfWeek = value?.days_of_week || []
   const startTime = value?.start_time || '09:00'
   const timezone = value?.timezone || 'America/Sao_Paulo'
+  const cronExpression = value?.cron_expression || ''
 
   const weekDays = [
     { value: 1, label: 'Mon' },
@@ -3005,6 +2994,7 @@ function RecurrenceConfigPanel({ value, onChange }: {
       days_of_week: daysOfWeek,
       timezone,
       start_time: startTime,
+      cron_expression: cronExpression || undefined,
       ...updates
     })
   }
@@ -3020,8 +3010,8 @@ function RecurrenceConfigPanel({ value, onChange }: {
     <div className="space-y-4 bg-slate-700/30 rounded-lg p-4">
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Frequency</label>
-        <div className="grid grid-cols-3 gap-2">
-          {(['daily', 'weekly', 'monthly'] as const).map(freq => (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {(['hourly', 'daily', 'weekly', 'monthly'] as const).map(freq => (
             <button
               key={freq}
               onClick={() => updateValue({ frequency: freq })}
@@ -3038,7 +3028,7 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">
-          Repeat every {frequency === 'daily' ? 'day(s)' : frequency === 'weekly' ? 'week(s)' : 'month(s)'}
+          Repeat every {frequency === 'hourly' ? 'hour(s)' : frequency === 'daily' ? 'day(s)' : frequency === 'weekly' ? 'week(s)' : 'month(s)'}
         </label>
         <input
           type="number"
@@ -3072,7 +3062,9 @@ function RecurrenceConfigPanel({ value, onChange }: {
       )}
 
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1.5">Start Time</label>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">
+          {frequency === 'hourly' ? 'Minute Anchor' : 'Start Time'}
+        </label>
         <input
           type="time"
           value={startTime}
@@ -3084,6 +3076,21 @@ function RecurrenceConfigPanel({ value, onChange }: {
 
       <div className="text-xs text-slate-400">
         Timezone: {timezone}
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1.5">Cron Expression Override</label>
+        <input
+          type="text"
+          value={cronExpression}
+          onChange={(e) => updateValue({ cron_expression: e.target.value.trim() || undefined })}
+          placeholder="0 */6 * * *"
+          className="w-full px-4 py-2.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white font-mono text-sm
+                     focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+        />
+        <p className="mt-1 text-xs text-slate-500">
+          Leave blank to use the frequency, interval, start time, and weekday settings.
+        </p>
       </div>
     </div>
   )

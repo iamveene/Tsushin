@@ -2998,7 +2998,7 @@ export interface FlowDefinition {
   // Phase 8.0 fields
   execution_method?: ExecutionMethod
   scheduled_at?: string | null
-  recurrence_rule?: Record<string, any> | null
+  recurrence_rule?: FlowRecurrenceRule | null
   flow_type?: 'notification' | 'conversation' | 'workflow' | 'task'
   default_agent_id?: number | null
   last_executed_at?: string | null
@@ -3072,6 +3072,17 @@ export interface ConversationThread {
 // v0.7.0 Wave 2: added 'triggered' execution method (Triggers ↔ Flows unification)
 export type ExecutionMethod = 'immediate' | 'scheduled' | 'recurring' | 'keyword' | 'triggered'
 export type FlowType = 'notification' | 'conversation' | 'workflow' | 'task'
+export type RecurrenceFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly'
+
+export interface FlowRecurrenceRule {
+  frequency: RecurrenceFrequency
+  interval?: number
+  days_of_week?: number[]
+  timezone?: string
+  start_time?: string
+  cron_expression?: string
+}
+
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
 export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store'
 
@@ -3275,13 +3286,7 @@ export interface CreateFlowData {
   description?: string
   execution_method?: ExecutionMethod
   scheduled_at?: string
-  recurrence_rule?: {
-    frequency: 'daily' | 'weekly' | 'monthly'
-    interval?: number
-    days_of_week?: number[]
-    timezone?: string
-    cron_expression?: string
-  }
+  recurrence_rule?: FlowRecurrenceRule
   flow_type?: FlowType
   default_agent_id?: number
   steps?: CreateFlowStepData[]
@@ -7057,7 +7062,7 @@ export const api = {
     description: string
     execution_method: ExecutionMethod
     scheduled_at: string
-    recurrence_rule: Record<string, any>
+    recurrence_rule: FlowRecurrenceRule
     flow_type: FlowType
     default_agent_id: number
     is_active: boolean
