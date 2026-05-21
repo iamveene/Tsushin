@@ -41,6 +41,8 @@ import {
   type DataExtractionRuleConfig,
   type DataParserRuleConfig,
   type TriggerKind,
+  type TeamTriggerBindingKind,
+  type TeamTriggerWithTeam,
   flowNodeToEditable,
   editableToUpdatePayload,
   editableToCreatePayload
@@ -178,6 +180,10 @@ function triggerKindLabel(kind: TriggerKind): string {
 function readString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key]
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function teamNotificationLabel(team: TeamTriggerWithTeam): string {
+  return `${team.team_name}: ${team.notification_contact_name ? `@${team.notification_contact_name}` : 'no team completion contact selected'}`
 }
 
 function triggerOptionFromRecord(kind: TriggerKind, raw: unknown): TriggerOption {
@@ -7117,12 +7123,17 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
   const canWriteFlows = hasPermission('flows.write')
   const [flow, setFlow] = useState<FlowDefinition | null>(null)
   const [steps, setSteps] = useState<EditableStepData[]>([])
+  const [wiredTeams, setWiredTeams] = useState<TeamTriggerWithTeam[]>([])
   const stepsRef = useRef<EditableStepData[]>([])
   const [loading, setLoading] = useState(true)
   // Flush callbacks registered by each EditableStepConfigForm to force-save pending edits
   const flushCallbacksRef = useRef<Map<number, () => void>>(new Map())
   const [saving, setSaving] = useState(false)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
+  const teamNotificationTargets = useMemo(
+    () => wiredTeams.map(teamNotificationLabel),
+    [wiredTeams],
+  )
 
   // Keep stepsRef in sync for use inside handleSave after flush
   useEffect(() => { stepsRef.current = steps }, [steps])
@@ -7144,8 +7155,22 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
         .sort((a, b) => a.position - b.position)
         .map(flowNodeToEditable)
       setSteps(editableSteps)
+      const sourceStep = editableSteps.find((step) => step.type === 'source')
+      const sourceCfg = (sourceStep?.config as Record<string, unknown> | undefined) || {}
+      const triggerKind = (sourceCfg.trigger_kind as string | undefined) || flowData.system_trigger_kind || ''
+      const triggerInstanceId = Number(sourceCfg.trigger_instance_id) || 0
+      if (flowData.is_system_owned && triggerKind && triggerInstanceId > 0) {
+        const teams = await api.listTeamTriggersByInstance({
+          trigger_kind: triggerKind as TeamTriggerBindingKind,
+          trigger_instance_id: triggerInstanceId,
+        }).catch(() => [] as TeamTriggerWithTeam[])
+        setWiredTeams(teams)
+      } else {
+        setWiredTeams([])
+      }
     } catch (error) {
       console.error('Failed to load flow:', error)
+      setWiredTeams([])
       toast.error('Load Failed', 'Failed to load flow')
       onClose()
     } finally {
@@ -7271,8 +7296,13 @@ function EditFlowModal({ flowId, agents, contacts, personas, customTools, custom
                   . To change <span className="text-white">what happens after</span>, edit the
                   steps below — the Source step shows the trigger config, the Gate runs
                   secondary filtering, the Default agent step runs only when an agent is
-                  assigned, and the Notification fires once enabled.
+                  assigned, and the Flow Notification fires only if this generated Flow route is enabled.
                 </p>
+                {teamNotificationTargets.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-cyan-400/20 bg-black/20 px-3 py-2 text-xs text-cyan-100">
+                    Wired Agent Team completion route: {teamNotificationTargets.join(', ')}
+                  </div>
+                )}
               </div>
             )
           })()}

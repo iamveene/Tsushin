@@ -1029,6 +1029,8 @@ export interface TeamListItem {
   sentinel_profile_id?: number | null
   member_count: number
   last_run_status?: string | null
+  notification_contact_id?: number | null
+  notification_contact_name?: string | null
   max_steps: number
   max_total_tokens?: number | null
   max_concurrent_runs: number
@@ -2175,6 +2177,7 @@ export interface RepositoryAutomationRequest {
   team_name?: string | null
   flow_name?: string | null
   routing_mode?: RepositoryAutomationRoutingMode | null
+  notify_contact_id?: number | null
 }
 
 export interface RepositoryAutomationResponse {
@@ -2206,6 +2209,8 @@ export interface RepositoryAutomationResponse {
     name: string
     status: string
     member_count: number
+    notification_contact_id?: number | null
+    notification_contact_name?: string | null
   } | null
   agents: Array<{
     id: number
@@ -2734,6 +2739,8 @@ export interface TeamTriggerWithTeam extends TeamTriggerResponse {
   team_status: TeamStatus
   team_topology: TeamTopology
   member_count: number
+  notification_contact_id?: number | null
+  notification_contact_name?: string | null
 }
 
 // Reverse-lookup: every continuous-agent subscription wired to one

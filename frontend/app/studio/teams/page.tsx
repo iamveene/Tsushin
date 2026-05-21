@@ -235,6 +235,11 @@ export default function StudioTeamsPage() {
                           <span className="badge badge-team flex items-center gap-1">
                             <UsersIcon size={12} /> {team.member_count} members
                           </span>
+                          {team.notification_contact_name && (
+                            <span className="badge badge-indigo">
+                              Team notification: @{team.notification_contact_name}
+                            </span>
+                          )}
                         </div>
                         {team.description && (
                           <p className="mb-3 max-w-3xl text-sm leading-6 text-tsushin-slate">{team.description}</p>

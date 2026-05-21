@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Repository review-team notification visibility (2026-05-21)
+
+- Added an explicit **Team completion notification** contact selector to the Repository Automation Wizard review-team template and persisted the selected contact through `notify_contact_id`.
+- Returned repository review-team notification metadata on wizard, Team, and wired-team responses so the wizard review step, Team surfaces, and generated Flow edit modal show who receives the final summary.
+- Added an Alembic backfill that attaches existing generated GitHub/GitLab review teams to the current user's mapped, reachable contact when no completion-notification directive exists.
+- Kept the generated repository Flow notification node separate from team-primary completion delivery, with Flow edit copy explaining that the inactive generated Flow route only sends its own notification if enabled.
+
 ### Fixed — Flow editor cosmetic QA polish (2026-05-21)
 
 - Polished the Flow Browser Automation step editor so selector and tool-argument rows render as compact responsive cards instead of cramped single-line grids, improving Correios-style CAPTCHA/tracking profiles on desktop and mobile.

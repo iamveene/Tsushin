@@ -202,6 +202,8 @@ class TeamTriggerWithTeamRead(TeamTriggerResponse):
     team_status: str
     team_topology: str
     member_count: int
+    notification_contact_id: Optional[int] = None
+    notification_contact_name: Optional[str] = None
 
 
 class TeamRunMemberStep(BaseModel):
@@ -286,6 +288,8 @@ class TeamListItem(BaseModel):
     sentinel_profile_id: Optional[int] = None
     member_count: int = 0
     last_run_status: Optional[str] = None
+    notification_contact_id: Optional[int] = None
+    notification_contact_name: Optional[str] = None
     max_steps: int
     max_total_tokens: Optional[int] = None
     max_concurrent_runs: int

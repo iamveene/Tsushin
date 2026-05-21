@@ -539,6 +539,7 @@ export default function StudioTeamDetailPage() {
           badges={
             <>
               {team && <span className={`badge ${STATUS_STYLES[team.status] || 'badge-neutral'}`}>{formatLabel(team.status)}</span>}
+              {team?.notification_contact_name && <span className="badge badge-indigo">Team notification: @{team.notification_contact_name}</span>}
               {readOnly && <span className="badge badge-warning">Read only</span>}
             </>
           }

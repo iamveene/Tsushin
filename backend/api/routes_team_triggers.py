@@ -17,6 +17,7 @@ so the frontend can address those endpoints.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,7 +26,7 @@ from sqlalchemy.orm import Session, joinedload
 from api.schemas.teams import TeamTriggerWithTeamRead
 from auth_dependencies import TenantContext, get_tenant_context, require_permission
 from db import get_db
-from models import AgentTeam, AgentTeamMember, AgentTeamTrigger
+from models import AgentTeam, AgentTeamMember, AgentTeamTrigger, Contact
 from models_rbac import User
 
 logger = logging.getLogger(__name__)
@@ -34,14 +35,43 @@ router = APIRouter(prefix="/api/team-triggers", tags=["agent-team-triggers"])
 
 
 _SUPPORTED_KINDS = {"jira", "github", "gitlab", "webhook", "gmail"}
+_NOTIFY_CONTACT_PATTERN = re.compile(r"\[notify:contact:(\d+)\]")
+
+
+def _notification_contact(
+    db: Session,
+    *,
+    tenant_id: str,
+    description: str | None,
+) -> tuple[int | None, str | None]:
+    match = _NOTIFY_CONTACT_PATTERN.search(description or "")
+    if not match:
+        return None, None
+    contact_id = int(match.group(1))
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.id == contact_id,
+            Contact.tenant_id == tenant_id,
+            Contact.is_active.is_(True),
+        )
+        .first()
+    )
+    return contact_id, contact.friendly_name if contact else None
 
 
 def _serialize(
+    db: Session,
     trigger: AgentTeamTrigger,
     team: AgentTeam,
     member_count: int,
 ) -> TeamTriggerWithTeamRead:
     config: dict[str, Any] = trigger.config_json if isinstance(trigger.config_json, dict) else {}
+    notification_contact_id, notification_contact_name = _notification_contact(
+        db,
+        tenant_id=team.tenant_id,
+        description=team.description,
+    )
     return TeamTriggerWithTeamRead(
         id=trigger.id,
         trigger_kind=trigger.trigger_kind,
@@ -57,6 +87,8 @@ def _serialize(
         team_status=team.status,
         team_topology=team.topology,
         member_count=member_count,
+        notification_contact_id=notification_contact_id,
+        notification_contact_name=notification_contact_name,
     )
 
 
@@ -122,6 +154,6 @@ async def list_team_triggers_by_instance(
             member_counts[team_id] = member_counts.get(team_id, 0) + 1
 
     return [
-        _serialize(row, row.team, member_counts.get(row.team_id, 0))
+        _serialize(db, row, row.team, member_counts.get(row.team_id, 0))
         for row in matched
     ]
