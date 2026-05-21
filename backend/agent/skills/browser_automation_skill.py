@@ -412,6 +412,123 @@ Rules:
             or "gemma4:latest"
         )
 
+    def _resolve_captcha_gemini_api_key(self, params: Dict[str, Any]) -> Optional[str]:
+        if params.get("gemini_api_key"):
+            return str(params.get("gemini_api_key"))
+
+        tenant_id = getattr(self, "_tenant_id", None) or self._resolve_tenant_id()
+        if self._db and tenant_id:
+            try:
+                from services.provider_instance_service import ProviderInstanceService
+
+                api_key = ProviderInstanceService.resolve_default_api_key("gemini", str(tenant_id), self._db)
+                if api_key:
+                    return api_key
+            except Exception as exc:
+                logger.debug("Gemini CAPTCHA default instance lookup failed: %s", exc)
+
+        return (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+        )
+
+    @staticmethod
+    def _extract_gemini_text(response: Any) -> str:
+        try:
+            return str(response.text or "")
+        except (ValueError, AttributeError):
+            answer = ""
+            try:
+                for candidate in getattr(response, "candidates", None) or []:
+                    content = getattr(candidate, "content", None)
+                    if not content:
+                        continue
+                    for part in getattr(content, "parts", []) or []:
+                        if getattr(part, "thought", False):
+                            continue
+                        text = getattr(part, "text", None)
+                        if text:
+                            answer += text
+            except Exception as exc:
+                logger.debug("Failed to extract Gemini CAPTCHA text from candidates: %s", exc)
+            return answer
+
+    async def _captcha_guesses_from_gemini(self, image_path: str, params: Dict[str, Any]) -> List[str]:
+        api_key = self._resolve_captcha_gemini_api_key(params)
+        if not api_key:
+            raise ValueError("Gemini API key not configured for CAPTCHA solving")
+
+        import google.generativeai as genai
+        from PIL import Image
+
+        model_name = (
+            params.get("gemini_model")
+            or params.get("model")
+            or os.getenv("TSUSHIN_CAPTCHA_GEMINI_MODEL")
+            or "gemini-2.5-flash-lite"
+        )
+        expected_length = self._captcha_expected_length(params)
+        length_hint = str(expected_length or "").strip()
+        length_rule = (
+            f"The code is exactly {length_hint} characters."
+            if length_hint.isdigit()
+            else "The code is 4 to 8 characters."
+        )
+        prompt = str(params.get("prompt") or f"""
+Read this CAPTCHA image exactly.
+Rules:
+- {length_rule}
+- The code uses lowercase letters a-z and digits 0-9.
+- Ignore crossing lines, background noise, and dots.
+- Return up to 5 likely readings, one per line.
+- Output only the readings, no labels and no commentary.
+""").strip()
+
+        try:
+            max_tokens = int(params.get("max_tokens") or params.get("num_predict") or 32)
+        except (TypeError, ValueError):
+            max_tokens = 32
+        try:
+            temperature = float(params.get("temperature", 0))
+        except (TypeError, ValueError):
+            temperature = 0
+
+        genai.configure(api_key=api_key)
+        generation_config = genai.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=max(1, min(256, max_tokens)),
+        )
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config=generation_config,
+        )
+
+        with Image.open(image_path) as image:
+            response = await asyncio.to_thread(
+                model.generate_content,
+                [prompt, image.copy()],
+                generation_config=generation_config,
+            )
+
+        return self._captcha_guess_lines(self._extract_gemini_text(response), expected_length)
+
+    @staticmethod
+    def _captcha_model_name(params: Dict[str, Any], solver_provider: str) -> str:
+        if solver_provider == "gemini":
+            return str(
+                params.get("gemini_model")
+                or params.get("model")
+                or os.getenv("TSUSHIN_CAPTCHA_GEMINI_MODEL")
+                or "gemini-2.5-flash-lite"
+            )
+        return str(
+            params.get("ollama_model")
+            or params.get("model")
+            or os.getenv("TSUSHIN_CAPTCHA_OLLAMA_MODEL")
+            or "gemma4:latest"
+        )
+
     async def _solve_image_captcha(self, provider, params: Dict[str, Any]) -> BrowserResult:
         selector = params.get("selector") or "img[src*='captcha'], img[alt*='captcha' i], img[id*='captcha' i], img[class*='captcha' i]"
         input_selector = params.get("input_selector") or (
