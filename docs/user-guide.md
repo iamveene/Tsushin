@@ -907,12 +907,48 @@ Financial templates should remain editable like any other Flow. Open a browser s
 
 The **Browser Automation** step editor exposes a **🎬 Record** button next to *+ Add selector*. It opens a live Chromium session streamed into the Flows page — every click, fill, and navigation is captured into a step ledger and compiled directly into the same selector rows you'd otherwise type by hand. No new step type, no schema change: the recorder is a *compiler* into today's `selectors[]` shape.
 
-- **▣ Mark captcha** drags a box over a captcha image and emits a `solve_captcha` row pointing at the next captured fill — same shape the prod Correios postal-tracking flow uses today.
+You have three authoring paths, and you can switch between them mid-flow:
+
+1. **🎬 Record (default)** — drive the browser yourself; the recorder writes the rows.
+2. **▾ Agentic mode** — give a prompt and a Browser-Use agent drives the same session for you, watch it work, take over whenever.
+3. **+ Add selector / paste codegen** — the original manual editor is still there for power users who already know what they want.
+
+Whichever path you pick, the output drops back into the same `BrowserAutomationConfigPanel` rows so you get a final review pass before saving the FlowNode.
+
+##### ToolPalette tiles
+
+- **▣ Mark captcha** drags a box over a captcha image and emits a `solve_captcha` row pointing at the next captured fill — exactly the shape the official Correios postal-tracking flow needs.
 - **👁 Capture output** drags over a text region and emits an `extract` row with a named output variable for downstream steps.
 - **🔑 Vault?** chip appears on any captured fill whose field name or `type=password` suggests a credential. Click it to open the existing Password Vault picker; the plaintext value gets swapped for the picker's `op://` reference and a row is added to `browser_secret_references`. The Save button refuses to compile if any plaintext password remains.
-- **▾ Agentic mode** (opt-in; requires `browser-use` from `requirements-optional.txt`) lets a Browser-Use agent drive the same recording session from a free-form prompt. Pause/resume hands control back to you mid-run. The compiled output is bit-for-bit shaped like a human recording.
+- **▾ Agentic mode** (opt-in; requires `browser-use` from `requirements-optional.txt`) lets a Browser-Use agent drive the same recording session from a free-form prompt. Pause/resume hands control back to you mid-run. The compiled output is bit-for-bit shaped like a human recording. Requires an Anthropic Provider Instance configured under Hub > Providers for the tenant; the recorder surfaces a 503 with a setup hint when missing.
 
-The recorder never persists the FlowNode for you — it pre-fills the existing config panel so you always get a final manual review pass before saving.
+##### Worked example — replicate "Postal Track | Correios | AD468811215BR" via UI in ~2 minutes
+
+This is the canonical browser-automation flow shipped with Tsushin. It pulls package status from the official Correios tracker (https://rastreamento.correios.com.br/app/index.php), which gates results behind a Securimage CAPTCHA. The recorder produces all five selector rows from one human pass:
+
+1. **Flows → "+ New flow"** → name it `Postal Track | Correios | AD468811215BR` → add a **Browser Automation** step.
+2. In the step's "Selectors and actions" header, click **🎬 Record**.
+3. URL: `https://rastreamento.correios.com.br/app/index.php`. Click **Start recording**. Wait ~1s for the canvas to show the live page.
+4. **Click the tracking input** (`Informe o código de rastreamento`) on the canvas, then type `AD468811215BR`. A `Fill` row appears in the right panel.
+5. Click the **▣ Mark captcha** tile. Drag a box over the Securimage CAPTCHA image. A `Captcha` row appears with the image's selector. The recorder will automatically wire its `value_target` to the next field you fill.
+6. **Click the CAPTCHA text input** (right of the image) → type any placeholder (e.g. `XXXXXX`). This becomes the `value_target` for the `solve_captcha` row. At flow execution time the `solve_captcha` skill OCRs the live image and overwrites this placeholder.
+7. **Click the "Consultar" button**. A `Click` row appears.
+8. After Correios responds (a few seconds), click **👁 Capture output**, drag a box over the tracking-result panel, and name the variable `delivery_status` when prompted.
+9. Click **Save as flow step**. The dialog closes; the BrowserAutomationConfigPanel below is now pre-filled with five rows that look like:
+   - `fill input[name="objeto"]` value=`AD468811215BR`
+   - `solve_captcha img#captcha_image` value_target=`input[name="captcha"]`
+   - `fill input[name="captcha"]` value=`XXXXXX` (runtime overwrites with OCR result)
+   - `click button[name="b-pesquisar"]`
+   - `extract <result panel selector>` as=`delivery_status`
+10. Click **Update Flow** at the top of the editor. Done — `delivery_status` is now available to downstream steps as `{{steps.<browser_step_name>.delivery_status}}`.
+
+Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button.
+
+##### Constraints to know
+
+- The recorder uses **stock Playwright** — sites that ban automated browsers may reject the inner session. For those targets, the existing manual editor still works.
+- Each tenant can have **2 concurrent recordings** open at once; trying to start a third returns HTTP 409 with a "discard an existing recording first" hint.
+- Recordings auto-tear down **30 minutes** after the last interaction, hard cap **2 hours**. A forgotten dialog won't leak a Chromium instance.
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 
