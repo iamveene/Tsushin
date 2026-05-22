@@ -893,7 +893,7 @@ Generic tracking, scraping, and portal-monitoring flows should be reconstructabl
 | **Summarization** | AI summarization of previous step outputs. |
 | **Gate** | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values, used by financial flows to route on `notification_state`. |
 | **Password Vault** | Resolves an approved vault reference without placing secrets in prompts. |
-| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — split into editable actions (navigate, fill, click, wait, dismiss-modal, execute-script, etc.). |
+| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — split into editable actions (navigate, fill, click, wait, dismiss-modal, execute-script, etc.). Click **🎬 Record** in the step editor to drive a live Chromium session and have Tsushin write the selector rows for you instead of typing them by hand. |
 | **HTTP Request** | Calls an API with editable method, URL, headers, body, and secret references. |
 | **Data Transform** | Extracts and normalizes fields from previous step outputs. |
 | **Financial Record Store** | Persists and dedupes financial records; emits `notification_state` for downstream gates/notifications. |
@@ -902,6 +902,17 @@ Generic tracking, scraping, and portal-monitoring flows should be reconstructabl
 The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually. The legacy `Trigger`, `Subflow`, and `AgentNode` step types are kept as backward-compatible aliases for older flows.
 
 Financial templates should remain editable like any other Flow. Open a browser step to adjust URL/action/selectors, add a **Skill** or **Summarization** step for agentic reasoning, and end with a conditional **Notification** fed by a previous storage/gate output.
+
+#### Authoring browser steps with the recorder (2026-05-22)
+
+The **Browser Automation** step editor exposes a **🎬 Record** button next to *+ Add selector*. It opens a live Chromium session streamed into the Flows page — every click, fill, and navigation is captured into a step ledger and compiled directly into the same selector rows you'd otherwise type by hand. No new step type, no schema change: the recorder is a *compiler* into today's `selectors[]` shape.
+
+- **▣ Mark captcha** drags a box over a captcha image and emits a `solve_captcha` row pointing at the next captured fill — same shape the prod Correios postal-tracking flow uses today.
+- **👁 Capture output** drags over a text region and emits an `extract` row with a named output variable for downstream steps.
+- **🔑 Vault?** chip appears on any captured fill whose field name or `type=password` suggests a credential. Click it to open the existing Password Vault picker; the plaintext value gets swapped for the picker's `op://` reference and a row is added to `browser_secret_references`. The Save button refuses to compile if any plaintext password remains.
+- **▾ Agentic mode** (opt-in; requires `browser-use` from `requirements-optional.txt`) lets a Browser-Use agent drive the same recording session from a free-form prompt. Pause/resume hands control back to you mid-run. The compiled output is bit-for-bit shaped like a human recording.
+
+The recorder never persists the FlowNode for you — it pre-fills the existing config panel so you always get a final manual review pass before saving.
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 
