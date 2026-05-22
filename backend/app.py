@@ -91,6 +91,12 @@ from api.shell_approval_routes import router as shell_approval_router, set_engin
 from api.shell_websocket import router as shell_ws_router, set_engine as set_shell_ws_engine
 # Watcher Activity WebSocket (Phase 8: Graph View Real-time Activity)
 from api.watcher_activity_websocket import router as watcher_activity_ws_router
+# Browser Automation Recorder — REST + WebSocket for record-and-refine authoring
+from api.routes_recorder import (
+    router as recorder_router,
+    ws_router as recorder_ws_router,
+    set_engine as set_recorder_engine,
+)
 from services.beacon_connection_service import start_beacon_service, stop_beacon_service
 # Google Integrations (Gmail, Calendar)
 from api.routes_google import router as google_router
@@ -245,6 +251,7 @@ async def lifespan(app: FastAPI):
     set_shell_engine(engine)
     set_shell_ws_engine(engine)  # Phase 18.4: Shell WebSocket C2
     # Note: watcher_activity_ws uses JWT token auth, no engine needed
+    set_recorder_engine(engine)  # Browser Automation Recorder — fail-closed user/tenant checks
     set_shell_approval_engine(engine)  # Phase 5: Shell Approval Workflow
     set_scheduler_engine(engine)  # Phase 6.4
     set_flows_engine(engine)  # Phase 6.6
@@ -1431,6 +1438,8 @@ app.include_router(shell_router, prefix="/api")  # Shell Skill (Phase 18: Remote
 app.include_router(shell_approval_router, prefix="/api")  # Shell Approval Workflow (Phase 5)
 app.include_router(shell_ws_router)  # Shell Skill WebSocket (Phase 18.4: WebSocket C2)
 app.include_router(watcher_activity_ws_router)  # Watcher Activity WebSocket (Phase 8: Graph View)
+app.include_router(recorder_router)  # Browser Recorder REST (/api/recorder/...)
+app.include_router(recorder_ws_router)  # Browser Recorder WS (/ws/recorder/{id})
 app.include_router(google_router, prefix="/api")  # Google Integrations (Gmail, Calendar)
 app.include_router(flows_router)  # Phase 6.6 - Multi-Step Flows API
 app.include_router(flow_trigger_bindings_router)  # v0.7.0 Wave 4 - Triggers↔Flows binding CRUD
