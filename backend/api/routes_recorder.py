@@ -127,6 +127,10 @@ async def create_session(
             initial_url=body.initial_url,
             viewport=viewport,
         )
+    except RuntimeError as e:
+        # Concurrency cap exceeded — surface a 409 so the client renders
+        # a "discard an existing recording" hint instead of a generic error.
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.exception("Recorder session create failed")
         raise HTTPException(status_code=500, detail=f"Failed to spawn recorder: {e}")

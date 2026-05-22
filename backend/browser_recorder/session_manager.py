@@ -79,6 +79,11 @@ class SessionRegistry:
         self._sessions: dict[str, RecordingSession] = {}
         self._lock = asyncio.Lock()
 
+    # Max concurrent recordings per tenant. Anti-abuse + bounds the
+    # screencast bandwidth/CPU load. Override via env if a future workload
+    # genuinely needs more.
+    MAX_PER_TENANT = 2
+
     async def create(
         self,
         *,
@@ -87,6 +92,17 @@ class SessionRegistry:
         initial_url: Optional[str] = None,
         viewport: Optional[dict] = None,
     ) -> RecordingSession:
+        # Enforce the per-tenant cap before we burn the cost of spawning
+        # a Playwright instance. Stale-expired sessions don't count —
+        # the janitor sweeps them, but if it hasn't run yet we sweep
+        # inline here so the cap reflects "actually running" recordings.
+        active = await self._count_active(tenant_id)
+        if active >= self.MAX_PER_TENANT:
+            raise RuntimeError(
+                f"Tenant has {active} active recordings (max {self.MAX_PER_TENANT}). "
+                "Discard one before starting another."
+            )
+
         session_id = uuid.uuid4().hex
         vp = viewport or _DEFAULT_VIEWPORT
 
@@ -167,6 +183,37 @@ class SessionRegistry:
     async def count_for_tenant(self, tenant_id: str) -> int:
         return sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
 
+    async def _count_active(self, tenant_id: str) -> int:
+        """Count not-yet-expired sessions for a tenant.
+
+        Sweeps any expired sessions inline so a slow janitor cycle can't
+        artificially block new recordings.
+        """
+        expired_ids = [
+            sid for sid, sess in self._sessions.items()
+            if sess.tenant_id == tenant_id and sess.is_expired()
+        ]
+        for sid in expired_ids:
+            try:
+                await self.teardown(sid)
+            except Exception:
+                pass
+        return sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
+
+    async def reap_expired(self) -> int:
+        """Tear down every session past its TTL. Returns number reaped."""
+        expired = [
+            sid for sid, sess in self._sessions.items() if sess.is_expired()
+        ]
+        count = 0
+        for sid in expired:
+            try:
+                if await self.teardown(sid):
+                    count += 1
+            except Exception as e:
+                logger.warning("Janitor teardown failed for %s: %s", sid, e)
+        return count
+
     async def teardown(self, session_id: str) -> bool:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
@@ -201,6 +248,7 @@ class SessionRegistry:
 
 
 _registry: Optional[SessionRegistry] = None
+_janitor_task: Optional[asyncio.Task] = None
 
 
 def get_registry() -> SessionRegistry:
@@ -208,3 +256,42 @@ def get_registry() -> SessionRegistry:
     if _registry is None:
         _registry = SessionRegistry()
     return _registry
+
+
+async def _janitor_loop(interval_seconds: int = 60) -> None:
+    """Reap expired recordings every minute.
+
+    Intentionally fire-and-forget — process restart loses all live
+    recordings anyway (they're in-memory), so persistence is not a goal.
+    """
+    registry = get_registry()
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            count = await registry.reap_expired()
+            if count:
+                logger.info("Recorder janitor reaped %d expired session(s)", count)
+        except asyncio.CancelledError:
+            logger.info("Recorder janitor cancelled")
+            raise
+        except Exception as e:  # pragma: no cover — defence in depth
+            logger.exception("Recorder janitor error: %s", e)
+
+
+def start_janitor() -> None:
+    """Spawn the background janitor on a running event loop."""
+    global _janitor_task
+    if _janitor_task and not _janitor_task.done():
+        return
+    _janitor_task = asyncio.create_task(_janitor_loop(), name="recorder-janitor")
+
+
+async def stop_janitor() -> None:
+    global _janitor_task
+    if _janitor_task and not _janitor_task.done():
+        _janitor_task.cancel()
+        try:
+            await _janitor_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _janitor_task = None

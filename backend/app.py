@@ -907,6 +907,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error starting Audit Retention Worker: {e}", exc_info=True)
 
+    # Browser Recorder janitor — reaps recording sessions past their TTL
+    # (30 min default) so a forgotten dialog doesn't leak a Chromium
+    # instance forever.
+    try:
+        from browser_recorder.session_manager import start_janitor as start_recorder_janitor
+        start_recorder_janitor()
+        logging.info("Browser Recorder janitor started (reaps expired sessions every 60s)")
+    except Exception as e:
+        logging.error(f"Error starting Browser Recorder janitor: {e}", exc_info=True)
+
     # Syslog Forwarder Worker (streams audit events to external syslog servers)
     try:
         from services.syslog_forwarder import start_syslog_forwarder
@@ -1087,6 +1097,14 @@ async def lifespan(app: FastAPI):
         logging.info("🐚 Beacon Connection Service stopped")
     except Exception as e:
         logging.error(f"Error stopping Beacon Connection Service: {e}", exc_info=True)
+
+    # Browser Recorder — stop janitor (best-effort; sessions die with the process)
+    try:
+        from browser_recorder.session_manager import stop_janitor as stop_recorder_janitor
+        await stop_recorder_janitor()
+        logging.info("Browser Recorder janitor stopped")
+    except Exception as e:
+        logging.error(f"Error stopping Browser Recorder janitor: {e}", exc_info=True)
 
     # Stop scheduler worker (Phase 6.4)
     try:
