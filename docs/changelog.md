@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Browser Automation Recorder (2026-05-22)
+
+- Added a record-and-refine authoring surface for `browser_automation` flow steps. A new 🎬 Record button inside the existing `BrowserAutomationConfigPanel` opens a live Chromium session streamed into the Flows page via CDP screencast — every click, fill, and navigation is captured and compiled into the same `FlowNode.config_json` shape today's runtime executes (no schema migration, no new step type, no new action vocabulary).
+- Added a `ToolPalette` with **Mark captcha** and **Capture output** drag-overlay tools that translate directly into the existing `solve_captcha` and `extract` selector actions; `solve_captcha` rows auto-wire their `value_target` to the next captured fill row.
+- Added a 🔑 Vault chip on still-plaintext password rows in the recorder ledger that opens the existing `PasswordVaultReferencePicker`; on confirm the recorder swaps the field's value for the picked `op://`-style reference and emits a `browser_secret_references` row pointing at `selectors[N].value`.
+- Added an opt-in **Agentic mode** that lets a Browser-Use agent drive the same recording session (Claude Opus 4.7 planner + Haiku 4.5 per-step, two-LLM split). Disabled by default — install `browser-use` + `langchain-anthropic` from `requirements-optional.txt` to enable.
+- Added per-tenant concurrency cap (2 active recordings/tenant, HTTP 409 over the limit) and a 60-second TTL janitor that reaps recordings idle past 30 minutes so a forgotten dialog can't leak a Chromium instance.
+- Added `/api/recorder/*` REST endpoints plus a `/ws/recorder/{id}` cookie-authed WebSocket that mirrors the existing `watcher_activity_websocket` handshake (httpOnly cookie primary, first-message JWT fallback), with full tenant-hopping and revoked-user fail-closed checks from `shell_websocket`.
+- Added 18 unit tests for the compiler (Correios-shaped event sequences, selector strategy ladder, password detection, captcha `value_target` wiring, `pvh_`/`op://` vault round-trips).
+
 ### Fixed — Repository review-team notification visibility (2026-05-21)
 
 - Added an explicit **Team completion notification** contact selector to the Repository Automation Wizard review-team template and persisted the selected contact through `notify_contact_id`.
