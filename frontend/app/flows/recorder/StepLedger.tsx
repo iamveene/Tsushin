@@ -16,6 +16,10 @@ import type { RecorderEventRow } from './useRecorderSocket'
 interface StepLedgerProps {
   events: RecorderEventRow[]
   onClear?: () => void
+  /** Invoked when the user clicks the "🔑 Vault?" chip on a fill row that
+   * still holds plaintext. The parent opens PasswordVaultReferencePicker
+   * targeting this row's selector. */
+  onVaultRequest?: (row: RecorderEventRow, index: number) => void
 }
 
 const KIND_LABELS: Record<string, { label: string; tone: string }> = {
@@ -53,7 +57,7 @@ function summarize(row: RecorderEventRow): string {
   }
 }
 
-export default function StepLedger({ events, onClear }: StepLedgerProps) {
+export default function StepLedger({ events, onClear, onVaultRequest }: StepLedgerProps) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
@@ -98,12 +102,23 @@ export default function StepLedger({ events, onClear }: StepLedgerProps) {
                   {summarize(row)}
                 </span>
                 {isPassword && (
-                  <span
-                    className="shrink-0 inline-block text-[10px] font-semibold rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 px-1.5 py-0.5"
-                    title="This looks like a credential field. Use the Vault tile to replace the plaintext value before saving."
-                  >
-                    🔑 Vault?
-                  </span>
+                  onVaultRequest ? (
+                    <button
+                      type="button"
+                      onClick={() => onVaultRequest(row, index)}
+                      className="shrink-0 inline-block text-[10px] font-semibold rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 px-1.5 py-0.5 hover:bg-yellow-500/20 hover:border-yellow-400 transition-colors"
+                      title="Click to pick a vault entry — the plaintext value gets swapped for a secret reference before save."
+                    >
+                      🔑 Vault?
+                    </button>
+                  ) : (
+                    <span
+                      className="shrink-0 inline-block text-[10px] font-semibold rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-300 px-1.5 py-0.5"
+                      title="This looks like a credential field. Use the Vault tile to replace the plaintext value before saving."
+                    >
+                      🔑 Vault?
+                    </span>
+                  )
                 )}
               </div>
             )

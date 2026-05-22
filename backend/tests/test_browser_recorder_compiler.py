@@ -230,6 +230,33 @@ def test_marker_vault_rejects_non_pvh_reference():
     assert config["browser_secret_references"] == []
 
 
+def test_marker_vault_accepts_op_uri():
+    """The PasswordVaultReferencePicker emits op://vault/item/field URIs.
+
+    These need to round-trip through the recorder as first-class secret
+    refs — the flow runtime's resolver tries pvh_ first then falls back
+    to a vault lookup against op:// URIs.
+    """
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/login"}),
+        RecordedEvent("fill", {
+            "selector": 'input[name="password"]',
+            "value": "tmp",
+            "field_meta": {"tag": "input", "name": "password", "type": "password"},
+        }),
+        RecordedEvent("marker.vault", {
+            "selector": 'input[name="password"]',
+            "reference": "op://Tsushin Prod/Correios/password",
+        }),
+    ]
+    config = compile_events(events)
+    fill = next(s for s in config["selectors"] if s["action"] == "fill")
+    assert fill["value"] == "op://Tsushin Prod/Correios/password"
+    assert "_needs_vault" not in fill
+    assert len(config["browser_secret_references"]) == 1
+    assert config["browser_secret_references"][0]["reference"].startswith("op://")
+
+
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------

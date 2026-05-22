@@ -129,7 +129,13 @@ def _row_fill(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_vault_handle(value: Any) -> bool:
-    return isinstance(value, str) and value.startswith("pvh_")
+    """True if `value` is a vault-resolvable reference, not raw plaintext.
+
+    The runtime accepts both the short-lived in-memory `pvh_` handles and
+    the canonical `op://vault/item/field` URI form used by stored
+    `browser_secret_references`. Either shape is safe to persist.
+    """
+    return isinstance(value, str) and (value.startswith("pvh_") or value.startswith("op://"))
 
 
 def _row_captcha(payload: dict[str, Any]) -> dict[str, Any]:
@@ -176,7 +182,7 @@ def _attach_vault(
     """
     target_selector = vault_payload.get("selector")
     reference = vault_payload.get("reference")
-    if not reference or not reference.startswith("pvh_"):
+    if not reference or not _is_vault_handle(reference):
         return
 
     # Walk from the end backward to find the most recent fill row whose

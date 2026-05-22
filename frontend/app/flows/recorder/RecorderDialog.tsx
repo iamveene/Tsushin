@@ -10,9 +10,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Modal from '@/components/ui/Modal'
+import PasswordVaultReferencePicker, {
+  type PasswordVaultReferenceValue,
+} from '@/components/password-vault/PasswordVaultReferencePicker'
 import { api, type FlowStepConfig } from '@/lib/client'
 import StreamCanvas, { type PointerInput, type KeyInput } from './StreamCanvas'
 import StepLedger from './StepLedger'
+import ToolPalette, { type MarkerMode } from './ToolPalette'
 import {
   useRecorderSocket,
   type RecorderEventRow,
@@ -37,7 +41,12 @@ export default function RecorderDialog({
   const [bootError, setBootError] = useState<string | null>(null)
   const [events, setEvents] = useState<RecorderEventRow[]>([])
   const [savePending, setSavePending] = useState(false)
-  const [markerMode, setMarkerMode] = useState<'captcha' | 'extract' | null>(null)
+  const [markerMode, setMarkerMode] = useState<MarkerMode>(null)
+  // Vault picker state — opened from a StepLedger "🔑 Vault?" chip.
+  // Holds the selector of the row we're wiring so the marker.vault event
+  // dispatched on accept targets the correct fill row.
+  const [vaultTarget, setVaultTarget] = useState<{ selector: string; rowIndex: number } | null>(null)
+  const [vaultDraft, setVaultDraft] = useState<PasswordVaultReferenceValue>({})
   // Hold the latest frame outside React state to avoid re-rendering the whole
   // dialog at 10 fps — StreamCanvas reads through this ref via the `framePort`.
   const framePortRef = useRef<{ latestFrame: RecorderFrame | null }>({ latestFrame: null })
@@ -165,6 +174,34 @@ export default function RecorderDialog({
 
   const handleClear = useCallback(() => setEvents([]), [])
 
+  const handleVaultRequest = useCallback((row: RecorderEventRow, index: number) => {
+    const sel = String(row.payload?.selector || '').trim()
+    if (!sel) return
+    setVaultDraft({})
+    setVaultTarget({ selector: sel, rowIndex: index })
+  }, [])
+
+  const handleVaultConfirm = useCallback(() => {
+    if (!vaultTarget) return
+    const ref = (vaultDraft.password_vault_reference || '').trim()
+    if (!ref) {
+      setBootError('Pick a vault entry before confirming.')
+      return
+    }
+    send({
+      type: 'marker.vault',
+      selector: vaultTarget.selector,
+      reference: ref,
+    })
+    setVaultTarget(null)
+    setVaultDraft({})
+  }, [send, vaultDraft.password_vault_reference, vaultTarget])
+
+  const handleVaultCancel = useCallback(() => {
+    setVaultTarget(null)
+    setVaultDraft({})
+  }, [])
+
   const statusBadge = (
     <span className={
       'inline-flex items-center gap-1.5 text-[10px] font-medium uppercase rounded px-2 py-0.5 ' +
@@ -218,39 +255,8 @@ export default function RecorderDialog({
           </div>
         )}
 
-        {/* Tool palette — Phase 4 expands these (vault picker, etc.) */}
         {sessionId && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setMarkerMode(markerMode === 'captcha' ? null : 'captcha')}
-              className={
-                'px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ' +
-                (markerMode === 'captcha'
-                  ? 'border-amber-400 bg-amber-500/20 text-amber-200'
-                  : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-amber-500/50 hover:text-amber-200')
-              }
-            >
-              ▣ Mark captcha
-            </button>
-            <button
-              type="button"
-              onClick={() => setMarkerMode(markerMode === 'extract' ? null : 'extract')}
-              className={
-                'px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ' +
-                (markerMode === 'extract'
-                  ? 'border-fuchsia-400 bg-fuchsia-500/20 text-fuchsia-200'
-                  : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-fuchsia-500/50 hover:text-fuchsia-200')
-              }
-            >
-              👁 Capture output
-            </button>
-            {markerMode && (
-              <span className="text-xs text-slate-400 italic">
-                Drag a box over the {markerMode === 'captcha' ? 'captcha image' : 'text to capture'}…
-              </span>
-            )}
-          </div>
+          <ToolPalette markerMode={markerMode} onModeChange={setMarkerMode} />
         )}
 
         {/* Two-pane layout: stream | step ledger */}
@@ -274,9 +280,49 @@ export default function RecorderDialog({
             )}
           </div>
           <div className="bg-slate-900 rounded-lg border border-slate-700 overflow-hidden min-h-0">
-            <StepLedger events={events} onClear={handleClear} />
+            <StepLedger events={events} onClear={handleClear} onVaultRequest={handleVaultRequest} />
           </div>
         </div>
+
+        {/* Vault picker — opened from the 🔑 chip on a fill row that still
+            holds plaintext. On confirm we dispatch marker.vault with the
+            picker's op://-style reference and the targeted selector. */}
+        <Modal
+          isOpen={!!vaultTarget}
+          onClose={handleVaultCancel}
+          title="Wire a password vault entry"
+          size="lg"
+          autoHeight
+          footer={
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleVaultCancel}
+                className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-xs hover:border-slate-500 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleVaultConfirm}
+                disabled={!vaultDraft.password_vault_reference}
+                className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 text-xs font-semibold transition-colors"
+              >
+                Apply to step
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3">
+            {vaultTarget && (
+              <p className="text-xs text-slate-400">
+                Targeting <code className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-mono text-[11px]">{vaultTarget.selector}</code>{' '}
+                — the recorded plaintext value will be replaced with this vault reference at save.
+              </p>
+            )}
+            <PasswordVaultReferencePicker value={vaultDraft} onChange={setVaultDraft} />
+          </div>
+        </Modal>
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700">

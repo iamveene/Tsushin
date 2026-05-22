@@ -207,8 +207,13 @@ async def _handle_client_message(
             "reference": str(msg.get("reference", "")),
             "field_meta": msg.get("field_meta"),
         }
-        if not payload["reference"].startswith("pvh_"):
-            await _safe_send(websocket, {"type": "error", "message": "vault reference must be a pvh_ handle"})
+        # Accept either short-lived in-memory handles (`pvh_`) or
+        # canonical vault op:// URIs — the runtime resolver tries `pvh_`
+        # first and falls back to PasswordVaultService lookup, so both
+        # are valid persistence shapes for browser_secret_references.
+        ref = payload["reference"]
+        if not (ref.startswith("pvh_") or ref.startswith("op://")):
+            await _safe_send(websocket, {"type": "error", "message": "vault reference must be a pvh_ handle or op:// URI"})
             return
         session.append_event("marker.vault", payload)
         await _safe_send(websocket, {"type": "event", "kind": "marker.vault", "payload": payload})
