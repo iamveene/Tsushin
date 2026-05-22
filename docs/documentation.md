@@ -2170,7 +2170,7 @@ Browser-Use's high-level Playwright actions (`go_to_url`, `click_element_by_inde
 
 #### 13.9.6 Canonical example — Correios postal tracking
 
-The "Postal Track | Correios | AD468811215BR" flow that ships with Tsushin (target: `https://rastreamento.correios.com.br/app/index.php` with a Securimage CAPTCHA) compiles into this `selectors[]` array from a single human pass through the recorder:
+The "Postal Track | Correios | AD468811215BR" flow that ships with Tsushin (target: `https://rastreamento.correios.com.br/app/index.php` with a Securimage CAPTCHA) compiles into this `selectors[]` array from a single human pass through the recorder. **Per the project-wide convention, every browser-automation flow ends with a Notification step so success/failure is observable** — a silent flow is indistinguishable from one that didn't run. Smoke-test script: [`backend/scripts/recorder_e2e_correios_to_vini.py`](../backend/scripts/recorder_e2e_correios_to_vini.py) records, saves, executes and reports the full notification proof.
 
 ```jsonc
 {
@@ -2192,6 +2192,27 @@ The "Postal Track | Correios | AD468811215BR" flow that ships with Tsushin (targ
 ```
 
 At execution time the existing `BrowserAutomationStepHandler` calls the `solve_captcha` skill (LLM vision OCR) to read the live CAPTCHA image and overwrite the placeholder `XXXXXX` value before clicking Consultar. The placeholder only exists so the compiler wires `value_target` correctly.
+
+The full saved FlowDefinition is `browser_automation → notification`:
+
+```jsonc
+// Step 2 — appended manually after Save-as-flow-step. The recorder doesn't
+// emit notification rows itself; users (or the smoke-test script) add it
+// so the flow is observable in production.
+{
+  "type": "notification",
+  "name": "notify_vini",
+  "position": 2,
+  "config_json": {
+    "channel": "whatsapp",
+    "recipient": "@Vini",
+    "recipients": ["@Vini"],
+    "message_template": "Correios {{step_1.url}} → {{step_1.delivery_status}}"
+  }
+}
+```
+
+`@Vini` is resolved by `_resolve_mcp_url_and_secret` (`backend/flows/flow_engine.py:239`) into the tenant's contact row, lookup by `friendly_name` ('Vini') → `whatsapp_id`/`phone_number`. The MCP URL is read from `WhatsAppMCPInstance.mcp_api_url` for that tenant's `agent`-type instance.
 
 #### 13.9.7 Constraints
 

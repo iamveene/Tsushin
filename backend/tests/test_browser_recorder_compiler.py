@@ -130,6 +130,24 @@ def test_correios_compile_basic_shape():
     assert config["browser_secret_references"] == []
 
 
+def test_compile_emits_top_level_tool_action():
+    """BrowserAutomationStepHandler rejects the step with
+    'Missing tool_action for browser automation step' when the top-level
+    config_json doesn't carry a `tool_action` field. The manual config
+    panel sets this via its dropdown (default 'navigate'); the recorder
+    must mirror that default so a saved recording runs at execution time
+    without any additional manual editing. Regression test for the
+    Correios+Notify-Vini E2E loop.
+    """
+    config = compile_events(_events_correios_shaped())
+    assert config.get("tool_action") == "navigate"
+
+    # Even an empty recording emits the tool_action — the flow editor
+    # surfaces it whether the user keeps the dropdown default or not.
+    empty = compile_events([])
+    assert empty.get("tool_action") == "navigate"
+
+
 def test_correios_actions_in_order():
     config = compile_events(_events_correios_shaped())
     actions = [s["action"] for s in config["selectors"]]

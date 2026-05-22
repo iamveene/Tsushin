@@ -940,9 +940,20 @@ This is the canonical browser-automation flow shipped with Tsushin. It pulls pac
    - `fill input[name="captcha"]` value=`XXXXXX` (runtime overwrites with OCR result)
    - `click button[name="b-pesquisar"]`
    - `extract <result panel selector>` as=`delivery_status`
-10. Click **Update Flow** at the top of the editor. Done — `delivery_status` is now available to downstream steps as `{{steps.<browser_step_name>.delivery_status}}`.
+10. **Add a Notification step at the bottom** so you actually find out the flow ran. Click *+ Add step* → choose **Notification** → set channel `whatsapp`, recipient `@Vini` (or whichever contact handle), and a template like `Correios {{step_1.url}} → {{step_1.delivery_status}}`. This is a project-wide convention: every browser-automation flow should end with a notification so the success/failure is observable. A silent flow is indistinguishable from a flow that didn't run.
+11. Click **Update Flow** at the top of the editor. Done — when this flow executes, the recorder replays the recorded actions, the runtime solves the live captcha, and the notification step pings you with the extracted `delivery_status`.
 
-Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button.
+Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button. Don't forget to still append the Notification step manually before saving — the recorder doesn't add it for you.
+
+##### Smoke-test script
+
+`backend/scripts/recorder_e2e_correios_to_vini.py` runs the whole loop end-to-end against a healthy backend: records the Correios flow via the recorder WebSocket, compiles it, creates a real FlowDefinition (browser_automation → notification @Vini), executes it, and reports structured proof of the notification leg (resolved recipient, rendered message body, MCP URL it POSTed to). Use this to validate new tenants or after stack changes:
+
+```
+docker exec tsushin-backend python /app/scripts/recorder_e2e_correios_to_vini.py
+```
+
+A healthy run ends with `OVERALL: PASS` and a WhatsApp ping to Vini. If the WhatsApp MCP isn't QR-authenticated, the script reports `STRUCTURAL PASS` and shows what message *would* have been sent so you can re-auth and re-run.
 
 ##### Constraints to know
 

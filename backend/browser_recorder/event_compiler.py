@@ -339,6 +339,13 @@ def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "use_tool_mode": True,
+        # `tool_action` is the canonical entry-point action the runtime
+        # reads (BrowserAutomationStepHandler at flow_engine.py:4040
+        # rejects the step with "Missing tool_action" if absent). The
+        # manual config panel defaults this to "navigate" via its dropdown;
+        # the recorder mirrors that default so a saved recording runs at
+        # execution time without any additional manual editing.
+        "tool_action": "navigate",
         "mode": "container",
         "provider_type": "playwright",
         "selectors": selectors,
