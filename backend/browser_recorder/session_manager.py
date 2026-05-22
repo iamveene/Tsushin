@@ -159,20 +159,30 @@ class SessionRegistry:
     def _wire_page_events(self, session: RecordingSession) -> None:
         """Subscribe to the page-level events the compiler needs.
 
-        Phase 1 captures only what's required to verify the streaming loop —
-        navigate + load. Click/fill capture is driven from the WS relay
-        layer where we already have coordinates and the JS shim's selector
-        lookup.
+        Captures top-frame navigations and load events into the session
+        and — when a WebSocket relay is currently attached — also
+        forwards them to the frontend so the StepLedger updates in real
+        time. Click/fill capture is driven from the WS relay layer where
+        we already have coordinates and the JS shim's selector lookup.
         """
         page = session.page
+        loop = asyncio.get_running_loop()
+
+        def _emit(kind: str, payload: dict) -> None:
+            session.append_event(kind, payload)
+            if session.relay_send is not None:
+                # relay_send is an async lambda; schedule on the running loop
+                asyncio.ensure_future(
+                    session.relay_send({"type": "event", "kind": kind, "payload": payload}),
+                    loop=loop,
+                )
 
         def _on_frame_navigated(frame) -> None:
-            # Only top frame; sub-frame nav noise is not actionable here
             if frame == page.main_frame:
-                session.append_event("navigate", {"url": frame.url})
+                _emit("navigate", {"url": frame.url})
 
         def _on_load() -> None:
-            session.append_event("load", {"url": page.url})
+            _emit("load", {"url": page.url})
 
         page.on("framenavigated", _on_frame_navigated)
         page.on("load", _on_load)

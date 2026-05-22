@@ -266,6 +266,16 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
         },
     })
 
+    # Replay any events that fired before this WS connected (initial
+    # navigate from create(), reconnect-after-blip, etc.) so the
+    # StepLedger doesn't show a stale-feeling zero count.
+    for prior in list(session.events):
+        await _safe_send(websocket, {
+            "type": "event",
+            "kind": prior.kind,
+            "payload": prior.payload,
+        })
+
     session.relay_send = lambda payload: _safe_send(websocket, payload)
 
     try:

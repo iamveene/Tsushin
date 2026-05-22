@@ -8,12 +8,13 @@
  * review pass in the manual editor before persisting the FlowNode.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Modal from '@/components/ui/Modal'
 import PasswordVaultReferencePicker, {
   type PasswordVaultReferenceValue,
 } from '@/components/password-vault/PasswordVaultReferencePicker'
 import { api, type FlowStepConfig } from '@/lib/client'
+import AgenticTab from './AgenticTab'
 import StreamCanvas, { type PointerInput, type KeyInput } from './StreamCanvas'
 import StepLedger from './StepLedger'
 import ToolPalette, { type MarkerMode } from './ToolPalette'
@@ -47,6 +48,19 @@ export default function RecorderDialog({
   // dispatched on accept targets the correct fill row.
   const [vaultTarget, setVaultTarget] = useState<{ selector: string; rowIndex: number } | null>(null)
   const [vaultDraft, setVaultDraft] = useState<PasswordVaultReferenceValue>({})
+  const [agenticExpanded, setAgenticExpanded] = useState(false)
+  const [agentPaused, setAgentPaused] = useState(false)
+  // Derive agent-running from the event stream — the backend dispatches
+  // "agent.start" / "agent.complete" / "agent.error" rows which the WS
+  // relay surfaces. Keeps the state synced even if the UI reloads.
+  const agentRunning = useMemo(() => {
+    let running = false
+    for (const ev of events) {
+      if (ev.kind === 'agent.start') running = true
+      else if (ev.kind === 'agent.complete' || ev.kind === 'agent.error' || ev.kind === 'agent.cancelled') running = false
+    }
+    return running
+  }, [events])
   // Hold the latest frame outside React state to avoid re-rendering the whole
   // dialog at 10 fps — StreamCanvas reads through this ref via the `framePort`.
   const framePortRef = useRef<{ latestFrame: RecorderFrame | null }>({ latestFrame: null })
@@ -256,7 +270,28 @@ export default function RecorderDialog({
         )}
 
         {sessionId && (
-          <ToolPalette markerMode={markerMode} onModeChange={setMarkerMode} />
+          <>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <ToolPalette markerMode={markerMode} onModeChange={setMarkerMode} />
+              <button
+                type="button"
+                onClick={() => setAgenticExpanded((v) => !v)}
+                className="text-[11px] text-slate-400 hover:text-cyan-300 inline-flex items-center gap-1 transition-colors"
+                title="Have an LLM-driven Browser-Use agent drive the session instead of clicking yourself"
+              >
+                {agenticExpanded ? '▾' : '▸'} Agentic mode
+              </button>
+            </div>
+            {agenticExpanded && (
+              <AgenticTab
+                sessionId={sessionId}
+                agentRunning={agentRunning}
+                agentPaused={agentPaused}
+                onStarted={() => setAgentPaused(false)}
+                onPaused={setAgentPaused}
+              />
+            )}
+          </>
         )}
 
         {/* Two-pane layout: stream | step ledger */}

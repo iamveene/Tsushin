@@ -8,3 +8,13 @@ google-cloud-secret-manager>=2.18.0
 qdrant-client>=1.13.0,<1.14.0  # BUG-698: pin to match auto-provisioned Qdrant server v1.13.x
 pinecone>=3.0.0
 pymongo[srv]>=4.6.0
+
+# Browser Recorder — Agentic mode (v1.1).
+# Browser-Use drives a recording session via the same Playwright Page the
+# human uses, so the compiler output is identical regardless of who drove.
+# OPT-IN: installs force major version bumps to anthropic/openai/aiohttp,
+# so the human-driven recorder ships with these intentionally absent.
+# agentic_driver.py imports them lazily; the /api/recorder/agent route
+# returns 501 cleanly when the packages aren't present.
+# browser-use>=0.1.40
+# langchain-anthropic>=0.2.0
