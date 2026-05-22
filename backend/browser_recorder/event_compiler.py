@@ -47,6 +47,13 @@ def _coalesce_fills(events: list[RecordedEvent]) -> list[RecordedEvent]:
     user-meaningful action is "the final value typed into this field". We
     keep the last value and drop the intermediates so the compiled
     `selectors[]` array doesn't carry per-character noise.
+
+    (The companion click-before-fill dedupe runs *after* row emission in
+    ``_dedupe_focus_click_then_fill`` — the click's payload selector
+    comes from the in-page shim and may differ in spelling from the
+    fill's selector even when both target the same element. Comparing
+    after both rows have run through pick_selector gives a canonical
+    string to compare.)
     """
     out: list[RecordedEvent] = []
     for ev in events:
@@ -65,8 +72,29 @@ def _coalesce_fills(events: list[RecordedEvent]) -> list[RecordedEvent]:
             out[-1].payload["field_meta"] = (
                 ev.payload.get("field_meta") or out[-1].payload.get("field_meta")
             )
-        else:
-            out.append(ev)
+            continue
+        out.append(ev)
+    return out
+
+
+def _dedupe_focus_click_then_fill(selectors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop a click row immediately followed by a fill on the same selector.
+
+    Runs after row emission so both rows have the canonical selector
+    string from ``pick_selector``. The click was just focusing the
+    field before typing — Playwright's ``fill`` action focuses the
+    element itself, so the click row is dead weight at replay time.
+    """
+    out: list[dict[str, Any]] = []
+    for row in selectors:
+        if (
+            row.get("action") == "fill"
+            and out
+            and out[-1].get("action") == "click"
+            and out[-1].get("selector") == row.get("selector")
+        ):
+            out.pop()
+        out.append(row)
     return out
 
 
@@ -302,6 +330,7 @@ def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
         # Unknown kinds are silently dropped — Phase 2 only handles the
         # event types Phase 1's relay emits.
 
+    selectors = _dedupe_focus_click_then_fill(selectors)
     _captcha_value_targets(selectors)
 
     # Compute a reasonable timeout — sum of per-step timeouts with a

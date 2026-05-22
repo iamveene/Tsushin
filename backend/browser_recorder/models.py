@@ -87,6 +87,11 @@ class RecordingSession:
     # find it. None when human-driven.
     agent_task: Optional[asyncio.Task] = None
     agent_paused: bool = False
+    # Reference to the Browser-Use Agent object itself (typed `Any` so this
+    # module stays free of the heavy browser_use import). Lets the route
+    # handler call agent.pause()/agent.resume() natively rather than
+    # poll a flag.
+    agent_handle: Optional[Any] = None
 
     def touch(self) -> None:
         self.last_active_at = time.time()

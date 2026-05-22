@@ -136,7 +136,13 @@ class SessionRegistry:
             self._wire_page_events(session)
 
             if initial_url:
-                await page.goto(initial_url)
+                # Use domcontentloaded (not the default 'load') so the goto
+                # returns as soon as the DOM is parsed — many real sites
+                # (e.g. Correios) keep loading ads/analytics for 30s+ after
+                # the page is usable, which would otherwise block the
+                # recorder from streaming for the full default timeout.
+                # 45s timeout gives slow connections breathing room.
+                await page.goto(initial_url, wait_until="domcontentloaded", timeout=45000)
                 session.append_event("navigate", {"url": initial_url})
 
             async with self._lock:
@@ -224,32 +230,48 @@ class SessionRegistry:
                 logger.warning("Janitor teardown failed for %s: %s", sid, e)
         return count
 
+    # Per-step cap on teardown coroutines. A busy Playwright session can
+    # take many seconds to close its context cleanly — we don't want a
+    # DELETE request to hang on the client for that long. Each step gets
+    # a short budget; if it overruns, we log and move on. The OS reclaims
+    # the underlying Chromium process when its parent dies.
+    TEARDOWN_STEP_TIMEOUT = 5.0
+
     async def teardown(self, session_id: str) -> bool:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
         if not session:
             return False
-        # Cancel agentic driver task first if present (Phase 6 will populate)
+        # Cancel agentic driver task first if present (Phase 6 wires this).
         if session.agent_task and not session.agent_task.done():
             session.agent_task.cancel()
             try:
-                await session.agent_task
-            except (asyncio.CancelledError, Exception):
+                await asyncio.wait_for(session.agent_task, timeout=self.TEARDOWN_STEP_TIMEOUT)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
-        # Stop screencast before closing — Chrome complains otherwise
-        try:
-            await session.cdp.send("Page.stopScreencast")
-        except Exception:
-            pass
-        try:
-            await session.cdp.detach()
-        except Exception:
-            pass
-        for closer in (session.context.close, session.browser.close, session.playwright.stop):
+
+        async def _with_timeout(coro_fn, label: str) -> None:
             try:
-                await closer()
-            except Exception as e:  # pragma: no cover — best-effort teardown
-                logger.warning("Recorder %s teardown step failed: %s", session_id, e)
+                await asyncio.wait_for(coro_fn(), timeout=self.TEARDOWN_STEP_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Recorder %s teardown step '%s' exceeded %ss budget — moving on",
+                    session_id, label, self.TEARDOWN_STEP_TIMEOUT,
+                )
+            except Exception as e:
+                logger.warning("Recorder %s teardown step '%s' failed: %s", session_id, label, e)
+
+        # Stop the screencast first so Chrome doesn't try to deliver frames
+        # into a tearing-down CDP session.
+        await _with_timeout(
+            lambda: session.cdp.send("Page.stopScreencast"),
+            "stopScreencast",
+        )
+        await _with_timeout(session.cdp.detach, "cdp.detach")
+        await _with_timeout(session.context.close, "context.close")
+        await _with_timeout(session.browser.close, "browser.close")
+        await _with_timeout(session.playwright.stop, "playwright.stop")
+
         logger.info("Recorder session %s torn down", session_id)
         return True
 

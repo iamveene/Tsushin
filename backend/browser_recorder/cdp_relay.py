@@ -177,7 +177,11 @@ async def _handle_client_message(
         url = str(msg.get("url", "")).strip()
         if url:
             try:
-                await page.goto(url)
+                # Same domcontentloaded reasoning as session_manager.create —
+                # real sites keep loading analytics/ads long after the
+                # page is usable, and we shouldn't block the relay loop on
+                # those resources.
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as e:
                 await _safe_send(websocket, {"type": "error", "message": f"navigate failed: {e}"})
             # framenavigated handler appends the event

@@ -286,6 +286,56 @@ def test_dedup_navigate_collapses_redirects():
     assert config["url"] == "https://example.com/"
 
 
+def test_focus_click_before_fill_is_deduped():
+    """A click that focuses an input before typing should not survive
+    into the compiled selectors[]. The runtime's `fill` action focuses
+    the element itself, so the click row is dead weight.
+
+    Without dedupe the Correios recording would emit:
+        [0] click input[name=id]
+        [1] fill  input[name=id]  value=AD468811215BR
+    With dedupe only the fill remains.
+    """
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("click", {
+            "x": 100, "y": 200,
+            "selector": 'input[name="id"]',
+            "meta": {"tag": "input", "name": "id", "type": "text"},
+        }),
+        RecordedEvent("fill", {
+            "selector": 'input[name="id"]',
+            "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "name": "id", "type": "text"},
+        }),
+    ]
+    config = compile_events(events)
+    actions = [s["action"] for s in config["selectors"]]
+    assert actions == ["fill"]
+    assert config["selectors"][0]["value"] == "AD468811215BR"
+
+
+def test_click_then_fill_on_different_selector_is_preserved():
+    """The dedupe only kicks in when the click and fill target the same
+    selector — clicking elsewhere and then filling a different field
+    must keep both rows."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("click", {
+            "selector": "button.open-form",
+            "meta": {"tag": "button"},
+        }),
+        RecordedEvent("fill", {
+            "selector": 'input[name="id"]',
+            "value": "AD",
+            "field_meta": {"tag": "input", "name": "id"},
+        }),
+    ]
+    config = compile_events(events)
+    actions = [s["action"] for s in config["selectors"]]
+    assert actions == ["click", "fill"]
+
+
 def test_mid_recording_navigate_emits_row():
     events = [
         RecordedEvent("navigate", {"url": "https://a.example/"}),

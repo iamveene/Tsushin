@@ -194,6 +194,50 @@ async def compile_session(
     )
 
 
+@router.get(
+    "/sessions/{session_id}/debug",
+    dependencies=[Depends(require_permission("flows.write"))],
+)
+async def debug_session(
+    session_id: str,
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> dict:
+    """Introspect a live recording session.
+
+    Returns the raw event stream + agent task state. Intended for
+    debugging agentic recordings — gives the UI (and humans) a way to
+    surface why an agent stalled without spelunking server logs.
+    """
+    registry = get_registry()
+    session = await registry.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Recording session not found")
+    if not ctx.can_access_resource(session.tenant_id):
+        raise HTTPException(status_code=404, detail="Recording session not found")
+    agent_done = session.agent_task.done() if session.agent_task else None
+    agent_exception = None
+    if session.agent_task and session.agent_task.done():
+        try:
+            exc = session.agent_task.exception()
+            if exc is not None:
+                agent_exception = f"{type(exc).__name__}: {str(exc)[:500]}"
+        except (asyncio.CancelledError, Exception):
+            pass
+    return {
+        "session_id": session.session_id,
+        "tenant_id": session.tenant_id,
+        "current_driver": session.current_driver.value if session.current_driver else None,
+        "agent_paused": session.agent_paused,
+        "agent_task_done": agent_done,
+        "agent_exception": agent_exception,
+        "event_count": len(session.events),
+        "events": [
+            {"kind": e.kind, "payload": e.payload, "ts": e.ts}
+            for e in session.events
+        ],
+    }
+
+
 @router.delete(
     "/sessions/{session_id}",
     status_code=204,
@@ -227,9 +271,9 @@ async def start_agent(
 ) -> dict:
     """Start a Browser-Use driver against the existing recording session.
 
-    Phase 6 wires this through `browser_recorder.agentic_driver`. Returns
-    501 until then so the frontend can feature-flag the UI off without a
-    real failure mode.
+    Resolves the Anthropic API key via the tenant's default
+    ProviderInstance (same path AIClient uses); returns 501 if browser-use
+    isn't installed, 503 if the tenant has no Anthropic key configured.
     """
     registry = get_registry()
     session = await registry.get(session_id)
@@ -241,12 +285,28 @@ async def start_agent(
         from browser_recorder.agentic_driver import start_agent_loop  # Phase 6
     except ImportError:
         raise HTTPException(status_code=501, detail="Agentic mode not yet enabled")
-    await start_agent_loop(
-        session=session,
-        prompt=body.prompt,
-        planner_model=body.planner_model,
-        step_model=body.step_model,
-    )
+    try:
+        await start_agent_loop(
+            session=session,
+            prompt=body.prompt,
+            tenant_id=session.tenant_id,
+            db=ctx.db,
+            planner_model=body.planner_model,
+            step_model=body.step_model,
+        )
+    except RuntimeError as e:
+        # Tenant missing the Anthropic provider instance / key — surface
+        # a specific 503 so the UI can render a "configure Anthropic
+        # provider first" hint instead of a generic 500.
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Agentic recorder start failed for session %s", session_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Agent start failed: {type(e).__name__}: {str(e)[:300]}",
+        )
     return {"status": "started", "driver": RecordingDriver.AGENT.value}
 
 
@@ -264,7 +324,21 @@ async def pause_agent(
         raise HTTPException(status_code=404, detail="Recording session not found")
     if not ctx.can_access_resource(session.tenant_id):
         raise HTTPException(status_code=404, detail="Recording session not found")
+
     session.agent_paused = not session.agent_paused
+    # Call Browser-Use's native pause/resume if the agent handle is around.
+    # The flag is the source of truth — the native call is a best-effort
+    # nudge so the agent yields between steps even if our cooperative
+    # on_step_start check missed.
+    handle = getattr(session, "agent_handle", None)
+    if handle is not None:
+        try:
+            if session.agent_paused and hasattr(handle, "pause"):
+                handle.pause()
+            elif (not session.agent_paused) and hasattr(handle, "resume"):
+                handle.resume()
+        except Exception:
+            logger.debug("Native pause/resume call failed for %s", session_id, exc_info=True)
     return {"paused": session.agent_paused}
 
 
