@@ -550,4 +550,119 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
             "_recorder_position": len(nodes) + 1,
         })
 
+    nodes = _combine_captcha_chain(nodes)
+    # Re-number positions after the combine
+    for new_pos, n in enumerate(nodes, start=1):
+        n["_recorder_position"] = new_pos
     return nodes
+
+
+def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse the captcha sequence into one canonical solve_captcha node.
+
+    The recorder emits atomic-per-action FlowNodes:
+        ... fill(objeto) → solve_captcha(marker) → click(submit) → extract(result)
+
+    The runtime's `solve_captcha` action expects ALL captcha-related
+    selectors as a DICT (not list) on the SAME FlowNode:
+        {
+          "tool_action": "solve_captcha",
+          "selectors": {
+            "captcha_image":  "#captcha_image",
+            "captcha_input":  "#captcha",
+            "captcha_submit": "#b-pesquisar",
+            "result_selector": "#result-panel"
+          }
+        }
+    because solve_captcha is a *combined* skill — it OCRs the image,
+    fills the input, clicks submit, and waits for the result panel.
+    Separate fill/click/extract FlowNodes would race against this combined
+    skill at runtime.
+
+    If a solve_captcha row is present AND followed by a click row AND
+    (optionally) an extract row, we combine them into one canonical
+    FlowNode. Otherwise the chain stays atomic.
+    """
+    captcha_idx = next(
+        (i for i, n in enumerate(nodes)
+         if (n.get("config_json") or {}).get("tool_action") == "solve_captcha"),
+        None,
+    )
+    if captcha_idx is None:
+        return nodes
+
+    cfg_captcha = nodes[captcha_idx]["config_json"]
+    sels = cfg_captcha.get("selectors") or []
+    if not sels:
+        return nodes
+    captcha_image_sel = sels[0].get("selector")
+    captcha_input_sel = sels[0].get("value_target")
+    if not (captcha_image_sel and captcha_input_sel):
+        return nodes
+
+    # Walk forward: first click → submit; first extract → result panel
+    submit_idx = next(
+        (i for i in range(captcha_idx + 1, len(nodes))
+         if (nodes[i].get("config_json") or {}).get("tool_action") == "click"),
+        None,
+    )
+    if submit_idx is None:
+        return nodes  # incomplete chain — keep atomic
+
+    submit_cfg = nodes[submit_idx]["config_json"]
+    submit_sels = submit_cfg.get("selectors") or []
+    submit_sel = submit_sels[0].get("selector") if submit_sels else None
+    if not submit_sel:
+        return nodes
+
+    extract_idx = next(
+        (i for i in range(submit_idx + 1, len(nodes))
+         if (nodes[i].get("config_json") or {}).get("tool_action") == "extract"),
+        None,
+    )
+    result_sel = None
+    if extract_idx is not None:
+        ext_sels = nodes[extract_idx]["config_json"].get("selectors") or []
+        if ext_sels:
+            result_sel = ext_sels[0].get("selector")
+
+    # Build the canonical combined solve_captcha node
+    canonical_selectors: dict[str, str] = {
+        "captcha_image": captcha_image_sel,
+        "captcha_input": captcha_input_sel,
+        "captcha_submit": submit_sel,
+    }
+    if result_sel:
+        canonical_selectors["result_selector"] = result_sel
+
+    profile_name = cfg_captcha.get("browser_session_profile_name")
+    combined: dict[str, Any] = {
+        "name": "solve_captcha",
+        "type": "browser_automation",
+        # Bumped timeout — solve_captcha invokes LLM-vision OCR which can
+        # take 30-90s per attempt + retries. Canonical flow #26 uses 1300s.
+        "timeout_seconds": 300,
+        "config_json": {
+            "use_tool_mode": True,
+            "tool_action": "solve_captcha",
+            "mode": "container",
+            "provider_type": "playwright",
+            "selectors": canonical_selectors,  # DICT shape (canonical)
+            "browser_secret_references": [],
+            "timeout_seconds": 300,
+            "session_persistence": True,
+            "session_ttl_seconds": 1800,
+        },
+    }
+    if profile_name:
+        combined["config_json"]["browser_session_profile_name"] = profile_name
+
+    # Remove the captcha, click, and (if present) extract nodes; insert combined
+    drop_indices = {captcha_idx, submit_idx}
+    if extract_idx is not None:
+        drop_indices.add(extract_idx)
+    kept = [n for i, n in enumerate(nodes) if i not in drop_indices]
+    # Insert at the captcha's original position
+    insert_pos = sum(1 for i in range(captcha_idx) if i not in drop_indices)
+    kept.insert(insert_pos, combined)
+    return kept

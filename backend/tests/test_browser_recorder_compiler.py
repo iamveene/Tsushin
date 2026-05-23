@@ -424,15 +424,66 @@ def test_compile_into_nodes_drops_placeholder_captcha_fill():
     ]
     nodes = compile_events_into_nodes(events)
     actions = [n["config_json"]["tool_action"] for n in nodes]
-    # navigate, fill (objeto), solve_captcha, click — placeholder captcha fill dropped
+    # After combine: navigate, fill (objeto), solve_captcha_combined.
+    # click was folded into solve_captcha; placeholder captcha fill was dropped.
     assert "solve_captcha" in actions
-    # Exactly one fill (objeto), NOT two (objeto + placeholder)
-    assert actions.count("fill") == 1
-    # And the solve_captcha node retains its value_target pointing at the
-    # captcha input selector
+    assert actions.count("fill") == 1  # only objeto, no placeholder captcha fill
+    assert actions.count("click") == 0  # submit got folded into solve_captcha
+    # Canonical solve_captcha uses DICT selectors with named keys
     captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
-    sel0 = captcha_node["config_json"]["selectors"][0]
-    assert sel0.get("value_target") == 'input[name="captcha"]'
+    sels = captcha_node["config_json"]["selectors"]
+    assert isinstance(sels, dict)
+    assert sels.get("captcha_input") == 'input[name="captcha"]'
+    assert sels.get("captcha_submit") == 'button[name="b-pesquisar"]'
+
+
+def test_compile_into_nodes_combines_captcha_chain_into_canonical_node():
+    """The runtime's solve_captcha is a COMBINED skill (OCR + fill +
+    submit + wait for result). When the recorder captures the canonical
+    captcha sequence (marker.captcha → fill captcha_input → click
+    submit → marker.extract result), the multi-FlowNode compiler should
+    combine those into ONE solve_captcha FlowNode with selectors as a
+    DICT (canonical shape), matching how `Postal Track | Correios | …`
+    (flow #26 in prod) is structured."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
+        RecordedEvent("fill", {
+            "selector": 'input[name="objeto"]', "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "name": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "rect": [101, 313, 424, 158],
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("fill", {
+            "selector": 'input[name="captcha"]', "value": "XXXXXX",
+            "field_meta": {"tag": "input", "name": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": 'button[name="b-pesquisar"]',
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "rect": [100, 500, 1080, 200],
+            "selector": "#result-panel",
+            "meta": {"tag": "div", "id": "result-panel"},
+            "as": "delivery_status",
+        }),
+    ]
+    nodes = compile_events_into_nodes(events)
+    actions = [n["config_json"]["tool_action"] for n in nodes]
+    assert actions.count("solve_captcha") == 1
+    assert actions.count("click") == 0, "click should be folded into solve_captcha"
+    assert actions.count("extract") == 0, "extract should be folded into solve_captcha as result_selector"
+
+    captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
+    sels = captcha_node["config_json"]["selectors"]
+    assert isinstance(sels, dict), "canonical solve_captcha uses DICT selectors, not list"
+    assert sels.get("captcha_image") == "img#captcha_image"
+    assert sels.get("captcha_input") == 'input[name="captcha"]'
+    assert sels.get("captcha_submit") == 'button[name="b-pesquisar"]'
+    assert sels.get("result_selector") == "#result-panel"
 
 
 def test_compile_into_nodes_keeps_vault_reference_with_owning_node():
