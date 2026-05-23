@@ -11694,6 +11694,62 @@ export const api = {
     if (!res.ok) await handleApiError(res, 'Failed to load callback URIs')
     return res.json()
   },
+
+  // Browser Automation Recorder — record-and-refine authoring for browser_automation flows.
+  // Sessions are ephemeral; tokens are not used in URLs (httpOnly cookie rides the WS upgrade).
+  async startRecorderSession(payload: {
+    initial_url?: string
+    viewport_width?: number
+    viewport_height?: number
+  }): Promise<{ session_id: string; ws_url: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start recording session')
+    return res.json()
+  },
+
+  async compileRecorderSession(sessionId: string): Promise<{
+    config_json: Partial<FlowStepConfig> & { _recorder_events?: unknown[] }
+    event_count: number
+  }> {
+    const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/compile`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to compile recording')
+    return res.json()
+  },
+
+  async deleteRecorderSession(sessionId: string): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok && res.status !== 404) await handleApiError(res, 'Failed to teardown recording')
+  },
+
+  async startRecorderAgent(sessionId: string, payload: {
+    prompt: string
+    planner_model?: string
+    step_model?: string
+  }): Promise<{ status: string; driver: string }> {
+    const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to start agentic recording')
+    return res.json()
+  },
+
+  async pauseRecorderAgent(sessionId: string): Promise<{ paused: boolean }> {
+    const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/agent/pause`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to toggle agent pause')
+    return res.json()
+  },
 }
 
 // ============================================================================

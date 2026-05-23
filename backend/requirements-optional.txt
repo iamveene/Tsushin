@@ -8,3 +8,14 @@ google-cloud-secret-manager>=2.18.0
 qdrant-client>=1.13.0,<1.14.0  # BUG-698: pin to match auto-provisioned Qdrant server v1.13.x
 pinecone>=3.0.0
 pymongo[srv]>=4.6.0
+
+# Browser Recorder — Agentic mode (v1.1).
+# Browser-Use drives a recording session via the same Playwright Page the
+# human uses, so the compiler output is identical regardless of who drove.
+# OPT-IN: installs force version bumps (anthropic, openai, aiohttp,
+# pydantic, etc.) — verified safe on Tsushin v0.7.x but worth re-checking
+# on major upstream releases. The agentic_driver imports browser-use
+# lazily; the /api/recorder/agent route returns 501 cleanly when the
+# package is missing. Browser-Use 0.12+ ships its own ChatAnthropic so
+# we do NOT need langchain-anthropic at all.
+# browser-use>=0.12.0

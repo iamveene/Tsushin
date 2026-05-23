@@ -411,3 +411,4 @@ deploy-to-vm.sh
 !deploy-to-vm.sh
 .fresh-install/
 !backend/tests/test_asr_routes_http.py
+!backend/tests/test_browser_recorder_compiler.py

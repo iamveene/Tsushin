@@ -2099,6 +2099,127 @@ Flow execution via `POST /api/flows/{flow_id}/execute` is fully asynchronous. Th
 
 Source: `backend/flows/stale_flow_cleanup.py`. Periodically removes or marks stale flow runs (orphaned conversation threads, timed-out runs).
 
+### 13.9 Browser Automation Recorder (2026-05-22)
+
+Record-and-refine authoring surface for `browser_automation` flow steps. Source: `backend/browser_recorder/`, `backend/api/routes_recorder.py`, `frontend/app/flows/recorder/`. Architecture summary in `.private/BROWSER_RECORDER_RESEARCH.md`.
+
+**Design bet:** the recorder is a *compiler* into the existing `FlowNode.config_json` schema. No new step type, no schema migration, no new action vocabulary in `BrowserAutomationStepHandler`. Whether the user drove the recording manually or a Browser-Use agent drove it, the output is bit-for-bit identical and runs through the same handler the platform has shipped since v0.6.x.
+
+#### 13.9.1 Three authoring paths
+
+| Path | When to pick | Backend |
+|---|---|---|
+| **🎬 Record** (default) | You know the site and can drive it yourself. | Spawns a Playwright Chromium per session; CDP screencast streams JPEGs to the StreamCanvas; mouse/keyboard events flow back via `Input.dispatch*`. |
+| **▾ Agentic mode** (v1.1, opt-in) | You'd rather describe the goal than click. | Browser-Use `Agent` drives the *same* Playwright `Page` object as the human recorder. Native `agent.pause()`/`agent.resume()` for take-over. Two-LLM split: Claude Opus 4.5 planner + Haiku 4.5 per-step. Anthropic key resolved per-tenant via `ProviderInstance`. |
+| **+ Add selector / paste codegen** | Power user editing an existing flow row. | The existing `BrowserAutomationConfigPanel` UI you already know — the recorder writes into the same panel, you still review before saving. |
+
+#### 13.9.2 REST + WebSocket surface
+
+`backend/api/routes_recorder.py` mounts both routers:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/recorder/sessions` | Spawn Chromium; returns `{session_id, ws_url}`. Cap is 2 active recordings per tenant — over the limit returns HTTP 409 with a "discard an existing recording first" hint. |
+| `WS`   | `/ws/recorder/{session_id}` | Cookie-authed bidirectional stream. Server pushes `{type:"frame", data: <jpeg-b64>}` + `{type:"event", kind, payload}`. Client pushes `input.mouse`, `input.key`, `input.text`, `navigate`, `marker.captcha`, `marker.extract`, `marker.vault`, `ping`. |
+| `POST` | `/api/recorder/sessions/{id}/compile` | Returns the `config_json` preview without persisting it — the frontend `RecorderDialog` calls this on Save and passes the result into the existing config panel's `onChange`. |
+| `POST` | `/api/recorder/sessions/{id}/agent` | Start a Browser-Use agent loop. Returns 503 if the tenant has no Anthropic `ProviderInstance` configured, 501 if `browser-use` isn't installed. |
+| `POST` | `/api/recorder/sessions/{id}/agent/pause` | Toggle pause/resume on the agent. Calls Browser-Use's native `pause()`/`resume()` plus the cooperative `agent_paused` flag. |
+| `GET`  | `/api/recorder/sessions/{id}/debug` | Live session introspection — events, agent task state, agent exception, current driver. UI-debuggable without server logs. |
+| `DELETE` | `/api/recorder/sessions/{id}` | Best-effort teardown — each Playwright closer gets a 5 s `asyncio.wait_for` budget so DELETE returns in under 100 ms even with a busy session. |
+
+WebSocket auth follows the watcher-activity pattern (httpOnly cookie primary, first-message JWT fallback) plus the shell-websocket fail-closed user-state and tenant-hopping checks.
+
+A background janitor task (`backend/browser_recorder/session_manager.start_janitor`) reaps recordings idle past 30 minutes every 60 s. Hard cap 2 hours. Wired into `app.py` lifespan startup/shutdown.
+
+#### 13.9.3 Event compiler
+
+`backend/browser_recorder/event_compiler.compile_events()` consumes `RecordedEvent` lists and produces a dict ready to assign to `FlowNode.config_json`. Notable behaviour:
+
+- `_dedupe_navigate` drops `framenavigated` repeats from internal Chrome redirects.
+- `_coalesce_fills` collapses sequential `Input.insertText` callbacks into one fill row with the final string.
+- `_dedupe_focus_click_then_fill` (post-pass) drops the focus-click that precedes typing into a field — Playwright's `fill` action focuses the element itself.
+- `_captcha_value_targets` walks `solve_captcha` rows and wires their `value_target` to the next `fill` row's selector — matches the canonical Correios shape `BrowserAutomationStepHandler` already executes.
+- Password fields (`type="password"` or name/id matching `/password|passwd|pwd|pin|cvv/i`) emit a `_needs_vault` flag on the row when the value isn't already a `pvh_` or `op://` reference. The frontend disables the Save button until a vault row is picked, and the backend `/compile` rejects the call as defense in depth.
+
+Selector strategy (`backend/browser_recorder/selector_strategy.pick_selector`) walks `data-testid` → `data-qa` → `data-cy` → `data-track` → `[name=…]` → `[type=submit]` → `[aria-label=…]` → `[role=…]` → `#id` → raw nth-of-type path. Returns `(primary, fallback)` so the runtime gets two shots.
+
+#### 13.9.4 Agentic action translation
+
+Browser-Use's high-level Playwright actions (`go_to_url`, `click_element_by_index`, `input_text`, `extract_content`) don't dispatch through the CDP `Input.dispatch*` hook the human-driven recorder uses. After `agent.run()` completes, `agentic_driver._emit_full_history()` walks `agent.history.history` and translates each step's `model_output.action[]` into the recorder's event vocabulary so the compiler emits a real FlowNode. Action mapping:
+
+| Browser-Use action | RecordedEvent kind | Payload extract |
+|---|---|---|
+| `go_to_url` | `navigate` | `url` |
+| `click_element_by_index` | `click` | resolves the interacted element's xpath/attrs → selector |
+| `input_text` | `fill` | indexed element + `text` |
+| `extract_content` | `marker.extract` | indexed element + `goal`/`query` → `as` |
+| `scroll_down` / `scroll_up` | `agent.scroll` | informational, dropped at compile |
+| `done` / `search_google` / `switch_tab` / `open_tab` / `close_tab` | (none) | terminal or out of scope for v1.1 |
+
+#### 13.9.5 Frontend integration points
+
+| Component | File | Purpose |
+|---|---|---|
+| `RecorderDialog` | `frontend/app/flows/recorder/RecorderDialog.tsx` | Top-level Modal (size="2xl"). Manages session lifecycle, marker state, vault picker, agentic tab. |
+| `StreamCanvas` | `frontend/app/flows/recorder/StreamCanvas.tsx` | `<canvas>` paint loop. Forwards pointer/keyboard events with viewport-coord scaling. Drag-to-mark overlay for captcha/extract markers. |
+| `StepLedger` | `frontend/app/flows/recorder/StepLedger.tsx` | Running list of captured rows. Yellow Vault chip on rows that look like passwords. |
+| `ToolPalette` | `frontend/app/flows/recorder/ToolPalette.tsx` | Mark captcha / Capture output / (optional) Inject vault tiles. |
+| `AgenticTab` | `frontend/app/flows/recorder/AgenticTab.tsx` | Prompt input + start/pause/resume. Surfaces 501 (browser-use not installed) and 503 (no Anthropic provider for tenant) with concrete hints. |
+| `useRecorderSocket` | `frontend/app/flows/recorder/useRecorderSocket.ts` | WS client mirroring `lib/websocket.ts` cookie-auth pattern + exponential backoff. |
+| CTA mount | `frontend/app/flows/page.tsx:912` | The 🎬 Record button next to "+ Add selector" inside `BrowserAutomationConfigPanel`. |
+
+#### 13.9.6 Canonical example — Correios postal tracking
+
+The "Postal Track | Correios | AD468811215BR" flow that ships with Tsushin (target: `https://rastreamento.correios.com.br/app/index.php` with a Securimage CAPTCHA) compiles into this `selectors[]` array from a single human pass through the recorder. **Per the project-wide convention, every browser-automation flow ends with a Notification step so success/failure is observable** — a silent flow is indistinguishable from one that didn't run. Smoke-test script: [`backend/scripts/recorder_e2e_correios_to_vini.py`](../backend/scripts/recorder_e2e_correios_to_vini.py) records, saves, executes and reports the full notification proof.
+
+```jsonc
+{
+  "use_tool_mode": true,
+  "mode": "container",
+  "provider_type": "playwright",
+  "url": "https://rastreamento.correios.com.br/app/index.php",
+  "selectors": [
+    {"action": "fill",          "selector": "input[name=\"objeto\"]",     "value": "AD468811215BR"},
+    {"action": "solve_captcha", "selector": "img#captcha_image",          "value_target": "input[name=\"captcha\"]"},
+    {"action": "fill",          "selector": "input[name=\"captcha\"]",    "value": "XXXXXX"},
+    {"action": "click",         "selector": "button[name=\"b-pesquisar\"]"},
+    {"action": "extract",       "selector": "<result panel>",             "as": "delivery_status"}
+  ],
+  "browser_secret_references": [],
+  "timeout_seconds": 110,
+  "session_persistence": false
+}
+```
+
+At execution time the existing `BrowserAutomationStepHandler` calls the `solve_captcha` skill (LLM vision OCR) to read the live CAPTCHA image and overwrite the placeholder `XXXXXX` value before clicking Consultar. The placeholder only exists so the compiler wires `value_target` correctly.
+
+The full saved FlowDefinition is `browser_automation → notification`:
+
+```jsonc
+// Step 2 — appended manually after Save-as-flow-step. The recorder doesn't
+// emit notification rows itself; users (or the smoke-test script) add it
+// so the flow is observable in production.
+{
+  "type": "notification",
+  "name": "notify_vini",
+  "position": 2,
+  "config_json": {
+    "channel": "whatsapp",
+    "recipient": "@Vini",
+    "recipients": ["@Vini"],
+    "message_template": "Correios {{step_1.url}} → {{step_1.delivery_status}}"
+  }
+}
+```
+
+`@Vini` is resolved by `_resolve_mcp_url_and_secret` (`backend/flows/flow_engine.py:239`) into the tenant's contact row, lookup by `friendly_name` ('Vini') → `whatsapp_id`/`phone_number`. The MCP URL is read from `WhatsAppMCPInstance.mcp_api_url` for that tenant's `agent`-type instance.
+
+#### 13.9.7 Constraints
+
+- Stock Playwright — sites with aggressive bot detection may reject the inner session. The original manual editor remains the fallback. (A `BROWSER_STEALTH_ENGINE` env var to flip in Patchright / CloakBrowser is in the design doc but not v1.)
+- Agentic mode requires installing `browser-use` from `requirements-optional.txt`. The install pins down `anthropic`, `openai`, `aiohttp`, `pydantic` etc. — verified safe on Tsushin v0.7.x but worth re-validating on major upstream releases.
+- Recorder sessions are in-memory only. Process restart loses any open recordings; the janitor reaps stale sessions but persistence is not a goal.
+
 ### 13.8 Financial flow notification state classifier (2026-05-06)
 
 `FinancialBillStoreStepHandler` now emits a `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `no_pending_bills`, `paid`, `unchanged`, `error`) at top level and inside `conditions`. The previous `should_notify` boolean is kept for backward compatibility but is now derived from the rich state (`new_boleto | barcode_changed | pending_no_barcode` notify by default).
