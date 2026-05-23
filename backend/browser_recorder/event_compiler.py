@@ -356,3 +356,198 @@ def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
     if initial_url:
         config["url"] = initial_url
     return config
+
+
+# ---------------------------------------------------------------------------
+# Multi-FlowNode compile (the production-ready output)
+# ---------------------------------------------------------------------------
+#
+# `compile_events` packs every captured action into ONE FlowNode's
+# selectors[] array, but the runtime's BrowserAutomationStepHandler only
+# executes the top-level `tool_action` (one action per FlowNode). That
+# means a recorded multi-action flow (navigate → fill → solve_captcha →
+# click → extract) compiled with the single-FlowNode shape would only
+# replay the navigate at runtime — the rest is dead weight.
+#
+# `compile_events_into_nodes` splits the same event stream into ONE
+# FlowNode per browser action, matching the canonical multi-step pattern
+# (e.g. flow "Postal Track | Correios | AD468811215BR" in prod). Each
+# node carries its single selector row + the right `tool_action`, and
+# all nodes share a `browser_session_profile_name` so the inner Chromium
+# session carries across steps. The output is a list ready to feed into
+# `POST /api/flows/{id}/steps` one entry at a time.
+
+
+def _slug_host(url: str) -> str:
+    """Derive a short profile name from a URL host."""
+    if not url:
+        return "session"
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or "session"
+    # Drop common top-level/www noise so "linkcorreios.com.br" → "linkcorreios"
+    parts = host.replace("www.", "").split(".")
+    return parts[0] if parts else "session"
+
+
+def _node_base(profile_name: str, tool_action: str, *, timeout: int = 30) -> dict[str, Any]:
+    """Shared FlowNode.config_json skeleton for a recorder-emitted node."""
+    return {
+        "use_tool_mode": True,
+        "tool_action": tool_action,
+        "mode": "container",
+        "provider_type": "playwright",
+        "selectors": [],
+        "browser_secret_references": [],
+        "timeout_seconds": timeout,
+        # session_persistence + shared profile name → the Playwright
+        # browser context carries across nodes so cookies, auth state, and
+        # mid-flow page state survive. Matches the canonical multi-step
+        # pattern (flow #26's open_correios → fill_tracking_code → … all
+        # share `browser_session_profile_name`).
+        "session_persistence": True,
+        "session_ttl_seconds": 300,
+        "browser_session_profile_name": f"recorder_{profile_name}",
+    }
+
+
+def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str, Any]]:
+    """Compile a recording into a LIST of FlowNode-ready dicts.
+
+    Each dict shape:
+        {
+            "name": "<step_name>",
+            "type": "browser_automation",
+            "config_json": { ... single-action config ... },
+            "timeout_seconds": int,
+        }
+
+    Caller is expected to POST each dict to
+    ``POST /api/flows/{id}/steps`` (FlowNodeCreate schema). Positions can
+    be assigned by the caller from list order, or by reading the
+    ``_recorder_position`` hint we include for convenience.
+
+    Notable behaviour vs the single-FlowNode `compile_events`:
+      - First navigate becomes its own FlowNode with `tool_action="navigate"`
+        and the top-level `url` field set.
+      - Each subsequent fill/click/extract is its own FlowNode with
+        `tool_action` matching the action and a single-row `selectors[]`.
+      - `solve_captcha` rows keep their `value_target`; the placeholder
+        fill the user typed into the captcha input AFTER marking the
+        captcha is dropped (the runtime's solve_captcha skill fills the
+        target via LLM-vision OCR — manual placeholder is dead weight).
+      - `browser_secret_references` ride with the node that contains the
+        referenced selectors[0].value, not centrally.
+      - All nodes share `browser_session_profile_name=recorder_<host>`
+        so the browser session survives across the chain.
+    """
+    # Reuse the legacy compiler to do dedup / coalesce / captcha wiring,
+    # then split the resulting selectors[] into per-action nodes.
+    legacy = compile_events(events)
+    selectors: list[dict[str, Any]] = list(legacy.get("selectors") or [])
+    secret_refs: list[dict[str, Any]] = list(legacy.get("browser_secret_references") or [])
+    initial_url: Optional[str] = legacy.get("url")
+    profile = _slug_host(initial_url or "")
+
+    # Track which selector indices have a vault reference pointing at them
+    # so we can ship the matching browser_secret_references with the node
+    # that owns selectors[0].
+    refs_by_index: dict[int, list[dict[str, Any]]] = {}
+    for ref in secret_refs:
+        target = (ref.get("target") or "").strip()
+        # target shape: selectors[<int>].value
+        if target.startswith("selectors[") and target.endswith("].value"):
+            try:
+                idx = int(target[len("selectors["):-len("].value")])
+                refs_by_index.setdefault(idx, []).append(ref)
+            except ValueError:
+                pass
+
+    # If the captcha placeholder fill landed on the same selector as the
+    # solve_captcha's value_target, drop it — runtime fills it via OCR.
+    captcha_targets: set[str] = {
+        row.get("value_target") or ""
+        for row in selectors
+        if row.get("action") == "solve_captcha" and row.get("value_target")
+    }
+    pruned_selectors: list[dict[str, Any]] = []
+    pruned_refs_by_index: dict[int, list[dict[str, Any]]] = {}
+    for orig_idx, row in enumerate(selectors):
+        if (
+            row.get("action") == "fill"
+            and row.get("selector") in captcha_targets
+            and not (row.get("value") or "").startswith(("pvh_", "op://"))
+        ):
+            continue  # drop placeholder XXXXXX captcha fill
+        new_idx = len(pruned_selectors)
+        pruned_selectors.append(row)
+        if orig_idx in refs_by_index:
+            # Re-target refs to the new index
+            for ref in refs_by_index[orig_idx]:
+                pruned_refs_by_index.setdefault(new_idx, []).append({
+                    **ref,
+                    "target": "selectors[0].value",  # always 0 in single-row nodes
+                })
+
+    nodes: list[dict[str, Any]] = []
+
+    # First node: navigate (if we have an initial URL)
+    if initial_url:
+        cfg = _node_base(profile, "navigate", timeout=30)
+        cfg["url"] = initial_url
+        nodes.append({
+            "name": f"open_{profile}",
+            "type": "browser_automation",
+            "config_json": cfg,
+            "timeout_seconds": 30,
+            "_recorder_position": len(nodes) + 1,
+        })
+
+    # One node per selector row (single-row selectors[])
+    for idx, row in enumerate(pruned_selectors):
+        action = row.get("action") or "navigate"
+        # tool_action mapping — most actions are 1:1; navigate inside
+        # selectors[] (mid-recording redirect) becomes a navigate FlowNode
+        # whose top-level url comes from the row's selector field.
+        tool_action = action
+        cfg = _node_base(profile, tool_action, timeout=30)
+        if action == "navigate":
+            # mid-flow navigation captured in selectors[]
+            cfg["url"] = row.get("selector") or ""
+            # No selectors[] for a navigate node
+            cfg["selectors"] = []
+        else:
+            # Strip the outer "action" since tool_action already carries it;
+            # the row is otherwise the canonical {selector, value, ...} shape.
+            row_copy = {k: v for k, v in row.items()}
+            row_copy.pop("_needs_vault", None)  # never leak this to the runtime
+            cfg["selectors"] = [row_copy]
+        if idx in pruned_refs_by_index:
+            cfg["browser_secret_references"] = pruned_refs_by_index[idx]
+
+        # Pick a step name that's descriptive without being verbose
+        def _shortname(row: dict[str, Any]) -> str:
+            sel = row.get("selector") or ""
+            for token in ("name=\"", "id=\"", "name='", "id='"):
+                if token in sel:
+                    start = sel.index(token) + len(token)
+                    end = sel.find('"', start) if '"' in token else sel.find("'", start)
+                    if end > start:
+                        return sel[start:end]
+            return sel.split(">")[-1].strip()[:24] or action
+
+        name = f"{action}_{_shortname(row)}"[:48]
+        if action == "extract" and row.get("as"):
+            name = f"extract_{row.get('as')}"
+        elif action == "solve_captcha":
+            name = "solve_captcha"
+        elif action == "wait_for_url":
+            name = "wait_for_url"
+        nodes.append({
+            "name": name,
+            "type": "browser_automation",
+            "config_json": cfg,
+            "timeout_seconds": 30,
+            "_recorder_position": len(nodes) + 1,
+        })
+
+    return nodes

@@ -17,7 +17,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from browser_recorder.event_compiler import compile_events  # noqa: E402
+from browser_recorder.event_compiler import compile_events, compile_events_into_nodes  # noqa: E402
 from browser_recorder.models import RecordedEvent  # noqa: E402
 from browser_recorder.selector_strategy import (  # noqa: E402
     is_password_field,
@@ -352,6 +352,115 @@ def test_click_then_fill_on_different_selector_is_preserved():
     config = compile_events(events)
     actions = [s["action"] for s in config["selectors"]]
     assert actions == ["click", "fill"]
+
+
+def test_compile_into_nodes_emits_one_node_per_action():
+    """Resolves task #28: the runtime executes a single tool_action per
+    FlowNode, so the recorder must emit one FlowNode per browser action
+    (matching the canonical multi-step pattern of flow #26). The legacy
+    single-FlowNode shape from compile_events() doesn't replay the
+    chain — only navigate runs.
+    """
+    nodes = compile_events_into_nodes(_events_correios_shaped())
+    actions = [n["config_json"]["tool_action"] for n in nodes]
+
+    # First node is the navigate; subsequent nodes follow the chain.
+    assert actions[0] == "navigate"
+    assert "fill" in actions
+    assert "solve_captcha" in actions
+    assert "click" in actions
+    assert "extract" in actions
+
+    # Each node has exactly one selector row (except navigate which has none)
+    for n in nodes:
+        sels = n["config_json"]["selectors"]
+        if n["config_json"]["tool_action"] == "navigate":
+            assert sels == []
+        else:
+            assert len(sels) == 1, f"node {n['name']!r} should have 1 selector, got {len(sels)}"
+
+
+def test_compile_into_nodes_session_profile_shared_across_nodes():
+    """All nodes must share a browser_session_profile_name so the
+    Playwright context (cookies, captcha state, redirects) carries
+    across the chain at runtime."""
+    nodes = compile_events_into_nodes(_events_correios_shaped())
+    profile_names = {n["config_json"].get("browser_session_profile_name") for n in nodes}
+    assert len(profile_names) == 1
+    profile = profile_names.pop()
+    assert profile and profile.startswith("recorder_")
+    # All nodes have session_persistence on
+    for n in nodes:
+        assert n["config_json"]["session_persistence"] is True
+
+
+def test_compile_into_nodes_drops_placeholder_captcha_fill():
+    """When the user marks the captcha image AND then types a placeholder
+    into the captcha input (before clicking submit), the recorder records
+    both events. The runtime's solve_captcha skill fills the captcha
+    input via OCR — the placeholder fill is dead weight that would
+    overwrite the OCR'd value. Multi-node compile drops it.
+    """
+    events = [
+        RecordedEvent("navigate", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
+        RecordedEvent("fill", {
+            "selector": 'input[name="objeto"]', "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "name": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "rect": [101, 313, 424, 158],
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        # Placeholder typed into the captcha field — should be dropped
+        RecordedEvent("fill", {
+            "selector": 'input[name="captcha"]', "value": "XXXXXX",
+            "field_meta": {"tag": "input", "name": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": 'button[name="b-pesquisar"]',
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+    ]
+    nodes = compile_events_into_nodes(events)
+    actions = [n["config_json"]["tool_action"] for n in nodes]
+    # navigate, fill (objeto), solve_captcha, click — placeholder captcha fill dropped
+    assert "solve_captcha" in actions
+    # Exactly one fill (objeto), NOT two (objeto + placeholder)
+    assert actions.count("fill") == 1
+    # And the solve_captcha node retains its value_target pointing at the
+    # captcha input selector
+    captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
+    sel0 = captcha_node["config_json"]["selectors"][0]
+    assert sel0.get("value_target") == 'input[name="captcha"]'
+
+
+def test_compile_into_nodes_keeps_vault_reference_with_owning_node():
+    """When a fill row references a vault entry, the matching
+    browser_secret_references row must ride with the node that owns
+    that fill — re-targeted to selectors[0].value (because each node
+    has only one selector)."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/login"}),
+        RecordedEvent("fill", {
+            "selector": 'input[name="password"]', "value": "leaked",
+            "field_meta": {"tag": "input", "name": "password", "type": "password"},
+        }),
+        RecordedEvent("marker.vault", {
+            "selector": 'input[name="password"]',
+            "reference": "op://Tsushin/Vault/password",
+        }),
+    ]
+    nodes = compile_events_into_nodes(events)
+    # Find the fill node
+    fill_node = next(n for n in nodes if n["config_json"]["tool_action"] == "fill")
+    sel0 = fill_node["config_json"]["selectors"][0]
+    assert sel0.get("value") == "op://Tsushin/Vault/password"
+    refs = fill_node["config_json"]["browser_secret_references"]
+    assert len(refs) == 1
+    assert refs[0].get("reference") == "op://Tsushin/Vault/password"
+    # Target re-pointed to selectors[0].value (single-row per node)
+    assert refs[0].get("target") == "selectors[0].value"
 
 
 def test_mid_recording_navigate_emits_row():

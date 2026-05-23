@@ -88,7 +88,18 @@ class CreateSessionResponse(BaseModel):
 
 
 class CompileResponse(BaseModel):
+    # Legacy single-FlowNode shape — packs every action into selectors[]
+    # of one node. Kept for backward compatibility with the existing
+    # frontend recorder dialog which inserts into one BrowserAutomationConfigPanel
+    # step. Note: at runtime BrowserAutomationStepHandler only executes the
+    # top-level tool_action, so this shape doesn't replay multi-action chains
+    # (task #28 — use `flow_nodes` instead for chained flows).
     config_json: dict
+    # New multi-FlowNode shape — one FlowNode per browser action. Caller
+    # POSTs each entry to /api/flows/{id}/steps. All entries share a
+    # browser_session_profile_name so the Playwright context carries
+    # across nodes. This is the production-ready shape.
+    flow_nodes: list[dict]
     event_count: int
 
 
@@ -163,33 +174,17 @@ async def compile_session(
     if not ctx.can_access_resource(session.tenant_id):
         raise HTTPException(status_code=404, detail="Recording session not found")
 
-    # Phase 2 will replace this with `from browser_recorder.event_compiler import compile`
-    # and feed `session.events`. The output shape below matches what
-    # `BrowserAutomationStepHandler` reads — `use_tool_mode`, `mode`, `selectors`,
-    # `browser_secret_references`, etc. — so the frontend can wire the Save
-    # path now and we only swap the compiler implementation later.
-    try:
-        from browser_recorder.event_compiler import compile_events  # Phase 2
-        config_json = compile_events(session.events)
-    except ImportError:
-        # Phase 1 fallback — preserves the event stream so we can verify
-        # the loop end-to-end before the compiler exists.
-        config_json = {
-            "use_tool_mode": True,
-            "mode": "container",
-            "provider_type": "playwright",
-            "selectors": [],
-            "browser_secret_references": [],
-            "timeout_seconds": 60,
-            "session_persistence": False,
-            "_recorder_events": [
-                {"kind": e.kind, "payload": e.payload, "ts": e.ts}
-                for e in session.events
-            ],
-        }
+    from browser_recorder.event_compiler import (
+        compile_events,
+        compile_events_into_nodes,
+    )
+
+    config_json = compile_events(session.events)
+    flow_nodes = compile_events_into_nodes(session.events)
 
     return CompileResponse(
         config_json=config_json,
+        flow_nodes=flow_nodes,
         event_count=len(session.events),
     )
 
