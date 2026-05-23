@@ -53,6 +53,7 @@ import TemplateInput from '@/components/flows/TemplateInput'
 import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import StepSamplePreview from '@/components/flows/StepSamplePreview'
 import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
+import RecorderDialog from './recorder/RecorderDialog'
 import {
   MessageIcon,
   BellIcon,
@@ -753,6 +754,7 @@ function BrowserAutomationConfigPanel({
   const selectors = normalizeBrowserSelectorRows(current.selectors)
   const secretReferences = normalizeSecretReferenceRows(current.browser_secret_references)
   const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
+  const [recorderOpen, setRecorderOpen] = useState(false)
   const compactInputClass = 'w-full min-w-0 px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none'
   const fieldLabelClass = 'block text-[11px] font-medium uppercase text-slate-500 mb-1'
   const removeButtonClass = 'shrink-0 rounded-md border border-red-500/30 px-2.5 py-1 text-xs font-medium text-red-300 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-200 transition-colors'
@@ -910,14 +912,39 @@ function BrowserAutomationConfigPanel({
       <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
         <div className="flex items-center justify-between">
           <label className="text-sm font-medium text-slate-300">Selectors and actions</label>
-          <button
-            type="button"
-            onClick={() => onChange({ selectors: [...selectors, { name: '', action: 'extract', selector: '', value: '' }] })}
-            className="text-xs text-cyan-400 hover:text-cyan-300"
-          >
-            + Add selector
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setRecorderOpen(true)}
+              className="text-xs text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1"
+              title="Record a real browser session and let Tsushin write the selectors"
+            >
+              🎬 Record
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ selectors: [...selectors, { name: '', action: 'extract', selector: '', value: '' }] })}
+              className="text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              + Add selector
+            </button>
+          </div>
         </div>
+        <RecorderDialog
+          isOpen={recorderOpen}
+          onClose={() => setRecorderOpen(false)}
+          initialUrl={current.url}
+          onApply={(compiled) => {
+            // Phase 5 will refine the merge — for now, replace selector/refs/url
+            // wholesale so the user reviews the recorded shape in this same
+            // panel before saving the FlowNode.
+            onChange({
+              ...compiled,
+              selectors: compiled.selectors ?? selectors,
+              browser_secret_references: compiled.browser_secret_references ?? secretReferences,
+            })
+          }}
+        />
         {selectors.length === 0 ? (
           <p className="text-xs text-slate-500">No selectors yet. Add explicit selectors when the action needs click, fill, or extract targets.</p>
         ) : (
