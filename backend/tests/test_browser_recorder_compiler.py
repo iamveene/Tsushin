@@ -432,10 +432,11 @@ def test_compile_into_nodes_drops_placeholder_captcha_fill():
     assert actions.count("click") == 0  # submit got folded into solve_captcha
     # Canonical solve_captcha uses DICT selectors with named keys
     captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
-    sels = captcha_node["config_json"]["selectors"]
-    assert isinstance(sels, dict)
-    assert sels.get("captcha_input") == 'input[name="captcha"]'
-    assert sels.get("captcha_submit") == 'button[name="b-pesquisar"]'
+    # Canonical uses `tool_arguments` with specific keys
+    args = captcha_node["config_json"]["tool_arguments"]
+    assert isinstance(args, dict)
+    assert args.get("input_selector") == 'input[name="captcha"]'
+    assert args.get("submit_selector") == 'button[name="b-pesquisar"]'
 
 
 def test_compile_into_nodes_combines_captcha_chain_into_canonical_node():
@@ -476,15 +477,18 @@ def test_compile_into_nodes_combines_captcha_chain_into_canonical_node():
     actions = [n["config_json"]["tool_action"] for n in nodes]
     assert actions.count("solve_captcha") == 1
     assert actions.count("click") == 0, "click should be folded into solve_captcha"
-    assert actions.count("extract") == 0, "extract should be folded into solve_captcha as result_selector"
+    assert actions.count("extract") == 0, "extract should be folded into solve_captcha as success_selector"
 
     captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
-    sels = captcha_node["config_json"]["selectors"]
-    assert isinstance(sels, dict), "canonical solve_captcha uses DICT selectors, not list"
-    assert sels.get("captcha_image") == "img#captcha_image"
-    assert sels.get("captcha_input") == 'input[name="captcha"]'
-    assert sels.get("captcha_submit") == 'button[name="b-pesquisar"]'
-    assert sels.get("result_selector") == "#result-panel"
+    # Canonical uses `tool_arguments` (not `selectors`) with specific keys
+    args = captcha_node["config_json"]["tool_arguments"]
+    assert isinstance(args, dict)
+    assert args.get("selector") == "img#captcha_image"
+    assert args.get("input_selector") == 'input[name="captcha"]'
+    assert args.get("submit_selector") == 'button[name="b-pesquisar"]'
+    assert args.get("success_selector") == "#result-panel"
+    # `selectors` field should NOT be set on solve_captcha nodes
+    assert "selectors" not in captcha_node["config_json"] or not captcha_node["config_json"].get("selectors")
 
 
 def test_compile_into_nodes_keeps_vault_reference_with_owning_node():
