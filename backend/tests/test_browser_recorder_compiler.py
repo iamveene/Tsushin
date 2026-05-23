@@ -380,18 +380,19 @@ def test_compile_into_nodes_emits_one_node_per_action():
             assert len(sels) == 1, f"node {n['name']!r} should have 1 selector, got {len(sels)}"
 
 
-def test_compile_into_nodes_session_profile_shared_across_nodes():
-    """All nodes must share a browser_session_profile_name so the
-    Playwright context (cookies, captcha state, redirects) carries
-    across the chain at runtime."""
+def test_compile_into_nodes_session_persistence_shared_across_nodes():
+    """All nodes must have session_persistence=True so the Playwright
+    context (cookies, captcha state, redirects) carries across the chain
+    at runtime. We mirror canonical flow #26's pattern: persistence on
+    + session_ttl_seconds=1800, with NO browser_session_profile_name
+    (the runtime keys sessions by tenant+agent within a FlowRun and
+    setting a profile name would point at a non-existent stored profile)."""
     nodes = compile_events_into_nodes(_events_correios_shaped())
-    profile_names = {n["config_json"].get("browser_session_profile_name") for n in nodes}
-    assert len(profile_names) == 1
-    profile = profile_names.pop()
-    assert profile and profile.startswith("recorder_")
-    # All nodes have session_persistence on
     for n in nodes:
-        assert n["config_json"]["session_persistence"] is True
+        cfg = n["config_json"]
+        assert cfg["session_persistence"] is True
+        assert cfg["session_ttl_seconds"] == 1800
+        assert "browser_session_profile_name" not in cfg
 
 
 def test_compile_into_nodes_drops_placeholder_captcha_fill():

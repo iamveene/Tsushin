@@ -390,7 +390,17 @@ def _slug_host(url: str) -> str:
 
 
 def _node_base(profile_name: str, tool_action: str, *, timeout: int = 30) -> dict[str, Any]:
-    """Shared FlowNode.config_json skeleton for a recorder-emitted node."""
+    """Shared FlowNode.config_json skeleton for a recorder-emitted node.
+
+    Mirrors canonical multi-step flows like Postal Track | Correios |
+    AD468811215BR (flow #26 in prod): session_persistence=True +
+    session_ttl_seconds=1800 is enough for the Playwright context to
+    carry across nodes within a single FlowRun (the BrowserSessionManager
+    keys sessions by tenant+agent). Setting `browser_session_profile_name`
+    here would point at a stored profile that doesn't exist for fresh
+    recordings — leave it unset so the runtime uses the ephemeral
+    in-FlowRun session.
+    """
     return {
         "use_tool_mode": True,
         "tool_action": tool_action,
@@ -399,14 +409,8 @@ def _node_base(profile_name: str, tool_action: str, *, timeout: int = 30) -> dic
         "selectors": [],
         "browser_secret_references": [],
         "timeout_seconds": timeout,
-        # session_persistence + shared profile name → the Playwright
-        # browser context carries across nodes so cookies, auth state, and
-        # mid-flow page state survive. Matches the canonical multi-step
-        # pattern (flow #26's open_correios → fill_tracking_code → … all
-        # share `browser_session_profile_name`).
         "session_persistence": True,
-        "session_ttl_seconds": 300,
-        "browser_session_profile_name": f"recorder_{profile_name}",
+        "session_ttl_seconds": 1800,
     }
 
 
@@ -635,13 +639,12 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if result_sel:
         canonical_selectors["result_selector"] = result_sel
 
-    profile_name = cfg_captcha.get("browser_session_profile_name")
     combined: dict[str, Any] = {
         "name": "solve_captcha",
         "type": "browser_automation",
         # Bumped timeout — solve_captcha invokes LLM-vision OCR which can
         # take 30-90s per attempt + retries. Canonical flow #26 uses 1300s.
-        "timeout_seconds": 300,
+        "timeout_seconds": 1300,
         "config_json": {
             "use_tool_mode": True,
             "tool_action": "solve_captcha",
@@ -649,13 +652,11 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "provider_type": "playwright",
             "selectors": canonical_selectors,  # DICT shape (canonical)
             "browser_secret_references": [],
-            "timeout_seconds": 300,
+            "timeout_seconds": 1300,
             "session_persistence": True,
             "session_ttl_seconds": 1800,
         },
     }
-    if profile_name:
-        combined["config_json"]["browser_session_profile_name"] = profile_name
 
     # Remove the captcha, click, and (if present) extract nodes; insert combined
     drop_indices = {captcha_idx, submit_idx}
