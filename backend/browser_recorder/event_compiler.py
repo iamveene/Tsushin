@@ -630,14 +630,20 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if ext_sels:
             result_sel = ext_sels[0].get("selector")
 
-    # Build the canonical combined solve_captcha node
-    canonical_selectors: dict[str, str] = {
-        "captcha_image": captcha_image_sel,
-        "captcha_input": captcha_input_sel,
-        "captcha_submit": submit_sel,
+    # Canonical solve_captcha uses `tool_arguments` (not `selectors`) with
+    # the specific keys the BrowserAutomationSkill expects:
+    #   selector         → captcha image
+    #   input_selector   → captcha text input
+    #   submit_selector  → submit button
+    #   success_selector → element that appears on success (acts as a wait barrier)
+    # Verified against prod flow #26's solve_captcha config.
+    captcha_args: dict[str, str] = {
+        "selector": captcha_image_sel,
+        "input_selector": captcha_input_sel,
+        "submit_selector": submit_sel,
     }
     if result_sel:
-        canonical_selectors["result_selector"] = result_sel
+        captcha_args["success_selector"] = result_sel
 
     combined: dict[str, Any] = {
         "name": "solve_captcha",
@@ -650,7 +656,7 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "tool_action": "solve_captcha",
             "mode": "container",
             "provider_type": "playwright",
-            "selectors": canonical_selectors,  # DICT shape (canonical)
+            "tool_arguments": captcha_args,
             "browser_secret_references": [],
             "timeout_seconds": 1300,
             "session_persistence": True,
