@@ -220,12 +220,26 @@ export default function StreamCanvas({
     })
   }, [onKey])
 
+  // Clipboard paste — read the host machine's clipboard and forward as
+  // an `Input.insertText` into the remote browser. Cmd/Ctrl+V on its
+  // own would only synthesize the key event over CDP, and Chromium-in-
+  // container has an empty clipboard, so the paste would no-op. By
+  // intercepting the `paste` event here we get the actual text via
+  // `clipboardData.getData('text')` and feed it through the same
+  // input.text channel a single keystroke uses.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('text') || ''
+    if (text) onText?.(text)
+  }, [onText])
+
   return (
     <canvas
       ref={canvasRef}
       tabIndex={0}
       width={viewport?.width || 1280}
       height={viewport?.height || 720}
+      onPaste={handlePaste}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
