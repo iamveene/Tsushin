@@ -18,7 +18,7 @@
  * vertical step list rather than a node-graph canvas.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { GlobeIcon } from '@/components/ui/icons'
 import { formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
 import type { RecordedDriverLabel } from '@/lib/client'
@@ -54,6 +54,19 @@ export interface BrowserGroupStepProps {
   onUngroup?: () => void
   // Whether the group should start expanded. Defaults to collapsed.
   defaultExpanded?: boolean
+  // v0.7.x inline child editing (edit mode only):
+  //   - `editingChildIdx`: index of the child currently being edited;
+  //     -1 / null means none.
+  //   - `onChildClick`: invoked when the user clicks a child row's header.
+  //     Parent toggles `editingChildIdx` to expand/collapse the editor.
+  //   - `renderChildEditor`: render the existing EditableStepConfigForm
+  //     (or any other config UI) for the open child. Returning null
+  //     keeps the row collapsed.
+  // Same callbacks apply to both human and agentic recordings — once
+  // compiled, the children are plain browser_automation steps.
+  editingChildIdx?: number | null
+  onChildClick?: (childIdx: number) => void
+  renderChildEditor?: (childIdx: number, child: BrowserGroupChild) => ReactNode
 }
 
 const DRIVER_BADGE: Record<RecordedDriverLabel, { label: string; cls: string }> = {
@@ -145,6 +158,9 @@ export default function BrowserGroupStep({
   syntheticHint,
   onUngroup,
   defaultExpanded,
+  editingChildIdx,
+  onChildClick,
+  renderChildEditor,
 }: BrowserGroupStepProps) {
   const [expanded, setExpanded] = useState<boolean>(Boolean(defaultExpanded))
 
@@ -246,52 +262,91 @@ export default function BrowserGroupStep({
               This group has no child steps yet.
             </div>
           ) : (
-            children.map((child, idx) => (
-              <div
-                key={idx}
-                className="flex items-start gap-3 p-3 rounded-lg border border-slate-700/50 bg-slate-800/40"
-              >
-                <div className="flex flex-col items-center gap-1 pt-1 w-8">
-                  <span className="text-xs font-mono text-slate-500">{idx + 1}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-2">
-                    {child.toolAction ? (
-                      <span className={`text-xs font-mono px-2 py-0.5 rounded-md ${actionChipClass(child.toolAction)}`}>
-                        {child.toolAction}
-                      </span>
-                    ) : null}
-                    <span className="text-sm text-slate-200 truncate">{child.label}</span>
-                    {mode === 'run' && child.status ? (
-                      <span
-                        className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-md border ${statusChipClass(child.status)}`}
-                      >
-                        {child.status}
-                      </span>
-                    ) : null}
+            children.map((child, idx) => {
+              const isEditable = mode === 'edit' && !!onChildClick
+              const isEditing = mode === 'edit' && editingChildIdx === idx
+              const editor = isEditing && renderChildEditor ? renderChildEditor(idx, child) : null
+              return (
+                <div
+                  key={idx}
+                  className={`rounded-lg border bg-slate-800/40 transition-colors ${
+                    isEditing
+                      ? 'border-cyan-500/60'
+                      : 'border-slate-700/50 hover:border-slate-600/70'
+                  }`}
+                >
+                  <div
+                    className={`flex items-start gap-3 p-3 ${isEditable ? 'cursor-pointer' : ''}`}
+                    role={isEditable ? 'button' : undefined}
+                    tabIndex={isEditable ? 0 : undefined}
+                    onClick={(e) => {
+                      if (!isEditable) return
+                      e.stopPropagation()
+                      onChildClick!(idx)
+                    }}
+                    onKeyDown={(e) => {
+                      if (!isEditable) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onChildClick!(idx)
+                      }
+                    }}
+                    title={isEditable ? (isEditing ? 'Click to collapse' : 'Click to edit this step') : undefined}
+                  >
+                    <div className="flex flex-col items-center gap-1 pt-1 w-8">
+                      <span className="text-xs font-mono text-slate-500">{idx + 1}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        {child.toolAction ? (
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded-md ${actionChipClass(child.toolAction)}`}>
+                            {child.toolAction}
+                          </span>
+                        ) : null}
+                        <span className="text-sm text-slate-200 truncate">{child.label}</span>
+                        {mode === 'run' && child.status ? (
+                          <span
+                            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-md border ${statusChipClass(child.status)}`}
+                          >
+                            {child.status}
+                          </span>
+                        ) : null}
+                        {isEditable ? (
+                          <span className="ml-auto text-[10px] uppercase tracking-wide text-cyan-400">
+                            {isEditing ? '▾ editing' : 'edit'}
+                          </span>
+                        ) : null}
+                      </div>
+                      {mode === 'run' && child.errorText ? (
+                        <div className="text-xs text-rose-300 bg-rose-500/5 border border-rose-500/20 rounded-md px-2 py-1 mb-2 break-words">
+                          {child.errorText}
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap gap-3">
+                        <Thumb
+                          src={child.recordedScreenshotB64}
+                          alt={`Recorded screenshot for step ${idx + 1}`}
+                          label="recorded"
+                        />
+                        {mode === 'run' ? (
+                          <Thumb
+                            src={child.runtimeScreenshot}
+                            alt={`Runtime screenshot for step ${idx + 1}`}
+                            label="runtime"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
-                  {mode === 'run' && child.errorText ? (
-                    <div className="text-xs text-rose-300 bg-rose-500/5 border border-rose-500/20 rounded-md px-2 py-1 mb-2 break-words">
-                      {child.errorText}
+                  {editor ? (
+                    <div className="border-t border-cyan-500/30 px-4 py-3 bg-slate-900/40 rounded-b-lg">
+                      {editor}
                     </div>
                   ) : null}
-                  <div className="flex flex-wrap gap-3">
-                    <Thumb
-                      src={child.recordedScreenshotB64}
-                      alt={`Recorded screenshot for step ${idx + 1}`}
-                      label="recorded"
-                    />
-                    {mode === 'run' ? (
-                      <Thumb
-                        src={child.runtimeScreenshot}
-                        alt={`Runtime screenshot for step ${idx + 1}`}
-                        label="runtime"
-                      />
-                    ) : null}
-                  </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       ) : null}
