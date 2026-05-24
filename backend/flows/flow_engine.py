@@ -1681,9 +1681,9 @@ class DataTransformStepHandler(FlowStepHandler):
                 "record_kind": "utility_bill",
                 "automation_key": service.CONSIGAZ_AUTOMATION_ID,
                 "provider": service.CONSIGAZ_PROVIDER,
-                "unit_id": str(config.get("financial_unit_id") or ""),
-                "asset": str(config.get("financial_asset") or ""),
-                "address": str(config.get("financial_address") or ""),
+                "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
+                "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
+                "address": str(config.get("record_address") or config.get("financial_address") or ""),
                 "reference_month": datetime.utcnow().strftime("%Y-%m"),
                 "no_open_bills": True,
                 "status": "no_pending_bills",
@@ -1693,9 +1693,9 @@ class DataTransformStepHandler(FlowStepHandler):
             "record_kind": "utility_bill",
             "automation_key": service.CONSIGAZ_AUTOMATION_ID,
             "provider": service.CONSIGAZ_PROVIDER,
-            "unit_id": str(config.get("financial_unit_id") or ""),
-            "asset": str(config.get("financial_asset") or ""),
-            "address": str(config.get("financial_address") or ""),
+            "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
+            "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
+            "address": str(config.get("record_address") or config.get("financial_address") or ""),
             "bill_id": selected.get("bill_id"),
             "reference_month": selected.get("reference_month"),
             "due_date": selected.get("due_date"),
@@ -1730,9 +1730,9 @@ class DataTransformStepHandler(FlowStepHandler):
                 "record_kind": "utility_bill",
                 "automation_key": service.MEDSENIOR_AUTOMATION_ID,
                 "provider": service.MEDSENIOR_PROVIDER,
-                "unit_id": str(config.get("financial_unit_id") or ""),
-                "asset": str(config.get("financial_asset") or ""),
-                "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
+                "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
+                "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
+                "address": str(config.get("record_address") or config.get("financial_address") or service.MEDSENIOR_ISSUER),
                 "reference_month": datetime.utcnow().strftime("%Y-%m"),
                 "no_open_bills": True,
                 "status": "no_pending_bills",
@@ -1768,7 +1768,10 @@ class DataTransformStepHandler(FlowStepHandler):
             raise ValueError("Data transform step requires tenant context")
 
         config = self._render_templates(self._load_config(step), input_data or {})
-        parser_mode = str(config.get("financial_parser_mode") or "").strip()
+        # v0.7.x: prefer the domain-neutral `parser_mode`; fall back to legacy
+        # `financial_parser_mode` so existing data_transform configs keep
+        # routing to the right normalization branch.
+        parser_mode = str(config.get("parser_mode") or config.get("financial_parser_mode") or "").strip()
         transform_mode = str(config.get("transform_mode") or ("financial_parser" if parser_mode else "json_path")).strip()
 
         if parser_mode == "consigaz_utility_bill":
@@ -1791,8 +1794,22 @@ class DataTransformStepHandler(FlowStepHandler):
 
         raw_bill_handle = None
         financial_record_handle = None
+        # v0.7.x: prefer the domain-neutral `emit_raw_handle` / `emit_record_handle`;
+        # legacy `emit_raw_bill_handle` / `emit_financial_record_handle` still
+        # honored when only the old keys are present. The handle emitted on
+        # the result is unchanged for downstream-step compatibility.
+        emit_raw = (
+            config.get("emit_raw_handle")
+            if config.get("emit_raw_handle") is not None
+            else config.get("emit_raw_bill_handle", True)
+        )
+        emit_record = (
+            config.get("emit_record_handle")
+            if config.get("emit_record_handle") is not None
+            else config.get("emit_financial_record_handle", bool(config.get("record_kind")))
+        )
         if isinstance(normalized, dict):
-            if record_kind == "utility_bill" and config.get("emit_raw_bill_handle", True) is not False:
+            if record_kind == "utility_bill" and emit_raw is not False:
                 raw_bill_handle = self._issue_financial_record_handle(
                     record_kind="utility_bill",
                     payload=normalized,
@@ -1800,7 +1817,7 @@ class DataTransformStepHandler(FlowStepHandler):
                     step=step,
                 )
                 financial_record_handle = raw_bill_handle
-            elif config.get("emit_financial_record_handle", bool(config.get("record_kind"))):
+            elif emit_record:
                 financial_record_handle = self._issue_financial_record_handle(
                     record_kind=record_kind,
                     payload=normalized,
@@ -1856,8 +1873,12 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
             payload = self._resolve_transform_source(str(handle), input_data)
             return payload if isinstance(payload, dict) else None
 
+        # v0.7.x: domain-neutral `record_source_step` takes precedence over the
+        # legacy financial_* chain. Same field, generic name — keeps old
+        # configs working via the existing fallback below.
         source_step = (
-            config.get("financial_bill_source_step")
+            config.get("record_source_step")
+            or config.get("financial_bill_source_step")
             or config.get("financial_bill_source")
             or config.get("financial_record_source_step")
             or config.get("financial_source_step")
@@ -1881,11 +1902,19 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         return None
 
     def _dedupe_key(self, record_kind: str, record: Optional[Dict[str, Any]], config: Dict[str, Any]) -> str:
-        if config.get("financial_dedupe_key") or config.get("financial_record_dedupe_key"):
-            return str(config.get("financial_dedupe_key") or config.get("financial_record_dedupe_key"))
+        # v0.7.x: prefer the domain-neutral `record_dedupe_key`; fall back to
+        # the legacy financial_* names so existing flows still dedupe the
+        # same way.
+        explicit = (
+            config.get("record_dedupe_key")
+            or config.get("financial_dedupe_key")
+            or config.get("financial_record_dedupe_key")
+        )
+        if explicit:
+            return str(explicit)
         record = record or {}
-        provider = record.get("provider") or config.get("financial_provider") or "unknown"
-        unit_id = record.get("unit_id") or config.get("financial_unit_id") or "unknown"
+        provider = record.get("provider") or config.get("record_provider") or config.get("financial_provider") or "unknown"
+        unit_id = record.get("unit_id") or config.get("record_unit") or config.get("financial_unit_id") or "unknown"
         reference = (
             record.get("reference_month")
             or record.get("due_date")
@@ -1940,11 +1969,12 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         if has_reference or has_amount or has_barcode:
             return None
 
-        provider = str(record.get("provider") or config.get("financial_provider") or "unknown")
-        unit_id = str(record.get("unit_id") or config.get("financial_unit_id") or "unknown")
+        provider = str(record.get("provider") or config.get("record_provider") or config.get("financial_provider") or "unknown")
+        unit_id = str(record.get("unit_id") or config.get("record_unit") or config.get("financial_unit_id") or "unknown")
         automation_key = str(
             record.get("automation_key")
             or record.get("automation_id")
+            or config.get("record_automation_key")
             or config.get("financial_automation_key")
             or config.get("financial_automation_id")
             or ""
@@ -1958,6 +1988,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         asset = str(
             record.get("asset")
             or record.get("title")
+            or config.get("record_asset")
             or config.get("financial_asset")
             or ""
         ).strip()
@@ -2018,6 +2049,7 @@ class FinancialRecordStoreStepHandler(FlowStepHandler):
         automation_key = str(
             normalized.get("automation_key")
             or normalized.get("automation_id")
+            or config.get("record_automation_key")
             or config.get("financial_automation_key")
             or config.get("financial_automation_id")
             or ""
@@ -4232,6 +4264,11 @@ class FlowEngine:
             "data_transform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: deterministic extraction primitive
             "financial_record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: generic financial storage primitive
             "financial_bill_store": FinancialBillStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: utility bill storage alias
+            # v0.7.x Genericize: domain-neutral alias of financial_record_store.
+            # Same handler instance — `record_*` config fields take precedence
+            # over `financial_*` via fallback-aware getters; legacy flows keep
+            # working unchanged.
+            "record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),
             "source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: Triggers↔Flows source entry node
             # Legacy types (backward compatibility)
             "Source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: legacy casing alias

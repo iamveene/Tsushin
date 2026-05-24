@@ -144,8 +144,12 @@ const STEP_TYPES: { value: StepType; label: string; Icon: React.FC<IconProps>; d
   { value: 'browser_automation', label: 'Browser Automation', Icon: GlobeIcon, description: 'Open a site and perform explicit browser actions' },
   { value: 'http_request', label: 'HTTP Request', Icon: CodeIcon, description: 'Call an API with editable URL, method, headers, body, and secrets' },
   { value: 'data_transform', label: 'Data Transform', Icon: ClipboardIcon, description: 'Extract and normalize fields from prior step output' },
-  { value: 'financial_record_store', label: 'Financial Record Store', Icon: DatabaseIcon, description: 'Persist and dedupe financial records by kind' },
-  { value: 'financial_bill_store', label: 'Utility Bill Store', Icon: DatabaseIcon, description: 'Utility-specific alias for bill storage and dedupe' },
+  // v0.7.x Genericize: domain-neutral `record_store` is the recommended
+  // primitive; the financial_* types stay registered as legacy aliases for
+  // existing flows but are marked "(legacy)" so authors pick the generic one.
+  { value: 'record_store', label: 'Record Store', Icon: DatabaseIcon, description: 'Persist + dedupe a record from a prior step (any kind: bill, statement, snapshot, invoice, …)' },
+  { value: 'financial_record_store', label: 'Financial Record Store (legacy)', Icon: DatabaseIcon, description: 'Legacy alias. New flows should use Record Store with record_kind="utility_bill" etc.' },
+  { value: 'financial_bill_store', label: 'Utility Bill Store (legacy)', Icon: DatabaseIcon, description: 'Legacy alias. New flows should use Record Store with record_kind="utility_bill".' },
   { value: 'skill', label: 'Skill', Icon: BrainIcon, description: 'Execute an agentic skill (flight search, web search, etc.)' },
   { value: 'summarization', label: 'Summarization', Icon: DocumentIcon, description: 'AI-powered summary of conversation' },
   { value: 'slash_command', label: 'Slash Command', Icon: CommandIcon, description: 'Execute a slash command (/scheduler, /memory, etc.)' },
@@ -725,11 +729,13 @@ function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
       parser_rules: [],
     }
   }
-  if (stepType === 'financial_record_store' || stepType === 'financial_bill_store') {
+  if (stepType === 'record_store' || stepType === 'financial_record_store' || stepType === 'financial_bill_store') {
+    // Default: generic record (no domain assumption). Legacy types still
+    // default to utility_bill so existing templates keep working.
+    const isLegacy = stepType !== 'record_store'
     return {
-      record_kind: 'utility_bill',
-      financial_record_dedupe_key: '{{provider}}:{{unit_id}}:{{reference_month}}',
-      financial_record_key_fields: 'provider, unit_id, reference_month',
+      record_kind: isLegacy ? 'utility_bill' : 'generic',
+      record_dedupe_key: '{{provider}}:{{unit_id}}:{{reference_month}}',
     }
   }
   if (stepType === 'password_vault') {
@@ -1296,13 +1302,13 @@ function DataTransformConfigPanel({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Financial parser</label>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">Parser mode</label>
           <select
-            value={current.financial_parser_mode || ''}
+            value={current.parser_mode ?? current.financial_parser_mode ?? ''}
             onChange={(event) => {
               const value = event.target.value
               onChange({
-                financial_parser_mode: value || null,
+                parser_mode: value || null,
                 transform_mode: value ? 'financial_parser' : (current.transform_mode || 'extract_fields'),
               })
             }}
@@ -1366,8 +1372,12 @@ function DataTransformConfigPanel({
         )}
       </div>
 
+      {/* v0.7.x Genericize: domain-neutral "Record metadata" panel. Reads from
+          `record_*` first, falls back to legacy `financial_*` so existing
+          flows keep displaying their values. Writes always go to `record_*`
+          so saves migrate forward; handler reads both. */}
       <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-4">
-        <label className="text-sm font-medium text-slate-300">Financial record metadata</label>
+        <label className="text-sm font-medium text-slate-300">Record metadata</label>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Record kind</label>
@@ -1386,9 +1396,9 @@ function DataTransformConfigPanel({
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Provider</label>
             <CursorSafeInput
               type="text"
-              value={current.financial_provider || ''}
-              onValueChange={(value) => onChange({ financial_provider: value })}
-              placeholder="consigaz, moderna, edp"
+              value={current.record_provider ?? current.financial_provider ?? ''}
+              onValueChange={(value) => onChange({ record_provider: value })}
+              placeholder="e.g. provider identifier"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1396,9 +1406,9 @@ function DataTransformConfigPanel({
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Automation key</label>
             <CursorSafeInput
               type="text"
-              value={current.financial_automation_key || ''}
-              onValueChange={(value) => onChange({ financial_automation_key: value })}
-              placeholder="provider_unit_period_kind"
+              value={current.record_automation_key ?? current.financial_automation_key ?? ''}
+              onValueChange={(value) => onChange({ record_automation_key: value })}
+              placeholder="e.g. stable identity for this record stream"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1406,9 +1416,9 @@ function DataTransformConfigPanel({
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Unit</label>
             <CursorSafeInput
               type="text"
-              value={current.financial_unit_id || ''}
-              onValueChange={(value) => onChange({ financial_unit_id: value })}
-              placeholder="unit, account, CPF, plate, installation"
+              value={current.record_unit ?? current.financial_unit_id ?? ''}
+              onValueChange={(value) => onChange({ record_unit: value })}
+              placeholder="e.g. account, unit, or subject identifier"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1416,9 +1426,9 @@ function DataTransformConfigPanel({
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Asset</label>
             <CursorSafeInput
               type="text"
-              value={current.financial_asset || ''}
-              onValueChange={(value) => onChange({ financial_asset: value })}
-              placeholder="property name, vehicle plate, broker account"
+              value={current.record_asset ?? current.financial_asset ?? ''}
+              onValueChange={(value) => onChange({ record_asset: value })}
+              placeholder="e.g. human-readable asset label"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1426,9 +1436,9 @@ function DataTransformConfigPanel({
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Address / issuer context</label>
             <CursorSafeInput
               type="text"
-              value={current.financial_address || ''}
-              onValueChange={(value) => onChange({ financial_address: value })}
-              placeholder="Provider address or issuer context"
+              value={current.record_address ?? current.financial_address ?? ''}
+              onValueChange={(value) => onChange({ record_address: value })}
+              placeholder="e.g. issuer name or street address"
               className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             />
           </div>
@@ -1437,20 +1447,20 @@ function DataTransformConfigPanel({
           <label className="inline-flex items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
-              checked={current.emit_raw_bill_handle ?? recordKind === 'utility_bill'}
-              onChange={(event) => onChange({ emit_raw_bill_handle: event.target.checked })}
+              checked={current.emit_raw_handle ?? current.emit_raw_bill_handle ?? recordKind === 'utility_bill'}
+              onChange={(event) => onChange({ emit_raw_handle: event.target.checked })}
               className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
             />
-            Emit raw bill handle
+            Emit raw handle
           </label>
           <label className="inline-flex items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
-              checked={current.emit_financial_record_handle ?? true}
-              onChange={(event) => onChange({ emit_financial_record_handle: event.target.checked })}
+              checked={current.emit_record_handle ?? current.emit_financial_record_handle ?? true}
+              onChange={(event) => onChange({ emit_record_handle: event.target.checked })}
               className="rounded border-slate-600 bg-slate-700 text-cyan-500 focus:ring-cyan-500"
             />
-            Emit financial record handle
+            Emit record handle
           </label>
         </div>
       </div>
@@ -1680,9 +1690,17 @@ function FinancialRecordStoreConfigPanel({
   allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
   currentStepPosition: number
 }) {
+  // v0.7.x Genericize: this panel is also used by the new `record_store` step
+  // type. Read from `record_*` first, fall back to legacy `financial_*` so
+  // existing flows still show their values. Saves always write the new keys;
+  // backend handler reads both via fallback (see RecordStoreStepHandler).
   const current = config || {}
-  const recordKind = isUtilityAlias ? 'utility_bill' : (current.record_kind || 'utility_bill')
-  const sourceStep = current.financial_record_source_step || current.financial_source_step || current.source_step || ''
+  const recordKind = isUtilityAlias ? 'utility_bill' : (current.record_kind || (isUtilityAlias ? 'utility_bill' : 'generic'))
+  const sourceStep = current.record_source_step
+    ?? current.financial_record_source_step
+    ?? current.financial_source_step
+    ?? current.source_step
+    ?? ''
 
   return (
     <div className="space-y-4">
@@ -1692,11 +1710,14 @@ function FinancialRecordStoreConfigPanel({
           <TemplateInput
             value={sourceStep}
             onValueChange={(value) => onChange({
+              record_source_step: value,
+              // Keep legacy mirrors in sync so older handler reads still resolve
+              // until existing flows have been re-saved.
               source_step: value,
               financial_record_source_step: value,
               financial_source_step: value,
             })}
-            placeholder="step_2 or normalized_record"
+            placeholder="prior step name (e.g. step_2 or normalized_record)"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
             allSteps={allSteps}
             currentStepPosition={currentStepPosition}
@@ -1713,18 +1734,19 @@ function FinancialRecordStoreConfigPanel({
             {FINANCIAL_RECORD_KIND_OPTIONS.map(option => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
+            <option value="generic">Generic</option>
           </select>
           {isUtilityAlias && (
-            <p className="text-xs text-slate-500 mt-1">Utility Bill Store is an alias for Financial Record Store with utility_bill kind.</p>
+            <p className="text-xs text-slate-500 mt-1">Utility Bill Store is a legacy alias for Record Store with record_kind=utility_bill.</p>
           )}
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Automation key</label>
           <CursorSafeInput
             type="text"
-            value={current.financial_automation_key || current.financial_automation_template || ''}
-            onValueChange={(value) => onChange({ financial_automation_key: value })}
-            placeholder="provider_unit_invoice"
+            value={current.record_automation_key ?? current.financial_automation_key ?? current.financial_automation_template ?? ''}
+            onValueChange={(value) => onChange({ record_automation_key: value })}
+            placeholder="stable identity for this record stream"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -1732,9 +1754,9 @@ function FinancialRecordStoreConfigPanel({
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
           <CursorSafeInput
             type="text"
-            value={current.financial_provider || ''}
-            onValueChange={(value) => onChange({ financial_provider: value })}
-            placeholder="provider slug"
+            value={current.record_provider ?? current.financial_provider ?? ''}
+            onValueChange={(value) => onChange({ record_provider: value })}
+            placeholder="provider identifier"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -1742,9 +1764,9 @@ function FinancialRecordStoreConfigPanel({
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Unit</label>
           <CursorSafeInput
             type="text"
-            value={current.financial_unit_id || ''}
-            onValueChange={(value) => onChange({ financial_unit_id: value })}
-            placeholder="unit, account, CPF, CNPJ, or asset id"
+            value={current.record_unit ?? current.financial_unit_id ?? ''}
+            onValueChange={(value) => onChange({ record_unit: value })}
+            placeholder="account, unit, or subject identifier"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -1752,9 +1774,9 @@ function FinancialRecordStoreConfigPanel({
           <label className="block text-sm font-medium text-slate-300 mb-1.5">Asset</label>
           <CursorSafeInput
             type="text"
-            value={current.financial_asset || ''}
-            onValueChange={(value) => onChange({ financial_asset: value })}
-            placeholder="apartment, vehicle plate, broker account, etc."
+            value={current.record_asset ?? current.financial_asset ?? ''}
+            onValueChange={(value) => onChange({ record_asset: value })}
+            placeholder="human-readable asset label"
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -1763,8 +1785,8 @@ function FinancialRecordStoreConfigPanel({
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1.5">Dedupe key</label>
         <TemplateInput
-          value={current.financial_record_dedupe_key || ''}
-          onValueChange={(value) => onChange({ financial_record_dedupe_key: value })}
+          value={current.record_dedupe_key ?? current.financial_record_dedupe_key ?? ''}
+          onValueChange={(value) => onChange({ record_dedupe_key: value })}
           placeholder="{{provider}}:{{unit_id}}:{{reference_month}}"
           className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           allSteps={allSteps}
@@ -5245,7 +5267,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
         />
       )}
 
-      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+      {['record_store', 'financial_record_store', 'financial_bill_store'].includes(step.type) && (
         <FinancialRecordStoreConfigPanel
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
@@ -6887,7 +6909,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
         />
       )}
 
-      {['financial_record_store', 'financial_bill_store'].includes(step.type) && (
+      {['record_store', 'financial_record_store', 'financial_bill_store'].includes(step.type) && (
         <FinancialRecordStoreConfigPanel
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
