@@ -651,6 +651,13 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "selector": captcha_image_sel,
         "input_selector": captcha_input_sel,
         "submit_selector": submit_sel,
+        # Default to the Gemini provider — Gemini-Flash-Lite vision is
+        # significantly faster (typically <10s) than a cold Ollama
+        # multimodal model load (60-180s). Tenants without a Gemini
+        # provider configured can override to "ollama" by editing the
+        # solve_captcha step after recording; the runtime falls back
+        # gracefully and the bumped timeout keeps Ollama viable.
+        "solver_provider": "gemini",
         "solver_timeout_seconds": 120,
     }
     if result_sel:
