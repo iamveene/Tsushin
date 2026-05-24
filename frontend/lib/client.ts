@@ -3091,7 +3091,7 @@ export interface FlowRecurrenceRule {
 }
 
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'browser_group' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'browser_group' | 'http_request' | 'data_transform' | 'record_store' | 'financial_record_store' | 'financial_bill_store'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
