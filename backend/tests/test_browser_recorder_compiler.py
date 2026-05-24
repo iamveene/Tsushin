@@ -487,7 +487,9 @@ def test_compile_into_nodes_combines_captcha_chain_into_canonical_node():
     assert args.get("input_selector") == 'input[name="captcha"]'
     assert args.get("submit_selector") == 'button[name="b-pesquisar"]'
     assert args.get("success_selector") == "#result-panel"
-    # Bumped solver_timeout_seconds so Ollama cold-start doesn't kill us
+    # Solver defaults to gemini (fast cloud OCR); ollama fallback via
+    # tenant edit. solver_timeout_seconds keeps Ollama viable too.
+    assert args.get("solver_provider") == "gemini"
     assert args.get("solver_timeout_seconds") == 120
     # `selectors` field should NOT be set on solve_captcha nodes
     assert "selectors" not in captcha_node["config_json"] or not captcha_node["config_json"].get("selectors")
