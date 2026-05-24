@@ -4030,6 +4030,12 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
             if (entry.kind === 'group') {
               const parentIdx = entry.parent ? entry.originalIndices[0] : null
               const childSteps = entry.children
+              const childOriginalIdxs = entry.parent
+                ? entry.originalIndices.slice(1)
+                : entry.originalIndices
+              const editingChildIdx = editingIndex !== null
+                ? childOriginalIdxs.indexOf(editingIndex)
+                : -1
               return (
                 <BrowserGroupStep
                   key={`group-${entry.originalIndices.join('-')}`}
@@ -4040,6 +4046,31 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                   childCount={childSteps.length}
                   syntheticHint={entry.synthetic}
                   onUngroup={parentIdx !== null ? () => ungroupBrowserGroup(parentIdx) : undefined}
+                  defaultExpanded={editingChildIdx >= 0}
+                  editingChildIdx={editingChildIdx}
+                  onChildClick={(localIdx) => {
+                    const origIdx = childOriginalIdxs[localIdx]
+                    setEditingIndex(editingIndex === origIdx ? null : origIdx)
+                  }}
+                  renderChildEditor={(localIdx) => {
+                    const origIdx = childOriginalIdxs[localIdx]
+                    const childStep = steps[origIdx]
+                    if (!childStep) return null
+                    return (
+                      <StepConfigForm
+                        step={childStep}
+                        agents={agents}
+                        contacts={contacts}
+                        personas={personas}
+                        customTools={customTools}
+                        customSkills={customSkills}
+                        onChange={(update) => updateStep(origIdx, update)}
+                        allSteps={steps}
+                        flushCallbacksRef={flushCallbacksRef}
+                        stepIndex={origIdx}
+                      />
+                    )
+                  }}
                   children={childSteps.map((c) => {
                     const cfg = (c.config ?? {}) as Record<string, any>
                     const { label, toolAction } = describeBrowserChild(c)
@@ -5978,6 +6009,16 @@ function EditableStepBuilder({
             if (entry.kind === 'group') {
               const parentIdx = entry.parent ? entry.originalIndices[0] : null
               const keyHint = entry.originalIndices.join('-')
+              // Children live at originalIndices[parent ? 1 : 0]..end. Map
+              // editingIndex to the local child idx when applicable so the
+              // BrowserGroupStep can render the inline editor under the
+              // right row. -1 / not-found ⇒ none editing.
+              const childOriginalIdxs = entry.parent
+                ? entry.originalIndices.slice(1)
+                : entry.originalIndices
+              const editingChildIdx = editingIndex !== null
+                ? childOriginalIdxs.indexOf(editingIndex)
+                : -1
               return (
                 <BrowserGroupStep
                   key={`group-${keyHint}`}
@@ -5988,6 +6029,31 @@ function EditableStepBuilder({
                   childCount={entry.children.length}
                   syntheticHint={entry.synthetic}
                   onUngroup={parentIdx !== null ? () => { void ungroupBrowserGroup(parentIdx) } : undefined}
+                  defaultExpanded={editingChildIdx >= 0}
+                  editingChildIdx={editingChildIdx}
+                  onChildClick={(localIdx) => {
+                    const origIdx = childOriginalIdxs[localIdx]
+                    setEditingIndex(editingIndex === origIdx ? null : origIdx)
+                  }}
+                  renderChildEditor={(localIdx) => {
+                    const origIdx = childOriginalIdxs[localIdx]
+                    const childStep = steps[origIdx]
+                    if (!childStep) return null
+                    return (
+                      <EditableStepConfigForm
+                        step={childStep}
+                        agents={agents}
+                        contacts={contacts}
+                        personas={personas}
+                        customTools={customTools}
+                        customSkills={customSkills}
+                        onChange={(update) => updateStep(origIdx, update)}
+                        flushCallbacksRef={flushCallbacksRef}
+                        allSteps={steps}
+                        flowIsSystemOwned={flowIsSystemOwned}
+                      />
+                    )
+                  }}
                   children={entry.children.map((c) => {
                     const cfg = (c.config ?? {}) as Record<string, any>
                     const { label, toolAction } = describeBrowserChild(c)
