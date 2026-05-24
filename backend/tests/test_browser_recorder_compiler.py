@@ -17,7 +17,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from browser_recorder.event_compiler import compile_events, compile_events_into_nodes  # noqa: E402
+from browser_recorder.event_compiler import (  # noqa: E402
+    compile_events,
+    compile_events_into_group,
+    compile_events_into_nodes,
+)
 from browser_recorder.models import RecordedEvent  # noqa: E402
 from browser_recorder.selector_strategy import (  # noqa: E402
     is_password_field,
@@ -535,3 +539,112 @@ def test_mid_recording_navigate_emits_row():
     assert actions.count("navigate") == 1
     assert "click" in actions
     assert config["url"] == "https://a.example/"
+
+
+# ---------------------------------------------------------------------------
+# Group compile shape — wraps multi-FlowNode children in a browser_group
+# parent so the editor + watcher render one collapsible card per recording.
+# ---------------------------------------------------------------------------
+
+
+def test_compile_into_group_returns_parent_plus_children():
+    result = compile_events_into_group(
+        _events_correios_shaped(),
+        recording_id="rec_abc123",
+    )
+    assert result is not None
+    parent = result["group_node"]
+    children = result["child_nodes"]
+
+    assert parent["type"] == "browser_group"
+    assert parent["config_json"]["group_recording_id"] == "rec_abc123"
+    assert parent["config_json"]["child_count"] == len(children)
+    assert parent["config_json"]["target_host"] == "linkcorreios.com.br"
+
+    # Children are the same shape as compile_events_into_nodes, but annotated
+    flat = compile_events_into_nodes(_events_correios_shaped())
+    assert len(children) == len(flat)
+    for idx, child in enumerate(children):
+        cfg = child["config_json"]
+        assert cfg["group_recording_id"] == "rec_abc123"
+        assert cfg["group_index"] == idx
+        assert child["type"] == "browser_automation"
+
+
+def test_compile_into_group_empty_events_returns_none():
+    assert compile_events_into_group([], recording_id="rec_empty") is None
+
+
+def test_compile_into_group_attaches_per_event_screenshots():
+    """Each child's config_json carries the screenshot captured at the
+    moment the action's source event was recorded, so the BrowserGroupStep
+    card can render a thumbnail next to the action label."""
+    events = [
+        RecordedEvent(
+            "navigate",
+            {"url": "https://example.com/"},
+            screenshot_b64="SHOT_NAV",
+        ),
+        RecordedEvent(
+            "fill",
+            {
+                "selector": 'input[name="q"]', "value": "hello",
+                "field_meta": {"tag": "input", "name": "q"},
+            },
+            screenshot_b64="SHOT_FILL",
+        ),
+    ]
+    result = compile_events_into_group(events, recording_id="rec_shots")
+    children = result["child_nodes"]
+    # First child is the navigate; second is the fill
+    assert children[0]["config_json"].get("screenshot_b64") == "SHOT_NAV"
+    fill_child = next(c for c in children if c["config_json"]["tool_action"] == "fill")
+    assert fill_child["config_json"].get("screenshot_b64") == "SHOT_FILL"
+
+
+def test_compile_into_group_driver_label_is_homogeneous_when_one_source():
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}, recorded_driver="human"),
+        RecordedEvent(
+            "fill",
+            {"selector": 'input[name="q"]', "value": "x", "field_meta": {"tag": "input", "name": "q"}},
+            recorded_driver="human",
+        ),
+    ]
+    result = compile_events_into_group(events, recording_id="rec_h")
+    assert result["group_node"]["config_json"]["recorded_driver"] == "human"
+    for child in result["child_nodes"]:
+        assert child["config_json"]["recorded_driver"] == "human"
+
+
+def test_compile_into_group_driver_label_is_mixed_when_both_drivers_present():
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}, recorded_driver="human"),
+        RecordedEvent(
+            "fill",
+            {"selector": 'input[name="q"]', "value": "x", "field_meta": {"tag": "input", "name": "q"}},
+            recorded_driver="agent",
+        ),
+    ]
+    result = compile_events_into_group(events, recording_id="rec_mixed")
+    assert result["group_node"]["config_json"]["recorded_driver"] == "mixed"
+
+
+def test_compile_into_group_screenshot_uses_last_fill_in_coalesce_streak():
+    """Sequential fills on the same selector should expose ONE child with
+    the screenshot of the final keystroke (matching the compiler's fill
+    coalesce), not the first keystroke."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}, screenshot_b64="NAV"),
+        RecordedEvent("fill", {
+            "selector": 'input[name="q"]', "value": "h",
+            "field_meta": {"tag": "input", "name": "q"},
+        }, screenshot_b64="SHOT_H"),
+        RecordedEvent("fill", {
+            "selector": 'input[name="q"]', "value": "i",
+            "field_meta": {"tag": "input", "name": "q"},
+        }, screenshot_b64="SHOT_HI"),
+    ]
+    result = compile_events_into_group(events, recording_id="rec_coalesce")
+    fill_child = next(c for c in result["child_nodes"] if c["config_json"]["tool_action"] == "fill")
+    assert fill_child["config_json"].get("screenshot_b64") == "SHOT_HI"

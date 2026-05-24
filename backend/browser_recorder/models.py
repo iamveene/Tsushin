@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -47,11 +48,24 @@ class RecordedEvent:
         - "marker.captcha"  : payload = {"rect": [x,y,w,h], "selector": str|None}
         - "marker.extract"  : payload = {"rect": [x,y,w,h], "selector": str|None, "as": str}
         - "marker.vault"    : payload = {"selector": str, "reference": str (pvh_...)}
+
+    `screenshot_b64` and `recorded_driver` are populated by
+    `RecordingSession.append_event` from session state at capture time —
+    they let the recorder produce a per-event visual + provenance trail
+    for the BrowserGroupStep UI in both the flow editor and the watcher.
     """
 
     kind: str
     payload: dict[str, Any]
     ts: float = field(default_factory=time.time)
+    # Base64-encoded JPEG snapshot taken at the moment the event was captured.
+    # Sourced from the latest CDP screencast frame held by the session — may
+    # be None if the WS relay never delivered a frame (very-early events).
+    screenshot_b64: Optional[str] = None
+    # "human" | "agent" — mirrors RecordingDriver.value of the session at
+    # the moment the event was captured. Stored per-event so a single
+    # recording that toggles modes mid-session retains per-step provenance.
+    recorded_driver: Optional[str] = None
 
 
 @dataclass
@@ -73,6 +87,16 @@ class RecordingSession:
 
     current_driver: Optional[RecordingDriver] = None
     events: list[RecordedEvent] = field(default_factory=list)
+
+    # Stable group identity for the resulting browser_group FlowNode.
+    # One per recording session — preserved across pauses/agent toggles so
+    # the editor can fold all of a session's events into one group card.
+    recording_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    # Cached most-recent CDP screencast frame (base64 JPEG). Updated each
+    # time `Page.screencastFrame` fires in the relay; used by
+    # `append_event` to attach a snapshot to the just-captured event.
+    latest_frame_b64: Optional[str] = None
 
     # Set when an active WebSocket relay is attached. None means nobody is
     # watching the stream right now — the session still records page events
@@ -99,6 +123,14 @@ class RecordingSession:
     def is_expired(self) -> bool:
         return (time.time() - self.last_active_at) > self.ttl_seconds
 
-    def append_event(self, kind: str, payload: dict[str, Any]) -> None:
-        self.events.append(RecordedEvent(kind=kind, payload=payload))
+    def append_event(self, kind: str, payload: dict[str, Any]) -> RecordedEvent:
+        driver = self.current_driver.value if self.current_driver else None
+        evt = RecordedEvent(
+            kind=kind,
+            payload=payload,
+            screenshot_b64=self.latest_frame_b64,
+            recorded_driver=driver,
+        )
+        self.events.append(evt)
         self.touch()
+        return evt

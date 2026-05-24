@@ -95,11 +95,20 @@ class CompileResponse(BaseModel):
     # top-level tool_action, so this shape doesn't replay multi-action chains
     # (task #28 — use `flow_nodes` instead for chained flows).
     config_json: dict
-    # New multi-FlowNode shape — one FlowNode per browser action. Caller
+    # Multi-FlowNode shape — one FlowNode per browser action. Caller
     # POSTs each entry to /api/flows/{id}/steps. All entries share a
     # browser_session_profile_name so the Playwright context carries
-    # across nodes. This is the production-ready shape.
+    # across nodes.
     flow_nodes: list[dict]
+    # v0.7.x Recorder UX — grouped shape. `flow_group` wraps the same
+    # children as `flow_nodes` under a single `browser_group` parent so the
+    # editor and watcher can render one collapsible card instead of N
+    # flat browser_automation rows interleaved with other steps. The
+    # children themselves are annotated with per-step screenshots and
+    # human/agent provenance. This is now the default shape the
+    # RecorderDialog inserts on Save. May be None if the event stream
+    # produced no compilable actions.
+    flow_group: Optional[dict] = None
     event_count: int
 
 
@@ -176,15 +185,21 @@ async def compile_session(
 
     from browser_recorder.event_compiler import (
         compile_events,
+        compile_events_into_group,
         compile_events_into_nodes,
     )
 
     config_json = compile_events(session.events)
     flow_nodes = compile_events_into_nodes(session.events)
+    flow_group = compile_events_into_group(
+        session.events,
+        recording_id=session.recording_id,
+    )
 
     return CompileResponse(
         config_json=config_json,
         flow_nodes=flow_nodes,
+        flow_group=flow_group,
         event_count=len(session.events),
     )
 

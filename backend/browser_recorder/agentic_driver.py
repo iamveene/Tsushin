@@ -34,10 +34,17 @@ _DEFAULT_STEP_MODEL = "claude-haiku-4-5-20251001"
 
 async def _emit_event(session: RecordingSession, kind: str, payload: dict[str, Any]) -> None:
     """Append an event to the session and push it down the WS relay if any."""
-    session.append_event(kind, payload)
+    evt = session.append_event(kind, payload)
     if session.relay_send is not None:
         try:
-            await session.relay_send({"type": "event", "kind": kind, "payload": payload})
+            await session.relay_send({
+                "type": "event",
+                "kind": evt.kind,
+                "payload": evt.payload,
+                "screenshot_b64": evt.screenshot_b64,
+                "recorded_driver": evt.recorded_driver,
+                "ts": evt.ts,
+            })
         except Exception:
             # WS may be reconnecting; the event is still in session.events
             pass
