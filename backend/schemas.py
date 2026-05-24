@@ -178,6 +178,12 @@ class StepType(str, Enum):
     # safe — no DB migration required.
     CUSTOM_SKILL = "custom_skill"  # Phase 22: Custom skill (alias for skill)
     BROWSER_AUTOMATION = "browser_automation"  # Phase 14.5: Browser automation
+    # v0.7.x Recorder UX: pure UI marker that bundles the consecutive
+    # browser_automation children compiled from one recording session.
+    # Handler (BrowserGroupStepHandler) is a no-op pass-through — the
+    # children run as they always have. See
+    # browser_recorder.event_compiler.compile_events_into_group.
+    BROWSER_GROUP = "browser_group"
     PASSWORD_VAULT = "password_vault"  # v0.7.x: provider-neutral vault references
     HTTP_REQUEST = "http_request"  # UI-authored deterministic HTTP/API step
     DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step
@@ -235,7 +241,18 @@ class RecurrenceRule(BaseModel):
 
 # --- Flow Step Schemas ---
 class FlowStepConfig(BaseModel):
-    """Type-specific step configuration"""
+    """Type-specific step configuration.
+
+    v0.7.x Recorder UX: `extra="allow"` so recorder-emitted metadata
+    (group_recording_id, group_index, recorded_driver, recorded_at,
+    screenshot_b64, target_host, child_count, event_count) round-trips
+    through POST /api/flows/create without being silently dropped by
+    Pydantic's default `extra="ignore"`. The runtime handlers only read
+    fields they recognise, so passthrough fields are harmless.
+    """
+    class Config:
+        extra = "allow"
+
     # Common fields
     channel: Optional[str] = Field(default="whatsapp", description="Delivery channel: whatsapp, telegram")
     recipient: Optional[str] = None  # Phone number or @mention

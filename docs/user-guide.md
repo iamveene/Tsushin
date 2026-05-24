@@ -954,6 +954,20 @@ The recorder backend's `/compile` endpoint emits *two* shapes for every recordin
 
 Today the manual *Save as flow step* button in the recorder dialog uses the legacy shape (one step at a time). Use the smoke-test script (below) or the API directly to insert multi-FlowNode recordings into a new flow.
 
+##### BrowserGroupStep — one card per recording (2026-05-24)
+
+A recording-as-a-multi-FlowNode flow used to render as N flat steps interleaved with the surrounding notification / gate steps. The flow editor and the run-detail watcher now fold those consecutive browser_automation steps into a single **collapsible BrowserGroup card** with:
+
+- **Header**: target host (e.g. *Browser session · rastreamento.correios.com.br*), a **Human / Agent / Mixed** badge that reflects the `RecordingDriver` per step (mixed when a single recording toggled modes mid-session), a child-count chip, and a "Recorded N ago" relative timestamp.
+- **Expanded body**: one row per child action with a colored action chip (cyan navigate, emerald fill, sky click, amber solve_captcha, fuchsia extract), the step name, and a thumbnail captured at the moment the action was recorded.
+- **Ungroup button** (real groups only): deletes the `browser_group` parent step. The children remain and resynthesize as a synthetic group on the next render — full unflatten requires deleting a child or inserting a non-browser step between them.
+
+The same renderer powers the **Watcher → Flows → View Details** modal in **run mode**: the expanded body adds a runtime thumbnail next to each recorded one (sourced from `FlowNodeRun.output_json.screenshot_paths`) plus a status chip (completed / failed / running) so auditors can compare *what was recorded* against *what actually happened* without opening multiple tabs.
+
+The recorder /compile endpoint now emits a *third* shape — `flow_group = { group_node, child_nodes }` — alongside `config_json` and `flow_nodes[]`. The `group_node` is a new `browser_group` step type whose runtime handler is a pure no-op (returns `completed` in 0 ms); the children execute exactly as ordinary `browser_automation` steps. All grouping data (`group_recording_id`, `group_index`, `recorded_driver`, `recorded_at`, `screenshot_b64`) lives in each child's `config_json` so the card needs no extra fetch.
+
+**Backwards compat**: any existing flow with ≥2 consecutive `browser_automation` steps auto-renders as a *synthetic* group, marked with an amber **Auto-grouped — save to persist** badge. No migration is needed — the original flat steps are untouched in storage; only the rendering changed.
+
 ##### Smoke-test script
 
 `backend/scripts/recorder_e2e_correios_to_vini.py` runs the whole loop end-to-end against a healthy backend: records the Correios flow via the recorder WebSocket, compiles it, creates a real FlowDefinition (browser_automation → notification @Vini), executes it, and reports structured proof of the notification leg (resolved recipient, rendered message body, MCP URL it POSTed to). Use this to validate new tenants or after stack changes:

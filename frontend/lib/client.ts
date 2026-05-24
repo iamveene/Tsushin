@@ -3091,7 +3091,7 @@ export interface FlowRecurrenceRule {
 }
 
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'browser_group' | 'http_request' | 'data_transform' | 'financial_record_store' | 'financial_bill_store'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
@@ -3431,6 +3431,65 @@ export interface FlowNodeRun {
   idempotency_key: string
   // Phase 8.0 fields
   retry_count?: number
+}
+
+// v0.7.x Recorder UX — config_json shapes for the BrowserGroup feature.
+//
+// The recorder /compile endpoint returns three parallel shapes:
+//   - config_json: legacy single-FlowNode (back-compat, manual save path)
+//   - flow_nodes:  one FlowNode per browser action (production-ready flat)
+//   - flow_group:  one browser_group parent + the same children annotated
+//                  with per-step screenshots + provenance (the default the
+//                  RecorderDialog now inserts on Save)
+export type RecordedDriverLabel = 'human' | 'agent' | 'mixed'
+
+export interface BrowserGroupParentConfig {
+  group_recording_id: string
+  recorded_driver: RecordedDriverLabel
+  recorded_at: string
+  target_host: string
+  child_count: number
+  event_count: number
+}
+
+export interface BrowserGroupChildConfig {
+  // Only the fields the BrowserGroupStep card reads — the full child
+  // config is the same browser_automation shape the runtime already
+  // executes, so we type just the new annotations and let the rest live
+  // in the open record. Callers can intersect with FlowStepConfig.
+  group_recording_id?: string
+  group_index?: number
+  recorded_driver?: RecordedDriverLabel
+  recorded_at?: string
+  screenshot_b64?: string | null
+  tool_action?: string
+}
+
+export interface BrowserGroupCompiled {
+  group_node: {
+    name: string
+    type: 'browser_group'
+    config_json: BrowserGroupParentConfig
+    timeout_seconds?: number
+  }
+  child_nodes: Array<{
+    name: string
+    type: 'browser_automation'
+    config_json: BrowserGroupChildConfig & Record<string, any>
+    timeout_seconds?: number
+  }>
+}
+
+export interface RecorderCompileResponse {
+  config_json: Partial<FlowStepConfig> & { _recorder_events?: unknown[] }
+  flow_nodes: Array<{
+    name: string
+    type: string
+    config_json: Record<string, any>
+    timeout_seconds?: number
+  }>
+  flow_group: BrowserGroupCompiled | null
+  event_count: number
 }
 
 // Phase 8.0: Flow statistics
@@ -11711,10 +11770,7 @@ export const api = {
     return res.json()
   },
 
-  async compileRecorderSession(sessionId: string): Promise<{
-    config_json: Partial<FlowStepConfig> & { _recorder_events?: unknown[] }
-    event_count: number
-  }> {
+  async compileRecorderSession(sessionId: string): Promise<RecorderCompileResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/compile`, {
       method: 'POST',
     })

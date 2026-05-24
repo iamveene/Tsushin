@@ -2121,7 +2121,7 @@ Record-and-refine authoring surface for `browser_automation` flow steps. Source:
 |---|---|---|
 | `POST` | `/api/recorder/sessions` | Spawn Chromium; returns `{session_id, ws_url}`. Cap is 2 active recordings per tenant — over the limit returns HTTP 409 with a "discard an existing recording first" hint. |
 | `WS`   | `/ws/recorder/{session_id}` | Cookie-authed bidirectional stream. Server pushes `{type:"frame", data: <jpeg-b64>}` + `{type:"event", kind, payload}`. Client pushes `input.mouse`, `input.key`, `input.text`, `navigate`, `marker.captcha`, `marker.extract`, `marker.vault`, `ping`. |
-| `POST` | `/api/recorder/sessions/{id}/compile` | Returns the `config_json` preview without persisting it — the frontend `RecorderDialog` calls this on Save and passes the result into the existing config panel's `onChange`. |
+| `POST` | `/api/recorder/sessions/{id}/compile` | Returns three parallel shapes: `config_json` (legacy single-FlowNode), `flow_nodes[]` (multi-FlowNode, one per browser action), and `flow_group = {group_node, child_nodes}` (the new `browser_group` parent + annotated children for the BrowserGroupStep card). The frontend `RecorderDialog` consumes `config_json`; programmatic consumers should prefer `flow_group`. |
 | `POST` | `/api/recorder/sessions/{id}/agent` | Start a Browser-Use agent loop. Returns 503 if the tenant has no Anthropic `ProviderInstance` configured, 501 if `browser-use` isn't installed. |
 | `POST` | `/api/recorder/sessions/{id}/agent/pause` | Toggle pause/resume on the agent. Calls Browser-Use's native `pause()`/`resume()` plus the cooperative `agent_paused` flag. |
 | `GET`  | `/api/recorder/sessions/{id}/debug` | Live session introspection — events, agent task state, agent exception, current driver. UI-debuggable without server logs. |
@@ -2189,6 +2189,47 @@ The legacy single-FlowNode `compile_events()` is still exposed for the existing 
 ```
 
 Validated end-to-end on prod ([flow #43](https://tsushin.archsec.io/flows): *Recorder Demo | Correios | AD468811215BR (canonical via compile_events_into_nodes)*) — 6 recorder-emitted FlowNodes + 2 hand-added (`data_transform normalize_tracking` + `notification notify_vini`), 14-second total runtime, canonical Correios tracking message delivered to `@Vini` on WhatsApp.
+
+#### 13.9.6b BrowserGroupStep — collapsible card per recording (2026-05-24)
+
+The multi-FlowNode shape (13.9.6a) ships one FlowNode per browser action so the runtime can replay the chain, but a flow with 5–15 of those steps becomes visually noisy in the flow editor — especially when interleaved with notification, gate, and message steps from the rest of the flow. The fix is *purely a UI grouping*: a new `browser_group` step type wraps the consecutive `browser_automation` children in one collapsible card, with no change to how the children execute.
+
+**New step type**: `browser_group` (backend `StepType.BROWSER_GROUP`). Runtime handler [`BrowserGroupStepHandler`](../backend/flows/flow_engine.py) is a no-op that returns `completed` in 0 ms — the children that follow it in the flow chain run as ordinary `browser_automation` steps. The parent's `config_json` carries display-only metadata:
+
+```jsonc
+{
+  "group_recording_id": "rec_abc123",
+  "recorded_driver": "human" | "agent" | "mixed",
+  "recorded_at": "2026-05-24T15:00:00Z",
+  "target_host": "rastreamento.correios.com.br",
+  "child_count": 5,
+  "event_count": 7
+}
+```
+
+**Child annotations** (added inline to each `browser_automation` child's `config_json` by `compile_events_into_group`):
+
+| Field | Purpose |
+|---|---|
+| `group_recording_id` | UUID per recording session; joins children to their parent and lets the frontend group helper detect "two recordings back-to-back" vs "one recording". |
+| `group_index` | 0-based ordinal; drives the numbered rows in the expanded card. |
+| `recorded_driver` | `"human"` or `"agent"` from `RecordingDriver` at capture time. |
+| `recorded_at` | ISO 8601 timestamp; the card shows "Recorded N ago". |
+| `screenshot_b64` | JPEG taken from the cached CDP screencast frame at the moment the source event was captured. Coalesced fills keep the *last* keystroke's screenshot. |
+
+**Driver tracking**: `RecordingSession.append_event` ([backend/browser_recorder/models.py](../backend/browser_recorder/models.py)) mirrors `current_driver` onto each `RecordedEvent`, so a single recording that toggled human → agent → human mid-session carries per-step provenance. The group's parent `recorded_driver` is the union: `"human"`, `"agent"`, or `"mixed"`.
+
+**Frontend grouping helper** [`groupBrowserSteps`](../frontend/lib/browserGroupHelpers.ts) folds two cases:
+
+1. A real `browser_group` parent followed by consecutive `browser_automation` children sharing its `group_recording_id`. **No synthetic hint.**
+2. ≥2 consecutive `browser_automation` steps with no parent. **Synthetic group** marked with an amber *"Auto-grouped — save to persist"* badge. This is the backwards-compat path for flows authored before 2026-05-24 — no migration was needed.
+
+**Card** ([frontend/components/flows/BrowserGroupStep.tsx](../frontend/components/flows/BrowserGroupStep.tsx)) ships in two modes:
+
+- `mode="edit"` — flow editor at [/flows](https://tsushin.archsec.io/flows). Header has the host, driver badge, child count, recorded-at timestamp, and an **Ungroup** button (real groups only). Expanded body shows per-child action chip + recorded thumbnail.
+- `mode="run"` — Watcher → Flows → View Details modal. Same card; expanded body adds a **runtime** thumbnail (from `FlowNodeRun.output_json.screenshot_paths`) next to the **recorded** thumbnail, plus a status chip per child (completed / failed / running). The recorded-vs-runtime juxtaposition is the auditing win.
+
+**Ungroup semantics**: deletes the `browser_group` parent step via the existing `deleteFlowStep` API. The children remain and resynthesize as a synthetic group on the next render (since they still share `group_recording_id`), with the amber hint. A full unflatten requires also deleting a child or inserting a non-browser step between them — rare in practice; the UI is intentionally biased toward keeping the visual group together.
 
 #### 13.9.6 Canonical example — Correios postal tracking
 

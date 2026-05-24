@@ -13,7 +13,7 @@ import Modal from '@/components/ui/Modal'
 import PasswordVaultReferencePicker, {
   type PasswordVaultReferenceValue,
 } from '@/components/password-vault/PasswordVaultReferencePicker'
-import { api, type FlowStepConfig } from '@/lib/client'
+import { api, type FlowStepConfig, type BrowserGroupCompiled } from '@/lib/client'
 import AgenticTab from './AgenticTab'
 import StreamCanvas, { type PointerInput, type KeyInput } from './StreamCanvas'
 import StepLedger from './StepLedger'
@@ -27,7 +27,16 @@ import {
 interface RecorderDialogProps {
   isOpen: boolean
   onClose: () => void
-  onApply: (config: Partial<FlowStepConfig>) => void
+  // Legacy single-step merge — used by BrowserAutomationConfigPanel to
+  // drop a compiled config_json into the existing single browser_automation
+  // step's config form. Optional when onInsertGroup is provided.
+  onApply?: (config: Partial<FlowStepConfig>) => void
+  // v0.7.x Recorder UX: flow-level group insertion. When provided, the
+  // Save button consumes the new `flow_group` compile shape (parent
+  // browser_group + annotated children) and asks the parent to insert
+  // them as new flow steps. This is the production-ready path; the
+  // legacy onApply remains for the in-panel record-into-one-step flow.
+  onInsertGroup?: (compiled: BrowserGroupCompiled) => void | Promise<void>
   initialUrl?: string
 }
 
@@ -35,6 +44,7 @@ export default function RecorderDialog({
   isOpen,
   onClose,
   onApply,
+  onInsertGroup,
   initialUrl,
 }: RecorderDialogProps) {
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -172,19 +182,33 @@ export default function RecorderDialog({
     setSavePending(true)
     try {
       const resp = await api.compileRecorderSession(sessionId)
-      // Strip Phase 1 fallback diagnostic so it doesn't leak into the
-      // saved FlowNode.config_json. Production compiler (Phase 2) doesn't
-      // emit it.
-      const cfg = { ...resp.config_json }
-      delete (cfg as any)._recorder_events
-      onApply(cfg)
-      onClose()
+      // When the parent has opted into group insertion AND the recorder
+      // produced any compilable actions, insert the parent + children at
+      // the flow level. Falls back to the legacy single-step merge if
+      // the parent only provided onApply (BrowserAutomationConfigPanel),
+      // or if the recording was empty enough that flow_group is null.
+      if (onInsertGroup && resp.flow_group) {
+        await onInsertGroup(resp.flow_group)
+        onClose()
+        return
+      }
+      if (onApply) {
+        // Strip Phase 1 fallback diagnostic so it doesn't leak into the
+        // saved FlowNode.config_json. Production compiler (Phase 2) doesn't
+        // emit it.
+        const cfg = { ...resp.config_json }
+        delete (cfg as any)._recorder_events
+        onApply(cfg)
+        onClose()
+        return
+      }
+      setBootError('Nothing to do — neither onInsertGroup nor onApply was wired.')
     } catch (err: any) {
       setBootError(err?.message || 'Compile failed')
     } finally {
       setSavePending(false)
     }
-  }, [onApply, onClose, sessionId])
+  }, [onApply, onClose, onInsertGroup, sessionId])
 
   const handleClear = useCallback(() => setEvents([]), [])
 
