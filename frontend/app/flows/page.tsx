@@ -3990,6 +3990,35 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
     setEditingIndex(null)
   }
 
+  // v0.7.x Recorder UX: launch the recorder at the flow-list level (not
+  // inside a single browser_automation panel) so a recording inserts as
+  // a `browser_group` parent + all `browser_automation` children at once
+  // — the production-ready flow_group shape from
+  // /api/recorder/sessions/{id}/compile.
+  const [groupRecorderOpen, setGroupRecorderOpen] = useState(false)
+
+  function insertCompiledGroup(compiled: { group_node: any; child_nodes: any[] }) {
+    const base = steps.length
+    const parent: CreateFlowStepData = {
+      name: compiled.group_node.name,
+      type: 'browser_group' as StepType,
+      position: base + 1,
+      config: compiled.group_node.config_json as FlowStepConfig,
+      timeout_seconds: compiled.group_node.timeout_seconds,
+      allow_multi_turn: false,
+    }
+    const children: CreateFlowStepData[] = compiled.child_nodes.map((c, i) => ({
+      name: c.name,
+      type: 'browser_automation' as StepType,
+      position: base + 2 + i,
+      config: c.config_json as FlowStepConfig,
+      timeout_seconds: c.timeout_seconds,
+      allow_multi_turn: false,
+    }))
+    onChange([...steps, parent, ...children])
+    setShowAddStep(false)
+  }
+
   const groupedEntries = groupBrowserSteps(steps)
 
   return (
@@ -4157,6 +4186,23 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       {showAddStep ? (
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
+          {/* v0.7.x Recorder UX: shortcut to record a browser session and
+              insert it as a browser_group + children in one click. Kept
+              separate from the typed step picker because it inserts
+              multiple steps, not one. */}
+          <button
+            type="button"
+            onClick={() => setGroupRecorderOpen(true)}
+            className="w-full mb-4 p-4 rounded-lg border border-cyan-500/40 bg-gradient-to-r from-cyan-500/10 to-sky-500/10
+                       hover:border-cyan-500 hover:from-cyan-500/15 hover:to-sky-500/15
+                       transition-all text-left flex items-center gap-3"
+          >
+            <span className="text-2xl">🎬</span>
+            <div className="flex-1">
+              <div className="text-sm font-medium text-white">Record browser session</div>
+              <div className="text-xs text-slate-400 mt-0.5">Drive a live Chromium and let Tsushin insert the recorded actions as one collapsible group of browser_automation steps.</div>
+            </div>
+          </button>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {/* Source steps are only created by trigger-prefilled Flow drafts. */}
             {getAddableStepTypes(steps, allowSourceStep).map(type => {
@@ -4192,6 +4238,12 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
           Add Step
         </button>
       )}
+
+      <RecorderDialog
+        isOpen={groupRecorderOpen}
+        onClose={() => setGroupRecorderOpen(false)}
+        onInsertGroup={insertCompiledGroup}
+      />
     </div>
   )
 }
@@ -5874,6 +5926,47 @@ function EditableStepBuilder({
     await deleteStep(parentIndex)
   }
 
+  // v0.7.x Recorder UX: insert a freshly-compiled group at the end of the
+  // flow. Posts the parent + each child sequentially via createFlowStep so
+  // the backend assigns canonical ids and the watcher run-detail can join
+  // FlowNodeRun ↔ FlowNode by id. Mirrors StepBuilder's insertCompiledGroup
+  // but uses the persistent-flow code path.
+  const [groupRecorderOpen, setGroupRecorderOpen] = useState(false)
+  async function insertCompiledGroup(compiled: { group_node: any; child_nodes: any[] }) {
+    const base = steps.length
+    // The backend's POST /api/flows/{id}/steps expects `config_json`
+    // (not `config`). Sending raw payloads here, not editableToCreatePayload
+    // — the compiled output is already in the canonical FlowNode shape.
+    const parentPayload: any = {
+      name: compiled.group_node.name,
+      type: 'browser_group',
+      position: base + 1,
+      config_json: compiled.group_node.config_json,
+      timeout_seconds: compiled.group_node.timeout_seconds,
+    }
+    const childPayloads: any[] = compiled.child_nodes.map((c, i) => ({
+      name: c.name,
+      type: 'browser_automation',
+      position: base + 2 + i,
+      config_json: c.config_json,
+      timeout_seconds: c.timeout_seconds,
+    }))
+    try {
+      const created: any[] = []
+      created.push(await api.createFlowStep(flowId, parentPayload))
+      for (const p of childPayloads) {
+        created.push(await api.createFlowStep(flowId, p))
+      }
+      const appended = [...steps, ...created.map(flowNodeToEditable)]
+      onStepsChange(appended)
+      setShowAddStep(false)
+      toast.success('Recorded group inserted', `${created.length} step${created.length === 1 ? '' : 's'} added`)
+    } catch (error) {
+      console.error('Failed to insert recorded group:', error)
+      toast.error('Recorder', 'Failed to insert recorded steps')
+    }
+  }
+
   const groupedEntries = groupBrowserSteps(steps)
 
   return (
@@ -6049,6 +6142,22 @@ function EditableStepBuilder({
       {showAddStep ? (
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
+          {/* v0.7.x Recorder UX: shortcut to record a browser session at
+              the flow level and insert it as a browser_group + children
+              in one click. */}
+          <button
+            type="button"
+            onClick={() => setGroupRecorderOpen(true)}
+            className="w-full mb-4 p-4 rounded-lg border border-cyan-500/40 bg-gradient-to-r from-cyan-500/10 to-sky-500/10
+                       hover:border-cyan-500 hover:from-cyan-500/15 hover:to-sky-500/15
+                       transition-all text-left flex items-center gap-3"
+          >
+            <span className="text-2xl">🎬</span>
+            <div className="flex-1">
+              <div className="text-sm font-medium text-white">Record browser session</div>
+              <div className="text-xs text-slate-400 mt-0.5">Drive a live Chromium and let Tsushin insert the recorded actions as one collapsible group of browser_automation steps.</div>
+            </div>
+          </button>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {/* Source steps are trigger-owned and cannot be added manually while editing. */}
             {getAddableStepTypes(steps, false).map(type => {
@@ -6092,6 +6201,12 @@ function EditableStepBuilder({
           Add Step
         </button>
       )}
+
+      <RecorderDialog
+        isOpen={groupRecorderOpen}
+        onClose={() => setGroupRecorderOpen(false)}
+        onInsertGroup={insertCompiledGroup}
+      />
     </div>
   )
 }
