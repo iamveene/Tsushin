@@ -92,6 +92,8 @@ import {
 import { parseUTCTimestamp, formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
 import { useGlobalRefresh } from '@/hooks/useGlobalRefresh'
 import CreateFromTemplateModal from '@/components/flows/CreateFromTemplateModal'
+import BrowserGroupStep from '@/components/flows/BrowserGroupStep'
+import { groupBrowserSteps, describeBrowserChild } from '@/lib/browserGroupHelpers'
 
 // ==================== CONSTANTS ====================
 
@@ -3972,12 +3974,59 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
     onChange(newSteps)
   }
 
+  // v0.7.x Recorder UX: ungroup a real browser_group → drop the parent
+  // marker, leaving the children as flat browser_automation steps. The
+  // visual grouping will resynthesize on the next render via
+  // `groupBrowserSteps` (since the children retain their shared
+  // group_recording_id), so the practical effect is "show me the parent's
+  // metadata as a banner" — full unflatten requires the user to also
+  // delete a child or insert a non-browser step between them.
+  function ungroupBrowserGroup(parentIndex: number) {
+    if (parentIndex < 0 || parentIndex >= steps.length) return
+    const newSteps = steps
+      .filter((_, i) => i !== parentIndex)
+      .map((s, i) => ({ ...s, position: i + 1 }))
+    onChange(newSteps)
+    setEditingIndex(null)
+  }
+
+  const groupedEntries = groupBrowserSteps(steps)
+
   return (
     <div className="space-y-4">
       {/* Steps List */}
       {steps.length > 0 && (
         <div className="space-y-3">
-          {steps.map((step, index) => (
+          {groupedEntries.map((entry, entryIdx) => {
+            if (entry.kind === 'group') {
+              const parentIdx = entry.parent ? entry.originalIndices[0] : null
+              const childSteps = entry.children
+              return (
+                <BrowserGroupStep
+                  key={`group-${entry.originalIndices.join('-')}`}
+                  mode="edit"
+                  targetHost={entry.summary.targetHost}
+                  driver={entry.summary.driver}
+                  recordedAt={entry.summary.recordedAt ?? null}
+                  childCount={childSteps.length}
+                  syntheticHint={entry.synthetic}
+                  onUngroup={parentIdx !== null ? () => ungroupBrowserGroup(parentIdx) : undefined}
+                  children={childSteps.map((c) => {
+                    const cfg = (c.config ?? {}) as Record<string, any>
+                    const { label, toolAction } = describeBrowserChild(c)
+                    return {
+                      label,
+                      toolAction,
+                      recordedScreenshotB64: (cfg.screenshot_b64 as string | undefined) ?? null,
+                    }
+                  })}
+                />
+              )
+            }
+
+            const step = entry.step
+            const index = entry.originalIndex
+            return (
             <div
               key={index}
               className={`rounded-xl border transition-all ${editingIndex === index
@@ -4099,7 +4148,8 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -5815,12 +5865,51 @@ function EditableStepBuilder({
     }
   }
 
+  // v0.7.x Recorder UX: ungroup a real browser_group → delete the parent
+  // step via the existing deleteStep API call. Children remain in place
+  // and will resynthesize visually since they share group_recording_id,
+  // mirroring StepBuilder's ungroup semantics.
+  async function ungroupBrowserGroup(parentIndex: number) {
+    if (parentIndex < 0 || parentIndex >= steps.length) return
+    await deleteStep(parentIndex)
+  }
+
+  const groupedEntries = groupBrowserSteps(steps)
+
   return (
     <div className="space-y-4">
       {/* Steps List */}
       {steps.length > 0 && (
         <div className="space-y-3">
-          {steps.map((step, index) => (
+          {groupedEntries.map((entry) => {
+            if (entry.kind === 'group') {
+              const parentIdx = entry.parent ? entry.originalIndices[0] : null
+              const keyHint = entry.originalIndices.join('-')
+              return (
+                <BrowserGroupStep
+                  key={`group-${keyHint}`}
+                  mode="edit"
+                  targetHost={entry.summary.targetHost}
+                  driver={entry.summary.driver}
+                  recordedAt={entry.summary.recordedAt ?? null}
+                  childCount={entry.children.length}
+                  syntheticHint={entry.synthetic}
+                  onUngroup={parentIdx !== null ? () => { void ungroupBrowserGroup(parentIdx) } : undefined}
+                  children={entry.children.map((c) => {
+                    const cfg = (c.config ?? {}) as Record<string, any>
+                    const { label, toolAction } = describeBrowserChild(c)
+                    return {
+                      label,
+                      toolAction,
+                      recordedScreenshotB64: (cfg.screenshot_b64 as string | undefined) ?? null,
+                    }
+                  })}
+                />
+              )
+            }
+            const step = entry.step
+            const index = entry.originalIndex
+            return (
             <div
               key={step.id || `new-${index}`}
               className={`rounded-xl border transition-all ${editingIndex === index
@@ -5951,7 +6040,8 @@ function EditableStepBuilder({
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -7540,6 +7630,11 @@ function ViewRunModal({ runId, onClose }: {
 }) {
   const [run, setRun] = useState<FlowRun | null>(null)
   const [nodeRuns, setNodeRuns] = useState<any[]>([])
+  // v0.7.x Recorder UX: the run-detail card needs per-step config_json
+  // (screenshot_b64, group_recording_id) to render BrowserGroupStep.
+  // FlowNodeRun alone carries runtime data; we also fetch the flow's
+  // nodes once per run and join client-side.
+  const [flowNodes, setFlowNodes] = useState<FlowNode[]>([])
   const [loading, setLoading] = useState(true)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const statusRef = useRef<string>('')
@@ -7574,6 +7669,17 @@ function ViewRunModal({ runId, onClose }: {
         api.getFlowRun(runId),
         api.getFlowNodeRuns(runId)
       ])
+      // Fetch the flow's nodes once we know the definition id. Safe to
+      // fail silently — the run-detail UI degrades to "no recorded
+      // thumbnails" without it but still shows status/timing.
+      if (runData?.flow_definition_id && flowNodes.length === 0) {
+        try {
+          const nodes = await api.getFlowNodes(runData.flow_definition_id)
+          setFlowNodes(nodes)
+        } catch (e) {
+          console.warn('Failed to load flow nodes for run detail:', e)
+        }
+      }
       setRun(runData)
       statusRef.current = runData.status
       setNodeRuns(nodeRunsData)
@@ -7708,47 +7814,107 @@ function ViewRunModal({ runId, onClose }: {
                 <span>{run?.status === 'pending' ? 'Preparing execution...' : 'Waiting for first step...'}</span>
               </div>
             ) : (
-              <div className="space-y-3">
-                {nodeRuns.map((nodeRun, index) => (
-                  <div
-                    key={nodeRun.id}
-                    className={`bg-slate-700/30 rounded-lg p-4 border transition-all duration-300 ${
-                      nodeRun.status === 'running'
-                        ? 'border-cyan-500/50 shadow-lg shadow-cyan-500/5'
-                        : nodeRun.status === 'completed'
-                          ? 'border-green-500/30'
-                          : nodeRun.status === 'failed'
-                            ? 'border-red-500/30'
-                            : 'border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        {nodeRun.status === 'running' && (
-                          <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                        )}
-                        <div className="font-medium text-white">Step {index + 1}</div>
-                      </div>
-                      <StatusBadge status={nodeRun.status} />
-                    </div>
-                    {nodeRun.execution_time_ms != null && (
-                      <div className="text-sm text-slate-400">
-                        Execution time: {nodeRun.execution_time_ms}ms
+              (() => {
+                // v0.7.x Recorder UX: zip each FlowNodeRun with its parent
+                // FlowNode so we can render BrowserGroupStep for any
+                // consecutive browser_automation children that came from
+                // one recording session. Falls back gracefully when
+                // flowNodes hasn't loaded yet — non-browser steps still
+                // render as before.
+                const nodeById = new Map<number, FlowNode>()
+                for (const n of flowNodes) nodeById.set(n.id, n)
+                const enriched = nodeRuns.map((nodeRun: any, idx: number) => {
+                  const node = nodeById.get(nodeRun.flow_node_id)
+                  const config = (node?.config_json ?? {}) as Record<string, any>
+                  const type = node?.type ?? 'unknown'
+                  const name = node?.name ?? `Step ${idx + 1}`
+                  return { type, config, nodeRun, name, displayIdx: idx + 1 }
+                })
+                const grouped = groupBrowserSteps(enriched)
+                return (
+                  <div className="space-y-3">
+                    {grouped.map((entry) => {
+                      if (entry.kind === 'group') {
+                        const keyHint = entry.originalIndices.join('-')
+                        return (
+                          <BrowserGroupStep
+                            key={`run-group-${keyHint}`}
+                            mode="run"
+                            targetHost={entry.summary.targetHost}
+                            driver={entry.summary.driver}
+                            recordedAt={entry.summary.recordedAt ?? null}
+                            childCount={entry.children.length}
+                            syntheticHint={entry.synthetic}
+                            children={entry.children.map((c) => {
+                              const { label, toolAction } = describeBrowserChild(c)
+                              const out = (c.nodeRun.output_json ?? {}) as Record<string, any>
+                              // Runtime screenshot — BrowserAutomationStepHandler
+                              // returns screenshot_paths or a single
+                              // screenshot field. Pick the first usable one.
+                              const paths = Array.isArray(out.screenshot_paths)
+                                ? out.screenshot_paths
+                                : []
+                              const runtimeShot =
+                                (typeof out.screenshot === 'string' && out.screenshot) ||
+                                (typeof out.screenshot_b64 === 'string' && out.screenshot_b64) ||
+                                (paths.length > 0 ? paths[paths.length - 1] : null)
+                              return {
+                                label,
+                                toolAction,
+                                recordedScreenshotB64:
+                                  (c.config.screenshot_b64 as string | undefined) ?? null,
+                                runtimeScreenshot: runtimeShot ?? null,
+                                status: c.nodeRun.status as any,
+                                errorText: c.nodeRun.error_text ?? null,
+                              }
+                            })}
+                          />
+                        )
+                      }
+                      const { nodeRun, displayIdx } = entry.step as any
+                      return (
+                        <div
+                          key={nodeRun.id}
+                          className={`bg-slate-700/30 rounded-lg p-4 border transition-all duration-300 ${
+                            nodeRun.status === 'running'
+                              ? 'border-cyan-500/50 shadow-lg shadow-cyan-500/5'
+                              : nodeRun.status === 'completed'
+                                ? 'border-green-500/30'
+                                : nodeRun.status === 'failed'
+                                  ? 'border-red-500/30'
+                                  : 'border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              {nodeRun.status === 'running' && (
+                                <div className="w-3 h-3 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                              )}
+                              <div className="font-medium text-white">Step {displayIdx}</div>
+                            </div>
+                            <StatusBadge status={nodeRun.status} />
+                          </div>
+                          {nodeRun.execution_time_ms != null && (
+                            <div className="text-sm text-slate-400">
+                              Execution time: {nodeRun.execution_time_ms}ms
+                            </div>
+                          )}
+                          {nodeRun.error_text && (
+                            <div className="mt-2 text-sm text-red-400">{nodeRun.error_text}</div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {/* Pending steps placeholder */}
+                    {runIsActive && nodeRuns.length < totalSteps && (
+                      <div className="flex items-center gap-2 text-slate-500 text-sm px-4 py-2">
+                        <div className="w-3 h-3 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
+                        {totalSteps - nodeRuns.length} step{totalSteps - nodeRuns.length > 1 ? 's' : ''} remaining...
                       </div>
                     )}
-                    {nodeRun.error_text && (
-                      <div className="mt-2 text-sm text-red-400">{nodeRun.error_text}</div>
-                    )}
                   </div>
-                ))}
-                {/* Pending steps placeholder */}
-                {runIsActive && nodeRuns.length < totalSteps && (
-                  <div className="flex items-center gap-2 text-slate-500 text-sm px-4 py-2">
-                    <div className="w-3 h-3 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
-                    {totalSteps - nodeRuns.length} step{totalSteps - nodeRuns.length > 1 ? 's' : ''} remaining...
-                  </div>
-                )}
-              </div>
+                )
+              })()
             )}
           </div>
         </div>

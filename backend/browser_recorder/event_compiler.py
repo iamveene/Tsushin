@@ -691,3 +691,151 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     insert_pos = sum(1 for i in range(captcha_idx) if i not in drop_indices)
     kept.insert(insert_pos, combined)
     return kept
+
+
+# ---------------------------------------------------------------------------
+# Group compile shape — wraps the multi-FlowNode list in a single
+# `browser_group` parent so the flow editor and watcher can render one
+# collapsible card per recording instead of N flat browser_automation rows
+# interleaved with surrounding notification / message / gate steps.
+# ---------------------------------------------------------------------------
+
+
+def _target_host(events: Iterable[RecordedEvent]) -> str:
+    """Pull the first navigate URL's host so the group header can show it."""
+    for ev in events:
+        if ev.kind == "navigate":
+            url = (ev.payload or {}).get("url") or ""
+            if not url:
+                continue
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or url
+            return host.replace("www.", "")
+    return "browser session"
+
+
+def _group_driver(events: Iterable[RecordedEvent]) -> str:
+    """Derive a single driver label for the group from per-event drivers.
+
+    Returns "human", "agent", or "mixed". Falls back to "human" if no event
+    carried a driver (very old sessions or unit-test fixtures that bypass
+    `RecordingSession.append_event`).
+    """
+    seen: set[str] = set()
+    for ev in events:
+        if ev.recorded_driver:
+            seen.add(ev.recorded_driver)
+    if not seen:
+        return "human"
+    if len(seen) == 1:
+        return next(iter(seen))
+    return "mixed"
+
+
+def _action_screenshots(events: list[RecordedEvent]) -> list[Optional[str]]:
+    """Pick one screenshot per "action-bearing" event in original order.
+
+    The multi-node compiler emits one FlowNode per navigate, fill (post-
+    coalesce), click, marker.captcha (becomes solve_captcha), marker.extract,
+    and marker.vault. We walk events in order and emit the screenshot
+    captured at the moment of each such action so the group's child rows
+    can render a per-step thumbnail.
+
+    Returns one entry per action event. Length will roughly match the
+    compiled child node list; callers zip with `min(len(...), len(...))`.
+    """
+    out: list[Optional[str]] = []
+    last_fill_selector: Optional[str] = None
+    for ev in events:
+        kind = ev.kind
+        # Coalesce sequential fills on the same selector — only keep the
+        # screenshot from the final keystroke so the thumbnail reflects the
+        # completed input. This mirrors `_coalesce_fills`.
+        if kind == "fill":
+            sel = (ev.payload or {}).get("selector")
+            if sel and sel == last_fill_selector and out:
+                out[-1] = ev.screenshot_b64 or out[-1]
+                continue
+            last_fill_selector = sel
+            out.append(ev.screenshot_b64)
+            continue
+        last_fill_selector = None
+        if kind in ("navigate", "click", "marker.captcha", "marker.extract", "marker.vault"):
+            out.append(ev.screenshot_b64)
+            continue
+        # load / key / other plumbing events don't map to a FlowNode
+    return out
+
+
+def compile_events_into_group(
+    events: Iterable[RecordedEvent],
+    *,
+    recording_id: str,
+) -> Optional[dict[str, Any]]:
+    """Return a `browser_group` parent + annotated child nodes.
+
+    Shape (all fields land in FlowNode.config_json after the caller persists):
+
+        {
+            "group_node": {
+                "name": "browser_group_<host>",
+                "type": "browser_group",
+                "config_json": {
+                    "group_recording_id": <recording_id>,
+                    "recorded_driver": "human"|"agent"|"mixed",
+                    "recorded_at": <iso8601>,
+                    "target_host": <host>,
+                    "child_count": <int>,
+                    "event_count": <int>,
+                },
+            },
+            "child_nodes": [
+                # Same shape as compile_events_into_nodes() entries, with
+                # group_recording_id + group_index + recorded_driver +
+                # recorded_at + screenshot_b64 inlined into config_json so
+                # the BrowserGroupStep card can render them without a
+                # separate fetch.
+                ...
+            ],
+        }
+
+    Returns None if the event stream produced zero compilable children.
+    """
+    event_list = list(events)
+    children = compile_events_into_nodes(event_list)
+    if not children:
+        return None
+
+    import datetime as _dt
+    recorded_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    host = _target_host(event_list)
+    driver = _group_driver(event_list)
+    shots = _action_screenshots(event_list)
+
+    for idx, child in enumerate(children):
+        cfg = child.setdefault("config_json", {})
+        cfg["group_recording_id"] = recording_id
+        cfg["group_index"] = idx
+        cfg["recorded_driver"] = driver
+        cfg["recorded_at"] = recorded_at
+        if idx < len(shots) and shots[idx]:
+            cfg["screenshot_b64"] = shots[idx]
+
+    group_node = {
+        "name": f"browser_group_{host}"[:48],
+        "type": "browser_group",
+        "config_json": {
+            "group_recording_id": recording_id,
+            "recorded_driver": driver,
+            "recorded_at": recorded_at,
+            "target_host": host,
+            "child_count": len(children),
+            "event_count": len(event_list),
+        },
+        # The parent is a pure UI marker — its handler is a no-op (see
+        # BrowserGroupStepHandler in backend/flows/flow_engine.py), so a
+        # very short timeout is plenty.
+        "timeout_seconds": 5,
+        "_recorder_position": 0,
+    }
+    return {"group_node": group_node, "child_nodes": children}

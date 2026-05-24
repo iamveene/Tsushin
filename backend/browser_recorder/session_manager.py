@@ -175,11 +175,22 @@ class SessionRegistry:
         loop = asyncio.get_running_loop()
 
         def _emit(kind: str, payload: dict) -> None:
-            session.append_event(kind, payload)
+            evt = session.append_event(kind, payload)
             if session.relay_send is not None:
-                # relay_send is an async lambda; schedule on the running loop
+                # relay_send is an async lambda; schedule on the running loop.
+                # Envelope mirrors cdp_relay._event_envelope so the frontend
+                # ledger receives screenshot/driver context for every event,
+                # regardless of which source captured it.
+                envelope = {
+                    "type": "event",
+                    "kind": evt.kind,
+                    "payload": evt.payload,
+                    "screenshot_b64": evt.screenshot_b64,
+                    "recorded_driver": evt.recorded_driver,
+                    "ts": evt.ts,
+                }
                 asyncio.ensure_future(
-                    session.relay_send({"type": "event", "kind": kind, "payload": payload}),
+                    session.relay_send(envelope),
                     loop=loop,
                 )
 

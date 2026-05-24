@@ -178,6 +178,12 @@ class StepType(str, Enum):
     # safe — no DB migration required.
     CUSTOM_SKILL = "custom_skill"  # Phase 22: Custom skill (alias for skill)
     BROWSER_AUTOMATION = "browser_automation"  # Phase 14.5: Browser automation
+    # v0.7.x Recorder UX: pure UI marker that bundles the consecutive
+    # browser_automation children compiled from one recording session.
+    # Handler (BrowserGroupStepHandler) is a no-op pass-through — the
+    # children run as they always have. See
+    # browser_recorder.event_compiler.compile_events_into_group.
+    BROWSER_GROUP = "browser_group"
     PASSWORD_VAULT = "password_vault"  # v0.7.x: provider-neutral vault references
     HTTP_REQUEST = "http_request"  # UI-authored deterministic HTTP/API step
     DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step

@@ -29,9 +29,26 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .models import RecordingSession
+from .models import RecordedEvent, RecordingSession
 
 logger = logging.getLogger(__name__)
+
+
+def _event_envelope(evt: RecordedEvent) -> dict[str, Any]:
+    """Build the JSON envelope for a freshly-captured RecordedEvent.
+
+    Carries the screenshot + driver alongside the payload so the StepLedger
+    can render real-time thumbnails and the agent/human badge without
+    needing a separate fetch.
+    """
+    return {
+        "type": "event",
+        "kind": evt.kind,
+        "payload": evt.payload,
+        "screenshot_b64": evt.screenshot_b64,
+        "recorded_driver": evt.recorded_driver,
+        "ts": evt.ts,
+    }
 
 
 # Frame stream is best-effort — if the client falls behind we just drop frames
@@ -114,7 +131,7 @@ async def _handle_client_message(
         # into a click selector row.
         if cdp_type == "mousePressed":
             sel = await _resolve_selector_at(session, params["x"], params["y"])
-            session.append_event(
+            evt = session.append_event(
                 "click",
                 {
                     "x": params["x"],
@@ -123,11 +140,7 @@ async def _handle_client_message(
                     "meta": (sel or {}).get("meta"),
                 },
             )
-            await _safe_send(websocket, {
-                "type": "event",
-                "kind": "click",
-                "payload": session.events[-1].payload,
-            })
+            await _safe_send(websocket, _event_envelope(evt))
         return
 
     if mtype == "input.key":
@@ -162,15 +175,11 @@ async def _handle_client_message(
         # last focused element. For now record the raw text event.
         selector = msg.get("selector")
         field_meta = msg.get("field_meta")
-        session.append_event(
+        evt = session.append_event(
             "fill",
             {"selector": selector, "value": text, "field_meta": field_meta},
         )
-        await _safe_send(websocket, {
-            "type": "event",
-            "kind": "fill",
-            "payload": session.events[-1].payload,
-        })
+        await _safe_send(websocket, _event_envelope(evt))
         return
 
     if mtype == "navigate":
@@ -201,8 +210,8 @@ async def _handle_client_message(
         }
         if mtype == "marker.extract":
             payload["as"] = str(msg.get("as", "")).strip() or "captured_value"
-        session.append_event(kind, payload)
-        await _safe_send(websocket, {"type": "event", "kind": kind, "payload": payload})
+        evt = session.append_event(kind, payload)
+        await _safe_send(websocket, _event_envelope(evt))
         return
 
     if mtype == "marker.vault":
@@ -219,8 +228,8 @@ async def _handle_client_message(
         if not (ref.startswith("pvh_") or ref.startswith("op://")):
             await _safe_send(websocket, {"type": "error", "message": "vault reference must be a pvh_ handle or op:// URI"})
             return
-        session.append_event("marker.vault", payload)
-        await _safe_send(websocket, {"type": "event", "kind": "marker.vault", "payload": payload})
+        evt = session.append_event("marker.vault", payload)
+        await _safe_send(websocket, _event_envelope(evt))
         return
 
     await _safe_send(websocket, {"type": "error", "message": f"unknown message type: {mtype}"})
@@ -233,9 +242,15 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
     loop = asyncio.get_running_loop()
 
     async def _on_screencast_frame(params: dict) -> None:
+        # Cache the latest frame on the session so any event captured between
+        # now and the next frame can carry it as `screenshot_b64`. This is the
+        # primary source of recorded thumbnails for the BrowserGroup UI.
+        frame_data = params.get("data")
+        if frame_data:
+            session.latest_frame_b64 = frame_data
         sent = await _safe_send(websocket, {
             "type": "frame",
-            "data": params.get("data"),
+            "data": frame_data,
             "metadata": params.get("metadata"),
         })
         # Always ack — even if the WS is gone, so CDP keeps a clean state.
@@ -274,11 +289,7 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
     # navigate from create(), reconnect-after-blip, etc.) so the
     # StepLedger doesn't show a stale-feeling zero count.
     for prior in list(session.events):
-        await _safe_send(websocket, {
-            "type": "event",
-            "kind": prior.kind,
-            "payload": prior.payload,
-        })
+        await _safe_send(websocket, _event_envelope(prior))
 
     session.relay_send = lambda payload: _safe_send(websocket, payload)
 

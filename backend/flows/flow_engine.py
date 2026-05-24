@@ -3912,6 +3912,40 @@ class SubflowStepHandler(FlowStepHandler):
         }
 
 
+class BrowserGroupStepHandler(FlowStepHandler):
+    """
+    v0.7.x Recorder UX: Pure UI marker that groups the consecutive
+    browser_automation children compiled from one recording session.
+
+    Runtime behaviour: no-op pass-through. The children that follow this
+    node in the flow chain execute on their own as ordinary
+    browser_automation steps — this handler exists only so the parent
+    node has a registered handler when the engine encounters it. All
+    state lives on the children (`group_recording_id`, `group_index`,
+    `screenshot_b64`); the parent's config_json carries display-only
+    metadata (`target_host`, `recorded_driver`, `child_count`,
+    `recorded_at`) that the editor + watcher use to render the
+    collapsible card.
+    """
+
+    async def execute(
+        self,
+        step: FlowNode,
+        input_data: Dict[str, Any],
+        flow_run: FlowRun,
+        step_run: FlowNodeRun
+    ) -> Dict[str, Any]:
+        config = json.loads(step.config_json) if isinstance(step.config_json, str) else (step.config_json or {})
+        return {
+            "status": "completed",
+            "group_recording_id": config.get("group_recording_id"),
+            "recorded_driver": config.get("recorded_driver"),
+            "target_host": config.get("target_host"),
+            "child_count": config.get("child_count"),
+            "note": "browser_group is a UI marker; child browser_automation steps execute below.",
+        }
+
+
 class BrowserAutomationStepHandler(FlowStepHandler):
     """
     Phase 14.5: Handles Browser Automation steps - executes browser actions via skill.
@@ -4192,6 +4226,7 @@ class FlowEngine:
             "summarization": SummarizationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 17: Agentic summarization
             "gate": GateStepHandler(db, self.mcp_sender, self.token_tracker),  # Conditional gate node
             "browser_automation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Browser automation
+            "browser_group": BrowserGroupStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: recorder-emitted UI grouping marker
             "password_vault": PasswordVaultStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: secret references
             "http_request": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: UI-authored HTTP primitive
             "data_transform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: deterministic extraction primitive
