@@ -2168,6 +2168,28 @@ Browser-Use's high-level Playwright actions (`go_to_url`, `click_element_by_inde
 | `useRecorderSocket` | `frontend/app/flows/recorder/useRecorderSocket.ts` | WS client mirroring `lib/websocket.ts` cookie-auth pattern + exponential backoff. |
 | CTA mount | `frontend/app/flows/page.tsx:912` | The 🎬 Record button next to "+ Add selector" inside `BrowserAutomationConfigPanel`. |
 
+#### 13.9.6a Multi-FlowNode output (production-ready)
+
+`compile_events_into_nodes(events) -> list[dict]` (added 2026-05-23) is the production-ready compile entry point: it splits the captured events into ONE FlowNode per browser action, each with its own `tool_action` and a single-row `selectors[]`. The runtime executes one action per FlowNode, so this is the shape that actually replays a recorded chain end-to-end.
+
+Key behaviours:
+
+- **Captcha chain combine:** when the recording contains the canonical sequence `marker.captcha → click submit → marker.extract`, those nodes are folded into ONE `solve_captcha` FlowNode with `tool_arguments` set to `{selector, input_selector, submit_selector, success_selector}` — the dict shape the runtime's combined OCR+fill+submit+wait skill expects. Defaults `solver_provider: "gemini"` (fast vision OCR; tenants without Gemini configured can override after the fact) and `solver_timeout_seconds: 120` (Ollama cold-start exceeds the runtime's 60s httpx default).
+- **Session continuity:** every node gets `session_persistence: True` + `session_ttl_seconds: 1800`, with NO `browser_session_profile_name` set (the runtime keys sessions by tenant+agent within a FlowRun; setting a profile name would point at a non-existent stored profile and silently break the chain).
+- **Vault references travel with the owning node:** if a fill row references a `pvh_` or `op://` handle, the matching `browser_secret_references` entry rides with the FlowNode that contains that fill, with its `target` re-pointed to `selectors[0].value` (each node has one selector).
+
+The legacy single-FlowNode `compile_events()` is still exposed for the existing UI integration (`BrowserAutomationConfigPanel` overwrites one step's config). `POST /api/recorder/sessions/{id}/compile` returns both shapes:
+
+```json
+{
+  "config_json":  { ... legacy single-FlowNode ... },
+  "flow_nodes":   [ ... new multi-FlowNode list ... ],
+  "event_count":  N
+}
+```
+
+Validated end-to-end on prod ([flow #43](https://tsushin.archsec.io/flows): *Recorder Demo | Correios | AD468811215BR (canonical via compile_events_into_nodes)*) — 6 recorder-emitted FlowNodes + 2 hand-added (`data_transform normalize_tracking` + `notification notify_vini`), 14-second total runtime, canonical Correios tracking message delivered to `@Vini` on WhatsApp.
+
 #### 13.9.6 Canonical example — Correios postal tracking
 
 The "Postal Track | Correios | AD468811215BR" flow that ships with Tsushin (target: `https://rastreamento.correios.com.br/app/index.php` with a Securimage CAPTCHA) compiles into this `selectors[]` array from a single human pass through the recorder. **Per the project-wide convention, every browser-automation flow ends with a Notification step so success/failure is observable** — a silent flow is indistinguishable from one that didn't run. Smoke-test script: [`backend/scripts/recorder_e2e_correios_to_vini.py`](../backend/scripts/recorder_e2e_correios_to_vini.py) records, saves, executes and reports the full notification proof.
