@@ -637,10 +637,21 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     #   submit_selector  → submit button
     #   success_selector → element that appears on success (acts as a wait barrier)
     # Verified against prod flow #26's solve_captcha config.
-    captcha_args: dict[str, str] = {
+    #
+    # The runtime defaults `solver_provider` to "ollama" with a 60s
+    # httpx ReadTimeout per attempt and NO retry on solver exceptions
+    # (only retries on empty guesses). On tenants where Ollama is on a
+    # cold model or under load, ReadTimeout fires before the OCR is done
+    # and the whole captcha step fails. Emitting `solver_timeout_seconds:
+    # 120` gives the Ollama call breathing room; that's also a no-op
+    # when a tenant has Gemini configured as the default provider
+    # (Gemini calls don't honour this param directly but its native
+    # timeout is generous).
+    captcha_args: dict[str, Any] = {
         "selector": captcha_image_sel,
         "input_selector": captcha_input_sel,
         "submit_selector": submit_sel,
+        "solver_timeout_seconds": 120,
     }
     if result_sel:
         captcha_args["success_selector"] = result_sel
