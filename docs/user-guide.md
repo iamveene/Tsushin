@@ -945,6 +945,15 @@ This is the canonical browser-automation flow shipped with Tsushin. It pulls pac
 
 Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button. Don't forget to still append the Notification step manually before saving — the recorder doesn't add it for you.
 
+##### Multi-FlowNode compile output (the production-ready shape, 2026-05-23)
+
+The recorder backend's `/compile` endpoint emits *two* shapes for every recording:
+
+- **`config_json`** — legacy single-FlowNode shape that drops into the existing `BrowserAutomationConfigPanel` editor when you click *Save as flow step*. Good for adding a single browser action to an existing flow you're editing manually.
+- **`flow_nodes[]`** — production-ready multi-FlowNode shape, one FlowNode per browser action. This is what programmatic consumers (smoke-test script, future "Save as new flow" button) should use. Captcha chains automatically collapse into one canonical `solve_captcha` step with `solver_provider: "gemini"` and `solver_timeout_seconds: 120` for fast vision OCR.
+
+Today the manual *Save as flow step* button in the recorder dialog uses the legacy shape (one step at a time). Use the smoke-test script (below) or the API directly to insert multi-FlowNode recordings into a new flow.
+
 ##### Smoke-test script
 
 `backend/scripts/recorder_e2e_correios_to_vini.py` runs the whole loop end-to-end against a healthy backend: records the Correios flow via the recorder WebSocket, compiles it, creates a real FlowDefinition (browser_automation → notification @Vini), executes it, and reports structured proof of the notification leg (resolved recipient, rendered message body, MCP URL it POSTed to). Use this to validate new tenants or after stack changes:
