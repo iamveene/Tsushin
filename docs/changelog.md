@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — `record_store` step type + generic UI panel (2026-05-24)
+
+Domain-neutral rename of the `financial_record_store` / `financial_bill_store` step config. The old types are kept forever as legacy aliases so existing prod flows (Consigaz, Medsenior, EDP, Postal Track…) never break.
+
+- New [`StepType.RECORD_STORE = "record_store"`](../backend/schemas.py) registered alongside the legacy `FINANCIAL_*` enum members. The same `FinancialRecordStoreStepHandler` instance handles all three step types ([flow_engine.py](../backend/flows/flow_engine.py)).
+- New `record_*` config fields on [`FlowStepConfig`](../backend/schemas.py): `record_provider`, `record_unit`, `record_asset`, `record_address`, `record_automation_key`, `record_source_step`, `record_dedupe_key`, plus `emit_record_handle` / `emit_raw_handle` / `parser_mode`. Handler resolution chains read `record_*` first and fall back to legacy `financial_*` so old configs work unchanged.
+- `DataTransformStepHandler` mirrors the same precedence for the three emit flags (`emit_record_handle` > `emit_financial_record_handle`, `emit_raw_handle` > `emit_raw_bill_handle`, `parser_mode` > `financial_parser_mode`).
+- Frontend step picker shows **Record Store** as the recommended option; the legacy entries are still selectable but labeled "(legacy)". The "Financial record metadata" panel was rewritten as **Record metadata** with generic placeholders (`"e.g. provider identifier"`, `"account, unit, or subject identifier"`, `"human-readable asset label"`) — previously hardcoded `"consigaz, moderna, edp"`, `"CPF, plate, installation"`, `"property name, vehicle plate, broker account"`. Both record-store panels hydrate from `record_*` with fallback to `financial_*`; saves write the new keys so flows migrate forward on next edit.
+- 38 new fallback unit tests ([backend/tests/test_record_store_field_fallback.py](../backend/tests/test_record_store_field_fallback.py)) pin the resolver precedence: new wins when both present, legacy works alone, defaults preserved for empty configs. Existing 3 `test_financial_record_dedupe.py` tests still pass.
+- Verified end-to-end on local against existing Consigaz flow #172 — all legacy values render in the new generic panel (Provider=`consigaz`, Unit=`AP0204`, Asset=`AP Ed. San Blass` backfilled from `financial_*`). New `record_store` step created + run via API; handler routes correctly. Deployed to `https://tsushin.archsec.io`; `RECORD_STORE` enum exposed; existing Correios + Postal Track + Consigaz flows continue to complete on prod.
+
+### Added — BrowserGroup clickable child rows open the config editor inline (2026-05-24)
+
+Closed the gap where the BrowserGroupStep card had `cursor:pointer` on each child row but no actual click handler — making the per-step config invisible/uneditable once a recording was inside the card. Now clicking a child row expands its existing `EditableStepConfigForm` (or `StepConfigForm` for new-flow drafts) right under the row.
+
+- New props on [`BrowserGroupStep`](../frontend/components/flows/BrowserGroupStep.tsx): `editingChildIdx`, `onChildClick(idx)`, `renderChildEditor(idx, child)`. Edit-mode rows become `role="button"` with an `EDIT` / `▾ editing` cue. Click toggles edit; cyan border highlights the editing row.
+- Both `StepBuilder` (new-flow draft) and `EditableStepBuilder` (existing flow) wire the props using the existing `editingIndex` state and the child's original step index. The editor for the clicked child renders inline under the row with the full config form.
+- Works identically for **human and agentic** recordings — both produce plain `browser_automation` children once compiled.
+- Recorder metadata (`group_recording_id`, `group_index`, `recorded_driver`, `recorded_at`) survives edits unchanged — the form only mutates touched fields; everything else rides along via the `extra="allow"` passthrough added with the original BrowserGroup work.
+- Verified against fixture flow #261 on local — mirror of prod flow #33 *"Correios | AD468811215BR | Agentic (multi-step canonical)"*. 5 agentic browser_automation children render under one card with the violet **Agent** badge; click `open_correios` row → form expands; rename to `open_correios_renamed_via_inline_edit`; reload → name persists and `group_recording_id="agentic_canonical_correios_local"` + `recorded_driver="agent"` still intact. Deployed to prod; spot-checked on `https://tsushin.archsec.io` flow #46 — 10 form inputs render inline under the clicked row, 0 console errors throughout.
+
 ### Added — Browser Automation Group node + Watcher audit view (2026-05-24)
 
 Folds the multi-FlowNode browser_automation output (shipped 2026-05-23) into one collapsible **BrowserGroupStep** card so the flow editor and the run-detail watcher stop drowning users in flat browser steps. Same renderer in both surfaces — the watcher view adds runtime screenshots side-by-side with the recorded ones for visual auditing.
