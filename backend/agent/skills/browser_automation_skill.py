@@ -588,11 +588,25 @@ Rules:
             except Exception as exc:
                 from hub.providers.browser_automation_provider import BrowserErrorCode
 
+                # The previous formatting `CAPTCHA solver failed: {exc}` was
+                # opaque whenever `str(exc)` rendered empty (e.g. ValueError("")
+                # or a custom exception with no message). Surface the
+                # exception type AND a non-empty fallback, and log the full
+                # traceback so flows that produce captcha failures are
+                # debuggable without re-instrumenting the skill.
+                exc_repr = repr(exc) if not str(exc) else str(exc)
+                exc_type = type(exc).__name__
+                logger.exception(
+                    "CAPTCHA solver raised %s (provider=%s, model_params=%r, exc=%r)",
+                    exc_type, solver_provider,
+                    {k: v for k, v in (params or {}).items() if k in ("model","gemini_model","ollama_model","ollama_base_url","prompt")},
+                    exc,
+                )
                 return BrowserResult(
                     success=False,
                     action="solve_captcha",
-                    data={"selector": selector, "captcha_detected": True, "attempt": attempt, "solver_provider": solver_provider},
-                    error=f"CAPTCHA solver failed: {exc}",
+                    data={"selector": selector, "captcha_detected": True, "attempt": attempt, "solver_provider": solver_provider, "exception_type": exc_type},
+                    error=f"CAPTCHA solver failed ({exc_type}): {exc_repr}",
                     error_code=BrowserErrorCode.UNKNOWN,
                     suggestions=["Check the configured CAPTCHA solver provider/model or configure this step for manual execution."],
                 )
