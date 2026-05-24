@@ -189,6 +189,11 @@ class StepType(str, Enum):
     DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step
     FINANCIAL_BILL_STORE = "financial_bill_store"  # Utility-bill storage/dedupe only
     FINANCIAL_RECORD_STORE = "financial_record_store"  # Generic financial record storage/dedupe
+    # v0.7.x: domain-neutral rename of financial_record_store. New flows
+    # should use this; the financial_* aliases keep working for existing
+    # flows. Same handler with fallback-aware field resolution
+    # (record_* preferred, financial_* fallback).
+    RECORD_STORE = "record_store"
     # v0.7.0 Wave 2/4: Triggers↔Flows Unification — Source step is the
     # canonical entry point for triggered flows. Wave 4 deep-link prefill
     # (Create flow from this trigger) sends a Source step with config
@@ -415,6 +420,22 @@ class FlowStepConfig(BaseModel):
     financial_bill_source_step: Optional[str] = None
     financial_bill_source: Optional[str] = None
     financial_bill: Optional[Dict[str, Any]] = None
+
+    # v0.7.x: domain-neutral aliases for the financial_* fields above. Used
+    # by the new `record_store` step type and by the renamed UI panel.
+    # `RecordStoreStepHandler` reads these first; falls back to the
+    # `financial_*` names when only the legacy fields are present so old
+    # flows keep working. Same idea for `data_transform`'s emit flags.
+    record_provider: Optional[str] = None              # ⇆ financial_provider
+    record_unit: Optional[str] = None                  # ⇆ financial_unit_id
+    record_asset: Optional[str] = None                 # ⇆ financial_asset
+    record_address: Optional[str] = None               # ⇆ financial_address
+    record_automation_key: Optional[str] = None        # ⇆ financial_automation_key
+    record_source_step: Optional[str] = None           # ⇆ financial_record_source_step / financial_source_step / source_step
+    record_dedupe_key: Optional[str] = None            # ⇆ financial_dedupe_key / financial_record_dedupe_key
+    emit_record_handle: Optional[bool] = None          # ⇆ emit_financial_record_handle
+    emit_raw_handle: Optional[bool] = None             # ⇆ emit_raw_bill_handle
+    parser_mode: Optional[str] = None                  # ⇆ financial_parser_mode
 
     # Conversation-specific
     objective: Optional[str] = None
