@@ -696,7 +696,23 @@ function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
   }, {})
 }
 
-function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
+// v0.7.x Recorder UX: when adding a new browser_automation step to a flow
+// that already has one, pre-fill its `url` with the URL of the most recent
+// prior browser_automation / browser_group step. Saves the user from
+// retyping the same URL across a multi-step navigation flow. Also used to
+// seed the flow-level RecorderDialog's `initialUrl`.
+function lastBrowserStepUrl(steps: Array<{ type?: string; config?: Record<string, any> | null }>): string | undefined {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i]
+    if (s.type !== 'browser_automation' && s.type !== 'browser_group') continue
+    const cfg = (s.config || {}) as Record<string, any>
+    const url = (cfg.url as string | undefined) || (cfg.target_host ? `https://${cfg.target_host}/` : undefined)
+    if (url) return url
+  }
+  return undefined
+}
+
+function defaultConfigForStepType(stepType: StepType, previousUrl?: string): Partial<FlowStepConfig> {
   if (stepType === 'browser_automation') {
     return {
       mode: 'container',
@@ -710,6 +726,9 @@ function defaultConfigForStepType(stepType: StepType): Partial<FlowStepConfig> {
       session_persistence: true,
       session_ttl_seconds: 300,
       browser_session_profile_name: '',
+      // v0.7.x: inherit URL from the previous browser step so multi-step
+      // navigation flows don't make the user retype the same URL.
+      ...(previousUrl ? { url: previousUrl } : {}),
     }
   }
   if (stepType === 'http_request') {
@@ -3950,7 +3969,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       name: `Step ${steps.length + 1}`,
       type: stepType,
       position: steps.length + 1,
-      config: defaultConfigForStepType(stepType),
+      config: defaultConfigForStepType(stepType, lastBrowserStepUrl(steps)) as FlowStepConfig,
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
     }
@@ -4294,6 +4313,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
         isOpen={groupRecorderOpen}
         onClose={() => setGroupRecorderOpen(false)}
         onInsertGroup={insertCompiledGroup}
+        initialUrl={lastBrowserStepUrl(steps)}
       />
     </div>
   )
@@ -5820,7 +5840,7 @@ function EditableStepBuilder({
       name: `Step ${newPosition}`,
       type: stepType,
       position: newPosition,
-      config: defaultConfigForStepType(stepType),
+      config: defaultConfigForStepType(stepType, lastBrowserStepUrl(steps)) as FlowStepConfig,
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
       _saving: true,
@@ -6292,6 +6312,7 @@ function EditableStepBuilder({
         isOpen={groupRecorderOpen}
         onClose={() => setGroupRecorderOpen(false)}
         onInsertGroup={insertCompiledGroup}
+        initialUrl={lastBrowserStepUrl(steps)}
       />
     </div>
   )
