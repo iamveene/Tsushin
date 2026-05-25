@@ -4239,41 +4239,40 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       {showAddStep ? (
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
-          {/* v0.7.x Recorder UX: shortcut to record a browser session and
-              insert it as a browser_group + children in one click. Kept
-              separate from the typed step picker because it inserts
-              multiple steps, not one. */}
-          <button
-            type="button"
-            onClick={() => setGroupRecorderOpen(true)}
-            className="w-full mb-4 p-4 rounded-lg border border-cyan-500/40 bg-gradient-to-r from-cyan-500/10 to-sky-500/10
-                       hover:border-cyan-500 hover:from-cyan-500/15 hover:to-sky-500/15
-                       transition-all text-left flex items-center gap-3"
-          >
-            <span className="text-2xl">🎬</span>
-            <div className="flex-1">
-              <div className="text-sm font-medium text-white">Record browser session</div>
-              <div className="text-xs text-slate-400 mt-0.5">Drive a live Chromium and let Tsushin insert the recorded actions as one collapsible group of browser_automation steps.</div>
-            </div>
-          </button>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {/* Source steps are only created by trigger-prefilled Flow drafts. */}
             {getAddableStepTypes(steps, allowSourceStep).map(type => {
               const StepIcon = type.Icon
               return (
-                <button
-                  key={type.value}
-                  type="button"
-                  onClick={(event) => handleStepTypeClick(event, type.value)}
-                  className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
-                             text-center transition-all text-slate-300 hover:text-cyan-400"
-                >
-                  <div className="flex justify-center">
-                    <StepIcon size={28} />
-                  </div>
-                  <div className="text-sm text-white mt-2">{type.label}</div>
-                  <div className="text-xs text-slate-500 mt-1">{type.description}</div>
-                </button>
+                <div key={type.value} className="relative">
+                  <button
+                    type="button"
+                    onClick={(event) => handleStepTypeClick(event, type.value)}
+                    className="w-full p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
+                               text-center transition-all text-slate-300 hover:text-cyan-400"
+                  >
+                    <div className="flex justify-center">
+                      <StepIcon size={28} />
+                    </div>
+                    <div className="text-sm text-white mt-2">{type.label}</div>
+                    <div className="text-xs text-slate-500 mt-1">{type.description}</div>
+                  </button>
+                  {/* v0.7.x Recorder UX: the 🎬 Record shortcut lives on the
+                      Browser Automation tile as a small secondary chip — it
+                      inserts a recorded browser_group instead of a single
+                      empty browser_automation step. Not featured separately
+                      because it only applies to one step type. */}
+                  {type.value === 'browser_automation' ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setGroupRecorderOpen(true) }}
+                      title="Record a live Chromium session and insert it as a collapsible browser_group"
+                      className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:border-cyan-500 hover:bg-cyan-500/15 transition-colors"
+                    >
+                      🎬 Record
+                    </button>
+                  ) : null}
+                </div>
               )
             })}
           </div>
@@ -6230,40 +6229,40 @@ function EditableStepBuilder({
       {showAddStep ? (
         <div className="rounded-xl border border-dashed border-slate-600 p-6">
           <h4 className="text-sm font-medium text-slate-300 mb-4">Add a Step</h4>
-          {/* v0.7.x Recorder UX: shortcut to record a browser session at
-              the flow level and insert it as a browser_group + children
-              in one click. */}
-          <button
-            type="button"
-            onClick={() => setGroupRecorderOpen(true)}
-            className="w-full mb-4 p-4 rounded-lg border border-cyan-500/40 bg-gradient-to-r from-cyan-500/10 to-sky-500/10
-                       hover:border-cyan-500 hover:from-cyan-500/15 hover:to-sky-500/15
-                       transition-all text-left flex items-center gap-3"
-          >
-            <span className="text-2xl">🎬</span>
-            <div className="flex-1">
-              <div className="text-sm font-medium text-white">Record browser session</div>
-              <div className="text-xs text-slate-400 mt-0.5">Drive a live Chromium and let Tsushin insert the recorded actions as one collapsible group of browser_automation steps.</div>
-            </div>
-          </button>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {/* Source steps are trigger-owned and cannot be added manually while editing. */}
             {getAddableStepTypes(steps, false).map(type => {
               const StepIcon = type.Icon
               return (
-                <button
-                  key={type.value}
-                  type="button"
-                  onClick={() => addStep(type.value)}
-                  className="p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
-                             text-center transition-all text-slate-300 hover:text-cyan-400"
-                >
-                  <div className="flex justify-center">
-                    <StepIcon size={28} />
-                  </div>
-                  <div className="text-sm text-white mt-2">{type.label}</div>
-                  <div className="text-xs text-slate-500 mt-1">{type.description}</div>
-                </button>
+                <div key={type.value} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => addStep(type.value)}
+                    className="w-full p-4 rounded-lg border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-500/5
+                               text-center transition-all text-slate-300 hover:text-cyan-400"
+                  >
+                    <div className="flex justify-center">
+                      <StepIcon size={28} />
+                    </div>
+                    <div className="text-sm text-white mt-2">{type.label}</div>
+                    <div className="text-xs text-slate-500 mt-1">{type.description}</div>
+                  </button>
+                  {/* v0.7.x Recorder UX: 🎬 Record chip attached to the
+                      Browser Automation tile — inserts a recorded
+                      browser_group instead of a single empty step. Not
+                      featured at top because it only applies to one step
+                      type. */}
+                  {type.value === 'browser_automation' ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setGroupRecorderOpen(true) }}
+                      title="Record a live Chromium session and insert it as a collapsible browser_group"
+                      className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:border-cyan-500 hover:bg-cyan-500/15 transition-colors"
+                    >
+                      🎬 Record
+                    </button>
+                  ) : null}
+                </div>
               )
             })}
           </div>
