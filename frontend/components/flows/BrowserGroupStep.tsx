@@ -18,7 +18,7 @@
  * vertical step list rather than a node-graph canvas.
  */
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { GlobeIcon } from '@/components/ui/icons'
 import { formatRelative as formatRelativeUtil } from '@/lib/dateUtils'
 import type { RecordedDriverLabel } from '@/lib/client'
@@ -174,6 +174,23 @@ export default function BrowserGroupStep({
     }
   }, [recordedAt])
 
+  // v0.7.x UX polish: when a child opens its inline editor, scroll the
+  // editing row into view so the form is never off-screen below the fold.
+  // `editingChildIdx` is the auth source; the effect targets the row's
+  // ref by index.
+  const childRowRefs = useRef<Array<HTMLDivElement | null>>([])
+  useEffect(() => {
+    if (mode !== 'edit') return
+    if (editingChildIdx == null || editingChildIdx < 0) return
+    const el = childRowRefs.current[editingChildIdx]
+    if (!el) return
+    // Smooth scroll so the editor lands centered in the viewport.
+    // requestAnimationFrame waits one tick for the editor to mount + lay out.
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [editingChildIdx, mode])
+
   return (
     <div
       data-testid="browser-group-step"
@@ -239,9 +256,9 @@ export default function BrowserGroupStep({
               }
             }}
             className="text-xs px-3 py-1.5 rounded-md border border-slate-600 text-slate-300 hover:border-cyan-500/50 hover:text-white transition-colors cursor-pointer"
-            title="Flatten this group back into individual browser_automation steps"
+            title="Flatten back to individual browser_automation steps for granular editing — children stay, only the group wrapper is removed"
           >
-            Ungroup
+            Flatten
           </span>
         ) : null}
 
@@ -269,6 +286,7 @@ export default function BrowserGroupStep({
               return (
                 <div
                   key={idx}
+                  ref={(el) => { childRowRefs.current[idx] = el }}
                   className={`rounded-lg border bg-slate-800/40 transition-colors ${
                     isEditing
                       ? 'border-cyan-500/60'

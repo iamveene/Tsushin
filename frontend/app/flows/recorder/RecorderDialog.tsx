@@ -271,7 +271,8 @@ export default function RecorderDialog({
               type="button"
               onClick={handleStart}
               disabled={!urlInput.trim()}
-              className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 text-xs font-semibold transition-colors"
+              title={urlInput.trim() ? 'Spawn a live Chromium and begin capturing actions' : 'Enter a starting URL above to enable recording'}
+              className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
             >
               Start recording
             </button>
