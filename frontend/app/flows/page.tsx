@@ -701,6 +701,24 @@ function rowsToStringMap(rows: FlowHeaderConfig[]): Record<string, string> {
 // prior browser_automation / browser_group step. Saves the user from
 // retyping the same URL across a multi-step navigation flow. Also used to
 // seed the flow-level RecorderDialog's `initialUrl`.
+// v0.7.x UX polish: per-action timeout suggestions. 30s is too tight for
+// solve_captcha/wait_for (OCR + page settle) and too loose for navigate/click
+// (fast feedback when a step is misconfigured). The suggested value is shown
+// as a hint next to the timeout field; the user can still override.
+function browserActionSuggestedTimeout(action: string | undefined): number {
+  switch (action) {
+    case 'solve_captcha': return 120
+    case 'wait_for':
+    case 'wait_for_url': return 60
+    case 'extract': return 45
+    case 'navigate': return 30
+    case 'click':
+    case 'fill':
+    case 'type': return 15
+    default: return 30
+  }
+}
+
 function lastBrowserStepUrl(steps: Array<{ type?: string; config?: Record<string, any> | null }>): string | undefined {
   for (let i = steps.length - 1; i >= 0; i--) {
     const s = steps[i]
@@ -717,7 +735,7 @@ function defaultConfigForStepType(stepType: StepType, previousUrl?: string): Par
     return {
       mode: 'container',
       provider_type: 'playwright',
-      timeout_seconds: 30,
+      timeout_seconds: browserActionSuggestedTimeout('navigate'),
       use_tool_mode: true,
       tool_action: 'navigate',
       tool_arguments: {},
@@ -869,12 +887,15 @@ function BrowserAutomationConfigPanel({
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Timeout seconds</label>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">
+            Timeout seconds
+            <span className="ml-1 text-xs font-normal text-slate-500">(suggested for {current.tool_action || 'navigate'}: {browserActionSuggestedTimeout(current.tool_action)}s)</span>
+          </label>
           <input
             type="number"
             min={5}
-            value={current.timeout_seconds || 30}
-            onChange={(e) => onChange({ timeout_seconds: Number(e.target.value) || 30 })}
+            value={current.timeout_seconds || browserActionSuggestedTimeout(current.tool_action)}
+            onChange={(e) => onChange({ timeout_seconds: Number(e.target.value) || browserActionSuggestedTimeout(current.tool_action) })}
             className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
           />
         </div>
@@ -973,7 +994,9 @@ function BrowserAutomationConfigPanel({
           }}
         />
         {selectors.length === 0 ? (
-          <p className="text-xs text-slate-500">No selectors yet. Add explicit selectors when the action needs click, fill, or extract targets.</p>
+          <p className="text-xs text-slate-500">
+            No selectors yet. <span className="text-slate-400">{current.tool_action === 'navigate' || current.tool_action === 'solve_captcha' ? 'This action usually does not need a selector — proceed.' : `Add at least one selector with a CSS path so ${current.tool_action || 'this action'} knows what to target.`}</span> Use <span className="text-cyan-400">🎬 Record</span> on the Browser Automation tile to skip typing selectors by hand.
+          </p>
         ) : (
           <div className="space-y-2">
             {selectors.map((selector, index) => (
