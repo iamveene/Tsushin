@@ -4244,7 +4244,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
             {getAddableStepTypes(steps, allowSourceStep).map(type => {
               const StepIcon = type.Icon
               return (
-                <div key={type.value} className="relative">
+                <div key={type.value} className="flex flex-col gap-1">
                   <button
                     type="button"
                     onClick={(event) => handleStepTypeClick(event, type.value)}
@@ -4257,19 +4257,18 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
                     <div className="text-sm text-white mt-2">{type.label}</div>
                     <div className="text-xs text-slate-500 mt-1">{type.description}</div>
                   </button>
-                  {/* v0.7.x Recorder UX: the 🎬 Record shortcut lives on the
-                      Browser Automation tile as a small secondary chip — it
-                      inserts a recorded browser_group instead of a single
-                      empty browser_automation step. Not featured separately
-                      because it only applies to one step type. */}
+                  {/* v0.7.x Recorder UX: 🎬 Record sits BELOW the Browser
+                      Automation tile (not absolute-overlay) so it never
+                      collides with the description text. Inserts a recorded
+                      browser_group instead of a single empty step. */}
                   {type.value === 'browser_automation' ? (
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); setGroupRecorderOpen(true) }}
                       title="Record a live Chromium session and insert it as a collapsible browser_group"
-                      className="absolute bottom-2 right-2 text-[10px] px-1.5 py-0.5 rounded border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:border-cyan-500 hover:bg-cyan-500/15 transition-colors"
+                      className="text-[11px] px-2 py-1 rounded-md border border-cyan-500/30 bg-cyan-500/5 text-cyan-300 hover:border-cyan-500/60 hover:bg-cyan-500/10 transition-colors text-center"
                     >
-                      🎬 Record
+                      🎬 Record session instead
                     </button>
                   ) : null}
                 </div>
