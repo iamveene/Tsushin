@@ -4880,6 +4880,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
 
       {step.type === 'browser_automation' && (
         <BrowserStepWizard
+          key={step.id ?? `draft-${step.position}`}
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
           allSteps={stepInfoList}
@@ -6523,6 +6524,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
 
       {step.type === 'browser_automation' && (
         <BrowserStepWizard
+          key={step.id ?? `draft-${step.position}`}
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
           allSteps={stepInfoList}
