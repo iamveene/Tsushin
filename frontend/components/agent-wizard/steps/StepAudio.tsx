@@ -45,10 +45,15 @@ export default function StepAudio() {
     || (audio?.provider === 'openai' && hasOpenAIKey)
     || (audio?.provider === 'elevenlabs' && hasElevenLabsKey)
     || (audio?.provider === 'gemini' && hasGeminiKey)
+  // ASR credential gate: Gemini ASR reuses the same Gemini Provider Instance as
+  // the LLM side, so we surface a clear blocker when the credential is missing.
+  const asrProviderOK = !wantsTranscript
+    || audio?.asrMode !== 'gemini'
+    || hasGeminiKey
 
   useEffect(() => {
-    markStepComplete('audio', isAudioValid(audio ?? null) && providerOK)
-  }, [audio, providerOK, markStepComplete])
+    markStepComplete('audio', isAudioValid(audio ?? null) && providerOK && asrProviderOK)
+  }, [audio, providerOK, asrProviderOK, markStepComplete])
 
   if (!loaded || !audio) {
     return <div className="py-6 text-center text-sm text-gray-400">Loading audio options…</div>
@@ -160,6 +165,19 @@ export default function StepAudio() {
             className="px-3 py-1.5 text-xs bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors"
           >
             Use Kokoro instead
+          </button>
+        </div>
+      )}
+
+      {!asrProviderOK && wantsTranscript && (
+        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
+          <div className="mb-2">Gemini multimodal transcription needs a configured Gemini Provider Instance in Hub → AI Providers.</div>
+          <button
+            type="button"
+            onClick={() => patchAudio({ asrMode: 'openai', transcriptModel: 'whisper-1' })}
+            className="px-3 py-1.5 text-xs bg-teal-500 hover:bg-teal-400 text-white rounded-lg transition-colors"
+          >
+            Use OpenAI Whisper instead
           </button>
         </div>
       )}
