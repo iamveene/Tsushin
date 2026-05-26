@@ -407,6 +407,92 @@ def test_audio_transcript_pinned_instance_error_does_not_include_cloud_fallback(
 # below (``test_audio_transcript_openai_mode_uses_cloud``).
 
 
+def test_audio_transcript_gemini_mode_routes_to_gemini_provider():
+    _ensure_real_whisper_instance_service()
+    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    try:
+        skill = AudioTranscriptSkill()
+        skill.set_db_session(object())
+        gemini_response = ASRResponse(
+            success=True, provider="gemini", text="gemini transcript", metadata={"model": "gemini-3.5-flash"}
+        )
+        fake_provider = _FakeProvider(gemini_response)
+
+        class _GeminiProviderClass:
+            def __init__(self, **kwargs):
+                pass
+            def __call__(self, **kwargs):
+                return fake_provider
+
+        with patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_provider_class",
+            return_value=lambda **kwargs: fake_provider,
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
+        ) as get_openai_provider:
+            result = asyncio.run(
+                skill.process(
+                    _make_message(audio_path),
+                    {
+                        "tenant_id": "tenant-alpha",
+                        "asr_mode": "gemini",
+                        "model": "gemini-3.5-flash",
+                        "language": "pt",
+                        "response_mode": "conversational",
+                    },
+                )
+            )
+
+        assert result.success is True
+        assert "gemini transcript" in result.output
+        assert result.metadata["provider"] == "gemini"
+        assert result.metadata["model"] == "gemini-3.5-flash"
+        assert fake_provider.requests[0].model == "gemini-3.5-flash"
+        assert fake_provider.requests[0].language == "pt"
+        get_openai_provider.assert_not_called()
+    finally:
+        os.remove(audio_path)
+
+
+def test_audio_transcript_gemini_mode_fails_closed_with_no_openai_fallback():
+    _ensure_real_whisper_instance_service()
+    fd, audio_path = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    try:
+        skill = AudioTranscriptSkill()
+        skill.set_db_session(object())
+        failing = ASRResponse(success=False, provider="gemini", error="quota_exceeded")
+        fake_provider = _FakeProvider(failing)
+
+        with patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_provider_class",
+            return_value=lambda **kwargs: fake_provider,
+        ), patch(
+            "agent.skills.audio_transcript.ASRProviderRegistry.get_openai_provider"
+        ) as get_openai_provider:
+            result = asyncio.run(
+                skill.process(
+                    _make_message(audio_path),
+                    {
+                        "tenant_id": "tenant-alpha",
+                        "asr_mode": "gemini",
+                        "model": "gemini-3.5-flash",
+                        "response_mode": "conversational",
+                    },
+                )
+            )
+
+        assert result.success is False
+        assert "Gemini multimodal ASR: quota_exceeded" in result.output
+        assert "no OpenAI fallback" in result.output
+        assert result.metadata["provider"] == "gemini"
+        assert result.metadata["fallback_attempted"] is False
+        get_openai_provider.assert_not_called()
+    finally:
+        os.remove(audio_path)
+
+
 def test_audio_transcript_openai_mode_uses_cloud():
     _ensure_real_whisper_instance_service()
     fd, audio_path = tempfile.mkstemp(suffix=".ogg")

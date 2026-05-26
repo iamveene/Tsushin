@@ -174,6 +174,18 @@ export const GEMINI_TTS_MODELS: { id: string; label: string }[] = [
 
 export const GEMINI_TTS_DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview'
 
+// ASR (speech-to-text) providers — backend registry in
+// `backend/hub/providers/asr_registry.py` registers `openai`, `speaches`,
+// `openai_whisper`, and `gemini`. The wizard groups speaches+openai_whisper
+// under the single `instance` UX mode since both are local container instances.
+export type ASRProviderId = 'openai' | 'instance' | 'gemini'
+
+export const GEMINI_ASR_MODELS: { id: string; label: string }[] = [
+  { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — multimodal (default)' },
+]
+
+export const GEMINI_ASR_DEFAULT_MODEL = 'gemini-3.5-flash'
+
 export const LANGUAGES = [
   { value: 'pt', label: 'Portuguese (pt)' },
   { value: 'en', label: 'English (en)' },

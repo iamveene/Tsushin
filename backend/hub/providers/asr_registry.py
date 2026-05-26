@@ -25,6 +25,7 @@ class ASRProviderRegistry:
     def initialize_providers(cls) -> None:
         if cls._initialized:
             return
+        from .gemini_asr_provider import GeminiASRProvider
         from .openai_asr_provider import OpenAIASRProvider
         from .openai_whisper_asr_provider import OpenAIWhisperASRProvider
         from .whisper_asr_provider import WhisperASRProvider
@@ -32,6 +33,7 @@ class ASRProviderRegistry:
         cls.register_provider("openai", OpenAIASRProvider)
         cls.register_provider("speaches", WhisperASRProvider)
         cls.register_provider("openai_whisper", OpenAIWhisperASRProvider)
+        cls.register_provider("gemini", GeminiASRProvider)
         cls._initialized = True
 
     @classmethod
