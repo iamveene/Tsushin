@@ -895,7 +895,7 @@ Generic tracking, scraping, and portal-monitoring flows should be reconstructabl
 | **Summarization** | AI summarization of previous step outputs. |
 | **Gate** | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values, used by financial flows to route on `notification_state`. |
 | **Password Vault** | Resolves an approved vault reference without placing secrets in prompts. |
-| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — split into editable actions (navigate, fill, click, wait, dismiss-modal, execute-script, etc.). Click **🎬 Record** in the step editor to drive a live Chromium session and have Tsushin write the selector rows for you instead of typing them by hand. |
+| **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — configured through a guided wizard that picks between **🎬 Record a flow** (drive Chromium once, Tsushin compiles the selectors) and **⚙️ Configure manually** (action picker → URL → selector rows). Advanced settings (timeout overrides, session profile, integration ID, tool arguments) live behind a single collapsible toggle on the Review step. |
 | **HTTP Request** | Calls an API with editable method, URL, headers, body, and secret references. |
 | **Data Transform** | Extracts and normalizes fields from previous step outputs. |
 | **Financial Record Store** | Persists and dedupes financial records; emits `notification_state` for downstream gates/notifications. |
@@ -905,17 +905,22 @@ The **Source** step appears only on triggered flows and is generated from the se
 
 Financial templates should remain editable like any other Flow. Open a browser step to adjust URL/action/selectors, add a **Skill** or **Summarization** step for agentic reasoning, and end with a conditional **Notification** fed by a previous storage/gate output.
 
-#### Authoring browser steps with the recorder (2026-05-22)
+#### Authoring browser steps with the wizard (2026-05-26)
 
-The **Browser Automation** step editor exposes a **🎬 Record** button next to *+ Add selector*. It opens a live Chromium session streamed into the Flows page — every click, fill, and navigation is captured into a step ledger and compiled directly into the same selector rows you'd otherwise type by hand. No new step type, no schema change: the recorder is a *compiler* into today's `selectors[]` shape.
+The **Browser Automation** step opens a guided wizard instead of the old flat panel. Every field that was previously exposed at once (Mode, Provider, Timeout, Session TTL, Profile, Integration ID, Tool Arguments, Selectors) is now staged behind the right question at the right moment.
 
-You have three authoring paths, and you can switch between them mid-flow:
+The wizard starts with a **trail picker**:
 
-1. **🎬 Record (default)** — drive the browser yourself; the recorder writes the rows.
-2. **▾ Agentic mode** — give a prompt and a Browser-Use agent drives the same session for you, watch it work, take over whenever.
-3. **+ Add selector / paste codegen** — the original manual editor is still there for power users who already know what they want.
+1. **🎬 Record a flow (recommended)** — type a starting URL, the recorder modal opens with the URL already filled in, and Chromium streams into the Flows page. Every click, fill, and navigation is captured into a step ledger and compiled into the same `selectors[]` rows you'd otherwise type by hand.
+2. **⚙️ Configure manually** — pick a friendly action (Open a page, Click something, Fill a form, Extract text, Wait for element, Run JS, or "More actions…"), type the URL, and the wizard shows ONLY the selector fields that action needs. No more rummaging through 6 unrelated columns to fill in one form field.
 
-Whichever path you pick, the output drops back into the same `BrowserAutomationConfigPanel` rows so you get a final review pass before saving the FlowNode.
+Editing an existing step opens the wizard directly on the **Review** stage with everything pre-loaded and **Advanced** collapsed, so simple tweaks stay fast. Click "← Start over" to drop selectors and pick a new trail; click "Change action" inside the Manual trail to swap actions without losing the URL.
+
+The **Browser session profile** field is now a dropdown sourced from **Hub > Tool APIs**. Picking a profile auto-populates its integration ID; choose "— No profile —" for a fresh isolated context, or "Type a profile name instead…" to drop down to a manual text input when the API is unreachable.
+
+The recorder can still be driven by an LLM in **▾ Agentic mode** from the recorder modal itself (requires `browser-use` from `requirements-optional.txt` and an Anthropic Provider Instance under Hub > Providers).
+
+Whichever trail you pick, the output writes into the same `FlowStepConfig` shape — no schema change, existing flows round-trip cleanly.
 
 ##### ToolPalette tiles
 
