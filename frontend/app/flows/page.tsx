@@ -54,6 +54,7 @@ import SourceStepConfig from '@/components/flows/SourceStepConfig'
 import StepSamplePreview from '@/components/flows/StepSamplePreview'
 import PasswordVaultReferencePicker, { type PasswordVaultReferenceValue } from '@/components/password-vault/PasswordVaultReferencePicker'
 import RecorderDialog from './recorder/RecorderDialog'
+import BrowserStepWizard from '@/components/browser-wizard/BrowserStepWizard'
 import {
   MessageIcon,
   BellIcon,
@@ -518,31 +519,6 @@ function PasswordVaultStepConfigPanel({
 
 const HTTP_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
-const BROWSER_ACTION_OPTIONS = [
-  { value: 'navigate', label: 'Navigate' },
-  { value: 'extract', label: 'Extract data' },
-  { value: 'click', label: 'Click' },
-  { value: 'fill', label: 'Fill form' },
-  { value: 'type_text', label: 'Type text' },
-  { value: 'wait_for', label: 'Wait for selector' },
-  { value: 'wait_for_url', label: 'Wait for URL' },
-  { value: 'dismiss_modal', label: 'Dismiss modal' },
-  { value: 'solve_captcha', label: 'Solve CAPTCHA' },
-  { value: 'execute_script', label: 'Execute script' },
-  { value: 'screenshot', label: 'Screenshot' },
-  { value: 'scroll', label: 'Scroll' },
-  { value: 'select_option', label: 'Select option' },
-  { value: 'hover', label: 'Hover' },
-  { value: 'get_attribute', label: 'Get attribute' },
-  { value: 'get_page_url', label: 'Get page URL' },
-  { value: 'go_back', label: 'Go back' },
-  { value: 'go_forward', label: 'Go forward' },
-  { value: 'open_tab', label: 'Open tab' },
-  { value: 'switch_tab', label: 'Switch tab' },
-  { value: 'close_tab', label: 'Close tab' },
-  { value: 'list_tabs', label: 'List tabs' },
-]
-
 const DATA_TRANSFORM_MODE_OPTIONS = [
   { value: 'extract_fields', label: 'Extract fields' },
   { value: 'parse_table', label: 'Parse table' },
@@ -552,10 +528,12 @@ const DATA_TRANSFORM_MODE_OPTIONS = [
   { value: 'record_mapping', label: 'Record mapping' },
 ]
 
+// Customer-specific parser modes remain wired in the backend (flow_engine)
+// and continue to run for any saved flow already referencing them. We just
+// don't expose customer names in the public dropdown — new flows pick
+// "None / generic rules" and tune via extraction rules.
 const FINANCIAL_PARSER_MODE_OPTIONS = [
   { value: '', label: 'None / generic rules' },
-  { value: 'consigaz_utility_bill', label: 'Consigaz utility bill' },
-  { value: 'medsenior_utility_bill', label: 'Medsenior utility bill' },
 ]
 
 const FINANCIAL_RECORD_KIND_OPTIONS = [
@@ -625,26 +603,6 @@ function normalizeSecretReferenceRows(value: unknown): FlowSecretReferenceConfig
         return { target, ...(rawValue as FlowSecretReferenceConfig) }
       }
       return { target, reference: String(rawValue ?? '') }
-    })
-  }
-  return []
-}
-
-function normalizeBrowserSelectorRows(value: unknown): BrowserSelectorConfig[] {
-  if (Array.isArray(value)) {
-    return value
-      .map(item => {
-        if (item && typeof item === 'object') return item as BrowserSelectorConfig
-        return { selector: String(item ?? '') }
-      })
-      .filter(item => Object.keys(item).length > 0)
-  }
-  if (value && typeof value === 'object') {
-    return Object.entries(value as Record<string, any>).map(([name, rawValue]) => {
-      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
-        return { name, ...(rawValue as BrowserSelectorConfig) }
-      }
-      return { name, selector: String(rawValue ?? '') }
     })
   }
   return []
@@ -784,367 +742,6 @@ function defaultConfigForStepType(stepType: StepType, previousUrl?: string): Par
   return {}
 }
 
-function BrowserAutomationConfigPanel({
-  config,
-  onChange,
-  allSteps,
-  currentStepPosition,
-}: {
-  config: FlowStepConfig | undefined
-  onChange: (update: Partial<FlowStepConfig>) => void
-  allSteps: Array<{ name: string; type: StepType; position: number; config?: FlowStepConfig }>
-  currentStepPosition: number
-}) {
-  const current = config || {}
-  const selectors = normalizeBrowserSelectorRows(current.selectors)
-  const secretReferences = normalizeSecretReferenceRows(current.browser_secret_references)
-  const toolArgumentRows = normalizeHeaderRows(current.tool_arguments)
-  const [recorderOpen, setRecorderOpen] = useState(false)
-  const compactInputClass = 'w-full min-w-0 px-2 py-1.5 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none'
-  const fieldLabelClass = 'block text-[11px] font-medium uppercase text-slate-500 mb-1'
-  const removeButtonClass = 'shrink-0 rounded-md border border-red-500/30 px-2.5 py-1 text-xs font-medium text-red-300 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-200 transition-colors'
-
-  function updateSelector(index: number, update: BrowserSelectorConfig) {
-    const next = selectors.map((selector, selectorIndex) => selectorIndex === index ? { ...selector, ...update } : selector)
-    onChange({ selectors: next })
-  }
-
-  function updateSecretReference(index: number, update: FlowSecretReferenceConfig) {
-    const next = secretReferences.map((ref, refIndex) => refIndex === index ? { ...ref, ...update } : ref)
-    onChange({ browser_secret_references: next })
-  }
-
-  function setToolArgumentRows(next: FlowHeaderConfig[]) {
-    onChange({ tool_arguments: rowsToToolArguments(next) })
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <label htmlFor="browser-step-tool-action" className="block text-sm font-medium text-slate-300 mb-1.5">Tool action</label>
-          <select
-            id="browser-step-tool-action"
-            value={current.tool_action || 'navigate'}
-            onChange={(e) => onChange({
-              tool_action: e.target.value,
-              use_tool_mode: true,
-              tool_arguments: { ...(current.tool_arguments || {}), action: e.target.value },
-            })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          >
-            {BROWSER_ACTION_OPTIONS.map(option => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="browser-step-url" className="block text-sm font-medium text-slate-300 mb-1.5">URL</label>
-          <TemplateInput
-            id="browser-step-url"
-            value={current.url || ''}
-            onValueChange={(value) => onChange({ url: value })}
-            placeholder="https://portal.example.com/login"
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-            allSteps={allSteps}
-            currentStepPosition={currentStepPosition}
-          />
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1.5">Prompt</label>
-        <TemplateTextarea
-          value={current.prompt || ''}
-          onValueChange={(value) => onChange({ prompt: value })}
-          rows={3}
-          placeholder="Describe the browser task. Keep credentials as references, not literal secrets."
-          className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none resize-none"
-          allSteps={allSteps}
-          currentStepPosition={currentStepPosition}
-        />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Mode</label>
-          <select
-            value={current.mode || 'container'}
-            onChange={(e) => onChange({ mode: e.target.value })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          >
-            <option value="container">Container</option>
-            <option value="host">Host</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Provider</label>
-          <CursorSafeInput
-            type="text"
-            value={current.provider_type || 'playwright'}
-            onValueChange={(value) => onChange({ provider_type: value })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
-            Timeout seconds
-            <span className="ml-1 text-xs font-normal text-slate-500">(suggested for {current.tool_action || 'navigate'}: {browserActionSuggestedTimeout(current.tool_action)}s)</span>
-          </label>
-          <input
-            type="number"
-            min={5}
-            value={current.timeout_seconds || browserActionSuggestedTimeout(current.tool_action)}
-            onChange={(e) => onChange({ timeout_seconds: Number(e.target.value) || browserActionSuggestedTimeout(current.tool_action) })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2">
-          <span className="text-sm font-medium text-slate-300">Persist browser session</span>
-          <input
-            type="checkbox"
-            checked={current.session_persistence !== false}
-            onChange={(e) => onChange({ session_persistence: e.target.checked })}
-            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
-          />
-        </label>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Session TTL seconds</label>
-          <input
-            type="number"
-            min={0}
-            value={current.session_ttl_seconds ?? 300}
-            onChange={(e) => onChange({ session_ttl_seconds: Number(e.target.value) || 0 })}
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser session profile</label>
-          <CursorSafeInput
-            type="text"
-            value={current.browser_session_profile_name || ''}
-            onValueChange={(value) => onChange({ browser_session_profile_name: value })}
-            placeholder="edp"
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-          <p className="mt-1 text-xs text-slate-500">Named profile from Hub &gt; Tool APIs. Leave blank for a fresh isolated context.</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Browser profile integration ID</label>
-          <input
-            type="number"
-            min={0}
-            value={current.browser_session_integration_id ?? ''}
-            onChange={(e) => onChange({ browser_session_integration_id: e.target.value ? Number(e.target.value) : null })}
-            placeholder="optional"
-            className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-        </div>
-        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 md:col-span-2">
-          <span>
-            <span className="block text-sm font-medium text-slate-300">Optional browser action</span>
-            <span className="block text-xs text-slate-500">Use with step behavior “Continue” to mark expected portal/login misses as skipped.</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={current.optional === true || current.treat_failure_as_skipped === true}
-            onChange={(e) => onChange({ optional: e.target.checked, treat_failure_as_skipped: e.target.checked })}
-            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500"
-          />
-        </label>
-      </div>
-
-      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-medium text-slate-300">Selectors and actions</label>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setRecorderOpen(true)}
-              className="text-xs text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1"
-              title="Record a real browser session and let Tsushin write the selectors"
-            >
-              🎬 Record
-            </button>
-            <button
-              type="button"
-              onClick={() => onChange({ selectors: [...selectors, { name: '', action: 'extract', selector: '', value: '' }] })}
-              className="text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              + Add selector
-            </button>
-          </div>
-        </div>
-        <RecorderDialog
-          isOpen={recorderOpen}
-          onClose={() => setRecorderOpen(false)}
-          initialUrl={current.url}
-          onApply={(compiled) => {
-            // Phase 5 will refine the merge — for now, replace selector/refs/url
-            // wholesale so the user reviews the recorded shape in this same
-            // panel before saving the FlowNode.
-            onChange({
-              ...compiled,
-              selectors: compiled.selectors ?? selectors,
-              browser_secret_references: compiled.browser_secret_references ?? secretReferences,
-            })
-          }}
-        />
-        {selectors.length === 0 ? (
-          <p className="text-xs text-slate-500">
-            No selectors yet. <span className="text-slate-400">{current.tool_action === 'navigate' || current.tool_action === 'solve_captcha' ? 'This action usually does not need a selector — proceed.' : `Add at least one selector with a CSS path so ${current.tool_action || 'this action'} knows what to target.`}</span> Use <span className="text-cyan-400">🎬 Record</span> on the Browser Automation tile to skip typing selectors by hand.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {selectors.map((selector, index) => (
-              <div key={index} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-slate-400">Selector {index + 1}</span>
-                  <button
-                    type="button"
-                    onClick={() => onChange({ selectors: selectors.filter((_, selectorIndex) => selectorIndex !== index) })}
-                    className={removeButtonClass}
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="grid min-w-0 gap-2 lg:grid-cols-[minmax(120px,0.9fr)_minmax(130px,0.8fr)_minmax(220px,1.7fr)]">
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Name</span>
-                    <CursorSafeInput
-                      type="text"
-                      value={selector.name || ''}
-                      onValueChange={(value) => updateSelector(index, { name: value })}
-                      placeholder="field name"
-                      className={compactInputClass}
-                    />
-                  </label>
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Action</span>
-                    <select
-                      value={selector.action || 'extract'}
-                      onChange={(e) => updateSelector(index, { action: e.target.value })}
-                      className={compactInputClass}
-                    >
-                      {BROWSER_ACTION_OPTIONS.map(option => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>CSS selector</span>
-                    <CursorSafeInput
-                      type="text"
-                      value={selector.selector || ''}
-                      onValueChange={(value) => updateSelector(index, { selector: value })}
-                      placeholder="CSS selector"
-                      className={compactInputClass}
-                    />
-                  </label>
-                </div>
-                <div className="grid min-w-0 gap-2 md:grid-cols-2">
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Value</span>
-                    <CursorSafeInput
-                      type="text"
-                      value={selector.value || ''}
-                      onValueChange={(value) => updateSelector(index, { value })}
-                      placeholder="value"
-                      className={compactInputClass}
-                    />
-                  </label>
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Fallback selector</span>
-                    <CursorSafeInput
-                      type="text"
-                      value={selector.fallback_selector || ''}
-                      onValueChange={(value) => updateSelector(index, { fallback_selector: value })}
-                      placeholder="fallback selector"
-                      className={compactInputClass}
-                    />
-                  </label>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-medium text-slate-300">Tool arguments</label>
-          <button
-            type="button"
-            onClick={() => setToolArgumentRows([...toolArgumentRows, { key: '', value: '' }])}
-            className="text-xs text-cyan-400 hover:text-cyan-300"
-          >
-            + Add argument
-          </button>
-        </div>
-        {toolArgumentRows.length === 0 ? (
-          <p className="text-xs text-slate-500">No extra arguments configured. Use this for script, timeout_ms, url_contains, state, attribute, wait_until, tab_id, fallback_selector, or fallback_script.</p>
-        ) : (
-          <div className="space-y-2">
-            {toolArgumentRows.map((argument, index) => (
-              <div key={index} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-slate-400">Argument {index + 1}</span>
-                  <button
-                    type="button"
-                    onClick={() => setToolArgumentRows(toolArgumentRows.filter((_, itemIndex) => itemIndex !== index))}
-                    className={removeButtonClass}
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="grid min-w-0 gap-2 md:grid-cols-[minmax(140px,0.8fr)_minmax(0,2fr)]">
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Key</span>
-                    <CursorSafeInput
-                      type="text"
-                      value={argument.key || ''}
-                      onValueChange={(value) => {
-                        const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, key: value } : item)
-                        setToolArgumentRows(next)
-                      }}
-                      placeholder="script"
-                      className={compactInputClass}
-                    />
-                  </label>
-                  <label className="min-w-0">
-                    <span className={fieldLabelClass}>Value</span>
-                    <TemplateTextarea
-                      value={argument.value || ''}
-                      onValueChange={(value) => {
-                        const next = toolArgumentRows.map((item, itemIndex) => itemIndex === index ? { ...item, value } : item)
-                        setToolArgumentRows(next)
-                      }}
-                      rows={(argument.key || '').trim() === 'script' ? 5 : 2}
-                      placeholder="Argument value or {{previous_step.field}}"
-                      className={`${compactInputClass} resize-y font-mono`}
-                      allSteps={allSteps}
-                      currentStepPosition={currentStepPosition}
-                    />
-                  </label>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <SecretReferenceRows
-        references={secretReferences}
-        onAdd={() => onChange({ browser_secret_references: [...secretReferences, { target: '', key: '', reference: '' }] })}
-        onChange={updateSecretReference}
-        onRemove={(index) => onChange({ browser_secret_references: secretReferences.filter((_, refIndex) => refIndex !== index) })}
-      />
-    </div>
-  )
-}
 
 function HttpRequestConfigPanel({
   config,
@@ -5282,7 +4879,7 @@ function StepConfigForm({ step, agents, contacts, personas, customTools, customS
       )}
 
       {step.type === 'browser_automation' && (
-        <BrowserAutomationConfigPanel
+        <BrowserStepWizard
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
           allSteps={stepInfoList}
@@ -6925,7 +6522,7 @@ function EditableStepConfigForm({ step, agents, contacts, personas, customTools,
       )}
 
       {step.type === 'browser_automation' && (
-        <BrowserAutomationConfigPanel
+        <BrowserStepWizard
           config={currentConfig}
           onChange={(next) => updateConfigMany(next)}
           allSteps={stepInfoList}

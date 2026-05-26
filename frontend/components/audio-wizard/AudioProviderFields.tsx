@@ -719,7 +719,7 @@ export function AudioTranscriptFields({
                 value={value.hotwords || ''}
                 onChange={(e) => onChange({ hotwords: e.target.value })}
                 rows={3}
-                placeholder="Consigaz, boleto, Pix, Vinicios"
+                placeholder="domain term 1, domain term 2, proper noun"
                 className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-teal-400 resize-y min-h-[88px]"
               />
               <div className="mt-1 text-xs text-gray-500">Comma or newline separated.</div>

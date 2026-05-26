@@ -180,16 +180,28 @@ export default function StreamCanvas({
     })
   }, [markerMode, onPointer, onRectMark, toViewportCoords])
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault()
-    const { x, y } = toViewportCoords(e.clientX, e.clientY)
-    onPointer?.({
-      action: 'wheel',
-      x, y,
-      deltaX: e.deltaX,
-      deltaY: e.deltaY,
-      modifiers: modifierBitfield(e),
-    })
+  // React's onWheel prop is registered as `passive: true` by Chromium, so
+  // `e.preventDefault()` inside a React-synthetic handler is a no-op — the
+  // wheel still scrolls the parent modal instead of being forwarded to the
+  // recorded page. Attaching the listener imperatively with
+  // `{ passive: false }` lets us cancel the default and route the scroll
+  // into the remote browser via CDP.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const { x, y } = toViewportCoords(e.clientX, e.clientY)
+      onPointer?.({
+        action: 'wheel',
+        x, y,
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        modifiers: modifierBitfield(e),
+      })
+    }
+    canvas.addEventListener('wheel', handler, { passive: false })
+    return () => canvas.removeEventListener('wheel', handler)
   }, [onPointer, toViewportCoords])
 
   // Keyboard handling: we forward key events while the canvas is focused.
@@ -243,7 +255,6 @@ export default function StreamCanvas({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onWheel={handleWheel}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
       onContextMenu={(e) => e.preventDefault()}

@@ -3465,7 +3465,7 @@ export default function HubPage() {
     })
     try {
       const result = await api.testBrowserSessionProfile(profile.id, {
-        url: 'https://www.edponline.com.br/para-sua-casa/servicos/selecionar-instalacao',
+        url: 'https://example.com/',
       })
       setBrowserSessionTestResults((current) => ({ ...current, [profile.id]: result }))
       await loadBrowserSessionProfiles()
