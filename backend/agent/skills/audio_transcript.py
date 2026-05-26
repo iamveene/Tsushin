@@ -185,7 +185,10 @@ class AudioTranscriptSkill(BaseSkill):
             #    (speaches or openai_whisper). **No silent fallback to OpenAI**:
             #    if the operator picked a local instance, a failure is surfaced
             #    as-is so privacy/cost expectations are respected.
-            # 2. ``asr_mode='openai'`` (or no instance pinned) → OpenAI Whisper API.
+            # 2. ``asr_mode='gemini'`` → Google Gemini multimodal (gemini-3.5-flash
+            #    et al.) consumes the audio inline and returns a transcript.
+            #    Same fail-closed contract as instance mode.
+            # 3. ``asr_mode='openai'`` (or no mode set) → OpenAI Whisper API.
             # The legacy ``tenant_default`` mode was retired with the
             # ``Tenant.default_asr_instance_id`` column; existing rows still
             # carrying that value are treated as ``openai`` (no silent
@@ -196,6 +199,8 @@ class AudioTranscriptSkill(BaseSkill):
             resolved_asr_instance = None
             instance_error: Optional[str] = None
             instance_path_chosen = bool(asr_mode == "instance" and asr_instance_id)
+            gemini_path_chosen = bool(asr_mode == "gemini")
+            gemini_error: Optional[str] = None
             if tenant_id and db and instance_path_chosen:
                 try:
                     from services.whisper_instance_service import WhisperInstanceService
@@ -264,6 +269,69 @@ class AudioTranscriptSkill(BaseSkill):
                         resolved_asr_instance_id,
                         asr_err,
                     )
+
+            # Gemini multimodal ASR: same fail-closed contract as instance mode.
+            # The model itself accepts audio bytes inline (or via Files API for
+            # >20 MB), so there is no instance row to look up — credentials
+            # come from the tenant's Gemini ProviderInstance.
+            if gemini_path_chosen and tenant_id and db and not transcript:
+                try:
+                    gemini_model = model if model and model != "whisper-1" else "gemini-3.5-flash"
+                    gemini_provider_cls = ASRProviderRegistry.get_provider_class("gemini")
+                    if gemini_provider_cls is None:
+                        gemini_error = "gemini_provider_unavailable"
+                    else:
+                        gemini_provider = gemini_provider_cls(
+                            db=db,
+                            token_tracker=self.token_tracker,
+                            tenant_id=tenant_id,
+                        )
+                        response = await gemini_provider.transcribe(
+                            ASRRequest(
+                                audio_path=audio_path,
+                                model=gemini_model,
+                                language=language,
+                                prompt=prompt,
+                                hotwords=hotwords,
+                                tenant_id=tenant_id,
+                                agent_id=getattr(message, "agent_id", None),
+                                sender_key=getattr(message, "sender", None),
+                                message_id=getattr(message, "message_id", None),
+                            )
+                        )
+                        if response.success:
+                            transcript = response.text.strip()
+                            provider_name = response.provider
+                            provider_model = gemini_model
+                        else:
+                            gemini_error = response.error or "gemini_failed"
+                            logger.warning(
+                                "Gemini ASR transcription failed: %s",
+                                gemini_error,
+                            )
+                except Exception as gemini_err:
+                    gemini_error = str(gemini_err) or repr(gemini_err)
+                    logger.warning("Gemini ASR path failed: %s", gemini_err)
+
+            # No silent fallback for Gemini: same privacy/cost contract as
+            # pinned instances. If the operator picked Gemini and it failed,
+            # surface the error rather than fanning out to OpenAI.
+            if not transcript and gemini_path_chosen:
+                return SkillResult(
+                    success=False,
+                    output=(
+                        "❌ Transcription failed.\n"
+                        f"• Gemini multimodal ASR: {gemini_error or 'unknown error'}\n"
+                        "(no OpenAI fallback — Gemini pinned by config)"
+                    ),
+                    metadata={
+                        "error": gemini_error or "gemini_asr_failed",
+                        "gemini_error": gemini_error,
+                        "audio_path": audio_path,
+                        "provider": "gemini",
+                        "fallback_attempted": False,
+                    },
+                )
 
             # No silent fallback: if the operator pinned a local instance and
             # it failed (or returned empty), surface that error directly. Only
@@ -499,9 +567,9 @@ class AudioTranscriptSkill(BaseSkill):
                 },
                 "asr_mode": {
                     "type": "string",
-                    "description": "ASR routing mode: cloud OpenAI Whisper API, or a specific tenant-owned local instance assigned to this agent.",
+                    "description": "ASR routing mode: cloud OpenAI Whisper API, a specific tenant-owned local instance assigned to this agent, or Google Gemini multimodal.",
                     "default": "openai",
-                    "enum": ["openai", "instance"]
+                    "enum": ["openai", "instance", "gemini"]
                 },
                 "asr_instance_id": {
                     "type": ["integer", "null"],
@@ -516,9 +584,9 @@ class AudioTranscriptSkill(BaseSkill):
                 },
                 "model": {
                     "type": "string",
-                    "description": "Cloud Whisper model identifier — only used when asr_mode='openai'. When asr_mode='instance' the model is dictated by the local container (ASRInstance.default_model) and this field is ignored.",
+                    "description": "Model identifier. For asr_mode='openai' use a Whisper model (e.g. 'whisper-1'). For asr_mode='gemini' use a Gemini multimodal model (e.g. 'gemini-3.5-flash'). For asr_mode='instance' the model is dictated by the local container.",
                     "default": "whisper-1",
-                    "enum": ["whisper-1"]
+                    "enum": ["whisper-1", "gemini-3.5-flash"]
                 },
                 "transcription_prompt": {
                     "type": ["string", "null"],

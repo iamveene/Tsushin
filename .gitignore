@@ -310,6 +310,7 @@ backend/tests/*
 !backend/tests/test_openai_asr_provider.py
 !backend/tests/test_openai_whisper_asr_provider.py
 !backend/tests/test_whisper_asr_provider.py
+!backend/tests/test_gemini_asr_provider.py
 !backend/tests/test_whatsapp_audio_skill_output_routing.py
 !backend/tests/test_provider_instance_hardening.py
 !backend/tests/test_sentinel_unified_parse.py

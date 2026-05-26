@@ -38,7 +38,7 @@ interface WizardState {
   format: string
   /** Provider-specific model id (Gemini today). */
   model?: string
-  asrMode: 'openai' | 'instance'
+  asrMode: 'openai' | 'instance' | 'gemini'
   asrInstanceId: number | null
   vadFilter: boolean | null
   transcriptModel: string
@@ -667,6 +667,8 @@ export default function AudioAgentsWizard({ isOpen, onClose, onComplete, options
                 <div className="text-white capitalize">
                   {state.asrMode === 'instance'
                     ? `Local instance #${state.asrInstanceId ?? '—'}`
+                    : state.asrMode === 'gemini'
+                    ? 'Google Gemini (multimodal)'
                     : 'OpenAI Whisper'}
                 </div>
               </div>

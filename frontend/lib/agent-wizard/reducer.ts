@@ -11,7 +11,7 @@ import type { AudioProvider } from '@/components/audio-wizard/defaults'
 
 export type AgentType = 'text' | 'audio' | 'hybrid'
 export type AudioCapability = 'voice' | 'transcript' | 'hybrid'
-export type ASRUsageMode = 'openai' | 'instance'
+export type ASRUsageMode = 'openai' | 'instance' | 'gemini'
 export type MemoryMode = 'builtin' | 'vector' | 'semantic'
 
 export type StepKey =

@@ -28,6 +28,8 @@ import {
   GEMINI_VOICES,
   GEMINI_TTS_MODELS,
   GEMINI_TTS_DEFAULT_MODEL,
+  GEMINI_ASR_MODELS,
+  GEMINI_ASR_DEFAULT_MODEL,
   LANGUAGES,
   MEM_LIMITS,
   type AudioProvider,
@@ -438,7 +440,7 @@ export function AudioVoiceFields({
   )
 }
 
-export type ASRUsageMode = 'openai' | 'instance'
+export type ASRUsageMode = 'openai' | 'instance' | 'gemini'
 
 export interface AudioTranscriptFieldsValue {
   responseMode?: 'conversational' | 'transcript_only'
@@ -510,12 +512,22 @@ export function AudioTranscriptFields({
       onChange({ asrMode: mode, asrInstanceId: nextId })
       return
     }
+    if (mode === 'gemini') {
+      onChange({
+        asrMode: mode,
+        asrInstanceId: null,
+        vadFilter: null,
+        model: value.model && value.model.startsWith('gemini-') ? value.model : GEMINI_ASR_DEFAULT_MODEL,
+      })
+      return
+    }
     onChange({
       asrMode: mode,
       asrInstanceId: null,
       vadFilter: null,
       transcriptionPrompt: '',
       hotwords: '',
+      model: 'whisper-1',
     })
   }
 
@@ -598,6 +610,19 @@ export function AudioTranscriptFields({
                 ? 'Pin this agent to one tenant-owned ASR container (Speaches or openai_whisper).'
                 : 'No local ASR instances available yet.'}
             </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => chooseMode('gemini')}
+            className={`w-full text-left p-4 rounded-xl border transition-colors ${
+              value.asrMode === 'gemini'
+                ? 'border-teal-400 bg-teal-500/10'
+                : 'border-white/10 bg-white/[0.02] hover:border-white/20'
+            }`}
+          >
+            <div className="text-white font-medium text-sm">Google Gemini (multimodal)</div>
+            <div className="text-xs text-gray-400 mt-1">Native multimodal transcription via gemini-3.5-flash. Requires a Gemini Provider Instance in Hub.</div>
           </button>
           {instances.length === 0 && (
             // Separate sibling: the disabled button above blocks click events
@@ -730,7 +755,7 @@ export function AudioTranscriptFields({
                 instance's default_model. The local container dictates which
                 model it serves; the skill-config "model" enum does not apply.
           */}
-          {value.asrMode === 'instance' ? (
+          {value.asrMode === 'instance' && (
             <>
               <label className="block text-sm font-medium mb-2">Local model</label>
               <div
@@ -743,7 +768,8 @@ export function AudioTranscriptFields({
                   : 'Select a local instance above'}
               </div>
             </>
-          ) : (
+          )}
+          {value.asrMode === 'openai' && (
             <>
               <label className="block text-sm font-medium mb-2">OpenAI model</label>
               <select
@@ -753,6 +779,20 @@ export function AudioTranscriptFields({
               >
                 {CLOUD_WHISPER_MODELS.map(m => (
                   <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </>
+          )}
+          {value.asrMode === 'gemini' && (
+            <>
+              <label className="block text-sm font-medium mb-2">Gemini model</label>
+              <select
+                value={value.model && value.model.startsWith('gemini-') ? value.model : GEMINI_ASR_DEFAULT_MODEL}
+                onChange={(e) => onChange({ model: e.target.value })}
+                className="w-full px-3 py-2 bg-white/[0.02] border border-white/10 rounded-lg text-sm text-white focus:outline-none focus:border-teal-400"
+              >
+                {GEMINI_ASR_MODELS.map(m => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
                 ))}
               </select>
             </>
@@ -775,6 +815,15 @@ export function AudioTranscriptFields({
             {selectedInstance
               ? `Pins this agent to ${selectedInstance.instance_name} (${selectedInstance.vendor}). Voice notes never leave the tenant — they're transcribed locally inside the auto-provisioned container.`
               : 'Select a local ASR instance to pin this agent.'}
+          </div>
+        )}
+        {value.asrMode === 'gemini' && (
+          <div>
+            Sends the audio directly to Google Gemini for multimodal transcription. Requires the Gemini Provider Instance configured under{' '}
+            <a href="/hub?tab=ai-providers" className="underline hover:text-white">
+              Hub → AI Providers
+            </a>{' '}
+            → Gemini. The same credential powers Gemini LLM calls — no separate setup needed.
           </div>
         )}
       </div>
