@@ -37,7 +37,17 @@ interface RecorderDialogProps {
   // them as new flow steps. This is the production-ready path; the
   // legacy onApply remains for the in-panel record-into-one-step flow.
   onInsertGroup?: (compiled: BrowserGroupCompiled) => void | Promise<void>
+  // Deprecated: prefer url + onUrlChange for two-way binding. Kept for
+  // legacy callers that seed the URL once and discard ownership.
   initialUrl?: string
+  // Controlled URL mode. When `url` is provided, the dialog reflects
+  // and reports changes to the parent — letting the wizard collect the
+  // URL once and reuse it here without re-typing.
+  url?: string
+  onUrlChange?: (url: string) => void
+  // When true, the in-dialog URL bar is hidden (the parent already
+  // collected the URL upstream). Start/Go still work, driven by `url`.
+  hideUrlBar?: boolean
 }
 
 export default function RecorderDialog({
@@ -46,9 +56,22 @@ export default function RecorderDialog({
   onApply,
   onInsertGroup,
   initialUrl,
+  url,
+  onUrlChange,
+  hideUrlBar,
 }: RecorderDialogProps) {
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [urlInput, setUrlInput] = useState<string>(initialUrl || '')
+  const [isClosing, setIsClosing] = useState(false)
+  // Controlled when `url` is defined; otherwise we own the value locally
+  // (legacy uncontrolled callers). `initialUrl` is treated as a one-shot
+  // seed for the local state and ignored in controlled mode.
+  const [localUrl, setLocalUrl] = useState<string>(initialUrl || '')
+  const isControlled = url !== undefined
+  const urlInput = isControlled ? (url as string) : localUrl
+  const setUrlInput = useCallback((next: string) => {
+    if (onUrlChange) onUrlChange(next)
+    if (!isControlled) setLocalUrl(next)
+  }, [isControlled, onUrlChange])
   const [bootError, setBootError] = useState<string | null>(null)
   const [events, setEvents] = useState<RecorderEventRow[]>([])
   const [savePending, setSavePending] = useState(false)
@@ -106,15 +129,35 @@ export default function RecorderDialog({
     }
   }, [isOpen])
 
-  // Teardown the backend session when the dialog closes (without Save).
-  // The deleteRecorderSession call is fire-and-forget — janitor will sweep
-  // any leak.
+  // Safety net: if the dialog is closed without going through
+  // handleDiscard (e.g. parent unmounts), fire a best-effort DELETE so the
+  // tenant doesn't lose a recording slot. Awaited DELETE for explicit
+  // Discard happens in handleDiscard below.
   useEffect(() => {
     if (!isOpen && sessionId) {
       api.deleteRecorderSession(sessionId).catch(() => { /* noop */ })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
+
+  // Explicit Discard: await DELETE so the user can immediately start
+  // another recording without hitting the per-tenant cap. Without this
+  // wait, two quick "Discard → Start" cycles used to surface a 409.
+  const handleDiscard = useCallback(async () => {
+    if (isClosing) return
+    if (sessionId) {
+      setIsClosing(true)
+      try {
+        await api.deleteRecorderSession(sessionId)
+      } catch {
+        // Janitor reaps anything we leak.
+      } finally {
+        setSessionId(null)
+        setIsClosing(false)
+      }
+    }
+    onClose()
+  }, [isClosing, onClose, sessionId])
 
   const handleStart = useCallback(async () => {
     setBootError(null)
@@ -256,37 +299,58 @@ export default function RecorderDialog({
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Record browser session" size="2xl" autoHeight>
       <div className="flex flex-col gap-3 h-[70vh] min-h-0">
-        {/* URL bar */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-medium uppercase text-slate-400 shrink-0">URL</label>
-          <input
-            type="text"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="https://www.linkcorreios.com.br/"
-            className="flex-1 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-          />
-          {!sessionId ? (
-            <button
-              type="button"
-              onClick={handleStart}
-              disabled={!urlInput.trim()}
-              title={urlInput.trim() ? 'Spawn a live Chromium and begin capturing actions' : 'Enter a starting URL above to enable recording'}
-              className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
-            >
-              Start recording
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleNavigate}
-              className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold transition-colors"
-            >
-              Go
-            </button>
-          )}
-          {statusBadge}
-        </div>
+        {/* URL bar — hidden when the parent already collected the URL */}
+        {!hideUrlBar ? (
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium uppercase text-slate-400 shrink-0">URL</label>
+            <input
+              type="text"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="https://example.com/"
+              className="flex-1 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+            />
+            {!sessionId ? (
+              <button
+                type="button"
+                onClick={handleStart}
+                disabled={!urlInput.trim() || isClosing}
+                title={urlInput.trim() ? 'Spawn a live Chromium and begin capturing actions' : 'Enter a starting URL above to enable recording'}
+                className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
+              >
+                Start recording
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleNavigate}
+                className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold transition-colors"
+              >
+                Go
+              </button>
+            )}
+            {statusBadge}
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] text-slate-500">
+              Recording <span className="text-slate-300 font-mono">{urlInput || '(no URL)'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {!sessionId && (
+                <button
+                  type="button"
+                  onClick={handleStart}
+                  disabled={!urlInput.trim() || isClosing}
+                  className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
+                >
+                  Start recording
+                </button>
+              )}
+              {statusBadge}
+            </div>
+          </div>
+        )}
 
         {bootError && (
           <div className="px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-xs text-red-300">
@@ -392,10 +456,11 @@ export default function RecorderDialog({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
-              className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-xs hover:border-slate-500 hover:text-white transition-colors"
+              onClick={handleDiscard}
+              disabled={isClosing}
+              className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-xs hover:border-slate-500 hover:text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              Discard
+              {isClosing ? 'Discarding…' : 'Discard'}
             </button>
             <button
               type="button"
