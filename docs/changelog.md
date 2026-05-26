@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Google Gemini 3.5 Flash as multimodal ASR provider (2026-05-26)
+
+Adds Google Gemini as a third audio-to-text option alongside the existing cloud OpenAI Whisper and local Speaches/openai_whisper instances. Audio bytes are sent inline to `gemini-3.5-flash` (with Files API fallback for files >20 MB) and the resulting transcript flows through the existing `AudioTranscriptSkill` pipeline unchanged.
+
+- New [`GeminiASRProvider`](../backend/hub/providers/gemini_asr_provider.py) mirroring the OpenAI provider shape — retries on transient 429/5xx, fail-closed on quota errors, no silent fallback to OpenAI. Reuses the tenant's existing Gemini `ProviderInstance` (same credential as Gemini LLM).
+- Registered as `gemini` in [`ASRProviderRegistry`](../backend/hub/providers/asr_registry.py); the third `asr_mode` branch lives in [`AudioTranscriptSkill`](../backend/agent/skills/audio_transcript.py) alongside the cloud/instance branches with identical privacy/cost contract.
+- Frontend audio wizard exposes a new **Google Gemini (multimodal)** card in the ASR backend picker with a model dropdown (`gemini-3.5-flash` default). [`StepAudio`](../frontend/components/agent-wizard/steps/StepAudio.tsx) gates the credential and surfaces an inline warning when the tenant has no active Gemini Provider Instance.
+- 9 new tests: 7 unit ([`test_gemini_asr_provider.py`](../backend/tests/test_gemini_asr_provider.py)) covering inline + Files API paths, retry on transient errors, empty-text failure, and canonical mime mapping; 2 skill-level integration tests ([`test_audio_transcript_skill_asr.py`](../backend/tests/test_audio_transcript_skill_asr.py)) validating the gemini branch and the fail-closed contract.
+- Anthropic and DeepSeek were researched and explicitly excluded — neither exposes a native audio-input API today (Anthropic uses ElevenLabs as a subcontractor for its voice product; DeepSeek has no audio model and devs combine third-party Whisper + R1).
+- Validated end-to-end against `https://tsushin.archsec.io`: direct Python call to `GeminiASRProvider.transcribe()` on the prod backend container transcribed `asr_test_pt.ogg` correctly ("*Este é um teste da versão 0.7 do Tisusim para reconhecimento de fala em português.*", inline path, single attempt, no retry). Tsushin agent on prod was flipped to `asr_mode=gemini`. The local-WhatsApp-tester → prod-bot leg surfaced a separate pre-existing issue in the WhatsApp MCP bridge (`/api/messages` does not expose `media_type` in its JSON response, so no audio message reaches `AudioTranscriptSkill` regardless of provider) — captured as a follow-up task; does not affect direct API or playground usage of the new provider.
+
 ### Added — `record_store` step type + generic UI panel (2026-05-24)
 
 Domain-neutral rename of the `financial_record_store` / `financial_bill_store` step config. The old types are kept forever as legacy aliases so existing prod flows (Consigaz, Medsenior, EDP, Postal Track…) never break.
