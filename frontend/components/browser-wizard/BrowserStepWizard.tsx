@@ -116,17 +116,29 @@ export default function BrowserStepWizard({ config, onChange, allSteps, currentS
 
   const handleRecorderApply = useCallback(
     (compiled: Partial<FlowStepConfig>) => {
-      // Phase 5 will refine the merge — for now mirror the legacy panel:
-      // recorded output overrides the wholesale config except for things
-      // the recorder didn't produce.
-      onChange({
-        ...compiled,
-        selectors: compiled.selectors ?? selectorRows,
-        browser_secret_references: compiled.browser_secret_references ?? cfg.browser_secret_references ?? [],
-      })
+      // The recorder's compile output includes opinionated defaults for
+      // mode/provider_type/timeout_seconds/session_persistence that would
+      // silently clobber whatever the user already configured in Advanced.
+      // Only merge the fields the recorder is authoritative for: URL,
+      // action, args, selectors, secret refs, and (if present) prompt.
+      const merge: Partial<FlowStepConfig> = {}
+      if (compiled.url !== undefined) merge.url = compiled.url
+      if (compiled.tool_action !== undefined) {
+        merge.tool_action = compiled.tool_action
+        merge.use_tool_mode = true
+      }
+      if (compiled.tool_arguments !== undefined) merge.tool_arguments = compiled.tool_arguments
+      if (compiled.selectors !== undefined) merge.selectors = compiled.selectors
+      if (compiled.browser_secret_references !== undefined) {
+        merge.browser_secret_references = compiled.browser_secret_references
+      }
+      if ((compiled as Record<string, unknown>).prompt !== undefined) {
+        ;(merge as Record<string, unknown>).prompt = (compiled as Record<string, unknown>).prompt
+      }
+      onChange(merge)
       setStage('review')
     },
-    [cfg.browser_secret_references, onChange, selectorRows],
+    [onChange],
   )
 
   // --- stage views ---------------------------------------------------------
