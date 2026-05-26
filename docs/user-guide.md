@@ -199,13 +199,14 @@ Three options: **Kokoro** (local, self-hosted), **OpenAI TTS**, or **ElevenLabs*
 
 #### ASR Providers (Speech-to-Text) — v0.7.0
 
-Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voice notes, Playground audio, Telegram voice messages):
+Tsushin supports four ASR engines for transcribing inbound audio (WhatsApp voice notes, Playground audio, Telegram voice messages):
 
 | Engine | Where it runs | When to use |
 |---|---|---|
 | **OpenAI Whisper API** | Cloud (OpenAI). Reuses your tenant's saved OpenAI key. | Default if you already have OpenAI configured and don't mind cloud transcription. |
 | **Whisper (local)** | Auto-provisioned container under Hub > Local Services. | Privacy-sensitive deployments — voice data never leaves your infrastructure. CPU-friendly. |
 | **Speaches** | Auto-provisioned container under Hub > Local Services. | Local Whisper alternative with different performance profile. The guided wizard recommends and defaults to **4 GB** memory to avoid startup/transcription OOM churn. |
+| **Google Gemini (multimodal)** | Cloud (Google). Reuses your tenant's Gemini Provider Instance — same credential as the Gemini LLM. | Multilingual voice notes where a multimodal model gives stronger context understanding than pure Whisper, or when you already pay for Gemini and want to consolidate billing. Inline upload up to 20 MB; larger files automatically use the Gemini Files API. |
 
 **Setup (Hub > Add Provider > Speech-to-Text):**
 
@@ -214,10 +215,11 @@ Tsushin supports three ASR engines for transcribing inbound audio (WhatsApp voic
 3. For Local: name the instance, optionally pick a GPU profile, and click **Provision**. The container is created with `auto_provision=true`; the wizard polls until it's healthy. Speaches defaults to **4 GB** memory; keep that recommendation unless you have host-level evidence that a smaller limit is safe.
 4. Once running, the instance shows up under **Hub > Local Services > Speech-to-Text** with start/stop/restart/logs/status controls.
 
-**Per-agent assignment.** The `audio_transcript` skill on each agent has two modes:
+**Per-agent assignment.** The `audio_transcript` skill on each agent has three modes:
 
 - **`openai`** — call the OpenAI Whisper API directly (requires the OpenAI key in the tenant Hub).
 - **`instance`** — pin a specific tenant-owned local ASR instance (requires `asr_instance_id`).
+- **`gemini`** — send the audio inline to Google Gemini multimodal (default `gemini-3.5-flash`). Requires a Gemini Provider Instance configured under **Hub > AI Providers > Gemini** (the same credential is reused for Gemini LLM calls).
 
 Both Audio Agents Wizard and the agent's Skills tab show a list of every active tenant ASR instance so you can pick which one this agent uses. There is **no global Settings → ASR page** and **no tenant-default ASR** in v0.7.0 — assignment is always explicit at the agent level.
 
