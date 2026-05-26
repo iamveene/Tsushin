@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Browser Automation Step Wizard + recorder UX fixes (2026-05-26)
+
+Replaced the 360-line flat `BrowserAutomationConfigPanel` (every field exposed at once: Mode/Provider/Timeout/Persist/TTL/Profile/Integration ID/Optional/Selectors/Tool Arguments) with a guided wizard. Bundled four recorder UX bug fixes alongside the redesign.
+
+- New [`BrowserStepWizard`](../frontend/components/browser-wizard/BrowserStepWizard.tsx) with three sibling files under [`frontend/components/browser-wizard/`](../frontend/components/browser-wizard/): `defaults.ts` (constants + normalizers ported from page.tsx), `SessionProfilePicker.tsx` (API-backed dropdown). Wizard flow: trail picker (🎬 Record vs ⚙️ Manual) → goal/url stages → review with collapsible Advanced panel. New steps default to the trail picker; existing steps with selectors open straight to Review (Advanced collapsed) so editing stays fast. On-disk `FlowStepConfig` schema is unchanged.
+- `BrowserSessionProfile` field is now a Hub-backed dropdown — was a free-text input with `"edp"` as a placeholder. Picking a profile auto-populates `browser_session_integration_id` so the user no longer has to look that up. Falls back to a text input when the API is unreachable.
+- Recorder URL controlled by parent ([`RecorderDialog`](../frontend/app/flows/recorder/RecorderDialog.tsx) gained `url` + `onUrlChange` + `hideUrlBar` props). The wizard owns the URL and reuses it inside the recorder — previously the user had to retype it.
+- **Bug fix — "Tenant has 2 active recordings (max 2)" after Discard:** the backend ([`session_manager.py`](../backend/browser_recorder/session_manager.py)) had a race where two concurrent POSTs could both pass the per-tenant cap check before either inserted. Added a `_pending_by_tenant` slot reservation under the registry lock so the cap is enforced atomically across in-flight setups. Also reaped expired sessions inline under the same lock. Frontend Discard now awaits the DELETE before re-enabling Start. New unit test suite [`test_browser_recorder_session_manager.py`](../backend/tests/test_browser_recorder_session_manager.py) (6 cases) pins the locking invariants.
+- **Bug fix — scroll during recording:** `StreamCanvas.tsx`'s React `onWheel` prop is registered as passive in Chromium, so `preventDefault()` was a no-op and the modal stole the scroll. Replaced with an imperative `addEventListener('wheel', …, { passive: false })`; wheel now routes into the CDP session and the recorded page scrolls.
+- **Removed customer-name leaks from public placeholders/options:** `placeholder="edp"` (browser session profile) → wizard dropdown; `placeholder="Consigaz, boleto, Pix, Vinicios"` (audio hotwords) → generic; `FINANCIAL_PARSER_MODE_OPTIONS` dropdown dropped `"consigaz_utility_bill"` and `"medsenior_utility_bill"` entries (backend handlers still wired so existing flows keep running); test URL `edponline.com.br` → `example.com`; recorder URL placeholder `linkcorreios.com.br` → `example.com`.
+- Cleanup: deleted `BrowserAutomationConfigPanel` and its now-orphaned constants `BROWSER_ACTION_OPTIONS` and `normalizeBrowserSelectorRows` from `page.tsx` (moved into the wizard's `defaults.ts`).
+- Local validation: 6 backend unit tests pass against the new race fix; frontend `npm run typecheck` clean; browser QA confirmed wizard renders, manual trail end-to-end works, and edit mode hydrates straight to Review.
+
 ### Added — `record_store` step type + generic UI panel (2026-05-24)
 
 Domain-neutral rename of the `financial_record_store` / `financial_bill_store` step config. The old types are kept forever as legacy aliases so existing prod flows (Consigaz, Medsenior, EDP, Postal Track…) never break.

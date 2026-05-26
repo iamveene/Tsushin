@@ -77,12 +77,24 @@ class SessionRegistry:
 
     def __init__(self) -> None:
         self._sessions: dict[str, RecordingSession] = {}
+        # In-flight create() count per tenant. Reserves a slot inside the
+        # lock so two concurrent POSTs can't both pass the cap check
+        # before either has inserted its session.
+        self._pending_by_tenant: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     # Max concurrent recordings per tenant. Anti-abuse + bounds the
     # screencast bandwidth/CPU load. Override via env if a future workload
     # genuinely needs more.
     MAX_PER_TENANT = 2
+
+    def _release_pending(self, tenant_id: str) -> None:
+        """Decrement the in-flight create() counter. Caller holds the lock."""
+        remaining = self._pending_by_tenant.get(tenant_id, 0) - 1
+        if remaining > 0:
+            self._pending_by_tenant[tenant_id] = remaining
+        else:
+            self._pending_by_tenant.pop(tenant_id, None)
 
     async def create(
         self,
@@ -92,16 +104,32 @@ class SessionRegistry:
         initial_url: Optional[str] = None,
         viewport: Optional[dict] = None,
     ) -> RecordingSession:
-        # Enforce the per-tenant cap before we burn the cost of spawning
-        # a Playwright instance. Stale-expired sessions don't count —
-        # the janitor sweeps them, but if it hasn't run yet we sweep
-        # inline here so the cap reflects "actually running" recordings.
-        active = await self._count_active(tenant_id)
-        if active >= self.MAX_PER_TENANT:
-            raise RuntimeError(
-                f"Tenant has {active} active recordings (max {self.MAX_PER_TENANT}). "
-                "Discard one before starting another."
-            )
+        # Reserve a slot atomically before doing any slow setup. Two
+        # concurrent POSTs used to both pass the count check before either
+        # one inserted, blowing past the cap.
+        expired_to_cleanup: list[RecordingSession] = []
+        async with self._lock:
+            # Sweep expired inline so a slow janitor cycle can't
+            # artificially block new recordings. We pop now, teardown
+            # off-lock below.
+            for sid in list(self._sessions.keys()):
+                sess = self._sessions[sid]
+                if sess.tenant_id == tenant_id and sess.is_expired():
+                    expired_to_cleanup.append(self._sessions.pop(sid))
+
+            active = sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
+            pending = self._pending_by_tenant.get(tenant_id, 0)
+            if active + pending >= self.MAX_PER_TENANT:
+                raise RuntimeError(
+                    f"Tenant has {active + pending} active recordings (max {self.MAX_PER_TENANT}). "
+                    "Discard one before starting another."
+                )
+            self._pending_by_tenant[tenant_id] = pending + 1
+
+        # Tear down any expired sessions in the background so this
+        # request isn't blocked by their cleanup.
+        for sess in expired_to_cleanup:
+            asyncio.create_task(self._cleanup_session_object(sess))
 
         session_id = uuid.uuid4().hex
         vp = viewport or _DEFAULT_VIEWPORT
@@ -147,6 +175,7 @@ class SessionRegistry:
 
             async with self._lock:
                 self._sessions[session_id] = session
+                self._release_pending(tenant_id)
 
             logger.info(
                 "Recorder session %s created (tenant=%s user=%s)",
@@ -155,6 +184,8 @@ class SessionRegistry:
             return session
 
         except Exception:
+            async with self._lock:
+                self._release_pending(tenant_id)
             # Best-effort teardown if any step above failed
             try:
                 await playwright.stop()
@@ -208,37 +239,23 @@ class SessionRegistry:
         return self._sessions.get(session_id)
 
     async def count_for_tenant(self, tenant_id: str) -> int:
-        return sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
-
-    async def _count_active(self, tenant_id: str) -> int:
-        """Count not-yet-expired sessions for a tenant.
-
-        Sweeps any expired sessions inline so a slow janitor cycle can't
-        artificially block new recordings.
-        """
-        expired_ids = [
-            sid for sid, sess in self._sessions.items()
-            if sess.tenant_id == tenant_id and sess.is_expired()
-        ]
-        for sid in expired_ids:
-            try:
-                await self.teardown(sid)
-            except Exception:
-                pass
-        return sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
+        async with self._lock:
+            return sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
 
     async def reap_expired(self) -> int:
         """Tear down every session past its TTL. Returns number reaped."""
-        expired = [
-            sid for sid, sess in self._sessions.items() if sess.is_expired()
-        ]
+        async with self._lock:
+            expired = [
+                sid for sid, sess in self._sessions.items() if sess.is_expired()
+            ]
+            sessions_to_cleanup = [self._sessions.pop(sid) for sid in expired]
         count = 0
-        for sid in expired:
+        for sess in sessions_to_cleanup:
             try:
-                if await self.teardown(sid):
-                    count += 1
+                await self._cleanup_session_object(sess)
+                count += 1
             except Exception as e:
-                logger.warning("Janitor teardown failed for %s: %s", sid, e)
+                logger.warning("Janitor teardown failed for %s: %s", sess.session_id, e)
         return count
 
     # Per-step cap on teardown coroutines. A busy Playwright session can
@@ -253,6 +270,18 @@ class SessionRegistry:
             session = self._sessions.pop(session_id, None)
         if not session:
             return False
+        await self._cleanup_session_object(session)
+        return True
+
+    async def _cleanup_session_object(self, session: RecordingSession) -> None:
+        """Tear down a session that's already been popped from _sessions.
+
+        Slot in _sessions has already been freed by the caller, so a
+        concurrent create() can immediately reuse the cap budget. This is
+        what closes the "Discard then start new" race that used to leak
+        409 errors back to the user.
+        """
+        session_id = session.session_id
         # Cancel agentic driver task first if present (Phase 6 wires this).
         if session.agent_task and not session.agent_task.done():
             session.agent_task.cancel()
@@ -284,7 +313,6 @@ class SessionRegistry:
         await _with_timeout(session.playwright.stop, "playwright.stop")
 
         logger.info("Recorder session %s torn down", session_id)
-        return True
 
     async def list_session_ids(self) -> list[str]:
         return list(self._sessions.keys())
