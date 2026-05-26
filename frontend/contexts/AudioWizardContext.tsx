@@ -26,7 +26,7 @@ export type AudioAgentType = 'voice' | 'transcript' | 'hybrid'
 export type AudioWizardMode = 'new' | 'existing'
 
 export interface AudioWizardOpenOptions {
-  presetProvider?: 'kokoro' | 'openai' | 'elevenlabs'
+  presetProvider?: 'kokoro' | 'openai' | 'elevenlabs' | 'gemini'
   presetAgentId?: number
   presetMode?: AudioWizardMode
   presetAgentType?: AudioAgentType
