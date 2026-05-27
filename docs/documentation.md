@@ -2138,10 +2138,19 @@ A background janitor task (`backend/browser_recorder/session_manager.start_janit
 - `_dedupe_navigate` drops `framenavigated` repeats from internal Chrome redirects.
 - `_coalesce_fills` collapses sequential `Input.insertText` callbacks into one fill row with the final string.
 - `_dedupe_focus_click_then_fill` (post-pass) drops the focus-click that precedes typing into a field — Playwright's `fill` action focuses the element itself.
-- `_captcha_value_targets` walks `solve_captcha` rows and wires their `value_target` to the next `fill` row's selector — matches the canonical Correios shape `BrowserAutomationStepHandler` already executes.
+- `_dedupe_consecutive_clicks` (added 2026-05-27, BUG-771) collapses two consecutive click rows on the same selector (commonly emitted when the user re-clicked an input because the canvas hadn't grabbed focus before BUG-767 was fixed).
+- `_captcha_value_targets` walks `solve_captcha` rows and wires their `value_target` to the next `fill` row's selector — matches the canonical Correios shape `BrowserAutomationStepHandler` already executes. As of 2026-05-27 (BUG-768) the resolver skips fills whose selector is missing or document-root (`body`/`html`/`*`) and refuses to ship a broken `value_target`; the affected fill row is marked `_needs_selector` so the API layer can reject the compile call instead of producing a flow that fails at runtime with "Element not found or not fillable: body".
+- `_combine_captcha_chain` (multi-FlowNode compile) folds captcha + submit-click into the canonical `solve_captcha` skill node, with these guarantees (all added 2026-05-27):
+  - **BUG-773** — the submit click is chosen via `_looks_like_submit` (button-like selectors / `pesquisar` / `consultar` / `submit` / `search` keywords) rather than the *first* click after the captcha marker (which was almost always the focus-click into the captcha input). Falls back to the first non-text-input click if no submit-like selector is present.
+  - **BUG-774** — `success_selector` is only populated when the recorded extract selector matches a content-region pattern (`ship-step` / `result` / `tracking` / `rastreamento` / `evento` / `events` / `timeline` / `status-list` / `history`). Noise selectors (carousel, ads) are scrubbed so the captcha skill doesn't see a false success match before the page actually settles.
+  - **BUG-776** — if no explicit `wait_for` was captured between submit and extract, the compiler auto-emits one targeting the extract's selector (when content-region). Mirrors the canonical `wait_tracking_result` shape from flow #33.
 - Password fields (`type="password"` or name/id matching `/password|passwd|pwd|pin|cvv/i`) emit a `_needs_vault` flag on the row when the value isn't already a `pvh_` or `op://` reference. The frontend disables the Save button until a vault row is picked, and the backend `/compile` rejects the call as defense in depth.
 
 Selector strategy (`backend/browser_recorder/selector_strategy.pick_selector`) walks `data-testid` → `data-qa` → `data-cy` → `data-track` → `[name=…]` → `[type=submit]` → `[aria-label=…]` → `[role=…]` → `#id` → raw nth-of-type path. Returns `(primary, fallback)` so the runtime gets two shots.
+
+##### Focused-element selector resolution (BUG-768)
+
+The `input.text` WebSocket handler in `backend/browser_recorder/cdp_relay.py` no longer trusts that the frontend will supply a selector with each character typed on the canvas — the StreamCanvas can't know which inner-Chromium element owns focus. When the frontend omits a selector, the backend now calls `__tsushinFocusedSelector` (an in-page shim installed alongside `__tsushinSelectorAt` in `session_manager.py`'s page-init script) to resolve the active element, skipping `<body>` and `<html>` so a stray focus event on the document root can never become a `fill` target.
 
 #### 13.9.4 Agentic action translation
 
@@ -2275,7 +2284,7 @@ The full saved FlowDefinition is `browser_automation → notification`:
 }
 ```
 
-`@Vini` is resolved by `_resolve_mcp_url_and_secret` (`backend/flows/flow_engine.py:239`) into the tenant's contact row, lookup by `friendly_name` ('Vini') → `whatsapp_id`/`phone_number`. The MCP URL is read from `WhatsAppMCPInstance.mcp_api_url` for that tenant's `agent`-type instance.
+`@Vini` is resolved by `_resolve_mcp_url_and_secret` (`backend/flows/flow_engine.py:239`) into the tenant's contact row, lookup by `friendly_name` ('Vini') → `whatsapp_id`/`phone_number`. The MCP URL is read from `WhatsAppMCPInstance.mcp_api_url` for that tenant's `agent`-type instance. As of 2026-05-27 (BUG-775), when the tenant has no `agent`-type MCP instance the resolver falls back to a `tester`-type instance for the same tenant before defaulting to the hardcoded `http://127.0.0.1:8080/api` — this is the default local-dev shape (e.g. a tenant whose only WhatsApp MCP is the Vini tester on port 8082) and notifications now route correctly instead of silently 404ing on the legacy default.
 
 #### 13.9.7 Constraints
 
