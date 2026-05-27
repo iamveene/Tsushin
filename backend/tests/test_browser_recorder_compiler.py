@@ -648,3 +648,115 @@ def test_compile_into_group_screenshot_uses_last_fill_in_coalesce_streak():
     result = compile_events_into_group(events, recording_id="rec_coalesce")
     fill_child = next(c for c in result["child_nodes"] if c["config_json"]["tool_action"] == "fill")
     assert fill_child["config_json"].get("screenshot_b64") == "SHOT_HI"
+
+
+# ---------------------------------------------------------------------------
+# Regression: BUG-768 — compiler must never emit body as a fill selector
+# ---------------------------------------------------------------------------
+
+
+def test_bug768_fill_with_no_selector_marked_needs_selector_not_body():
+    """When the relay couldnt resolve a focused selector and ships a
+    fill event with selector=None, the compiler must flag _needs_selector
+    rather than silently falling back to body (which the runtime then
+    rejects as "Element not found or not fillable: body")."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": None,
+            "value": "AD468811215BR",
+            "field_meta": None,
+        }),
+    ]
+    cfg = compile_events(events)
+    fill_rows = [r for r in cfg["selectors"] if r["action"] == "fill"]
+    assert len(fill_rows) == 1
+    assert fill_rows[0].get("_needs_selector") is True
+    assert fill_rows[0]["selector"] is None
+    # And critically: no row anywhere ships a body selector
+    for row in cfg["selectors"]:
+        assert (row.get("selector") or "").strip() not in {"body", "html", "*", "document"}
+
+
+def test_bug768_explicit_body_selector_is_scrubbed():
+    """If a stale event somehow arrives with selector=body, the compiler
+    must scrub it instead of trusting the broken value."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": "body",
+            "value": "AD468811215BR",
+            "field_meta": {"tag": "body"},
+        }),
+    ]
+    cfg = compile_events(events)
+    fill_rows = [r for r in cfg["selectors"] if r["action"] == "fill"]
+    assert fill_rows[0]["selector"] is None
+    assert fill_rows[0].get("_needs_selector") is True
+
+
+def test_bug768_captcha_value_target_skips_unresolved_fill():
+    """solve_captcha rows must not point value_target at a fill with no
+    real selector — that was the exact runtime failure on Run #2934
+    ("Element not found or not fillable: body")."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        # Bad fill — no selector resolution
+        RecordedEvent("fill", {"selector": None, "value": "XXXXXX", "field_meta": None}),
+        # Good fill later — captcha should point at THIS, not the broken one
+        RecordedEvent("fill", {
+            "selector": "input[name=\"captcha\"]",
+            "value": "XXXXXX",
+            "field_meta": {"tag": "input", "name": "captcha"},
+        }),
+    ]
+    cfg = compile_events(events)
+    captcha_rows = [r for r in cfg["selectors"] if r["action"] == "solve_captcha"]
+    assert captcha_rows
+    target = captcha_rows[0].get("value_target")
+    assert target == "input[name=\"captcha\"]"
+
+
+# ---------------------------------------------------------------------------
+# Regression: BUG-771 — consecutive identical clicks must collapse
+# ---------------------------------------------------------------------------
+
+
+def test_bug771_two_consecutive_clicks_on_same_selector_collapse():
+    """User re-clicked the same input because focus wasnt grabbed
+    (BUG-767). The compiler should emit ONE click row, not two."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("click", {
+            "selector": "input#objeto",
+            "meta": {"tag": "input", "id": "objeto"},
+        }),
+        RecordedEvent("click", {
+            "selector": "input#objeto",
+            "meta": {"tag": "input", "id": "objeto"},
+        }),
+    ]
+    cfg = compile_events(events)
+    click_rows = [r for r in cfg["selectors"] if r["action"] == "click"]
+    assert len(click_rows) == 1
+
+
+def test_bug771_consecutive_clicks_on_different_selectors_preserved():
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("click", {
+            "selector": "input#a",
+            "meta": {"tag": "input", "id": "a"},
+        }),
+        RecordedEvent("click", {
+            "selector": "input#b",
+            "meta": {"tag": "input", "id": "b"},
+        }),
+    ]
+    cfg = compile_events(events)
+    click_rows = [r for r in cfg["selectors"] if r["action"] == "click"]
+    assert len(click_rows) == 2
