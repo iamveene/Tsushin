@@ -647,14 +647,51 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not (captcha_image_sel and captcha_input_sel):
         return nodes
 
-    # Walk forward: first click → submit; first extract → result panel
-    submit_idx = next(
-        (i for i in range(captcha_idx + 1, len(nodes))
-         if (nodes[i].get("config_json") or {}).get("tool_action") == "click"),
-        None,
-    )
+    # Walk forward to find the submit click.
+    #
+    # BUG-773: previously this picked the FIRST click after solve_captcha,
+    # which is almost always the click *into* the captcha text input (the
+    # user clicks to focus, then types). Skip clicks whose selector
+    # resolves to a text/captcha input — they're focus-only and not the
+    # actual form submit.
+    def _looks_like_submit(row_selector: str) -> bool:
+        sel = (row_selector or "").lower()
+        if not sel:
+            return False
+        # Anything that walks like a submit button: button[type=submit],
+        # input[type=submit], element id/name containing "submit"/"pesquisar"/
+        # "search"/"consultar"/"buscar"/"go", or a bare <button> selector.
+        if "button" in sel or "type=\"submit\"" in sel or "type='submit'" in sel:
+            return True
+        for keyword in ("pesquisar", "submit", "consultar", "buscar", "search"):
+            if keyword in sel:
+                return True
+        return False
+
+    def _is_text_input(row_selector: str) -> bool:
+        sel = (row_selector or "").lower()
+        if not sel:
+            return False
+        # input#captcha, input[name="captcha"], input[type="text"], etc.
+        return sel.startswith("input") and "type=\"submit\"" not in sel and "button" not in sel
+
+    submit_idx = None
+    fallback_idx = None
+    for i in range(captcha_idx + 1, len(nodes)):
+        cfg = nodes[i].get("config_json") or {}
+        if cfg.get("tool_action") != "click":
+            continue
+        sels = cfg.get("selectors") or []
+        sel = sels[0].get("selector") if sels else ""
+        if _looks_like_submit(sel):
+            submit_idx = i
+            break
+        if fallback_idx is None and not _is_text_input(sel):
+            fallback_idx = i
     if submit_idx is None:
-        return nodes  # incomplete chain — keep atomic
+        submit_idx = fallback_idx
+    if submit_idx is None:
+        return nodes  # no usable submit click — keep atomic
 
     submit_cfg = nodes[submit_idx]["config_json"]
     submit_sels = submit_cfg.get("selectors") or []

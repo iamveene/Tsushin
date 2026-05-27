@@ -211,25 +211,38 @@ export default function StreamCanvas({
   }, [onPointer, toViewportCoords])
 
   // Keyboard handling: we forward key events while the canvas is focused.
-  // For "ordinary" printable keys we also send a text-insert so the
-  // remote field receives the character even if the browser swallows the
-  // synthesized keypress (modifier-aware, IME-safe).
+  //
+  // BUG-772: previously we sent BOTH onKey (CDP dispatchKeyEvent with no
+  // text param — which still inserts the char in Chromium because keyDown
+  // events with a printable `key` insert text by default) AND onText (CDP
+  // insertText). That doubled every printable keystroke, and OS-level
+  // type bursts (Claude-in-Chrome) tripled them, turning AD468811215BR
+  // into AD468811215BRD468811215BRD468811215BR.
+  //
+  // Fix: printable single chars take the text-insert path exclusively
+  // (one source of truth for char insertion). Non-printable keys
+  // (Tab/Enter/Backspace/Arrow/etc.) keep the key-event path because
+  // they don't have an insertable text payload.
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
+    if (isPrintableChar) {
+      onText?.(e.key)
+      return
+    }
     onKey?.({
       action: 'down',
       key: e.key,
       code: e.code,
       modifiers: modifierBitfield(e),
     })
-    // Single printable character — also insert as text.
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      onText?.(e.key)
-    }
   }, [onKey, onText])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    // Mirror handleKeyDown: don't emit key-up for printable chars
+    // (the text-insert path handles them in one shot).
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) return
     onKey?.({
       action: 'up',
       key: e.key,
